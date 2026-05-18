@@ -49,7 +49,7 @@ impl ProductionMaterializer {
         Self { node, snapshot_rx }
     }
 
-    /// Resolve the `BehaviorConfig` for the materialized task against the
+    /// Resolve the `AgentBehavior` for the materialized task against the
     /// current active snapshot. Returns an error if the behavior is not
     /// loaded (e.g. unavailable at the time of fire) so the caller can surface
     /// a deterministic `materialize:` failure instead of silently dropping the
@@ -70,12 +70,12 @@ impl ProductionMaterializer {
             .ok_or_else(|| {
                 anyhow!(
                     "behavior {} has no backend binding; scheduled fires require a backend",
-                    behavior.name
+                    behavior.behavior_id
                 )
             })?;
         Ok((
-            behavior.name.clone(),
-            behavior.did().to_string(),
+            behavior.behavior_id.clone(),
+            behavior.agent_did().to_string(),
             behavior.deadline_duration.as_secs(),
             backend_id,
         ))

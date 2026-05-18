@@ -54,7 +54,8 @@ fn snapshot_with_event_triggers(
         HashMap::new(),
         HashMap::new(),
     )
-    .with_event_triggers(triggers, HashSet::new());
+    .with_event_triggers(triggers, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(generation, HashMap::new()))
 }
 

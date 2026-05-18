@@ -10,7 +10,7 @@ use rig::tool::ToolDyn;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_agent;
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::schema::ensure_schemas;
@@ -24,7 +24,7 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot(
     node: Arc<EmbeddedNode>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     run_openai_oneshot_with_tools(node, behavior, Vec::new(), prompt).await
@@ -32,7 +32,7 @@ pub async fn run_openai_oneshot(
 
 pub async fn run_openai_oneshot_with_tools(
     node: Arc<EmbeddedNode>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
@@ -60,7 +60,7 @@ pub async fn run_openai_oneshot_with_tools(
         BackendProviderKind::OpenAiCompatible => {
             let build_context = format!(
                 "building OpenAI-compatible completion client for behavior {} against {}",
-                behavior.name, behavior.backend_endpoint
+                behavior.behavior_id, behavior.backend_endpoint
             );
             let client: rig::providers::openai::CompletionsClient =
                 rig::providers::openai::CompletionsClient::builder()
@@ -83,7 +83,7 @@ pub async fn run_openai_oneshot_with_tools(
         BackendProviderKind::OpenRouter => {
             let build_context = format!(
                 "building OpenRouter completion client for behavior {} against {}",
-                behavior.name, behavior.backend_endpoint
+                behavior.behavior_id, behavior.backend_endpoint
             );
             let client: rig::providers::openrouter::Client =
                 rig::providers::openrouter::Client::builder()
@@ -108,7 +108,7 @@ pub async fn run_openai_oneshot_with_tools(
 
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     preamble: String,
@@ -134,7 +134,7 @@ where
 
 async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     prompt_builder: &LayeredPromptBuilder,
     agent: &Agent<M>,
     prompt: &str,
@@ -142,8 +142,8 @@ async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
 ) -> Result<OneshotRunResult> {
     let hook = DefraSessionHook::with_identity(
         node,
-        &behavior.name,
-        behavior.did(),
+        &behavior.behavior_id,
+        behavior.agent_did(),
         FailurePolicy::default(),
     )
     .with_background_tool_registry(background_tool_registry);

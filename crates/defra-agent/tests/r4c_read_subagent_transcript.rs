@@ -5,8 +5,8 @@ mod support;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    upsert_agent_behavior, upsert_tool_selection, AgentBehavior, DefraSessionHook, FailurePolicy,
-    ToolSelectionDocument,
+    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
+    FailurePolicy, ToolSelectionDocument,
 };
 use rig::agent::{PromptHook, ToolCallHookAction};
 use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
@@ -70,7 +70,7 @@ async fn setup_db(name: &str) -> support::TestDb {
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
@@ -89,7 +89,7 @@ async fn setup_db(name: &str) -> support::TestDb {
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),

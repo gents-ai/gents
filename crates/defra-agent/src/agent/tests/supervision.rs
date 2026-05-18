@@ -15,11 +15,11 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let behaviors = vec![
         Arc::new(
-            PendingBehaviorConfig::new("panic-profile")
+            PendingAgentBehavior::new("panic-profile")
                 .build_with_identity_for_test(test_identity("panic-profile")),
         ),
         Arc::new(
-            PendingBehaviorConfig::new("steady-profile")
+            PendingAgentBehavior::new("steady-profile")
                 .build_with_identity_for_test(test_identity("steady-profile")),
         ),
     ];
@@ -27,11 +27,11 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let runner = {
         let panic_attempts = panic_attempts.clone();
         let sibling_ticks = sibling_ticks.clone();
-        move |behavior: Arc<crate::config::BehaviorConfig>, mut shutdown: watch::Receiver<bool>| {
+        move |behavior: Arc<crate::config::AgentBehavior>, mut shutdown: watch::Receiver<bool>| {
             let panic_attempts = panic_attempts.clone();
             let sibling_ticks = sibling_ticks.clone();
             async move {
-                if behavior.name == "panic-profile" {
+                if behavior.behavior_id == "panic-profile" {
                     let attempt = panic_attempts.fetch_add(1, Ordering::SeqCst);
                     if attempt < 2 {
                         panic!("boom");

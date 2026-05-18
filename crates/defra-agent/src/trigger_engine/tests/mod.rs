@@ -12,13 +12,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::compaction::CompactionStrategy;
-use crate::config::{BehaviorConfig, SamplingConfig};
+use crate::config::{AgentBehavior, SamplingConfig};
 use crate::document_config::{
     list_event_trigger_records, list_schedule_records, load_schedule_next_run_at,
 };
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::KeyIdentity;
+use crate::identity::{AgentPrincipal, KeyIdentity};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_case_count,
     lean_trigger_dispatch_cases, LeanTriggerDispatchCase, LeanTriggerKeyContract, LeanVocabulary,
@@ -41,6 +41,27 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 
 /// Recorded `supersede` invocation: `(trigger_id, trigger_kind)`.
 type SupersedeCall = (String, TriggerKind);
+
+/// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
+/// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
+/// `debug_assert!`. Does not exercise signing.
+fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
+    use crate::identity::AgentIdentity as _;
+    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    Arc::new(crate::identity::AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    })
+}
 
 const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../../proofs/Proofs/Triggers/Types.lean");
 const LEAN_TRIGGER_TYPES_FILE: &str = "crates/defra-agent/proofs/Proofs/Triggers/Types.lean";
@@ -274,7 +295,8 @@ fn snapshot_with_schedules(
         HashMap::new(),
         HashMap::new(),
     )
-    .with_schedules(schedules, HashSet::new());
+    .with_schedules(schedules, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -385,26 +407,34 @@ fn snapshot_from_trigger_contract(
         HashMap::new(),
     )
     .with_schedules(active_schedules, HashSet::new())
-    .with_event_triggers(active_event_triggers, HashSet::new());
+    .with_event_triggers(active_event_triggers, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
-/// Build a minimal `BehaviorConfig` suitable for the production materializer
+/// Build a minimal `AgentBehavior` suitable for the production materializer
 /// integration test. The behavior has a backend binding (required — the
 /// materializer rejects tasks whose behavior is not backend-bound) but does
 /// not drive any inference: the integration test asserts lineage on the
 /// persisted `AgentRequest` doc only, not execution.
-fn integration_test_behavior(behavior_name: &str) -> Arc<BehaviorConfig> {
-    let identity = Arc::new(
+fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
+    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
             None,
         )
         .unwrap(),
     );
-    Arc::new(BehaviorConfig {
-        name: behavior_name.to_string(),
+    let principal = Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
         identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    });
+    Arc::new(AgentBehavior {
+        behavior_id: behavior_name.to_string(),
+        principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://localhost:0/v1".to_string(),
@@ -429,17 +459,18 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<BehaviorConfig> {
 /// hand the ProductionMaterializer a snapshot where `behavior_id` resolution
 /// succeeds.
 fn snapshot_with_behavior_and_schedules(
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.name.clone(),
+        behavior.behavior_id.clone(),
         vec![behavior],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
     )
-    .with_schedules(schedules, HashSet::new());
+    .with_schedules(schedules, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 

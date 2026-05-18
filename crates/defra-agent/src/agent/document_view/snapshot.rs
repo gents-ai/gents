@@ -6,8 +6,10 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::admission::backend_admission_configs_from_backends;
-use crate::config::BehaviorConfig;
-use crate::document_config::{default_behavior_id_for_agent, AgentBehavior};
+use crate::config::AgentBehavior;
+use crate::document_config::{
+    default_behavior_id_for_agent, AgentBehavior as AgentBehaviorDocument,
+};
 use crate::runtime_snapshot::{
     ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
 };
@@ -16,9 +18,11 @@ use crate::tool_surface::ToolSelection;
 use super::{validate_subagent_targets_resolve, DocumentRuntimeView};
 
 use crate::agent::{
-    behavior_config_from_documents, subagent_tool_config_from_document,
-    tool_selection_from_document, DocumentResolveContext,
+    assemble_principal_and_behaviors, behavior_config_from_documents,
+    subagent_tool_config_from_document, tool_selection_from_document, BehaviorBuildError,
+    DocumentResolveContext,
 };
+use crate::identity::AgentPrincipal;
 use crate::tool_surface::SubagentToolConfig;
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
@@ -42,8 +46,29 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| default_behavior_id_for_agent(context.identity.did()));
 
-    let mut behaviors = Vec::<Arc<BehaviorConfig>>::new();
+    let principal_data = AgentPrincipal {
+        agent_did: view.principal.value.agent_did.clone(),
+        identity: context.identity.clone(),
+        default_behavior_id: default_behavior_id.clone(),
+        display_name: view.principal.value.display_name.clone(),
+        enabled: view.principal.value.enabled,
+    };
+
     let mut unavailable_behaviors = HashMap::new();
+    // Collect sync factory closures for each resolvable behavior.  All
+    // resolution done here is synchronous (the existing `async { }.await`
+    // was a try-block syntax workaround; there are no real `.await`s inside
+    // it).  We separate pre-resolution from Arc construction so that the
+    // single `Arc::new(AgentPrincipal { ... })` lives exclusively inside
+    // `assemble_principal_and_behaviors`.
+    let mut behavior_factories: Vec<
+        Box<
+            dyn FnOnce(
+                    Arc<AgentPrincipal>,
+                ) -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                + Send,
+        >,
+    > = Vec::new();
 
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
@@ -55,30 +80,26 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             continue;
         }
 
-        let backend = match behavior
-            .backend_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(backend_id) => view
+        // Perform all synchronous resolution before the factory closure.
+        let resolved_result: Result<_, anyhow::Error> = (|| {
+            let backend_id = behavior
+                .backend_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!("behavior {} has no backend binding", behavior.behavior_id)
+                })?;
+            let backend = view
                 .backends
                 .get(backend_id)
-                .map(|record| &record.value)
+                .map(|record| record.value.clone())
                 .ok_or_else(|| {
                     anyhow!(
                         "behavior {} references missing backend {}",
                         behavior.behavior_id,
                         backend_id
                     )
-                }),
-            None => Err(anyhow!(
-                "behavior {} has no backend binding",
-                behavior.behavior_id
-            )),
-        };
-
-        let resolved = async {
-            let backend = backend?;
+                })?;
             if !backend.is_available() {
                 anyhow::bail!(
                     "behavior {} backend {} is unavailable (enabled={} probe_status={})",
@@ -101,7 +122,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             let inference_profile = view
                 .inference_profiles
                 .get(profile_id)
-                .map(|record| &record.value)
+                .map(|record| record.value.clone())
                 .ok_or_else(|| {
                     anyhow!(
                         "behavior {} references missing inference profile {}",
@@ -131,23 +152,36 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 },
                 None => (ToolSelection::default(), SubagentToolConfig::default()),
             };
+            Ok((backend, inference_profile, tool_selection, subagent_tools))
+        })();
 
-            let behavior_config = behavior_config_from_documents(
-                context.identity.clone(),
-                behavior,
-                backend,
-                inference_profile,
-                tool_selection,
-                subagent_tools,
-                &context.tool_ceiling,
-            )?;
-            Ok::<_, anyhow::Error>(Arc::new(behavior_config))
-        }
-        .await;
-
-        match resolved {
-            Ok(behavior_config) => {
-                behaviors.push(behavior_config);
+        match resolved_result {
+            Ok((backend, inference_profile, tool_selection, subagent_tools)) => {
+                let behavior_id = behavior.behavior_id.clone();
+                let behavior_value = behavior.clone();
+                let tool_ceiling = context.tool_ceiling.clone();
+                let factory: Box<
+                    dyn FnOnce(
+                            Arc<AgentPrincipal>,
+                        )
+                            -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                        + Send,
+                > = Box::new(move |principal| {
+                    behavior_config_from_documents(
+                        principal,
+                        &behavior_value,
+                        &backend,
+                        &inference_profile,
+                        tool_selection,
+                        subagent_tools,
+                        &tool_ceiling,
+                    )
+                    .map_err(|error| BehaviorBuildError {
+                        behavior_id: behavior_id.clone(),
+                        error,
+                    })
+                });
+                behavior_factories.push(factory);
             }
             Err(error) => {
                 unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
@@ -155,9 +189,24 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
+    // Construct one Arc<AgentPrincipal> and share it across all behaviors.
+    // This is the load-bearing site fenced by the loader-dedup proptest.
+    let (principal, behavior_results) =
+        assemble_principal_and_behaviors(principal_data, behavior_factories);
+
+    let mut behaviors = Vec::<Arc<AgentBehavior>>::new();
+    for result in behavior_results {
+        match result {
+            Ok(behavior_arc) => behaviors.push(behavior_arc),
+            Err(BehaviorBuildError { behavior_id, error }) => {
+                unavailable_behaviors.insert(behavior_id, error.to_string());
+            }
+        }
+    }
+
     let candidate_behavior_ids = behaviors
         .iter()
-        .map(|behavior| behavior.name.clone())
+        .map(|behavior| behavior.behavior_id.clone())
         .collect::<HashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(behaviors.len());
     for behavior in behaviors {
@@ -168,20 +217,20 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
             Err(error) => {
-                unavailable_behaviors.insert(behavior.name.clone(), error.to_string());
+                unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
             }
         }
     }
 
     let active_behavior_ids = behavior_surfaces
         .iter()
-        .map(|(behavior, _)| behavior.name.clone())
+        .map(|(behavior, _)| behavior.behavior_id.clone())
         .collect::<HashSet<_>>();
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
         tool_surface.retain_subagent_targets(&active_behavior_ids);
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);
     }
 
@@ -202,6 +251,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         backend_admission_configs,
         unavailable_behaviors,
     )
+    .with_principal(principal)
     .with_local_did(context.identity.did().to_string())
     .with_paired_peer_dids(paired_peer_dids)
     .with_schedules(active_schedules, unavailable_schedules)
@@ -476,7 +526,7 @@ fn resolve_event_triggers(
 
 pub(super) fn collect_unresolved_behavior_references(
     view: &DocumentRuntimeView,
-    behavior: &AgentBehavior,
+    behavior: &AgentBehaviorDocument,
     details: &mut Vec<String>,
 ) {
     if let Some(selection_id) = behavior.tool_selection_id.as_deref().and_then(non_empty) {
@@ -509,7 +559,7 @@ pub(super) fn collect_unresolved_behavior_references(
 
 pub(super) fn behavior_references_ready(
     view: &DocumentRuntimeView,
-    behavior: &AgentBehavior,
+    behavior: &AgentBehaviorDocument,
 ) -> bool {
     let mut details = Vec::new();
     collect_unresolved_behavior_references(view, behavior, &mut details);

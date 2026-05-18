@@ -12,7 +12,7 @@ use defra_agent::{
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
     load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
-    AgentBehavior, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
+    AgentBehaviorDocument, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -478,7 +478,7 @@ async fn initialize_runtime_home(
     let inference_profile = standard_inference_profile(&inference_profile_id);
     upsert_inference_profile(node, &inference_profile).await?;
 
-    let behavior = AgentBehavior {
+    let behavior = AgentBehaviorDocument {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some("Default".to_string()),

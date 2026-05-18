@@ -6,12 +6,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use super::*;
-use crate::agent::PendingBehaviorConfig;
+use crate::agent::PendingAgentBehavior;
 use crate::backend_provider::BackendProviderKind;
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::KeyIdentity;
+use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
 use crate::lean_vocab_test::{
     assert_state_machine_contract_is_complete, lean_runtime_reconcile_case,
     lean_state_machine_contract,
@@ -39,15 +39,32 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+fn stub_principal() -> Arc<AgentPrincipal> {
+    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    })
+}
+
 async fn snapshot_for_behaviors(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
-    behaviors: Vec<Arc<BehaviorConfig>>,
+    behaviors: Vec<Arc<AgentBehavior>>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
         let tool_surface = behavior.tools.resolve(node).await.unwrap();
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
         default_behavior_id.to_string(),
@@ -55,6 +72,7 @@ async fn snapshot_for_behaviors(
         tool_surfaces,
         HashMap::new(),
     )
+    .with_principal(stub_principal())
 }
 
 #[tokio::test]
@@ -117,10 +135,10 @@ fn rust_pairing_reconcile_step(
 }
 
 async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {
-    let mut initial_behavior = PendingBehaviorConfig::new("general")
+    let mut initial_behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-initial"));
     initial_behavior.system_prompt = "before operator write".to_string();
-    let mut updated_behavior = PendingBehaviorConfig::new("general")
+    let mut updated_behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-updated"));
     updated_behavior.system_prompt = "after operator write".to_string();
     let current_resolved =
@@ -136,14 +154,15 @@ async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::Embedded
 }
 
 async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNode) -> bool {
-    let behavior = PendingBehaviorConfig::new("general")
+    let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-install"));
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
     let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
@@ -159,7 +178,7 @@ async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNod
 }
 
 async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::EmbeddedNode) -> bool {
-    let behavior = PendingBehaviorConfig::new("general")
+    let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
     let current_resolved = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
@@ -167,7 +186,8 @@ async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::Embedded
         Vec::new(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, HashMap::new());
@@ -183,14 +203,14 @@ async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::Embedded
 
 async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     let behavior = Arc::new(
-        PendingBehaviorConfig::new("general")
+        PendingAgentBehavior::new("general")
             .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
     );
     let tool_surface = Arc::new(behavior.tools.resolve(node).await.unwrap());
     let starts = Arc::new(AtomicUsize::new(0));
     let runner = {
         let starts = starts.clone();
-        move |_behavior: Arc<BehaviorConfig>,
+        move |_behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               mut shutdown: watch::Receiver<bool>| {
@@ -294,11 +314,11 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
 
     let starts = Arc::new(StdMutex::new(HashMap::<String, usize>::new()));
-    let mut initial_behavior = PendingBehaviorConfig::new("general")
-        .build_with_identity_for_test(test_identity("general"));
+    let mut initial_behavior =
+        PendingAgentBehavior::new("general").build_with_identity_for_test(test_identity("general"));
     initial_behavior.system_prompt = "initial prompt".to_string();
-    let mut updated_behavior = PendingBehaviorConfig::new("general")
-        .build_with_identity_for_test(test_identity("general"));
+    let mut updated_behavior =
+        PendingAgentBehavior::new("general").build_with_identity_for_test(test_identity("general"));
     updated_behavior.system_prompt = "updated prompt".to_string();
 
     let initial_snapshot =
@@ -308,7 +328,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
 
     let runner = {
         let starts = starts.clone();
-        move |behavior: Arc<BehaviorConfig>,
+        move |behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               mut shutdown: watch::Receiver<bool>| {
@@ -317,7 +337,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
                 *starts
                     .lock()
                     .unwrap()
-                    .entry(behavior.name.clone())
+                    .entry(behavior.behavior_id.clone())
                     .or_default() += 1;
                 loop {
                     tokio::select! {
@@ -424,9 +444,9 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let agent_did = "did:defra-agent:reconcile-failure-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
 
-    let initial_behavior = PendingBehaviorConfig::new("general")
+    let initial_behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("general-initial"));
-    let mut updated_behavior = PendingBehaviorConfig::new("general")
+    let mut updated_behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("general-updated"));
     updated_behavior.system_prompt = "updated prompt".to_string();
 
@@ -439,9 +459,10 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         valid_updated_snapshot.behaviors.values().cloned().collect(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
 
-    let runner = move |_behavior: Arc<BehaviorConfig>,
+    let runner = move |_behavior: Arc<AgentBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        mut shutdown: watch::Receiver<bool>| async move {
@@ -523,10 +544,17 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let agent_did = "did:defra-agent:reconcile-tool-surface-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
-
-    let initial_behavior = Arc::new(BehaviorConfig {
-        name: "general".to_string(),
+    let principal = Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
         identity: identity.clone(),
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    });
+
+    let initial_behavior = Arc::new(AgentBehavior {
+        behavior_id: "general".to_string(),
+        principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
@@ -544,9 +572,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: crate::config::SamplingConfig::default(),
     });
-    let updated_behavior = Arc::new(BehaviorConfig {
-        name: "general".to_string(),
-        identity: identity.clone(),
+    let updated_behavior = Arc::new(AgentBehavior {
+        behavior_id: "general".to_string(),
+        principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
@@ -589,7 +617,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let runner = {
         let observed_tool_names = observed_tool_names.clone();
-        move |_behavior: Arc<BehaviorConfig>,
+        move |_behavior: Arc<AgentBehavior>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               mut shutdown: watch::Receiver<bool>| {

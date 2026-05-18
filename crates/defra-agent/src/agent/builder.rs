@@ -9,18 +9,21 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
-use super::{runtime, DefraAgent, ProcessLifecycleObserver};
+use super::{
+    assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,
+    ProcessLifecycleObserver,
+};
 use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::hook::FailurePolicy;
-use crate::identity::AgentIdentity;
+use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{
@@ -42,7 +45,7 @@ pub struct DefraAgentBuilder {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
-    behaviors: Vec<PendingBehaviorConfig>,
+    behaviors: Vec<PendingAgentBehavior>,
 }
 
 impl DefraAgentBuilder {
@@ -103,7 +106,7 @@ impl DefraAgentBuilder {
     pub fn behavior(self, name: impl Into<String>) -> BehaviorBuilder {
         BehaviorBuilder {
             agent: self,
-            behavior: PendingBehaviorConfig::new(name),
+            behavior: PendingAgentBehavior::new(name),
         }
     }
 
@@ -144,25 +147,55 @@ impl DefraAgentBuilder {
             );
         }
 
-        let mut behaviors = Vec::with_capacity(self.behaviors.len());
+        // Async-resolve every behavior into a sync factory closure that
+        // accepts `Arc<AgentPrincipal>`. The actual `Arc::new(AgentPrincipal
+        // { ... })` is constructed exactly once inside
+        // `assemble_principal_and_behaviors` below.
+        let mut behavior_factories: Vec<
+            Box<
+                dyn FnOnce(
+                        Arc<AgentPrincipal>,
+                    )
+                        -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                    + Send,
+            >,
+        > = Vec::with_capacity(self.behaviors.len());
         for behavior in self.behaviors {
-            let config = behavior
-                .build(node.as_ref(), Some(&identity), &self.tool_ceiling)
+            let factory = behavior
+                .into_factory(node.as_ref(), &self.tool_ceiling)
                 .await?;
-            behaviors.push(Arc::new(config));
+            behavior_factories.push(factory);
+        }
+
+        let principal_data = AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity: identity.clone(),
+            default_behavior_id: default_behavior_id.clone(),
+            display_name: None,
+            enabled: true,
+        };
+
+        let (principal, behavior_results) =
+            assemble_principal_and_behaviors(principal_data, behavior_factories);
+
+        let mut behaviors = Vec::with_capacity(behavior_results.len());
+        for result in behavior_results {
+            let behavior_arc = result.map_err(|e| {
+                anyhow::anyhow!("behavior '{}' build failed: {}", e.behavior_id, e.error)
+            })?;
+            behaviors.push(behavior_arc);
         }
         behaviors.sort_by(|left, right| {
-            let left_is_default = left.name == default_behavior_id;
-            let right_is_default = right.name == default_behavior_id;
+            let left_is_default = left.behavior_id == default_behavior_id;
+            let right_is_default = right.behavior_id == default_behavior_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
         Ok(DefraAgent {
             node,
-            agent_did: identity.did().to_string(),
-            default_behavior_id,
+            principal,
             behaviors,
             unavailable_behaviors: Default::default(),
             document_runtime_context: None,
@@ -181,15 +214,10 @@ impl DefraAgentBuilder {
 
 pub struct BehaviorBuilder {
     agent: DefraAgentBuilder,
-    behavior: PendingBehaviorConfig,
+    behavior: PendingAgentBehavior,
 }
 
 impl BehaviorBuilder {
-    pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
-        self.behavior.identity = Some(identity);
-        self
-    }
-
     pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
         self.behavior.backend_id = Some(backend_id.into());
         self
@@ -318,9 +346,8 @@ fn find_duplicates(values: &[String]) -> HashSet<String> {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingBehaviorConfig {
+pub(crate) struct PendingAgentBehavior {
     name: String,
-    identity: Option<Arc<dyn AgentIdentity>>,
     backend_id: Option<String>,
     #[cfg(test)]
     backend_endpoint: String,
@@ -338,11 +365,10 @@ pub(crate) struct PendingBehaviorConfig {
     sampling: SamplingConfig,
 }
 
-impl PendingBehaviorConfig {
+impl PendingAgentBehavior {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            identity: None,
             backend_id: None,
             #[cfg(test)]
             backend_endpoint: TEST_DEFAULT_BACKEND_ENDPOINT.to_string(),
@@ -361,17 +387,82 @@ impl PendingBehaviorConfig {
         }
     }
 
+    /// Async phase: resolve the backend and validate it. Returns a sync
+    /// factory closure that accepts `Arc<AgentPrincipal>` and produces
+    /// the fully-built `AgentBehavior`.
+    ///
+    /// This split lets `DefraAgentBuilder::build` collect all factory
+    /// closures before calling `assemble_principal_and_behaviors`, so
+    /// that the single `Arc::new(AgentPrincipal { ... })` lives
+    /// exclusively in the helper (the load-bearing site fenced by the
+    /// loader-dedup proptest).
+    async fn into_factory(
+        self,
+        node: &EmbeddedNode,
+        tool_ceiling: &ToolCeiling,
+    ) -> Result<
+        Box<
+            dyn FnOnce(
+                    Arc<AgentPrincipal>,
+                ) -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                + Send,
+        >,
+    > {
+        let backend_id = self
+            .backend_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?
+            .to_string();
+        let backend = lookup_backend(node, &backend_id).await?.ok_or_else(|| {
+            anyhow!(
+                "behavior '{}' references missing backend {}",
+                self.name,
+                backend_id
+            )
+        })?;
+        if !backend.is_available() {
+            anyhow::bail!(
+                "behavior '{}' backend {} is unavailable (enabled={} probe_status={})",
+                self.name,
+                backend_id,
+                backend.enabled,
+                backend.probe_status
+            );
+        }
+        BackendAdmissionConfig::from_backend(&backend)?;
+
+        let behavior_name = self.name.clone();
+        let resolved_backend_id = Some(backend.backend_id);
+        let provider_kind = backend.provider_kind;
+        let endpoint = backend.endpoint;
+        let api_key = backend.api_key;
+        let api_key_env_var = backend.api_key_env_var;
+        let tool_ceiling = tool_ceiling.clone();
+
+        Ok(Box::new(move |principal| {
+            self.build_with_resolved_backend(
+                principal,
+                resolved_backend_id,
+                provider_kind,
+                endpoint,
+                api_key,
+                api_key_env_var,
+                &tool_ceiling,
+            )
+            .map_err(|error| BehaviorBuildError {
+                behavior_id: behavior_name,
+                error,
+            })
+        }))
+    }
+
+    #[allow(dead_code)]
     async fn build(
         self,
         node: &EmbeddedNode,
-        default_identity: Option<&Arc<dyn AgentIdentity>>,
+        principal: Arc<AgentPrincipal>,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<BehaviorConfig> {
-        let identity = self
-            .identity
-            .clone()
-            .or_else(|| default_identity.cloned())
-            .ok_or_else(|| anyhow!("behavior '{}' is missing identity", self.name))?;
+    ) -> Result<AgentBehavior> {
         let backend_id = self
             .backend_id
             .as_deref()
@@ -394,7 +485,7 @@ impl PendingBehaviorConfig {
         }
         BackendAdmissionConfig::from_backend(&backend)?;
         self.build_with_resolved_backend(
-            identity,
+            principal,
             Some(backend.backend_id),
             backend.provider_kind,
             backend.endpoint,
@@ -407,19 +498,19 @@ impl PendingBehaviorConfig {
     #[allow(clippy::too_many_arguments)]
     fn build_with_resolved_backend(
         self,
-        identity: Arc<dyn AgentIdentity>,
+        principal: Arc<AgentPrincipal>,
         backend_id: Option<String>,
         backend_provider_kind: BackendProviderKind,
         backend_endpoint: String,
         backend_api_key: Option<String>,
         backend_api_key_env_var: Option<String>,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<BehaviorConfig> {
+    ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
 
-        Ok(BehaviorConfig {
-            name: self.name,
-            identity,
+        Ok(AgentBehavior {
+            behavior_id: self.name,
+            principal,
             backend_id,
             backend_provider_kind,
             backend_endpoint,
@@ -446,17 +537,24 @@ impl PendingBehaviorConfig {
 }
 
 #[cfg(test)]
-impl PendingBehaviorConfig {
-    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> BehaviorConfig
+impl PendingAgentBehavior {
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> AgentBehavior
     where
         I: AgentIdentity + 'static,
     {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
-        self.identity = Some(Arc::new(identity));
-        let resolved_identity = self.identity.clone().unwrap();
+        let behavior_name = self.name.clone();
+        let identity: Arc<dyn AgentIdentity> = Arc::new(identity);
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity,
+            default_behavior_id: behavior_name.clone(),
+            display_name: None,
+            enabled: true,
+        });
         self.build_with_resolved_backend(
-            resolved_identity,
+            principal,
             backend_id,
             BackendProviderKind::OpenAiCompatible,
             backend_endpoint,

@@ -6,7 +6,8 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
+use crate::identity::AgentPrincipal;
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
@@ -107,10 +108,11 @@ pub(crate) struct ResolvedEventTrigger {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
+    pub(crate) principal: Option<Arc<AgentPrincipal>>,
     pub(crate) local_did: String,
     pub(crate) paired_peer_dids: HashSet<String>,
     pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<BehaviorConfig>>,
+    pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
@@ -125,7 +127,7 @@ impl ResolvedRuntimeSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_behavior_id: String,
-        behaviors: Vec<Arc<BehaviorConfig>>,
+        behaviors: Vec<Arc<AgentBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         unavailable_behaviors: HashMap<String, String>,
     ) -> Self {
@@ -140,18 +142,19 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn from_parts_with_admission_configs(
         default_behavior_id: String,
-        behaviors: Vec<Arc<BehaviorConfig>>,
+        behaviors: Vec<Arc<AgentBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
         unavailable_behaviors: HashMap<String, String>,
     ) -> Self {
         Self {
+            principal: None,
             local_did: String::new(),
             paired_peer_dids: HashSet::new(),
             default_behavior_id,
             behaviors: behaviors
                 .into_iter()
-                .map(|behavior| (behavior.name.clone(), behavior))
+                .map(|behavior| (behavior.behavior_id.clone(), behavior))
                 .collect(),
             tool_surfaces,
             backend_admission_configs,
@@ -162,6 +165,18 @@ impl ResolvedRuntimeSnapshot {
             unavailable_event_triggers: HashSet::new(),
             active_tasks: HashMap::new(),
         }
+    }
+
+    /// Attach the deployment principal Arc to this resolved snapshot.
+    ///
+    /// Mirrors `with_schedules` / `with_event_triggers`: the loader
+    /// (`document_view/snapshot.rs`) constructs one
+    /// `Arc<AgentPrincipal>` per snapshot and attaches it here so
+    /// `ActiveRuntimeSnapshot.principal` is uniformly `Some(...)`
+    /// across both loader and builder construction paths.
+    pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
+        self.principal = Some(principal);
+        self
     }
 
     pub(crate) fn with_local_did(mut self, local_did: String) -> Self {
@@ -217,8 +232,15 @@ impl ResolvedRuntimeSnapshot {
         generation: u64,
         dispatchers: DispatcherMap,
     ) -> ActiveRuntimeSnapshot {
+        debug_assert!(
+            self.principal.is_some(),
+            "ResolvedRuntimeSnapshot::activate called without principal set — \
+             every production construction path must call .with_principal(...) \
+             before activation",
+        );
         ActiveRuntimeSnapshot {
             generation,
+            principal: self.principal,
             local_did: self.local_did,
             paired_peer_dids: self.paired_peer_dids,
             default_behavior_id: self.default_behavior_id,
@@ -256,10 +278,11 @@ impl ResolvedRuntimeSnapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) generation: u64,
+    pub(crate) principal: Option<Arc<AgentPrincipal>>,
     pub(crate) local_did: String,
     pub(crate) paired_peer_dids: HashSet<String>,
     pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<BehaviorConfig>>,
+    pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
@@ -272,7 +295,7 @@ pub(crate) struct ActiveRuntimeSnapshot {
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<BehaviorConfig>> {
+    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<AgentBehavior>> {
         self.behaviors.get(behavior_id)
     }
 
@@ -337,7 +360,7 @@ fn configuration_fingerprint(
     default_behavior_id: &str,
     local_did: &str,
     paired_peer_dids: &HashSet<String>,
-    behaviors: &HashMap<String, Arc<BehaviorConfig>>,
+    behaviors: &HashMap<String, Arc<AgentBehavior>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
     unavailable_behaviors: &HashMap<String, String>,

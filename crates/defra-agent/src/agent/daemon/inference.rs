@@ -102,7 +102,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             if attempt > 0 {
                 let delay = self.retry_policy.delay_for_attempt(attempt - 1);
                 tracing::info!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     attempt,
                     delay_ms = delay.as_millis() as u64,
                     request_id = %request.request_id,
@@ -130,15 +130,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let attempt_index = attempt + 1;
             let request_id = request.request_id.clone();
             let session_id = request.session_id.clone();
-            let behavior_id = self.behavior.name.clone();
+            let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = lifecycle.backend_id().to_string();
             let model_name = self.behavior.model_name.clone();
             let attempt_result = async {
                 let hook = DefraSessionHook::resume_or_create_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
-                    &self.behavior.name,
-                    self.behavior.did(),
+                    &self.behavior.behavior_id,
+                    self.behavior.agent_did(),
                     self.hook_failure_policy,
                 )
                 .await?

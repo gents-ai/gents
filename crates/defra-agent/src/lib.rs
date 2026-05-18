@@ -56,7 +56,11 @@ pub use agent::{
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::InferenceBackend;
 pub use compaction::CompactionStrategy;
-pub use config::BehaviorConfig;
+pub use config::{
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+};
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
@@ -65,14 +69,15 @@ pub use document_config::{
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
-    AgentBehavior, AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap,
+    ToolSelectionDocument,
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    AgentIdentity, KeyIdentity, RegisteredIdentity, ServiceAccount,
+    AgentIdentity, AgentPrincipal, KeyIdentity, RegisteredIdentity, ServiceAccount,
 };
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{
@@ -108,6 +113,21 @@ pub use toolset::{
 };
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
+
+/// Test-internal surface for driving production helpers directly from
+/// integration tests.
+///
+/// `assemble_principal_and_behaviors` is `pub(crate)` in production.
+/// Exposing it here (under `#[doc(hidden)]`) lets the loader-dedup
+/// proptest (`tests/identity_conformance_proptest.rs`) call the same
+/// helper that both production snapshot paths funnel through, without
+/// widening the public API.
+#[doc(hidden)]
+pub mod __test_internals {
+    pub use crate::agent::principal_assembly::{
+        assemble_principal_and_behaviors, BehaviorBuildError,
+    };
+}
 
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]

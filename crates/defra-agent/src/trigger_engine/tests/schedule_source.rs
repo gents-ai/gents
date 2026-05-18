@@ -340,7 +340,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let task = ResolvedTask {
         task_id: "task-e2e".to_string(),
         name: Some("Mini Host Health".to_string()),
-        behavior_id: behavior.name.clone(),
+        behavior_id: behavior.behavior_id.clone(),
         prompt_template: "integration fire".to_string(),
         output_schema_ref: None,
     };

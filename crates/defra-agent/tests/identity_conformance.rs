@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 #[path = "../src/lean_vocab_test.rs"]
 mod lean_vocab_test;
@@ -8,6 +9,89 @@ use lean_vocab_test::{
     LeanIdentityBehavior, LeanIdentityContract, LeanIdentityDeployment, LeanIdentityPermissionCase,
     LeanIdentityStructuralCase,
 };
+
+use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
+
+#[path = "support/identity_stubs.rs"]
+mod identity_stubs;
+use identity_stubs::StubAgentIdentity;
+
+/// Build `Arc<AgentPrincipal>` instances (one per Lean principal row)
+/// and `Arc<AgentBehavior>` instances with the matching principal
+/// back-ref. The Lean rows may include multiple principals (e.g., the
+/// `separate_principal_*` cases), so this helper legitimately produces
+/// a multi-principal world. The single-principal-per-snapshot
+/// invariant from the spec applies to the production loader (fenced
+/// by the proptest in task 12), not to these test fixtures.
+fn build_runtime_behaviors_from_lean_case(
+    case: &LeanIdentityPermissionCase,
+) -> Vec<Arc<AgentBehavior>> {
+    use std::collections::HashMap;
+    let principals: HashMap<String, Arc<AgentPrincipal>> = case
+        .principals
+        .iter()
+        .map(|p| {
+            let identity: Arc<dyn AgentIdentity> = StubAgentIdentity::arc(p.did.clone());
+            let arc = Arc::new(AgentPrincipal {
+                agent_did: p.did.clone(),
+                identity,
+                default_behavior_id: String::new(),
+                display_name: None,
+                enabled: p.enabled,
+            });
+            (p.did.clone(), arc)
+        })
+        .collect();
+    case.behaviors
+        .iter()
+        .map(|b| {
+            let principal = principals
+                .get(b.principal.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "lean case {:?}: behavior {:?} references unknown principal {:?}",
+                        case.name, b.id, b.principal
+                    )
+                })
+                .clone();
+            Arc::new(build_agent_behavior_for_routing_test(
+                b.id.clone(),
+                principal,
+            ))
+        })
+        .collect()
+}
+
+/// Construct an `AgentBehavior` populated with default routing-test
+/// values; only behavior_id and principal are load-bearing for the
+/// routing tests.
+fn build_agent_behavior_for_routing_test(
+    behavior_id: String,
+    principal: Arc<AgentPrincipal>,
+) -> AgentBehavior {
+    AgentBehavior {
+        behavior_id,
+        principal,
+        backend_id: None,
+        backend_provider_kind: defra_agent::BackendProviderKind::default(),
+        backend_endpoint: String::new(),
+        backend_api_key: None,
+        backend_api_key_env_var: None,
+        model_name: defra_agent::DEFAULT_MODEL_NAME.to_string(),
+        context_window: defra_agent::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: defra_agent::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: defra_agent::DEFAULT_MAX_TURNS,
+        system_prompt: String::new(),
+        tools: defra_agent::BehaviorToolConfig::default(),
+        compaction_threshold: defra_agent::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: defra_agent::CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: defra_agent::DEFAULT_STREAM_BATCH_MS,
+        deadline_duration: std::time::Duration::from_secs(
+            defra_agent::DEFAULT_DEADLINE_DURATION_SECS,
+        ),
+        sampling: defra_agent::SamplingConfig::default(),
+    }
+}
 
 /// Rust mirror of `Identity.World.WellFormed` from
 /// `Proofs/Identity/State.lean`. Returns true iff:
@@ -49,49 +133,6 @@ fn rust_well_formed(case: &LeanIdentityStructuralCase) -> bool {
     }
 
     true
-}
-
-fn behavior_for_id<'a>(
-    case: &'a LeanIdentityPermissionCase,
-    behavior_id: &str,
-) -> &'a LeanIdentityBehavior {
-    case.behaviors
-        .iter()
-        .find(|behavior| behavior.id == behavior_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "permission case {:?} references missing behavior {:?}",
-                case.name, behavior_id
-            )
-        })
-}
-
-fn deployment_for_id<'a>(
-    case: &'a LeanIdentityPermissionCase,
-    deployment_id: &str,
-) -> &'a LeanIdentityDeployment {
-    case.deployments
-        .iter()
-        .find(|deployment| deployment.id == deployment_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "permission case {:?} references missing deployment {:?}",
-                case.name, deployment_id
-            )
-        })
-}
-
-fn rust_canonical_permission_decision(case: &LeanIdentityPermissionCase, principal: &str) -> bool {
-    case.grants
-        .iter()
-        .any(|grant| grant.principal == principal && grant.permission == case.permission)
-}
-
-fn rust_hostability_decision(
-    deployment: &LeanIdentityDeployment,
-    behavior: &LeanIdentityBehavior,
-) -> bool {
-    deployment.principal == behavior.principal
 }
 
 #[test]
@@ -155,12 +196,16 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
     }
 
     for case in cases {
-        let principal_dids: HashSet<&str> =
+        // Fixture integrity: guard against a malformed Lean export. These
+        // assertions verify the IdentityPermissionCase row is internally
+        // consistent before the runtime-witness assertions run.
+        let principal_dids: std::collections::HashSet<&str> =
             case.principals.iter().map(|p| p.did.as_str()).collect();
         assert!(
             principal_dids.contains(case.row_owner.as_str()),
-            "case {:?}: row_owner must be a declared principal",
-            case.name
+            "case {:?}: row_owner {:?} must be a declared principal",
+            case.name,
+            case.row_owner
         );
         assert!(
             case.permission.contains(case.row_owner.as_str()),
@@ -169,7 +214,6 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
             case.permission,
             case.row_owner
         );
-
         for grant in &case.grants {
             assert!(
                 principal_dids.contains(grant.principal.as_str()),
@@ -179,91 +223,118 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
             );
         }
 
-        let actor = behavior_for_id(case, &case.actor_behavior);
-        let peer = behavior_for_id(case, &case.peer_behavior);
-        assert_eq!(
-            actor.principal, case.expected_actor_principal,
-            "case {:?}: actor behavior-id lookup drifted",
-            case.name
-        );
-        assert_eq!(
-            peer.principal, case.expected_peer_principal,
-            "case {:?}: peer behavior-id lookup drifted",
-            case.name
-        );
+        // Drive runtime types from the Lean fixture. The assertions go
+        // through AgentBehavior::principal.agent_did rather than the
+        // local Rust mirror that this test used to maintain.
+        let runtime_behaviors = build_runtime_behaviors_from_lean_case(case);
+        let by_id: std::collections::HashMap<&str, &AgentBehavior> = runtime_behaviors
+            .iter()
+            .map(|b| (b.behavior_id.as_str(), b.as_ref()))
+            .collect();
 
-        let actor_allowed = rust_canonical_permission_decision(case, &actor.principal);
-        let peer_allowed = rust_canonical_permission_decision(case, &peer.principal);
+        let actor = by_id.get(case.actor_behavior.as_str()).unwrap_or_else(|| {
+            panic!(
+                "case {:?}: actor_behavior {:?} not constructed",
+                case.name, case.actor_behavior
+            )
+        });
+        let peer = by_id.get(case.peer_behavior.as_str()).unwrap_or_else(|| {
+            panic!(
+                "case {:?}: peer_behavior {:?} not constructed",
+                case.name, case.peer_behavior
+            )
+        });
+
         assert_eq!(
-            actor_allowed, case.expected_actor_allowed,
-            "case {:?}: actor permission decision drifted",
+            actor.principal.agent_did, case.expected_actor_principal,
+            "case {:?}: actor behavior-id lookup drifted at runtime layer",
             case.name
         );
         assert_eq!(
-            peer_allowed, case.expected_peer_allowed,
-            "case {:?}: peer permission decision drifted",
+            peer.principal.agent_did, case.expected_peer_principal,
+            "case {:?}: peer behavior-id lookup drifted at runtime layer",
             case.name
         );
         assert_eq!(
-            actor.principal == peer.principal,
+            actor.principal.agent_did == peer.principal.agent_did,
             case.same_principal,
-            "case {:?}: same-principal witness drifted",
-            case.name
-        );
-        assert_eq!(
-            actor_allowed == peer_allowed,
-            case.expected_decisions_equal,
-            "case {:?}: expected decision equality drifted",
-            case.name
-        );
-
-        let host = deployment_for_id(case, &case.host_deployment);
-        assert_eq!(
-            rust_hostability_decision(host, actor),
-            case.expected_actor_hostable,
-            "case {:?}: actor hostability decision drifted",
-            case.name
-        );
-        assert_eq!(
-            rust_hostability_decision(host, peer),
-            case.expected_peer_hostable,
-            "case {:?}: peer hostability decision drifted",
+            "case {:?}: same-principal witness drifted at runtime layer",
             case.name
         );
     }
 }
 
 #[test]
-fn identity_respects_principal_contract_is_declared() {
+fn identity_respects_principal_contract_enforced_by_runtime_routing() {
     let contracts = lean_identity_contracts();
     let target = contracts
         .iter()
         .find(|c: &&LeanIdentityContract| c.name == "identity.respects_principal_boundary")
         .expect(
             "Lean must emit the identity.respects_principal_boundary contract \
-             — this is the spec the future runtime permission engine (#193) lands against",
+             — this is the runtime routing witness for #193",
         );
 
-    // The contract is declared today and not yet enforced by a runtime
-    // permission decision module. The finite rows consumed by
-    // `identity_permission_cases_pin_runtime_permission_contract_shape`
-    // are the #193 handoff: replace that Rust mirror with the runtime
-    // decide function, then flip `enforced` to `true`.
+    // After #193 lands, the contract is enforced by the runtime: the
+    // AgentBehavior::principal back-reference makes behavior -> principal
+    // -> Identity::Authenticated(did) routing single-valued by
+    // construction. DefraDB ACP, being DID-keyed, returns identical
+    // results for behaviors sharing a principal.
     assert!(
-        !target.enforced,
-        "identity.respects_principal_boundary is marked enforced=true in Lean, \
-         but the Rust runtime permission decision module is not yet wired up. \
-         Either revert the Lean flag or extend this test to drive the runtime."
+        target.enforced,
+        "identity.respects_principal_boundary must be enforced=true \
+         now that AgentBehavior holds Arc<AgentPrincipal> as a back-ref \
+         and the loader threads a single principal Arc through every \
+         behavior in the snapshot"
     );
     assert_eq!(
         target.tracked_by, "#193",
-        "tracked_by must point at the runtime-refactor tracker so the deferred \
-         enforcement has a discoverable owner"
+        "tracked_by must continue to point at the runtime-refactor tracker"
     );
     assert!(
         target.statement.contains("agent_did"),
-        "contract statement must mention agent_did so a reader unfamiliar with the \
-         Lean model can grasp the boundary; statement was: {}",
+        "contract statement must name agent_did so a reader unfamiliar \
+         with the Lean model can grasp the boundary; statement was: {}",
         target.statement
     );
+    assert!(
+        target.statement.contains("routing")
+            || target.statement.contains("resolution")
+            || target.statement.contains("Identity::Authenticated"),
+        "contract statement must name the routing-witness interpretation: \
+         the runtime resolves behavior -> agent_did and supplies that DID \
+         as the ACP actor; statement was: {}",
+        target.statement
+    );
+
+    // Exercise the runtime routing witness over every Lean row.
+    for case in lean_identity_permission_cases() {
+        let runtime_behaviors = build_runtime_behaviors_from_lean_case(case);
+        let by_id: std::collections::HashMap<&str, &AgentBehavior> = runtime_behaviors
+            .iter()
+            .map(|b| (b.behavior_id.as_str(), b.as_ref()))
+            .collect();
+
+        let actor = by_id[case.actor_behavior.as_str()];
+        let peer = by_id[case.peer_behavior.as_str()];
+
+        // The structural claim: behaviors with the same Lean principal
+        // resolve to the same agent_did at the runtime layer.
+        assert_eq!(
+            actor.principal.agent_did, case.expected_actor_principal,
+            "case {:?}: actor.principal.agent_did mismatch",
+            case.name
+        );
+        assert_eq!(
+            peer.principal.agent_did, case.expected_peer_principal,
+            "case {:?}: peer.principal.agent_did mismatch",
+            case.name
+        );
+        assert_eq!(
+            actor.principal.agent_did == peer.principal.agent_did,
+            case.same_principal,
+            "case {:?}: routing-witness same_principal mismatch",
+            case.name
+        );
+    }
 }

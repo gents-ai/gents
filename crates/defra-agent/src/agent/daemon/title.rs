@@ -23,7 +23,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         admission_context: AdmissionCallContext,
     ) {
         let node = Arc::clone(&self.node);
-        let behavior_did = self.behavior.did().to_string();
+        let behavior_did = self.behavior.agent_did().to_string();
         let request = request.clone();
         let mut title_agent = self.agent.clone();
         title_agent.tool_choice = None;

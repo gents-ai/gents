@@ -6,7 +6,7 @@ use rig::tool::ToolDyn;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{BehaviorConfig, SamplingConfig};
+use crate::config::{AgentBehavior, SamplingConfig};
 use crate::watcher::AgentRequest;
 
 fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
@@ -15,7 +15,7 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
 
 pub(crate) fn build_agent<C>(
     client: &C,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     preamble: &str,
     tools: Vec<Box<dyn ToolDyn>>,
 ) -> Agent<C::CompletionModel>
@@ -41,7 +41,7 @@ where
 pub(crate) fn build_admitted_agent<C>(
     client: C,
     admission: AdmissionRegistry,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     preamble: &str,
     tools: Vec<Box<dyn ToolDyn>>,
 ) -> Agent<<AdmittedCompletionClient<C> as CompletionClient>::CompletionModel>
@@ -70,7 +70,7 @@ where
 
 fn configure_agent_builder<M, P, ToolState>(
     mut builder: AgentBuilder<M, P, ToolState>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     tool_count: usize,
 ) -> AgentBuilder<M, P, ToolState>
 where
@@ -103,7 +103,7 @@ where
 
 pub(crate) fn agent_with_request_sampling<M>(
     agent: &Agent<M>,
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     request: &AgentRequest,
 ) -> Agent<M>
 where
@@ -175,7 +175,7 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
 }
 
 fn request_additional_params(
-    behavior: &BehaviorConfig,
+    behavior: &AgentBehavior,
     request: &AgentRequest,
 ) -> Option<serde_json::Value> {
     match behavior.backend_provider_kind {

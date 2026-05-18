@@ -10,6 +10,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
     let agent_did = "did:defra-agent:router-latest-snapshot";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: std::collections::HashSet::new(),
         default_behavior_id: "general".to_string(),
@@ -26,6 +27,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: std::collections::HashSet::new(),
         default_behavior_id: "code".to_string(),
@@ -98,6 +100,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     let agent_did = "did:defra-agent:router-observed-generation";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: std::collections::HashSet::new(),
         default_behavior_id: "general".to_string(),
@@ -114,6 +117,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: std::collections::HashSet::new(),
         default_behavior_id: "general".to_string(),

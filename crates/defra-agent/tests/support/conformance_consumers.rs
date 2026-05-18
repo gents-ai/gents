@@ -161,11 +161,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "identity_permission_cases_pin_runtime_permission_contract_shape",
         },
         ConformanceConsumer::RustTest {
-            id: "identity_conformance::identity_respects_principal_contract_is_declared",
+            id: "identity_conformance::identity_respects_principal_contract_enforced_by_runtime_routing",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/identity_conformance.rs",
             module_path: "identity_conformance",
-            function: "identity_respects_principal_contract_is_declared",
+            function: "identity_respects_principal_contract_enforced_by_runtime_routing",
         },
         ConformanceConsumer::RustTest {
             id: "lifecycle::tests::request_state_machine_contract_is_complete",

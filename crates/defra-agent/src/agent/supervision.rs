@@ -7,17 +7,17 @@ use futures::FutureExt;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::retry::RetryPolicy;
 
 pub(super) async fn supervise_behaviors_with_runner<F, Fut>(
-    behaviors: Vec<Arc<BehaviorConfig>>,
+    behaviors: Vec<Arc<AgentBehavior>>,
     mut shutdown: watch::Receiver<bool>,
     retry_policy: RetryPolicy,
     runner: F,
 ) -> Result<()>
 where
-    F: Fn(Arc<BehaviorConfig>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Arc<AgentBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut join_set = JoinSet::new();
@@ -39,7 +39,7 @@ where
             _ = shutdown.changed() => return Ok(()),
             Some(joined) = join_set.join_next() => {
                 let (behavior, outcome) = joined?;
-                running.remove(&behavior.name);
+                running.remove(&behavior.behavior_id);
 
                 if shutdown.has_changed().unwrap_or(false) {
                     return Ok(());
@@ -52,11 +52,11 @@ where
                         }
                     }
                     Ok(Err(error)) => {
-                        let attempt = failure_counts.entry(behavior.name.clone()).or_default();
+                        let attempt = failure_counts.entry(behavior.behavior_id.clone()).or_default();
                         let delay = retry_policy.delay_for_attempt(*attempt);
                         *attempt += 1;
                         tracing::error!(
-                            behavior_id = %behavior.name,
+                            behavior_id = %behavior.behavior_id,
                             error = %error,
                             delay_ms = delay.as_millis() as u64,
                             "behavior task failed, scheduling restart"
@@ -68,11 +68,11 @@ where
                         spawn_behavior(&mut join_set, &mut running, behavior, shutdown.clone(), runner.clone());
                     }
                     Err(_) => {
-                        let attempt = failure_counts.entry(behavior.name.clone()).or_default();
+                        let attempt = failure_counts.entry(behavior.behavior_id.clone()).or_default();
                         let delay = retry_policy.delay_for_attempt(*attempt);
                         *attempt += 1;
                         tracing::error!(
-                            behavior_id = %behavior.name,
+                            behavior_id = %behavior.behavior_id,
                             delay_ms = delay.as_millis() as u64,
                             "behavior task panicked, scheduling restart"
                         );
@@ -90,16 +90,16 @@ where
 }
 
 fn spawn_behavior<F, Fut>(
-    join_set: &mut JoinSet<(Arc<BehaviorConfig>, std::thread::Result<Result<()>>)>,
+    join_set: &mut JoinSet<(Arc<AgentBehavior>, std::thread::Result<Result<()>>)>,
     running: &mut std::collections::HashSet<String>,
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     shutdown: watch::Receiver<bool>,
     runner: F,
 ) where
-    F: Fn(Arc<BehaviorConfig>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Arc<AgentBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let name = behavior.name.clone();
+    let name = behavior.behavior_id.clone();
     running.insert(name);
     join_set.spawn(async move {
         let outcome = AssertUnwindSafe(runner(behavior.clone(), shutdown))

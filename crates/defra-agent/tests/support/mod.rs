@@ -11,6 +11,7 @@ use tempfile::TempDir;
 pub mod conformance_consumers;
 pub mod fixtures;
 pub mod http_mock;
+pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod mock_endpoint;
 pub mod pairing_conformance;

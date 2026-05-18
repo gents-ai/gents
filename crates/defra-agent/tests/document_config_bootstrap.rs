@@ -2,7 +2,7 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, list_agent_behaviors, load_agent_behavior, load_inference_profile,
-    upsert_agent_behavior, upsert_inference_profile, AgentBehavior, InferenceProfile,
+    upsert_agent_behavior, upsert_inference_profile, AgentBehaviorDocument, InferenceProfile,
 };
 
 mod support;
@@ -145,7 +145,7 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
 
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: behavior_id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some("Default".to_string()),

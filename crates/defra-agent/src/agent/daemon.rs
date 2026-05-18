@@ -13,7 +13,7 @@ mod title;
 
 use super::runtime::StartupBarrier;
 use crate::compaction::{CompactionOptions, DefraCompactor};
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
@@ -23,7 +23,7 @@ use crate::watcher::AgentRequest;
 
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     agent: Agent<M>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
@@ -44,7 +44,7 @@ enum HandleRequestOutcome {
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<BehaviorConfig>,
+        behavior: Arc<AgentBehavior>,
         agent: Agent<M>,
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
@@ -54,7 +54,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
-            behavior.did(),
+            behavior.agent_did(),
             Duration::from_millis(behavior.stream_batch_ms),
         );
         let compactor = DefraCompactor::new(agent.clone());
@@ -85,19 +85,19 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
-            behavior_id = %self.behavior.name,
-            did = %self.behavior.did(),
+            behavior_id = %self.behavior.behavior_id,
+            did = %self.behavior.agent_did(),
             model = %self.behavior.model_name,
             context_window = self.behavior.context_window,
             "defra-agent behavior started"
         );
 
         self.startup_barrier
-            .mark_behavior_ready(&self.behavior.name)
+            .mark_behavior_ready(&self.behavior.behavior_id)
             .await;
         tracing::info!(
-            behavior_id = %self.behavior.name,
-            did = %self.behavior.did(),
+            behavior_id = %self.behavior.behavior_id,
+            did = %self.behavior.agent_did(),
             "defra-agent behavior executor online"
         );
 
@@ -106,7 +106,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 biased;
 
                 _ = shutdown.changed() => {
-                    tracing::info!(behavior_id = %self.behavior.name, "shutdown signal received");
+                    tracing::info!(behavior_id = %self.behavior.behavior_id, "shutdown signal received");
                     return Ok(());
                 }
 
@@ -131,7 +131,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 .filter(|behavior_id| !behavior_id.is_empty())
                 .unwrap_or("")
                 .to_string();
-            let behavior_id = self.behavior.name.clone();
+            let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
             let execution_origin = crate::lifecycle::ExecutionOrigin::from_persisted(
                 request.execution_origin.as_deref(),
@@ -159,8 +159,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     ) {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.behavior.name,
-            self.behavior.did(),
+            &self.behavior.behavior_id,
+            self.behavior.agent_did(),
             request.clone(),
             self.behavior.deadline_duration.as_secs(),
             crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),
@@ -171,7 +171,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued) => {
                 tracing::info!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     "request queued behind an earlier same-session request"
@@ -180,7 +180,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Ok(ClaimOutcome::Interrupted) => {
                 tracing::info!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "pre_claim",
@@ -190,7 +190,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Ok(ClaimOutcome::Expired) => {
                 tracing::info!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "stale_ttl",
@@ -200,7 +200,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Err(error) => {
                 tracing::warn!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     error = %error,
                     "failed to claim request"
@@ -215,14 +215,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             .map(str::trim)
             .filter(|behavior_id| !behavior_id.is_empty())
         {
-            if requested_behavior_id != self.behavior.name {
+            if requested_behavior_id != self.behavior.behavior_id {
                 let error = anyhow::anyhow!(
                     "request targets behavior {} but runtime is serving behavior {}",
                     requested_behavior_id,
-                    self.behavior.name
+                    self.behavior.behavior_id
                 );
                 tracing::warn!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     requested_behavior_id = %requested_behavior_id,
@@ -242,7 +242,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 };
                 if let Err(stream_error) = response_written {
                     tracing::error!(
-                        behavior_id = %self.behavior.name,
+                        behavior_id = %self.behavior.behavior_id,
                         error = %stream_error,
                         "failed to write behavior-mismatch response"
                     );
@@ -253,7 +253,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
 
         if let Err(error) = lifecycle.prepare_session_with_identity().await {
             tracing::error!(
-                behavior_id = %self.behavior.name,
+                behavior_id = %self.behavior.behavior_id,
                 request_id = %request.request_id,
                 session_id = %request.session_id,
                 behavior_id = %lifecycle.behavior_id(),
@@ -274,7 +274,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             };
             if let Err(stream_error) = response_written {
                 tracing::error!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     error = %stream_error,
                     "failed to write session-preparation response"
                 );
@@ -302,7 +302,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Ok(HandleRequestOutcome::Interrupted) => {
                 tracing::info!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "mid_flight",
@@ -312,7 +312,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 tracing::error!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request failed after response started"
@@ -322,7 +322,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
             Err(error) => {
                 tracing::error!(
-                    behavior_id = %self.behavior.name,
+                    behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request handling failed"
@@ -341,7 +341,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 };
                 if let Err(stream_error) = response_written {
                     tracing::error!(
-                        behavior_id = %self.behavior.name,
+                        behavior_id = %self.behavior.behavior_id,
                         error = %stream_error,
                         "failed to write error response"
                     );

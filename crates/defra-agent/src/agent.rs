@@ -7,12 +7,12 @@ use tokio::sync::{watch, OnceCell};
 
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::hook::FailurePolicy;
-use crate::identity::AgentIdentity;
+use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -28,6 +28,7 @@ use crate::trigger_engine::manual_source::ManualTriggerHandle;
 mod builder;
 mod daemon;
 mod document_view;
+pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
 mod stream_processor;
@@ -36,8 +37,11 @@ mod supervision;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use principal_assembly::assemble_principal_and_behaviors;
+pub(crate) use principal_assembly::BehaviorBuildError;
+
 #[cfg(test)]
-pub(crate) use builder::PendingBehaviorConfig;
+pub(crate) use builder::PendingAgentBehavior;
 pub use builder::{BehaviorBuilder, DefraAgentBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,9 +89,8 @@ pub(crate) struct DocumentResolveContext {
 #[derive(Clone)]
 pub struct DefraAgent {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
-    default_behavior_id: String,
-    behaviors: Vec<Arc<BehaviorConfig>>,
+    principal: Arc<AgentPrincipal>,
+    behaviors: Vec<Arc<AgentBehavior>>,
     unavailable_behaviors: HashMap<String, String>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
@@ -119,24 +122,42 @@ impl DefraAgent {
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
-        let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
+        debug_assert!(
+            resolved_snapshot.principal.is_some(),
+            "from_default_behavior_documents called with a snapshot lacking a principal; \
+             the production loader always sets principal: Some(...) — a None snapshot \
+             means a non-production path bypassed the loader and would produce a \
+             DefraAgent.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
+        );
+        // The snapshot carries the principal Arc constructed once in the loader.
+        // Fall back to a synthetic principal if (in tests) the snapshot has none.
+        let principal = resolved_snapshot.principal.clone().unwrap_or_else(|| {
+            let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
+            Arc::new(AgentPrincipal {
+                agent_did: identity.did().to_string(),
+                identity: identity.clone(),
+                default_behavior_id,
+                display_name: None,
+                enabled: true,
+            })
+        });
+        let default_behavior_id = principal.default_behavior_id.clone();
         let mut behaviors = resolved_snapshot
             .behaviors
             .values()
             .cloned()
             .collect::<Vec<_>>();
         behaviors.sort_by(|left, right| {
-            let left_is_default = left.name == default_behavior_id;
-            let right_is_default = right.name == default_behavior_id;
+            let left_is_default = left.behavior_id == default_behavior_id;
+            let right_is_default = right.behavior_id == default_behavior_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
         Ok(Self {
             node,
-            agent_did: identity.did().to_string(),
-            default_behavior_id,
+            principal,
             behaviors,
             unavailable_behaviors: resolved_snapshot.unavailable_behaviors,
             document_runtime_context: Some(document_runtime_context),
@@ -152,16 +173,37 @@ impl DefraAgent {
         })
     }
 
-    pub fn behaviors(&self) -> &[Arc<BehaviorConfig>] {
+    pub fn behaviors(&self) -> &[Arc<AgentBehavior>] {
         &self.behaviors
     }
 
+    /// Returns the deployment principal record.
+    ///
+    /// All DefraDB ops issued by this `DefraAgent` are signed by
+    /// `self.principal.identity`. Two `AgentBehavior`s on the same
+    /// `DefraAgent` share this Arc by construction (single-principal
+    /// per snapshot invariant), so any DID-keyed permission decision
+    /// returns identical results for behaviors on this deployment.
+    pub fn principal(&self) -> &AgentPrincipal {
+        &self.principal
+    }
+
+    /// Returns a clone of the deployment principal Arc.
+    ///
+    /// Use this when threading the principal into a task / spawned
+    /// future / snapshot rebuild path that needs to hold the Arc
+    /// independently. Prefer `principal()` for read-only access
+    /// from a single scope.
+    pub(crate) fn principal_arc(&self) -> Arc<AgentPrincipal> {
+        Arc::clone(&self.principal)
+    }
+
     pub fn agent_did(&self) -> &str {
-        &self.agent_did
+        &self.principal.agent_did
     }
 
     pub fn default_behavior_id(&self) -> &str {
-        &self.default_behavior_id
+        &self.principal.default_behavior_id
     }
 
     pub fn unavailable_behaviors(&self) -> &HashMap<String, String> {
@@ -199,14 +241,14 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 }
 
 pub(crate) fn behavior_config_from_documents(
-    identity: Arc<dyn AgentIdentity>,
+    principal: Arc<AgentPrincipal>,
     behavior: &crate::document_config::AgentBehavior,
     backend: &crate::backend_registry::InferenceBackend,
     inference_profile: &crate::document_config::InferenceProfile,
     tool_selection: ToolSelection,
     subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
-) -> anyhow::Result<BehaviorConfig> {
+) -> anyhow::Result<AgentBehavior> {
     let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
     let stream_batch_ms = inference_profile
         .stream_batch_ms
@@ -220,9 +262,9 @@ pub(crate) fn behavior_config_from_documents(
         .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
 
-    Ok(BehaviorConfig {
-        name: behavior.behavior_id.clone(),
-        identity,
+    Ok(AgentBehavior {
+        behavior_id: behavior.behavior_id.clone(),
+        principal,
         backend_id: Some(backend.backend_id.clone()),
         backend_provider_kind: backend.provider_kind,
         backend_endpoint: backend.endpoint.clone(),

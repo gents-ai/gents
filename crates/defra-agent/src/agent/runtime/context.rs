@@ -37,12 +37,12 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(behaviors: &[Arc<crate::config::BehaviorConfig>]) -> Self {
+    pub(super) fn new(behaviors: &[Arc<crate::config::AgentBehavior>]) -> Self {
         Self {
             pending_behaviors: Mutex::new(
                 behaviors
                     .iter()
-                    .map(|behavior| behavior.name.clone())
+                    .map(|behavior| behavior.behavior_id.clone())
                     .collect::<HashSet<_>>(),
             ),
             notify: Notify::new(),
@@ -73,7 +73,7 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_behavior(
         &self,
-        behavior: Arc<crate::config::BehaviorConfig>,
+        behavior: Arc<crate::config::AgentBehavior>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         shutdown: watch::Receiver<bool>,
@@ -96,8 +96,8 @@ impl RuntimeContext {
             &tool_surface.background_tools().allowlist,
         );
         tracing::info!(
-            behavior_id = %behavior.name,
-            did = %behavior.did(),
+            behavior_id = %behavior.behavior_id,
+            did = %behavior.agent_did(),
             model = %behavior.model_name,
             tools = ?tool_names,
             "building behavior runtime"
@@ -107,7 +107,7 @@ impl RuntimeContext {
             BackendProviderKind::OpenAiCompatible => {
                 let build_context = format!(
                     "building OpenAI-compatible completion client for behavior {} against {}",
-                    behavior.name, behavior.backend_endpoint
+                    behavior.behavior_id, behavior.backend_endpoint
                 );
                 let client: rig::providers::openai::CompletionsClient =
                     rig::providers::openai::CompletionsClient::builder()
@@ -130,7 +130,7 @@ impl RuntimeContext {
             BackendProviderKind::OpenRouter => {
                 let build_context = format!(
                     "building OpenRouter completion client for behavior {} against {}",
-                    behavior.name, behavior.backend_endpoint
+                    behavior.behavior_id, behavior.backend_endpoint
                 );
                 let client: rig::providers::openrouter::Client =
                     rig::providers::openrouter::Client::builder()
@@ -156,7 +156,7 @@ impl RuntimeContext {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_behavior_with_client<C>(
         &self,
-        behavior: Arc<crate::config::BehaviorConfig>,
+        behavior: Arc<crate::config::AgentBehavior>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,

@@ -154,7 +154,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .iter()
         .map(|behavior| {
             json!({
-                "behavior_id": behavior.name,
+                "behavior_id": behavior.behavior_id,
                 "backend_id": behavior.backend_id,
                 "model_name": behavior.model_name,
             })

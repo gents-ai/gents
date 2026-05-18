@@ -25,7 +25,7 @@ use anyhow::Result;
 use rig::completion::message::{Message, Text, UserContent};
 use rig::one_or_many::OneOrMany;
 
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::tool_surface::ToolSurface;
 
 const TITLE_GENERATION_SUFFIX: &str =
@@ -94,12 +94,12 @@ pub struct LayeredPromptBuilder {
 }
 
 impl LayeredPromptBuilder {
-    pub fn new(behavior: &BehaviorConfig, tool_surface: &ToolSurface) -> Self {
+    pub fn new(behavior: &AgentBehavior, tool_surface: &ToolSurface) -> Self {
         let tool_names = tool_surface.tool_names();
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         Self::for_behavior(
             &behavior.system_prompt,
-            &behavior.name,
+            &behavior.behavior_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
             behavior.context_window,
