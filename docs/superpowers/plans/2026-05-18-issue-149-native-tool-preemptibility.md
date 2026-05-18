@@ -12,6 +12,15 @@ Each task below is intended to be one PR unless the implementation reveals a
 smaller safe split. Every task ends with formatting, focused tests, broader
 smoke tests where appropriate, and a commit.
 
+Filed sub-issues:
+
+- #230: ManagedExec Lean liveness model.
+- #231: ManagedExec Rust boundary and process ownership.
+- #232: Native filesystem runner protocol.
+- #233: ManagedExec conformance witness rows.
+- #234: Health/status liveness reporting.
+- #235: Soak closeout gate.
+
 ## Task 1: Add ManagedExec Lean State Skeleton
 
 Purpose: introduce the executor state machine without connecting it to tool
@@ -570,4 +579,3 @@ Expected output:
 test result: ok
 Build completed successfully
 ```
-

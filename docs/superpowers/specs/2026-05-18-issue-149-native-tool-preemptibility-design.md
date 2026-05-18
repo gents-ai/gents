@@ -4,6 +4,7 @@ Status: design draft
 Date: 2026-05-18
 Tracking: #149, #159 R3
 Related audit: `docs/superpowers/audits/2026-05-12-deadline-plumbing-audit.md`
+Filed follow-ups: #230, #231, #232, #233, #234, #235
 
 ## Goal
 
@@ -335,17 +336,13 @@ This work should be multi-PR. Natural boundaries:
 
 ## Deferred Decisions
 
-The following decisions should be tracked as sub-issues before implementation:
+The following decisions and cross-cutting work are tracked as filed sub-issues:
 
-- Whether `ManagedExec` is a new crate (`crates/defra-managed-exec`) or a module
-  under `crates/defra-agent/src/managed_exec/`.
-- Whether native tools use one shared runner binary or one subcommand per tool.
-- Whether runner protocol is stdin/stdout JSON only, or also supports streaming
-  partial output.
-- Whether Unix-only process-group kill is acceptable for the first PR, with
-  Windows Job Object support deferred.
-- Whether executor metadata is memory-only health data or persisted on
-  `AgentToolCall`.
-
-Sub-issue numbers will be added in a follow-up docs commit after filing.
-
+| Issue | Title | Scope |
+| --- | --- | --- |
+| #230 | Issue #149 R3: model ManagedExec liveness in Lean | Decide standalone machine vs ToolExecution extension; add state, transition, and liveness theorem shape. |
+| #231 | Issue #149 R3: choose ManagedExec Rust crate boundary and process ownership | Decide crate/module boundary, Unix process-group API, and first-platform support. |
+| #232 | Issue #149 R3: define native filesystem runner protocol | Decide shared runner vs per-tool binary, JSON vs streaming protocol, shared traversal library shape, and `read_file` migration. |
+| #233 | Issue #149 R3: add ManagedExec conformance witness rows | Emit ManagedExec vocabulary, transition rows, liveness rows, and Rust coverage consumers. |
+| #234 | Issue #149 R3: expose native tool executor liveness in health/status | Decide memory-only vs persisted executor metadata and expose active tool/executor age counters. |
+| #235 | Issue #149 R3: define soak closeout gate for native tool preemptibility | Define the replay/soak evidence required before treating #149/R3 as operationally closed. |
