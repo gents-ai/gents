@@ -278,11 +278,10 @@ def caseCoverage : List CoverageEntry :=
       "queue_deadline_cases"
       "QueueDeadlineConformanceCases"
       "state_machine_conformance::generated_queue_deadline_cases_pin_r4a_contract_rows"
-  , consumerWithFollowUpCoverage
+  , consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "state_machine_conformance::generated_recovery_sweep_cases_pin_startup_recovery_contract"
-      "Deadline audit PR E must implement InferenceCall::recover_all; the bridge terminal wiring follow-up must implement detached bridge row recovery."
+      "state_machine_conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract"
   , consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"

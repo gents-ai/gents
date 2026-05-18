@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use super::context::{RuntimeContext, StartupBarrier};
-use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
+use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall};
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{DefraAgent, DocumentResolveContext, ProcessLifecycleState};
 use crate::backend_registry;
@@ -374,6 +374,47 @@ pub(in crate::agent) async fn run_agent(
 
 async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_behavior_id: &str) {
     let mut recovered_any = false;
+
+    match ToolCallLifecycle::recover_all(node, agent_did).await {
+        Ok(report) => {
+            if report.tool_calls_recovered > 0 {
+                recovered_any = true;
+                tracing::info!(
+                    agent_did = %agent_did,
+                    count = report.tool_calls_recovered,
+                    "recovered stuck tool calls"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %agent_did,
+                error = %error,
+                "startup tool-call recovery failed"
+            );
+        }
+    }
+
+    match InferenceCall::recover_all(node, agent_did).await {
+        Ok(report) => {
+            if report.calls_recovered > 0 {
+                recovered_any = true;
+                tracing::info!(
+                    agent_did = %agent_did,
+                    count = report.calls_recovered,
+                    "recovered stale inference calls"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %agent_did,
+                error = %error,
+                "startup inference-call recovery failed"
+            );
+        }
+    }
+
     match RequestLifecycle::recover_all(node, agent_did).await {
         Ok(report) => {
             if report.requests_recovered > 0 {
@@ -403,26 +444,6 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
         }
         Err(error) => {
             tracing::warn!(agent_did = %agent_did, error = %error, "startup recovery failed");
-        }
-    }
-
-    match ToolCallLifecycle::recover_all(node, agent_did).await {
-        Ok(report) => {
-            if report.tool_calls_recovered > 0 {
-                recovered_any = true;
-                tracing::info!(
-                    agent_did = %agent_did,
-                    count = report.tool_calls_recovered,
-                    "recovered stuck tool calls"
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                agent_did = %agent_did,
-                error = %error,
-                "startup tool-call recovery failed"
-            );
         }
     }
 

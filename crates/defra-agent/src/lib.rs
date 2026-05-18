@@ -49,6 +49,7 @@ pub mod watcher;
 
 pub use collection::Collection;
 
+pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState,

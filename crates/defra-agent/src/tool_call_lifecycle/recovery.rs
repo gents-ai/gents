@@ -6,8 +6,8 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::background_tools::{
-    fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
-    subagent_tool_not_allowed_payload,
+    child_request_completed, fail_running_subagent_tool_call, load_parent_subagent_authorization,
+    project_child_terminal, subagent_spawn_denial, subagent_tool_not_allowed_payload,
 };
 use crate::graphql::escape_graphql_string;
 use crate::interrupt::interrupt_request;
@@ -15,7 +15,7 @@ use crate::session::execute_mutation_with_retry;
 
 use super::{
     subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
-    FailureClass, ToolCallState,
+    ChildTerminal, FailureClass, ToolCallState,
 };
 
 #[derive(Debug, Default)]
@@ -45,6 +45,8 @@ struct RunningToolCallRow {
     cancel_policy: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
+    #[serde(default)]
+    unclaimed_deadline_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +75,7 @@ enum RecoveryOutcome {
     Cancelled,
     Failed,
     BackgroundInterrupted,
+    UnclaimedCrossDeploymentSpawn,
 }
 
 impl super::ToolCallLifecycle {
@@ -117,6 +120,13 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         };
         if child_request_exists(node, &child_request_id).await? {
+            continue;
+        }
+        if row
+            .unclaimed_deadline_at
+            .as_deref()
+            .is_some_and(|deadline| !deadline.is_empty())
+        {
             continue;
         }
 
@@ -299,6 +309,7 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
     let mut recovered = 0;
     for row in rows {
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
+        let unclaimed_deadline_at = parse_datetime(row.unclaimed_deadline_at.as_deref());
         let parent = match row
             .request_id
             .as_deref()
@@ -308,30 +319,27 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             None => None,
         };
 
-        if is_background_subagent_tool(&row)
-            && !parent
-                .as_ref()
-                .is_some_and(|parent| request_is_interrupted(parent))
-        {
-            tracing::info!(
-                doc_id = %row.doc_id,
-                request_id = row.request_id.as_deref().unwrap_or(""),
-                session_id = %row.session_id,
-                tool_call_id = %row.tool_call_id,
-                child_request_id = row.child_request_id.as_deref().unwrap_or(""),
-                "leaving background subagent tool call running during recovery"
-            );
+        if recover_bridge_terminal_child(node, &row).await? {
+            recovered += 1;
             continue;
         }
 
-        let outcome = if is_background_tool_row(&row)
+        let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
+            Some(RecoveryOutcome::TimedOut)
+        } else if unclaimed_deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
+            Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
+        } else if is_background_tool_row(&row)
             && parent
                 .as_ref()
                 .is_some_and(|parent| !request_is_terminal(parent))
         {
             Some(RecoveryOutcome::BackgroundInterrupted)
-        } else if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
-            Some(RecoveryOutcome::TimedOut)
+        } else if is_detached_subagent_tool(&row)
+            && parent
+                .as_ref()
+                .is_some_and(|parent| request_is_interrupted(parent))
+        {
+            None
         } else if parent
             .as_ref()
             .is_some_and(|parent| request_is_interrupted(parent))
@@ -344,37 +352,37 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
         };
 
         let Some(outcome) = outcome else {
+            if is_background_subagent_tool(&row) {
+                tracing::info!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    child_request_id = row.child_request_id.as_deref().unwrap_or(""),
+                    "leaving background subagent tool call running during recovery"
+                );
+            }
             continue;
         };
 
-        if is_detached_subagent_tool(&row) {
-            tracing::info!(
-                doc_id = %row.doc_id,
-                request_id = row.request_id.as_deref().unwrap_or(""),
-                session_id = %row.session_id,
-                tool_call_id = %row.tool_call_id,
-                child_request_id = row.child_request_id.as_deref().unwrap_or(""),
-                "leaving detached subagent tool call running during recovery"
-            );
-            continue;
-        }
-
         let mut remote_cancel_intent_at = None;
-        if let Some(child_request_id) = cascade_child_request_id(&row) {
-            if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
-                if let Err(error) = interrupt_request(node, child_request_id).await {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        session_id = %row.session_id,
-                        tool_call_id = %row.tool_call_id,
-                        child_request_id,
-                        error = %error,
-                        "failed to cascade recovery interrupt to child request"
-                    );
+        if outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn {
+            if let Some(child_request_id) = cascade_child_request_id(&row) {
+                if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                    if let Err(error) = interrupt_request(node, child_request_id).await {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            request_id = row.request_id.as_deref().unwrap_or(""),
+                            session_id = %row.session_id,
+                            tool_call_id = %row.tool_call_id,
+                            child_request_id,
+                            error = %error,
+                            "failed to cascade recovery interrupt to child request"
+                        );
+                    }
+                } else {
+                    remote_cancel_intent_at = Some(Utc::now());
                 }
-            } else {
-                remote_cancel_intent_at = Some(Utc::now());
             }
         }
 
@@ -448,6 +456,7 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
             await_mode
             cancel_policy
             child_request_id
+            unclaimed_deadline_at
         }
     }"#;
 
@@ -531,6 +540,171 @@ async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<b
         .is_some_and(|rows| !rows.is_empty()))
 }
 
+async fn recover_bridge_terminal_child(
+    node: &EmbeddedNode,
+    row: &RunningToolCallRow,
+) -> Result<bool> {
+    let Some(child_request_id) = child_request_id(row) else {
+        return Ok(false);
+    };
+    let Some(child) =
+        crate::background_tools::load_child_terminal_row(node, child_request_id).await?
+    else {
+        return Ok(false);
+    };
+
+    if child_request_completed(&child) {
+        let result = load_child_completion_result(node, child_request_id)
+            .await?
+            .unwrap_or_else(|| format!("child request {child_request_id} completed"));
+        recover_bridge_completed_row(node, row, &result).await?;
+        return Ok(true);
+    }
+
+    let Some(terminal) = project_child_terminal(&child) else {
+        return Ok(false);
+    };
+    recover_bridge_failed_row(node, row, &terminal).await?;
+    Ok(true)
+}
+
+async fn load_child_completion_result(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Result<Option<String>> {
+    #[derive(Deserialize)]
+    struct ResponseRow {
+        content: Option<String>,
+    }
+
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                content
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query child AgentResponse {child_request_id} for bridge recovery failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<ResponseRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .next()
+        .and_then(|row| row.content)
+        .filter(|content| !content.trim().is_empty()))
+}
+
+async fn recover_bridge_completed_row(
+    node: &EmbeddedNode,
+    row: &RunningToolCallRow,
+    child_result: &str,
+) -> Result<()> {
+    let now = Utc::now();
+    let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
+    let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
+    let latency_ms = (now - started_at).num_milliseconds().max(0);
+    let escaped_doc_id = escape_graphql_string(&row.doc_id);
+    let escaped_result = escape_graphql_string(child_result);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "running" }}
+                }},
+                input: {{
+                    result: "{escaped_result}",
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    started_at: "{started_at}",
+                    deadline_at: "{deadline_at}",
+                    completed_at: "{completed_at}",
+                    latency_ms: {latency_ms},
+                    unclaimed_deadline_at: null
+                }}
+            ) {{ _docID }}
+        }}"#,
+        started_at = started_at.to_rfc3339(),
+        deadline_at = deadline_at.to_rfc3339(),
+        completed_at = now.to_rfc3339(),
+    );
+
+    execute_mutation_with_retry(node, &mutation, "recover_bridge_completed_child")
+        .await
+        .context("recover bridge completed child mutation")?;
+    Ok(())
+}
+
+async fn recover_bridge_failed_row(
+    node: &EmbeddedNode,
+    row: &RunningToolCallRow,
+    terminal: &ChildTerminal,
+) -> Result<()> {
+    let now = Utc::now();
+    let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
+    let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
+    let latency_ms = (now - started_at).num_milliseconds().max(0);
+    let escaped_doc_id = escape_graphql_string(&row.doc_id);
+    let projected = terminal.projected_state().as_str();
+    let optional_fields = match terminal {
+        ChildTerminal::Failed {
+            reason,
+            failure_class,
+        } => {
+            let escaped_reason = escape_graphql_string(reason);
+            let failure_class = failure_class.as_str();
+            format!(
+                r#"result: "{escaped_reason}",
+                    tool_failure_class: "{failure_class}","#
+            )
+        }
+        _ => String::new(),
+    };
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "running" }}
+                }},
+                input: {{
+                    {optional_fields}
+                    status: "completed",
+                    lifecycle_state: "{projected}",
+                    started_at: "{started_at}",
+                    deadline_at: "{deadline_at}",
+                    completed_at: "{completed_at}",
+                    latency_ms: {latency_ms},
+                    unclaimed_deadline_at: null
+                }}
+            ) {{ _docID }}
+        }}"#,
+        started_at = started_at.to_rfc3339(),
+        deadline_at = deadline_at.to_rfc3339(),
+        completed_at = now.to_rfc3339(),
+    );
+
+    execute_mutation_with_retry(node, &mutation, "recover_bridge_terminal_child")
+        .await
+        .context("recover bridge terminal child mutation")?;
+    Ok(())
+}
+
 async fn recover_tool_call_row(
     node: &EmbeddedNode,
     row: &RunningToolCallRow,
@@ -571,7 +745,8 @@ async fn recover_tool_call_row(
                     lifecycle_state: "{lifecycle_state}",
                     started_at: "{started_at_str}"{deadline_field},
                     completed_at: "{completed_at_str}",
-                    latency_ms: {latency_ms}{failure_class_field}{remote_cancel_intent_fields}
+                    latency_ms: {latency_ms},
+                    unclaimed_deadline_at: null{failure_class_field}{remote_cancel_intent_fields}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -698,13 +873,14 @@ impl RecoveryOutcome {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,
             Self::Cancelled | Self::BackgroundInterrupted => ToolCallState::Cancelled,
-            Self::Failed => ToolCallState::Failed,
+            Self::Failed | Self::UnclaimedCrossDeploymentSpawn => ToolCallState::Failed,
         }
     }
 
     fn failure_class(self) -> Option<FailureClass> {
         match self {
             Self::TimedOut | Self::Failed => Some(FailureClass::External),
+            Self::UnclaimedCrossDeploymentSpawn => Some(FailureClass::ServiceUnavailable),
             Self::Cancelled | Self::BackgroundInterrupted => None,
         }
     }
@@ -728,6 +904,9 @@ impl RecoveryOutcome {
             }
             Self::Failed => {
                 "tool call failed because parent request was already terminal".to_string()
+            }
+            Self::UnclaimedCrossDeploymentSpawn => {
+                "no peer claimed subagent spawn before the unclaimed spawn deadline".to_string()
             }
         }
     }

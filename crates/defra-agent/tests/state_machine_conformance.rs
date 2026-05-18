@@ -7,8 +7,9 @@ use defra_agent::event_delivery_contract::{
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use defra_agent::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
 use defra_agent::{
-    write_manual_agent_request, DefraSessionHook, DefraStreamWriter, FailurePolicy,
+    write_manual_agent_request, DefraSessionHook, DefraStreamWriter, FailurePolicy, InferenceCall,
     RequestLifecycle,
 };
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
@@ -40,12 +41,11 @@ use lean_vocab_test::{
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
     lean_inference_slot_accounting_case, lean_mcp_health_cases, lean_queue_deadline_case,
     lean_queue_deadline_cases, lean_r4c_background_work_case, lean_r4c_background_work_cases,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_case,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_cases,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
-    LeanR4cBackgroundWorkCase,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
+    lean_request_transition_cases, lean_response_transition_cases, lean_runtime_reconcile_case,
+    lean_session_recovery_case, lean_state_machine_contract, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -58,7 +58,7 @@ use support::snapshots::{
 };
 use support::{
     build_request, create_agent_session, create_request, create_response_with_content_and_status,
-    create_response_with_status, first_optional_row, set_interrupt_requested_at,
+    create_response_with_status, first_optional_row, first_row, set_interrupt_requested_at,
     set_request_lifecycle_state, set_valid_until, test_db, upsert_conversation, AGENT_DID,
     AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
@@ -91,9 +91,9 @@ fn lean_executable_contracts_cover_initial_domains() {
     coverage::lean_executable_contracts_cover_initial_domains();
 }
 
-#[test]
-fn generated_recovery_sweep_cases_pin_startup_recovery_contract() {
-    recovery_sweeps::generated_recovery_sweep_cases_pin_startup_recovery_contract();
+#[tokio::test]
+async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
+    recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
 }
 
 #[test]

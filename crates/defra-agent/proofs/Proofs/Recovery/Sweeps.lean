@@ -343,9 +343,9 @@ def detachedBridgeRecoverySweep : RecoverySweep :=
   { Row := DetachedBridgeRecoveryRow
   , collection := .agentToolCall
   , sweepId := "tool_call_lifecycle_recover_detached_bridge_rows"
-  , rustFunction := "ToolCallLifecycle::recover_detached_bridge_rows"
+  , rustFunction := "ToolCallLifecycle::recover_all"
   , cadence := .startup
-  , implementationStatus := .obligation
+  , implementationStatus := .implemented
   , stale := detachedBridgeRecoveryStale
   , recover := detachedBridgeRecover
   , terminal := fun row => isTerminal row.call.state
@@ -431,7 +431,7 @@ def inferenceCallRecoverySweep : RecoverySweep :=
   , sweepId := "inference_call_recover_all_stale_calls"
   , rustFunction := "InferenceCall::recover_all"
   , cadence := .startup
-  , implementationStatus := .obligation
+  , implementationStatus := .implemented
   , stale := inferenceCallRecoveryStale
   , recover := inferenceCallRecover
   , terminal := fun row => isTerminal row.call.state
