@@ -4,7 +4,7 @@ Status: design draft
 Date: 2026-05-18
 Tracking: #149, #159 R3
 Related audit: `docs/superpowers/audits/2026-05-12-deadline-plumbing-audit.md`
-Filed follow-ups: #230, #231, #232, #233, #234, #235
+Filed follow-ups: #230, #231, #232, #233, #234, #235, #236
 
 ## Goal
 
@@ -82,6 +82,12 @@ Reference inspected:
 - `process_manager.rs` centralizes spawn, output collection until deadline,
   process pruning, exit watching, and background polling.
 
+Controller decision, 2026-05-18: Option A is confirmed. Options B and C do not
+satisfy the bounded-timeout liveness theorem this spec needs to discharge. Keep
+the existing `spawn_blocking` filesystem boundary as the in-flight mitigation;
+`native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue`
+stays green throughout migration as the guardrail.
+
 Defra does not need the full interactive Codex surface for native filesystem
 tools. The recommended subset is a single-shot managed-exec layer:
 
@@ -97,15 +103,29 @@ tools. The recommended subset is a single-shot managed-exec layer:
 
 The runner should be a Defra binary rather than shelling out to `find`, `grep`,
 or platform tools. That preserves the current ignore rules, path display,
-structured output, and test fixtures while avoiding quoting/platform drift.
+structured output, and test fixtures while avoiding quoting/platform drift. The
+runner binary should live in its own crate because it is a separate executable;
+ManagedExec itself stays a `defra-agent` module.
+
+ManagedExec is a module at `crates/defra-agent/src/managed_exec/`, not a new
+crate. Codex `unified_exec` is a useful module precedent; extract only if a
+consumer outside `defra-agent` appears.
 
 Process ownership should be group-scoped on Unix: spawn the runner into its own
 process group/session, terminate the group on timeout, then escalate after a
-short grace interval. Windows can initially be out of scope or use a Job Object
-when Windows support becomes required. Existing bash tools already demonstrate
-the shape of subprocess timeouts (`crates/defra-agent/src/toolset/shared/command.rs:122`,
-`command.rs:147`, `crates/defra-agent/src/toolset/bash_tools.rs:106`), but the
-native-tool boundary needs stronger ownership than `kill_on_drop(true)` alone.
+short grace interval. The first implementation is Unix-only for darwin/Linux,
+with a clear `#[cfg(unix)]` boundary. The non-Unix path should be an explicit
+stub that points at #236 until that issue adds Windows Job Object/process-tree
+support. Existing bash tools already demonstrate the shape of subprocess timeouts
+(`crates/defra-agent/src/toolset/shared/command.rs:122`, `command.rs:147`,
+`crates/defra-agent/src/toolset/bash_tools.rs:106`), but the native-tool
+boundary needs stronger ownership than `kill_on_drop(true)` alone.
+
+`read_file` is out of scope for managed exec and should stay on
+`tokio::fs::read`. The target bug class is synchronous traversal/read work that
+does not yield; `grep`'s `std::fs::read_to_string` migrates with grep.
+Subprocess overhead for a single-file read is not justified unless a concrete
+postmortem later shows that path needs process ownership.
 
 Pros:
 
@@ -284,8 +304,8 @@ Proposed additions:
   - child non-zero exit -> tool `failed`, no timeout;
   - timeout with partial stdout -> terminal timeout envelope preserves captured
     output metadata.
-- Coverage ledger entry tying the rows to Rust tests in the managed-exec crate
-  and the migrated file-tool tests.
+- Coverage ledger entry tying the rows to Rust tests in the managed-exec module,
+  runner crate, and migrated file-tool tests.
 
 The existing `native_filesystem_boundary_cases` can stay as the current
 `spawnBlockingRuntimeBoundary` witness family until migration completes. After
@@ -293,20 +313,12 @@ Option A lands, either replace those rows with
 `managedExecProcessGroupBoundary` rows or keep both families so tests prove the
 old boundary is no longer used by migrated tools.
 
-Runtime observability likely does not require a persisted schema change. If the
-implementation stores executor metadata on `AgentToolCall`, add optional fields
-only after a separate schema decision:
-
-- `executor_kind`
-- `executor_pid`
-- `executor_started_at`
-- `executor_kill_signaled_at`
-- `executor_reaped_at`
-- `executor_exit_code`
-
-The lighter default is to keep those in daemon memory and expose them through
-health/status, while the lifecycle row remains the durable source of truth for
-`timedOut`, `cancelled`, `failed`, and `completed`.
+Executor metadata is memory-only plus health/status/logging for the first
+implementation. Do not persist pid, kill-signaled time, exit code, or reap
+status on `AgentToolCall`. The lifecycle row's `lifecycle_state`,
+`failure_class`, `started_at`, and `completed_at` remain the durable source of
+truth. Persist executor metadata only if a concrete postmortem-analysis need
+emerges.
 
 ## Scope Split
 
@@ -317,14 +329,14 @@ This work should be multi-PR. Natural boundaries:
 2. **Conformance contract rows.** Emit `ManagedExec` vocabulary, transition,
    and liveness witness rows; add coverage-ledger entries and Rust consumers
    that initially assert pending implementation status.
-3. **Managed-exec Rust crate/module.** Add the single-shot process manager with
+3. **Managed-exec Rust module.** Add the single-shot process manager with
    process-group spawn, timeout, cancel, output caps, and reap reporting.
-4. **Native filesystem runner protocol.** Add the runner request/response
-   schema and runner binary, reusing current filesystem traversal behavior.
+4. **Native filesystem runner crate.** Add the runner request/response schema
+   and runner binary crate, reusing current filesystem traversal behavior.
 5. **Migrate `glob` and `list_files`.** Route the highest-risk traversal tools
    through managed exec; keep output snapshots stable.
-6. **Migrate `grep` and decide `read_file`.** Move grep; decide whether
-   `read_file` follows for uniformity or remains `tokio::fs::read`.
+6. **Migrate `grep`.** Move grep, including its `std::fs::read_to_string`
+   path. Keep `read_file` on `tokio::fs::read`.
 7. **Lifecycle integration.** Wire managed-exec timeout/cancel outcomes into
    `ToolCallLifecycle` and request cancellation paths.
 8. **Observability.** Add `/healthz` or `/status` active request/tool/executor
@@ -341,8 +353,9 @@ The following decisions and cross-cutting work are tracked as filed sub-issues:
 | Issue | Title | Scope |
 | --- | --- | --- |
 | #230 | Issue #149 R3: model ManagedExec liveness in Lean | Decide standalone machine vs ToolExecution extension; add state, transition, and liveness theorem shape. |
-| #231 | Issue #149 R3: choose ManagedExec Rust crate boundary and process ownership | Decide crate/module boundary, Unix process-group API, and first-platform support. |
-| #232 | Issue #149 R3: define native filesystem runner protocol | Decide shared runner vs per-tool binary, JSON vs streaming protocol, shared traversal library shape, and `read_file` migration. |
+| #231 | Issue #149 R3: choose ManagedExec Rust crate boundary and process ownership | Implement `crates/defra-agent/src/managed_exec/`, Unix process-group kill, and #236 non-Unix stub. |
+| #232 | Issue #149 R3: define native filesystem runner protocol | Define the runner crate/protocol for `list_files`, `glob`, and `grep`; `read_file` stays in process. |
 | #233 | Issue #149 R3: add ManagedExec conformance witness rows | Emit ManagedExec vocabulary, transition rows, liveness rows, and Rust coverage consumers. |
-| #234 | Issue #149 R3: expose native tool executor liveness in health/status | Decide memory-only vs persisted executor metadata and expose active tool/executor age counters. |
+| #234 | Issue #149 R3: expose native tool executor liveness in health/status | Expose memory-only executor metadata and active tool/executor age counters. |
 | #235 | Issue #149 R3: define soak closeout gate for native tool preemptibility | Define the replay/soak evidence required before treating #149/R3 as operationally closed. |
+| #236 | ManagedExec: add Windows process termination support | Add Windows process-tree termination support after the first Unix-only implementation. |

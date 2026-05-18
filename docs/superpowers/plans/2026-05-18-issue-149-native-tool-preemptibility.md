@@ -6,7 +6,8 @@ Goal: implement the approved design in
 Do not start implementation until the design PR is approved. This plan assumes
 the design recommendation is accepted: keep the current `spawn_blocking`
 filesystem boundary as the interim mitigation, then migrate native filesystem
-tools to a managed subprocess boundary with process-group kill.
+traversal tools to a managed subprocess boundary with process-group kill.
+Controller decisions from 2026-05-18 are incorporated below.
 
 Each task below is intended to be one PR unless the implementation reveals a
 smaller safe split. Every task ends with formatting, focused tests, broader
@@ -20,6 +21,23 @@ Filed sub-issues:
 - #233: ManagedExec conformance witness rows.
 - #234: Health/status liveness reporting.
 - #235: Soak closeout gate.
+- #236: Windows process termination support.
+
+Controller decisions:
+
+- Option A is confirmed; keep
+  `native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue`
+  green throughout migration.
+- ManagedExec is a module at `crates/defra-agent/src/managed_exec/`, not a new
+  crate.
+- The runner binary should live in its own crate because it is a separate
+  executable.
+- `read_file` stays on `tokio::fs::read`; `grep`'s synchronous
+  `std::fs::read_to_string` migrates with grep.
+- First implementation is Unix-only with an explicit non-Unix stub pointing at
+  #236.
+- Executor metadata is memory-only plus health/status/logging, not persisted on
+  `AgentToolCall`.
 
 ## Task 1: Add ManagedExec Lean State Skeleton
 
@@ -243,6 +261,7 @@ Files touched:
 Code shape:
 
 ```rust
+// crates/defra-agent/src/managed_exec/process.rs
 pub(crate) struct ManagedExecRequest {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
@@ -255,6 +274,11 @@ pub(crate) enum ManagedExecOutcome {
     Exited { code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> },
     TimedOut { stdout: Vec<u8>, stderr: Vec<u8>, kill: KillReport },
     Cancelled { stdout: Vec<u8>, stderr: Vec<u8>, kill: KillReport },
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn run_managed_exec(_request: ManagedExecRequest) -> ManagedExecOutcome {
+    unimplemented!("Windows ManagedExec process termination: see #236")
 }
 ```
 
@@ -284,11 +308,13 @@ can execute current filesystem operations out of process.
 
 Files touched:
 
+- Add: `crates/defra-native-fs-runner/Cargo.toml`
+- Add: `crates/defra-native-fs-runner/src/main.rs`
+- Add: `crates/defra-native-fs-runner/src/protocol.rs`
+- Modify: workspace `Cargo.toml`
 - Add: `crates/defra-agent/src/toolset/native_runner.rs`
-- Add: `crates/defra-agent/src/bin/defra-native-fs-runner.rs`
 - Modify: `crates/defra-agent/src/toolset/shared/filesystem.rs`
 - Modify: `crates/defra-agent/src/toolset/shared.rs`
-- Modify: `Cargo.toml`
 - Add tests under `crates/defra-agent/tests/` or `src/toolset/tests.rs`
 
 Code shape:
@@ -299,7 +325,6 @@ pub(crate) enum NativeFsRunnerRequest {
     ListFiles(ListFilesArgs),
     Glob(GlobArgs),
     Grep(GrepArgs),
-    ReadFile(ReadFileArgs),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -315,7 +340,7 @@ Verify:
 ```bash
 cargo fmt --all --check
 cargo test -p defra-agent --lib toolset::tests::native_runner
-cargo run -p defra-agent --bin defra-native-fs-runner -- --self-test
+cargo run -p defra-native-fs-runner -- --self-test
 ```
 
 Expected output:
@@ -377,18 +402,16 @@ Commit:
 Migrate glob and list_files to managed exec
 ```
 
-## Task 8: Migrate Grep And Decide ReadFile
+## Task 8: Migrate Grep
 
-Purpose: move the remaining traversal-heavy native filesystem tool, and either
-migrate `read_file` for uniformity or document why `tokio::fs::read` remains
-in process.
+Purpose: move the remaining traversal-heavy native filesystem tool. `read_file`
+stays in process on `tokio::fs::read`; this task only verifies that decision
+does not regress its tests.
 
 Files touched:
 
 - Modify: `crates/defra-agent/src/toolset/file_tools.rs`
 - Modify: `crates/defra-agent/src/toolset/tests.rs`
-- Modify: `docs/superpowers/specs/2026-05-18-issue-149-native-tool-preemptibility-design.md`
-  if `read_file` remains in process
 
 Code shape:
 
