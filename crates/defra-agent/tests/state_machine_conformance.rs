@@ -153,9 +153,9 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     );
 }
 
-#[test]
-fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
-    tooling_slots_queue_command::generated_queue_deadline_cases_pin_r4a_contract_rows();
+#[tokio::test]
+async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
+    tooling_slots_queue_command::generated_queue_deadline_cases_pin_r4a_contract_rows().await;
 }
 
 #[tokio::test]
