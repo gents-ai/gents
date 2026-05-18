@@ -114,6 +114,21 @@ pub use toolset::{
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
+/// Test-internal surface for driving production helpers directly from
+/// integration tests.
+///
+/// `assemble_principal_and_behaviors` is `pub(crate)` in production.
+/// Exposing it here (under `#[doc(hidden)]`) lets the loader-dedup
+/// proptest (`tests/identity_conformance_proptest.rs`) call the same
+/// helper that both production snapshot paths funnel through, without
+/// widening the public API.
+#[doc(hidden)]
+pub mod __test_internals {
+    pub use crate::agent::principal_assembly::{
+        assemble_principal_and_behaviors, BehaviorBuildError,
+    };
+}
+
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod public_api_tests {

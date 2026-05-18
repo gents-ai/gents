@@ -9,7 +9,10 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
-use super::{runtime, DefraAgent, ProcessLifecycleObserver};
+use super::{
+    assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,
+    ProcessLifecycleObserver,
+};
 use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
@@ -144,21 +147,43 @@ impl DefraAgentBuilder {
             );
         }
 
-        // Construct one principal Arc and share it across all behaviors.
-        let principal = Arc::new(AgentPrincipal {
+        // Async-resolve every behavior into a sync factory closure that
+        // accepts `Arc<AgentPrincipal>`. The actual `Arc::new(AgentPrincipal
+        // { ... })` is constructed exactly once inside
+        // `assemble_principal_and_behaviors` below.
+        let mut behavior_factories: Vec<
+            Box<
+                dyn FnOnce(
+                        Arc<AgentPrincipal>,
+                    )
+                        -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                    + Send,
+            >,
+        > = Vec::with_capacity(self.behaviors.len());
+        for behavior in self.behaviors {
+            let factory = behavior
+                .into_factory(node.as_ref(), &self.tool_ceiling)
+                .await?;
+            behavior_factories.push(factory);
+        }
+
+        let principal_data = AgentPrincipal {
             agent_did: identity.did().to_string(),
             identity: identity.clone(),
             default_behavior_id: default_behavior_id.clone(),
             display_name: None,
             enabled: true,
-        });
+        };
 
-        let mut behaviors = Vec::with_capacity(self.behaviors.len());
-        for behavior in self.behaviors {
-            let config = behavior
-                .build(node.as_ref(), principal.clone(), &self.tool_ceiling)
-                .await?;
-            behaviors.push(Arc::new(config));
+        let (principal, behavior_results) =
+            assemble_principal_and_behaviors(principal_data, behavior_factories);
+
+        let mut behaviors = Vec::with_capacity(behavior_results.len());
+        for result in behavior_results {
+            let behavior_arc = result.map_err(|e| {
+                anyhow::anyhow!("behavior '{}' build failed: {}", e.behavior_id, e.error)
+            })?;
+            behaviors.push(behavior_arc);
         }
         behaviors.sort_by(|left, right| {
             let left_is_default = left.behavior_id == default_behavior_id;
@@ -362,6 +387,76 @@ impl PendingAgentBehavior {
         }
     }
 
+    /// Async phase: resolve the backend and validate it. Returns a sync
+    /// factory closure that accepts `Arc<AgentPrincipal>` and produces
+    /// the fully-built `AgentBehavior`.
+    ///
+    /// This split lets `DefraAgentBuilder::build` collect all factory
+    /// closures before calling `assemble_principal_and_behaviors`, so
+    /// that the single `Arc::new(AgentPrincipal { ... })` lives
+    /// exclusively in the helper (the load-bearing site fenced by the
+    /// loader-dedup proptest).
+    async fn into_factory(
+        self,
+        node: &EmbeddedNode,
+        tool_ceiling: &ToolCeiling,
+    ) -> Result<
+        Box<
+            dyn FnOnce(
+                    Arc<AgentPrincipal>,
+                ) -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                + Send,
+        >,
+    > {
+        let backend_id = self
+            .backend_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?
+            .to_string();
+        let backend = lookup_backend(node, &backend_id).await?.ok_or_else(|| {
+            anyhow!(
+                "behavior '{}' references missing backend {}",
+                self.name,
+                backend_id
+            )
+        })?;
+        if !backend.is_available() {
+            anyhow::bail!(
+                "behavior '{}' backend {} is unavailable (enabled={} probe_status={})",
+                self.name,
+                backend_id,
+                backend.enabled,
+                backend.probe_status
+            );
+        }
+        BackendAdmissionConfig::from_backend(&backend)?;
+
+        let behavior_name = self.name.clone();
+        let resolved_backend_id = Some(backend.backend_id);
+        let provider_kind = backend.provider_kind;
+        let endpoint = backend.endpoint;
+        let api_key = backend.api_key;
+        let api_key_env_var = backend.api_key_env_var;
+        let tool_ceiling = tool_ceiling.clone();
+
+        Ok(Box::new(move |principal| {
+            self.build_with_resolved_backend(
+                principal,
+                resolved_backend_id,
+                provider_kind,
+                endpoint,
+                api_key,
+                api_key_env_var,
+                &tool_ceiling,
+            )
+            .map_err(|error| BehaviorBuildError {
+                behavior_id: behavior_name,
+                error,
+            })
+        }))
+    }
+
+    #[allow(dead_code)]
     async fn build(
         self,
         node: &EmbeddedNode,

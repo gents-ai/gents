@@ -34,6 +34,7 @@ pub struct ServiceAccount {
 /// `crates/defra-agent/proofs/Proofs/Identity/State.lean`
 /// (`Identity.Principal`) with the live signing handle (`identity`)
 /// and the routing shortcut (`default_behavior_id`).
+#[derive(Clone)]
 pub struct AgentPrincipal {
     pub agent_did: String,
     pub identity: Arc<dyn AgentIdentity>,

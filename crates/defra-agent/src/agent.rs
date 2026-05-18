@@ -28,6 +28,7 @@ use crate::trigger_engine::manual_source::ManualTriggerHandle;
 mod builder;
 mod daemon;
 mod document_view;
+pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
 mod stream_processor;
@@ -35,6 +36,9 @@ mod stream_processor;
 mod supervision;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use principal_assembly::assemble_principal_and_behaviors;
+pub(crate) use principal_assembly::BehaviorBuildError;
 
 #[cfg(test)]
 pub(crate) use builder::PendingAgentBehavior;
