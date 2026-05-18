@@ -53,10 +53,6 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
-    pub(crate) fn mode(&self) -> &'static str {
-        self.access.mode()
-    }
-
     /// Execute a GraphQL query within this transaction.
     pub(crate) async fn execute(&self, query: &str) -> Result<Value> {
         match (&self.access, &self.handle) {
