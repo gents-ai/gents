@@ -99,10 +99,20 @@ pub(crate) async fn apply_bound_desired_manifest(
     // commit, we issue a single auto-commit no-op write here to wake the
     // watcher. The data we just committed inside the tx is durable regardless
     // of whether this nudge succeeds.
-    // Remove this block when defradb.rs#970 ships.
+    //
+    // When defradb.rs#970 ships and we bump the workspace pin, remove:
+    //   1. This comment block and the `if` block that follows it.
+    //   2. The `nudge_runtime_watcher_after_apply` helper below.
+    //   3. The `escape_graphql_string` import at the top of this file, if it
+    //      becomes unused after (2).
+    // Verify the removal by running:
+    //   cargo test -p defra-agent-cli --test cli_config_apply_running
+    // — `config_apply_reconciles_running_runtime_without_restart` must still
+    // pass against the upstream-fixed defradb.rs without the nudge.
     if config_apply_counts_changed(&applied) {
         if let Err(nudge_err) = nudge_runtime_watcher_after_apply(&access, bound).await {
             tracing::warn!(
+                agent_did = %bound.context.target_agent_did,
                 %nudge_err,
                 "config apply: post-commit runtime nudge failed; runtime may not reconcile until restart"
             );
@@ -139,15 +149,18 @@ pub(crate) async fn apply_bound_desired_manifest(
     Ok(report)
 }
 
-/// Issue a single auto-commit write to wake the in-process runtime watcher
-/// after a transactional apply. This is the implementation of the stopgap
-/// described above. The mutation re-writes `enabled` on the AgentPrincipal
-/// doc with its existing value — semantically a no-op, but the auto-commit
-/// path does emit an Update event on the EventBus, which is what the
-/// runtime watcher subscribes to.
+/// Wake the runtime watcher after a transactional apply commit by issuing
+/// an auto-commit write that triggers an Update event on the EventBus.
 ///
-/// Callers are expected to log and swallow the returned error; this is a
-/// best-effort wakeup and does not affect the durability of the apply.
+/// The write targets `AgentPrincipal::enabled`, re-setting it to the
+/// manifest's declared value. This is a no-op when the live `enabled`
+/// already matches the manifest; if the live value drifted out-of-band,
+/// the nudge will also reconcile it back to the manifest value, which is
+/// the correct manifest-wins semantics.
+///
+/// This helper is part of the stopgap for sourcenetwork/defradb.rs#970;
+/// remove together with its call site when upstream emits Update events
+/// on transaction commit.
 async fn nudge_runtime_watcher_after_apply(
     access: &ConfigAccess,
     bound: &super::binding::BoundDesiredManifest,
