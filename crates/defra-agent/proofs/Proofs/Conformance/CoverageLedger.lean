@@ -110,6 +110,10 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_call_lifecycle::tests::rust_tool_call_state_vocabulary_matches_lean_model"
   , consumerCoverage
       "vocabulary"
+      "ManagedExecState"
+      "managed_exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model"
+  , consumerCoverage
+      "vocabulary"
       "ToolFailureClass"
       "tool_call_lifecycle::tests::rust_failure_class_vocabulary_matches_lean_model"
   , consumerCoverage
@@ -177,6 +181,10 @@ def stateMachineCoverage : List CoverageEntry :=
       "tool_call_lifecycle::tests::tool_call_state_machine_contract_is_complete"
   , consumerCoverage
       "state_machine"
+      "ManagedExec"
+      "managed_exec::tests::managed_exec_state_machine_contract_is_complete"
+  , consumerCoverage
+      "state_machine"
       "AwaitMode"
       "state_machine_conformance::lean_emits_await_mode_vocabulary"
   , consumerCoverage
@@ -242,6 +250,10 @@ def caseCoverage : List CoverageEntry :=
       "native_filesystem_boundary_cases"
       "NativeFilesystemBoundaryCases"
       "toolset::tests::generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract"
+  , consumerCoverage
+      "managed_exec_cases"
+      "ManagedExecLivenessCases"
+      "state_machine_conformance::managed_exec_liveness_cases_pin_native_process_boundary"
   , consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"

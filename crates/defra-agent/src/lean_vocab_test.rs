@@ -45,6 +45,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub(crate) backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
     pub(crate) native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
+    pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
@@ -300,6 +301,10 @@ pub(crate) fn lean_backend_health_admission_cases() -> &'static [LeanBackendHeal
 pub(crate) fn lean_native_filesystem_boundary_cases() -> &'static [LeanNativeFilesystemBoundaryCase]
 {
     &lean_contract_snapshot().native_filesystem_boundary_cases
+}
+
+pub(crate) fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {
+    &lean_contract_snapshot().managed_exec_liveness_cases
 }
 
 pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {

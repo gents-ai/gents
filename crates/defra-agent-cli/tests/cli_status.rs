@@ -235,6 +235,13 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     let liveness = output
         .get("liveness")
         .expect("status output must include liveness block");
+    assert!(
+        liveness
+            .get("active_native_executors")
+            .and_then(Value::as_array)
+            .is_some(),
+        "CLI status liveness must include active_native_executors from live HTTP status when available: {liveness}"
+    );
     let expired = liveness
         .get("expired_processing_count")
         .and_then(Value::as_i64)

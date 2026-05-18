@@ -297,6 +297,17 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
         &[],
         data.liveness.expired_processing_count,
     );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_active_native_executors",
+        "Number of active managed native executor processes.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_active_native_executors",
+        &[],
+        data.liveness.active_native_executors.len() as i64,
+    );
 
     lines.push(String::new());
     Ok(lines.join("\n"))
@@ -355,7 +366,8 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
-    let liveness = compute_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
+    let mut liveness = compute_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
+    liveness.active_native_executors = defra_agent::active_native_executors();
     Ok(MetricsQueryData {
         agent_runtimes: envelope.agent_runtimes,
         inference_backends: envelope.inference_backends,

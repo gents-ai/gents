@@ -167,6 +167,17 @@ structure NativeFilesystemBoundaryCase where
   queueAdvancesBeforeBlockerReturns : Bool
   deriving Repr
 
+structure ManagedExecLivenessCase where
+  name : String
+  trigger : String
+  preExecState : String
+  preToolState : String
+  expectedExecState : String
+  expectedToolState : String
+  maxSteps : Nat
+  killSignalRequired : Bool
+  deriving Repr
+
 structure LifecycleTransitionCase where
   name : String
   domain : String

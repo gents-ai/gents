@@ -221,6 +221,22 @@ def nativeFilesystemBoundaryCaseJson
       ++ boolString witness.queueAdvancesBeforeBlockerReturns
     ++ "}"
 
+def managedExecLivenessCaseJson
+    (witness : ManagedExecLivenessCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"trigger\":" ++ jsonString witness.trigger ++ ","
+    ++ "\"pre_exec_state\":" ++ jsonString witness.preExecState ++ ","
+    ++ "\"pre_tool_state\":" ++ jsonString witness.preToolState ++ ","
+    ++ "\"expected_exec_state\":"
+      ++ jsonString witness.expectedExecState ++ ","
+    ++ "\"expected_tool_state\":"
+      ++ jsonString witness.expectedToolState ++ ","
+    ++ "\"max_steps\":" ++ toString witness.maxSteps ++ ","
+    ++ "\"kill_signal_required\":"
+      ++ boolString witness.killSignalRequired
+    ++ "}"
+
 def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -676,6 +692,9 @@ def snapshotJson : String :=
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
+    ++ "\"managed_exec_liveness_cases\":"
+      ++ jsonArray
+        (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
     ++ "\"tool_preflight_cases\":"
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"

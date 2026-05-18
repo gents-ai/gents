@@ -9,6 +9,7 @@ import Proofs.RuntimeReconcile
 import Proofs.PairingReconcile
 import Proofs.Conformance.ContractCases
 import Proofs.ToolExecution
+import Proofs.ManagedExec
 
 /-!
 # Core Conformance Vocabularies and State Machines
@@ -445,6 +446,43 @@ def toolCallMachine : StateMachineContract :=
         (fun call => call.state.toDefraDB))
   { base with namedTransitions := toolCallNamedTransitions }
 
+def managedExecStates : List ManagedExecState :=
+  ManagedExecState.all
+
+def managedExecStateNames : List String :=
+  managedExecStates.map ManagedExecState.toDefraDB
+
+def managedExecActions : List (String × ManagedExecContext.Action) :=
+  [ ("spawn", .spawn)
+  , ("spawnFailed", .spawnFailed)
+  , ("observeExitSuccess", .observeExitSuccess 0)
+  , ("observeExitFailure", .observeExitFailure 1)
+  , ("deadlineElapsed", .deadlineElapsed)
+  , ("cancelRequested", .cancelRequested)
+  , ("killObserved", .killObserved)
+  , ("reapFailed", .reapFailed)
+  ]
+
+def managedExecWithState (state : ManagedExecState) : ManagedExecContext :=
+  { state := state
+  , deadline := 1
+  , now := 2
+  , killSignaledAt := none
+  , exitCode := none
+  }
+
+def managedExecMachine : StateMachineContract :=
+  machineContract
+    "ManagedExec"
+    managedExecStateNames
+    (terminalNames managedExecStates ManagedExecState.toDefraDB)
+    (actionNames managedExecActions)
+    (transitionPairsFromSamples
+      (managedExecStates.map managedExecWithState)
+      managedExecActions
+      ManagedExecContext.step?
+      (fun exec => exec.state.toDefraDB))
+
 /-- AwaitMode is a static enum on `ToolCallContext` (foreground/background).
     It has no transitions in its own right — the mode-flip edges live on
     `toolCallMachine`'s `namedTransitions` (`background`, `foreground`).
@@ -548,6 +586,7 @@ def vocabularies : List VocabularyContract :=
         ].map InferenceCallTerminalReason.toDefraDB
     }
   , { domain := "ToolCallState", values := toolCallStateNames }
+  , { domain := "ManagedExecState", values := managedExecStateNames }
   , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   , { domain := "AwaitMode"
@@ -573,6 +612,7 @@ def stateMachines : List StateMachineContract :=
   , sessionRecoveryMachine
   , inferenceCallMachine
   , toolCallMachine
+  , managedExecMachine
   , awaitModeMachine
   , cancelPolicyMachine
   , childTerminalMachine

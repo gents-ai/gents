@@ -1,0 +1,12 @@
+[package]
+name = "defra-native-fs-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Out-of-process native filesystem runner for defra-agent"
+
+[dependencies]
+anyhow.workspace = true
+glob = "0.3"
+serde.workspace = true
+serde_json.workspace = true

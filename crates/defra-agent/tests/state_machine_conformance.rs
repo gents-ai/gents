@@ -39,13 +39,14 @@ use lean_vocab_test::{
     lean_command_sandbox_case, lean_compaction_reducer_cases, lean_contract_snapshot,
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
-    lean_inference_slot_accounting_case, lean_mcp_health_cases, lean_queue_deadline_case,
-    lean_queue_deadline_cases, lean_r4c_background_work_case, lean_r4c_background_work_cases,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_response_transition_cases, lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_state_machine_contract, lean_tool_preflight_case,
-    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
-    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_inference_slot_accounting_case, lean_managed_exec_liveness_cases, lean_mcp_health_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_cases,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
+    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -130,6 +131,67 @@ async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
 fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
     tooling_slots_queue_command::generated_tool_execution_cases_cover_preflight_and_retry_contracts(
     );
+}
+
+#[test]
+fn managed_exec_liveness_cases_pin_native_process_boundary() {
+    let machine = lean_state_machine_contract("ManagedExec");
+    assert_eq!(
+        machine.states,
+        vec![
+            "pendingSpawn",
+            "running",
+            "exited",
+            "killSignaled",
+            "killed",
+            "spawnFailed",
+            "reapFailed"
+        ]
+    );
+    assert!(machine
+        .legal_transitions
+        .iter()
+        .any(|pair| pair.from == "running" && pair.to == "killSignaled"));
+    assert!(machine
+        .legal_transitions
+        .iter()
+        .any(|pair| pair.from == "killSignaled" && pair.to == "killed"));
+
+    let cases = lean_managed_exec_liveness_cases();
+    assert_eq!(cases.len(), 5);
+    let deadline = cases
+        .iter()
+        .find(|case| case.name == "running_child_expired_deadline_kill_signaled")
+        .expect("deadline liveness case must be emitted");
+    assert_eq!(deadline.trigger, "deadlineElapsed");
+    assert_eq!(deadline.pre_exec_state, "running");
+    assert_eq!(deadline.pre_tool_state, "running");
+    assert_eq!(deadline.expected_exec_state, "killSignaled");
+    assert_eq!(deadline.expected_tool_state, "timedOut");
+    assert_eq!(deadline.max_steps, 1);
+    assert!(deadline.kill_signal_required);
+
+    let cancel = cases
+        .iter()
+        .find(|case| case.name == "running_child_cancel_kill_signaled")
+        .expect("cancel liveness case must be emitted");
+    assert_eq!(cancel.trigger, "cancelRequested");
+    assert_eq!(cancel.expected_tool_state, "cancelled");
+    assert!(cancel.kill_signal_required);
+
+    for case in cases {
+        if case.expected_exec_state == "killSignaled" {
+            assert!(
+                case.kill_signal_required,
+                "kill-signaled cases must require an OS signal: {case:?}"
+            );
+        } else {
+            assert!(
+                !case.kill_signal_required,
+                "non-kill cases must not require an OS signal: {case:?}"
+            );
+        }
+    }
 }
 
 #[test]

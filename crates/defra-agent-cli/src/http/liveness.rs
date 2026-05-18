@@ -35,6 +35,7 @@ pub(crate) struct RuntimeLivenessSnapshot {
     pub(crate) expired_processing_count: i64,
     pub(crate) requests: Vec<ActiveRequest>,
     pub(crate) active_tool_calls: Vec<ActiveToolCall>,
+    pub(crate) active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +137,7 @@ pub(crate) fn compute_liveness_summary(
         expired_processing_count,
         requests: request_views,
         active_tool_calls,
+        active_native_executors: Vec::new(),
     }
 }
 

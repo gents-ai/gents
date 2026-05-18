@@ -1,10 +1,25 @@
 # Issue #149 Native Tool Preemptibility Design
 
-Status: design draft
+Status: accepted and implemented
 Date: 2026-05-18
 Tracking: #149, #159 R3
 Related audit: `docs/superpowers/audits/2026-05-12-deadline-plumbing-audit.md`
 Filed follow-ups: #230, #231, #232, #233, #234, #235, #236
+
+Implementation closeout, 2026-05-18:
+
+- ManagedExec landed as `crates/defra-agent/src/managed_exec/` with Unix
+  process-group termination, output caps, active-executor snapshots, and the
+  explicit non-Unix #236 stub.
+- The runner landed as the `defra-native-fs-runner` binary crate with a JSON
+  request/response protocol.
+- `list_files`, `glob`, and `grep` now execute through the managed runner;
+  `read_file` remains on `tokio::fs::read`.
+- Lean conformance now includes the `ManagedExec` state machine and liveness
+  witness rows, and native filesystem boundary witnesses now name
+  `managedExecProcessGroupBoundary`.
+- `/healthz`, `/status`, Prometheus, and CLI status liveness expose active
+  native executors when the live server is reachable.
 
 ## Goal
 
@@ -307,11 +322,10 @@ Proposed additions:
 - Coverage ledger entry tying the rows to Rust tests in the managed-exec module,
   runner crate, and migrated file-tool tests.
 
-The existing `native_filesystem_boundary_cases` can stay as the current
-`spawnBlockingRuntimeBoundary` witness family until migration completes. After
-Option A lands, either replace those rows with
-`managedExecProcessGroupBoundary` rows or keep both families so tests prove the
-old boundary is no longer used by migrated tools.
+The `native_filesystem_boundary_cases` witness family now uses
+`managedExecProcessGroupBoundary` for `list_files`, `glob`, and `grep`. The old
+`spawnBlockingRuntimeBoundary` name remains only as design history; migrated
+tools no longer use the Tokio blocking-pool boundary for traversal.
 
 Executor metadata is memory-only plus health/status/logging for the first
 implementation. Do not persist pid, kill-signaled time, exit code, or reap
@@ -322,7 +336,7 @@ emerges.
 
 ## Scope Split
 
-This work should be multi-PR. Natural boundaries:
+The implementation landed along the natural boundaries below:
 
 1. **Lean ManagedExec spec skeleton.** Add `Proofs/ManagedExec/` state,
    transition, executable step, and first liveness theorem shape. No Rust.
@@ -341,10 +355,12 @@ This work should be multi-PR. Natural boundaries:
    `ToolCallLifecycle` and request cancellation paths.
 8. **Observability.** Add `/healthz` or `/status` active request/tool/executor
    age fields and expired-processing counts.
-9. **Recovery and orphan cleanup.** Startup sweep handles persisted running
-   tool rows and any recorded managed-exec orphan metadata.
-10. **Soak closeout.** Add the #149 soak replay gate and document the closure
-    criteria.
+9. **Recovery and orphan cleanup.** No executor metadata is persisted in the
+   first implementation, so startup recovery continues to operate on persisted
+   running tool rows rather than orphan executor rows.
+10. **Soak closeout.** The deterministic native filesystem deadline regression
+    and final PR gate are the closeout evidence in this worktree; a separate
+    `crates/amygdala-evals/` soak was not added because that crate is absent.
 
 ## Deferred Decisions
 

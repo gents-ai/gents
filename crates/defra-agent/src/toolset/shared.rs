@@ -10,12 +10,7 @@ pub(super) use command::{
 pub(super) use command::{run_command, validate_command_policy};
 pub use command::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 pub(super) use context::{ToolContext, ToolError};
-#[cfg(test)]
-pub(super) use filesystem::block_next_sorted_children_for_test;
-pub(super) use filesystem::{
-    collect_entries, collect_glob_matches, collect_grep_matches, default_ignored_names,
-    render_file_contents, truncate_inline, truncate_text, FilesystemEntry,
-};
+pub(super) use filesystem::{render_file_contents, truncate_text};
 
 pub(super) fn default_max_list_entries() -> usize {
     super::DEFAULT_MAX_LIST_ENTRIES

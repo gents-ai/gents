@@ -203,6 +203,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "tool_retry_disposition_contract_cases_match_mcp_pool_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "managed_exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/managed_exec/tests.rs",
+            module_path: "managed_exec::tests",
+            function: "rust_managed_exec_state_vocabulary_matches_lean_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "managed_exec::tests::managed_exec_state_machine_contract_is_complete",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/managed_exec/tests.rs",
+            module_path: "managed_exec::tests",
+            function: "managed_exec_state_machine_contract_is_complete",
+        },
+        ConformanceConsumer::RustTest {
             id: "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/runtime_status/tests.rs",
@@ -313,6 +327,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
             module_path: "state_machine_conformance",
             function: "lean_executable_contracts_cover_initial_domains",
+        },
+        ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::managed_exec_liveness_cases_pin_native_process_boundary",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "managed_exec_liveness_cases_pin_native_process_boundary",
         },
         ConformanceConsumer::RustTest {
             id: "state_machine_conformance::lean_emits_await_mode_vocabulary",

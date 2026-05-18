@@ -3,6 +3,7 @@ import Proofs.Request
 import Proofs.InferenceCall
 import Proofs.Persistence
 import Proofs.ToolExecution
+import Proofs.ManagedExec.Composed
 
 /-!
 # Cross-Layer Composition

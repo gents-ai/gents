@@ -23,6 +23,7 @@ The proofs are strongest where the runtime is a state machine:
 - client turn projection and desktop shell workflow state
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
+- managed native executor deadline/cancel liveness and tool composition
 
 They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool
@@ -46,7 +47,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers twelve practical areas:
+The current proof suite covers thirteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -62,6 +63,8 @@ The current proof suite covers twelve practical areas:
     disabled-network fail-closed behavior, sandbox selection, and filtered env
 12. Tool execution boundary rules: schema/health preflight and MCP retry
     eligibility before future idempotent tool retries are enabled
+13. Managed native executor liveness: deadline/cancel transitions signal the
+    executor and compose to a terminal timed-out/cancelled tool outcome
 
 The proof boundary matters:
 
@@ -118,6 +121,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
+| `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -146,6 +150,7 @@ Semantic submodules:
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
+| `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
@@ -180,6 +185,7 @@ currently covers:
 - `RuntimeReconcile`
 - `SessionRecovery`
 - `InferenceCall`
+- `ManagedExec`
 
 `RuntimeReconcile`, `SessionRecovery`, and `ClientShell` also emit deterministic
 witness rows. Those rows keep the JSON small while pinning generation
@@ -194,6 +200,12 @@ test and a desktop list consumed by the Rust session-snapshot bridge test.
 It also emits `ToolExecution` preflight and retry witness rows, plus the
 `ToolRetryDisposition` vocabulary, so Rust tests can reject accidental MCP
 preflight or `call_tool` retry drift before idempotency metadata changes.
+
+ManagedExec exports its state vocabulary, legal transition table, and
+deadline/cancel liveness witness rows. Rust consumes those contracts in the
+managed-exec unit tests and `state_machine_conformance`, while native
+filesystem boundary cases now name `managedExecProcessGroupBoundary` for
+`list_files`, `glob`, and `grep`.
 
 The same JSON includes `coverage_ledger`, maintained in
 `Proofs/Conformance/CoverageLedger.lean`. The Rust test

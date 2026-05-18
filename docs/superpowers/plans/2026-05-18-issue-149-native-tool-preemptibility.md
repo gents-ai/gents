@@ -39,6 +39,40 @@ Controller decisions:
 - Executor metadata is memory-only plus health/status/logging, not persisted on
   `AgentToolCall`.
 
+Implementation closeout, 2026-05-18:
+
+- Tasks 1-4 landed the Lean `ManagedExec` state machine, liveness theorems,
+  tool-execution composition, conformance JSON, and Rust consumers.
+- Tasks 5-8 landed Unix ManagedExec process-group ownership, the
+  `defra-native-fs-runner` binary crate, and migrated `list_files`, `glob`, and
+  `grep` to `managedExecProcessGroupBoundary`. `read_file` remains in-process on
+  `tokio::fs::read` by design.
+- Task 9 is satisfied through request-scoped runtime context handoff into the
+  native runner and ManagedExec timeout/cancel outcomes returning the existing
+  lifecycle markers consumed by the hook.
+- Task 10 landed active native executor snapshots in `/healthz`, `/status`,
+  Prometheus, and CLI status liveness when the live HTTP server is reachable.
+- Task 11 did not add `crates/amygdala-evals/` coverage because that crate is
+  not present in this worktree. The closeout regression is the deterministic
+  `native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue`
+  test plus the final gate below.
+
+Final verification completed:
+
+```text
+cargo fmt --all --check
+cargo test -p defra-agent --lib runtime_status::tests::
+cargo test -p defra-agent --lib toolset::tests::read_only_bash
+cargo test -p defra-agent-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
+cargo test -p defra-agent-cli --test cli_status -- --nocapture --test-threads=1
+cargo test -p defra-agent-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+cargo test -p defra-agent --test state_machine_conformance
+cd crates/defra-agent/proofs && lake build
+cargo test -p defra-agent --lib managed_exec::
+cargo test -p defra-agent --lib toolset::tests::native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue
+cargo run -p defra-native-fs-runner -- --self-test
+```
+
 ## Task 1: Add ManagedExec Lean State Skeleton
 
 Purpose: introduce the executor state machine without connecting it to tool

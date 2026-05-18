@@ -18,6 +18,7 @@ import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolExecution
+import Proofs.ManagedExec
 import Proofs.MCPHealth
 import Proofs.StreamingResponse
 import Proofs.Background

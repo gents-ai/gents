@@ -96,6 +96,18 @@ pub(crate) struct LeanNativeFilesystemBoundaryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanManagedExecLivenessCase {
+    pub(crate) name: String,
+    pub(crate) trigger: String,
+    pub(crate) pre_exec_state: String,
+    pub(crate) pre_tool_state: String,
+    pub(crate) expected_exec_state: String,
+    pub(crate) expected_tool_state: String,
+    pub(crate) max_steps: usize,
+    pub(crate) kill_signal_required: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanToolPreflightCase {
     pub(crate) name: String,
     pub(crate) health: String,

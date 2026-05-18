@@ -14,9 +14,9 @@ use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
 use super::shared::{
-    block_next_sorted_children_for_test, build_shell_env_from_vars, select_sandbox_for_policy,
-    validate_command_policy, validate_read_only_command, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, ToolContext,
+    build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
+    validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    ToolContext,
 };
 use super::*;
 use crate::ensure_schemas;
@@ -284,6 +284,28 @@ fn compact_exec_meta(output: &str) -> serde_json::Value {
     serde_json::from_str(raw).expect("metadata json")
 }
 
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(previous) => std::env::set_var(self.key, previous),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     let root = temp_root("defra-agent-native-boundary");
@@ -291,7 +313,11 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
-    let _blocker = block_next_sorted_children_for_test(context.root(), Duration::from_millis(200));
+    let _block_dir = EnvVarGuard::set(
+        "DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR",
+        context.root().as_os_str(),
+    );
+    let _block_ms = EnvVarGuard::set("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS", "200");
     let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
         context.clone(),
         DEFAULT_MAX_MATCHES,
@@ -357,7 +383,7 @@ fn generated_native_filesystem_boundary_cases_match_preemptible_boundary_contrac
             case.name
         );
         assert_eq!(case.work_class, "filesystemTraversal");
-        assert_eq!(case.boundary, "spawnBlockingRuntimeBoundary");
+        assert_eq!(case.boundary, "managedExecProcessGroupBoundary");
         assert!(case.inner_poll_blocks);
         assert!(case.request_deadline_ms <= 20);
         assert!(case.blocker_ms >= 200);

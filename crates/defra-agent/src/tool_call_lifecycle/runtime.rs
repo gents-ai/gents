@@ -31,6 +31,12 @@ struct ToolRuntimeScope {
     cancellation_token: CancellationToken,
 }
 
+#[derive(Clone)]
+pub(crate) struct CurrentToolRuntimeContext {
+    pub(crate) deadline_at: Option<DateTime<Utc>>,
+    pub(crate) cancellation_token: CancellationToken,
+}
+
 tokio::task_local! {
     static TOOL_RUNTIME_SCOPE: ToolRuntimeScope;
 }
@@ -56,6 +62,16 @@ where
 
 pub(crate) fn wrap_tool(tool: Box<dyn ToolDyn>) -> Box<dyn ToolDyn> {
     Box::new(RuntimeManagedTool { inner: tool })
+}
+
+pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
+    TOOL_RUNTIME_SCOPE
+        .try_with(Clone::clone)
+        .ok()
+        .map(|scope| CurrentToolRuntimeContext {
+            deadline_at: scope.deadline_at,
+            cancellation_token: scope.cancellation_token,
+        })
 }
 
 pub(crate) fn classify_managed_tool_result(result: &str) -> Option<ManagedToolTerminal> {
