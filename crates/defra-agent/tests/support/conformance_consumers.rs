@@ -259,11 +259,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_queue_deadline_cases_pin_r4a_contract_rows",
         },
         ConformanceConsumer::RustTest {
-            id: "state_machine_conformance::generated_recovery_sweep_cases_pin_startup_recovery_contract",
+            id: "state_machine_conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
             module_path: "state_machine_conformance",
-            function: "generated_recovery_sweep_cases_pin_startup_recovery_contract",
+            function: "generated_recovery_sweep_cases_drive_startup_recovery_contract",
         },
         ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract",

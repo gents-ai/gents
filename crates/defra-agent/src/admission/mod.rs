@@ -3,6 +3,7 @@ mod config;
 mod controller;
 mod permit;
 mod persistence;
+mod recovery;
 mod registry;
 #[cfg(test)]
 mod slot_accounting;
@@ -13,6 +14,7 @@ pub(crate) use client::{
     AdmittedCompletionClient, CallKind,
 };
 pub(crate) use config::{backend_admission_configs_from_backends, BackendAdmissionConfig};
+pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
 
 #[cfg(test)]

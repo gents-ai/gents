@@ -877,7 +877,7 @@ async fn background_completion_wakeup_waits_behind_active_foreground_parent_then
 }
 
 #[tokio::test]
-async fn recovery_leaves_running_background_bridge_alive_after_parent_completes() {
+async fn recovery_fails_running_background_bridge_after_parent_completes() {
     let (db, session_id, parent_request_id) =
         setup_fixture("background_completion_recovery_skip").await;
     let (child_request_id, _) = create_child_and_bridge(
@@ -895,17 +895,23 @@ async fn recovery_leaves_running_background_bridge_alive_after_parent_completes(
     let report = ToolCallLifecycle::recover_all(db.node.as_ref(), AGENT_DID)
         .await
         .unwrap();
-    assert_eq!(report.tool_calls_recovered, 0);
+    assert_eq!(report.tool_calls_recovered, 1);
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-recovery-skip").await;
-    assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
+    assert!(
+        tool.result
+            .as_deref()
+            .is_some_and(|result| result.contains("parent request was already terminal")),
+        "background bridge failure should explain the terminal parent"
+    );
     let interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
         .await
         .unwrap();
     assert!(
-        interrupt.is_none(),
-        "background child should not be interrupted merely because the parent completed"
+        interrupt.is_some(),
+        "cascade background child should be interrupted once recovery fails the parent bridge"
     );
 }
 
