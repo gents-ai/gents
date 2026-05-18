@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::cli::*;
@@ -67,7 +67,28 @@ pub(crate) async fn apply_bound_desired_manifest(
         &live_manifest,
     );
 
-    let applied = apply_desired_state_changes(&access, &desired_bundle, &planned).await?;
+    let applied = {
+        let txn = access
+            .begin_apply_txn()
+            .await
+            .context("config apply: begin transaction")?;
+        let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+            Ok(counts) => counts,
+            Err(error) => {
+                if let Err(discard_err) = txn.discard().await {
+                    tracing::warn!(
+                        %discard_err,
+                        "config apply: tx discard failed after apply error"
+                    );
+                }
+                return Err(error);
+            }
+        };
+        if let Err(commit_err) = txn.commit().await {
+            return Err(commit_err).context("config apply: commit failed");
+        }
+        counts
+    };
 
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =

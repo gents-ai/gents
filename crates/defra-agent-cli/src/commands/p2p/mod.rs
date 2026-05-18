@@ -64,13 +64,3 @@ pub(super) async fn p2p_probe_get(client: &reqwest::Client, url: &str) -> Value 
         }),
     }
 }
-
-pub(super) fn p2p_api_base(graphql: &str) -> Result<String> {
-    graphql
-        .trim()
-        .strip_suffix("/graphql")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
-        })
-}

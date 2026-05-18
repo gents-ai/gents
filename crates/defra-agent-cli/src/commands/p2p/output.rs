@@ -10,7 +10,6 @@ use crate::shared::{
     StoredRuntimeState,
 };
 
-use super::p2p_api_base;
 use crate::{http_get_json, normalize_optional_string, read_runtime_state, resolve_home_dir};
 
 pub(super) fn p2p_collection_rows(
@@ -133,7 +132,7 @@ pub(super) async fn fetch_live_http_p2p_status(
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .context("building P2P status HTTP client")?;
-    let api_base = p2p_api_base(graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(graphql)?;
     let identity =
         http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
             .await
