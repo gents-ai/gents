@@ -6,8 +6,6 @@ import Proofs.Conformance.Boundaries
 This file is reserved for real unresolved mismatches between the Lean product
 specification and the Rust/DefraDB implementation.
 
-There are currently no known active spec deviations.
-
 Closed historical issues, intentional product policies, reserved vocabulary,
 and external storage/operational assumptions are documented in
 `Proofs.Conformance.Boundaries` instead of being listed as deviations.
@@ -47,6 +45,19 @@ def deviations : List Deviation :=
     , acceptedFailureMode := some "missed_subagent_spawn_observation_in_live_process"
     , acceptedFollowUp :=
         some "Track at #187 PR description; deadline-audit followup #5."
+    }
+  , { id := "defradb_rs_p2p_subscription_state_not_durable"
+    , domain := "reverse_pairing"
+    , subject := "DefraDB P2P subscription persistence"
+    , statement :=
+        "Reverse-pairing convergence assumes receiver-side P2P gossipsub " ++
+        "subscription state survives process restart. Go DefraDB persists that " ++
+        "state, but defradb.rs currently keeps iroh/libp2p subscription " ++
+        "registration in memory unless a higher-level path re-installs it."
+    , acceptedFailureMode :=
+        some "receiver_restart_drops_subscription_delivery_contract"
+    , acceptedFollowUp :=
+        some "Track upstream at sourcenetwork/defradb.rs#957; downstream at sourcenetwork/defra-agent#166."
     }
   ]
 
