@@ -39,6 +39,7 @@ def vocabularies : List VocabularyContract :=
         ].map InferenceCallTerminalReason.toDefraDB
     }
   , { domain := "ToolCallState", values := toolCallStateNames }
+  , { domain := "CancelCause", values := toolCallCancelCauseNames }
   , { domain := "ManagedExecState", values := managedExecStateNames }
   , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }

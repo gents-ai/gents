@@ -168,6 +168,39 @@ impl CancelPolicy {
     pub const ALL: &'static [CancelPolicy] = &[CancelPolicy::Cascade, CancelPolicy::Detach];
 }
 
+/// Why a tool-call cancellation was requested at the state-machine boundary.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CancelCause {
+    Interrupted,
+    Deadline,
+    UserCancelled,
+}
+
+impl CancelCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CancelCause::Interrupted => "interrupted",
+            CancelCause::Deadline => "deadline",
+            CancelCause::UserCancelled => "userCancelled",
+        }
+    }
+
+    pub fn from_persisted(s: &str) -> Option<Self> {
+        match s {
+            "interrupted" => Some(CancelCause::Interrupted),
+            "deadline" => Some(CancelCause::Deadline),
+            "userCancelled" => Some(CancelCause::UserCancelled),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &'static [CancelCause] = &[
+        CancelCause::Interrupted,
+        CancelCause::Deadline,
+        CancelCause::UserCancelled,
+    ];
+}
+
 /// The four non-.completed terminal states a child AgentRequest can reach.
 /// Used as the argument shape to bridge_failure to project the child terminal
 /// onto a parent ToolCallState (.failed for most, .cancelled for .interrupted).
@@ -502,6 +535,20 @@ mod tests {
     }
 
     #[test]
+    fn rust_cancel_cause_vocabulary_matches_lean_model() {
+        let rust_causes = CancelCause::ALL
+            .iter()
+            .copied()
+            .map(CancelCause::as_str)
+            .collect::<Vec<_>>();
+        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+            domain: "CancelCause",
+            rust_source: "CancelCause::ALL",
+            rust_values: &rust_causes,
+        });
+    }
+
+    #[test]
     fn rust_failure_class_vocabulary_matches_lean_model() {
         let rust_classes = FailureClass::ALL
             .iter()
@@ -576,6 +623,23 @@ mod bucket_1_subagent_vocabulary {
     #[test]
     fn cancel_policy_from_persisted_unknown_returns_none() {
         assert_eq!(CancelPolicy::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn cancel_cause_round_trip_via_persisted_vocab() {
+        for &cause in CancelCause::ALL {
+            assert_eq!(CancelCause::from_persisted(cause.as_str()), Some(cause));
+        }
+    }
+
+    #[test]
+    fn cancel_cause_all_has_three_variants() {
+        assert_eq!(CancelCause::ALL.len(), 3);
+    }
+
+    #[test]
+    fn cancel_cause_from_persisted_unknown_returns_none() {
+        assert_eq!(CancelCause::from_persisted("unknown"), None);
     }
 
     #[test]

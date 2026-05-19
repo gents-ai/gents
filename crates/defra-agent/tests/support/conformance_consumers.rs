@@ -420,6 +420,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_tool_call_state_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::tests::rust_cancel_cause_vocabulary_matches_lean_model",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/tool_call_lifecycle.rs",
+            module_path: "tool_call_lifecycle::tests",
+            function: "rust_cancel_cause_vocabulary_matches_lean_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::tests::rust_failure_class_vocabulary_matches_lean_model",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/tool_call_lifecycle.rs",

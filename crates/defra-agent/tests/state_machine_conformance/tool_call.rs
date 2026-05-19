@@ -123,6 +123,33 @@ pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
 }
 
 #[test]
+pub(super) fn lean_tool_call_cancel_actions_name_cancel_cause() {
+    let machine = lean_state_machine_contract("ToolCall");
+    let causes = lean_vocabulary_values("CancelCause");
+
+    for cause in causes {
+        let before = format!("cancelBeforeDispatch_{cause}");
+        let during = format!("cancelDuringRun_{cause}");
+        assert!(
+            machine.actions.iter().any(|action| action == &before),
+            "ToolCall actions must include cause-qualified action {before:?}"
+        );
+        assert!(
+            machine.actions.iter().any(|action| action == &during),
+            "ToolCall actions must include cause-qualified action {during:?}"
+        );
+    }
+
+    assert!(
+        !machine
+            .actions
+            .iter()
+            .any(|action| action == "cancelBeforeDispatch" || action == "cancelDuringRun"),
+        "ToolCall cancel actions must name the CancelCause vocabulary string"
+    );
+}
+
+#[test]
 fn lean_emits_bridge_transitions_in_tool_call_machine() {
     let machine = lean_state_machine_contract("ToolCall");
     let bridge_names: Vec<&str> = vec![
