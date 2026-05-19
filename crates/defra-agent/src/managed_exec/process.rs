@@ -14,6 +14,7 @@ use super::output::{KillReport, ManagedExecOutcome};
 
 const TERM_GRACE: Duration = Duration::from_millis(100);
 const KILL_GRACE: Duration = Duration::from_millis(250);
+const CAPTURE_DRAIN_AFTER_FAILED_REAP: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(crate) struct ManagedExecRequest {
@@ -203,8 +204,9 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let kill = terminate_process_group(child_pgid, &mut wait).await;
     drop(wait);
     child.finished = kill.reaped;
-    let stdout = join_capture(stdout_task).await;
-    let stderr = join_capture(stderr_task).await;
+    let capture_timeout = (!kill.reaped).then_some(CAPTURE_DRAIN_AFTER_FAILED_REAP);
+    let stdout = join_capture_with_timeout(stdout_task, capture_timeout).await;
+    let stderr = join_capture_with_timeout(stderr_task, capture_timeout).await;
 
     match outcome_kind {
         OutcomeKind::TimedOut => ManagedExecOutcome::TimedOut {
@@ -226,7 +228,9 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
 
 #[cfg(not(unix))]
 pub(crate) async fn run_managed_exec(_request: ManagedExecRequest) -> ManagedExecOutcome {
-    unimplemented!("Windows ManagedExec process termination: see #236")
+    ManagedExecOutcome::SpawnFailed {
+        error: "ManagedExec process-group termination is not yet supported on non-Unix platforms; see #236".to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -245,6 +249,8 @@ struct ManagedChild {
 #[cfg(unix)]
 impl ManagedChild {
     fn new(child: Child) -> Self {
+        // The pre_exec setsid() call makes the child's pid its process-group id.
+        // If setsid() fails, Command::spawn returns an error before this point.
         let pgid = child.id().and_then(|pid| i32::try_from(pid).ok());
         Self {
             inner: child,
@@ -262,6 +268,7 @@ impl ManagedChild {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         if !self.finished {
+            // Drop is last-resort cleanup, so skip TERM grace and force the group down.
             if let Some(pgid) = self.pgid {
                 let _ = signal_process_group(pgid, libc::SIGKILL);
             }
@@ -315,6 +322,29 @@ async fn join_capture(task: tokio::task::JoinHandle<OutputCapture>) -> OutputCap
         bytes: Vec::new(),
         truncated: true,
     })
+}
+
+async fn join_capture_with_timeout(
+    mut task: tokio::task::JoinHandle<OutputCapture>,
+    timeout: Option<Duration>,
+) -> OutputCapture {
+    let Some(timeout) = timeout else {
+        return join_capture(task).await;
+    };
+
+    tokio::select! {
+        result = &mut task => result.unwrap_or(OutputCapture {
+            bytes: Vec::new(),
+            truncated: true,
+        }),
+        _ = tokio::time::sleep(timeout) => {
+            task.abort();
+            OutputCapture {
+                bytes: Vec::new(),
+                truncated: true,
+            }
+        }
+    }
 }
 
 async fn sleep_until_deadline(deadline_at: Option<DateTime<Utc>>) {

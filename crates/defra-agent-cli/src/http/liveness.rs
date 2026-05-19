@@ -35,6 +35,7 @@ pub(crate) struct RuntimeLivenessSnapshot {
     pub(crate) expired_processing_count: i64,
     pub(crate) requests: Vec<ActiveRequest>,
     pub(crate) active_tool_calls: Vec<ActiveToolCall>,
+    pub(crate) active_native_executors_available: bool,
     pub(crate) active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
 }
 
@@ -63,7 +64,7 @@ pub(crate) struct ActiveToolCall {
     pub(crate) deadline_expired: bool,
 }
 
-pub(crate) fn compute_liveness_summary(
+pub(crate) fn compute_request_liveness_summary(
     now: DateTime<Utc>,
     requests: Vec<LivenessRequestRow>,
     tool_calls: Vec<LivenessToolCallRow>,
@@ -137,8 +138,18 @@ pub(crate) fn compute_liveness_summary(
         expired_processing_count,
         requests: request_views,
         active_tool_calls,
+        active_native_executors_available: false,
         active_native_executors: Vec::new(),
     }
+}
+
+pub(crate) fn with_active_native_executors(
+    mut snapshot: RuntimeLivenessSnapshot,
+    active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
+) -> RuntimeLivenessSnapshot {
+    snapshot.active_native_executors_available = true;
+    snapshot.active_native_executors = active_native_executors;
+    snapshot
 }
 
 fn parse_optional_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -207,7 +218,7 @@ mod tests {
             request("req-expired", -120, -30), // claimed 2m ago, deadline 30s ago
             request("req-fresh", -10, 60),     // claimed 10s ago, deadline 60s in future
         ];
-        let snapshot = compute_liveness_summary(now(), requests, Vec::new());
+        let snapshot = compute_request_liveness_summary(now(), requests, Vec::new());
 
         assert_eq!(snapshot.expired_processing_count, 1);
         assert!(snapshot
@@ -238,7 +249,7 @@ mod tests {
     fn active_tool_calls_carry_tool_name_and_running_age() {
         let requests = vec![request("req-1", -45, 60)];
         let tools = vec![tool_call("req-1", "tc-1", "glob", -30, Some(60), None)];
-        let snapshot = compute_liveness_summary(now(), requests, tools);
+        let snapshot = compute_request_liveness_summary(now(), requests, tools);
 
         assert_eq!(snapshot.active_tool_calls.len(), 1);
         let tc = &snapshot.active_tool_calls[0];
@@ -263,7 +274,7 @@ mod tests {
             None,
             Some("bridge"),
         )];
-        let snapshot = compute_liveness_summary(now(), requests, tools);
+        let snapshot = compute_request_liveness_summary(now(), requests, tools);
 
         let tc = &snapshot.active_tool_calls[0];
         assert_eq!(tc.await_mode.as_deref(), Some("bridge"));
@@ -273,7 +284,7 @@ mod tests {
     fn last_progress_age_ms_uses_most_recent_tool_activity_over_claimed_at() {
         let requests = vec![request("req-1", -300, 60)];
         let tools = vec![tool_call("req-1", "tc-1", "bash", -10, Some(60), None)];
-        let snapshot = compute_liveness_summary(now(), requests, tools);
+        let snapshot = compute_request_liveness_summary(now(), requests, tools);
 
         let req = snapshot
             .requests
@@ -295,7 +306,7 @@ mod tests {
     #[test]
     fn last_progress_age_ms_falls_back_to_claimed_at_when_no_tool_calls() {
         let requests = vec![request("req-1", -45, 60)];
-        let snapshot = compute_liveness_summary(now(), requests, Vec::new());
+        let snapshot = compute_request_liveness_summary(now(), requests, Vec::new());
 
         let req = &snapshot.requests[0];
         assert!(

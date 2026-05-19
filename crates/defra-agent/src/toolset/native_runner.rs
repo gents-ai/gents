@@ -35,7 +35,7 @@ impl NativeFsRunner {
         let cancellation_token = runtime
             .map(|runtime| runtime.cancellation_token)
             .unwrap_or_else(CancellationToken::new);
-        let runner = resolve_runner_command(&self.root);
+        let runner = resolve_runner_command(&self.root)?;
         let stdin = serde_json::to_vec(&request)
             .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
 
@@ -79,49 +79,35 @@ struct RunnerCommand {
     cwd: PathBuf,
 }
 
-fn resolve_runner_command(root: &Path) -> RunnerCommand {
+fn resolve_runner_command(root: &Path) -> Result<RunnerCommand, ToolError> {
     if let Ok(path) = std::env::var(RUNNER_ENV) {
         if !path.trim().is_empty() {
-            return RunnerCommand {
+            return Ok(RunnerCommand {
                 argv: vec![
                     path,
                     "--root".to_string(),
                     root.to_string_lossy().into_owned(),
                 ],
                 cwd: root.to_path_buf(),
-            };
+            });
         }
     }
 
     if let Some(candidate) = adjacent_runner_binary() {
-        return RunnerCommand {
+        return Ok(RunnerCommand {
             argv: vec![
                 candidate.to_string_lossy().into_owned(),
                 "--root".to_string(),
                 root.to_string_lossy().into_owned(),
             ],
             cwd: root.to_path_buf(),
-        };
+        });
     }
 
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
-        .to_path_buf();
-    RunnerCommand {
-        argv: vec![
-            "cargo".to_string(),
-            "run".to_string(),
-            "--quiet".to_string(),
-            "-p".to_string(),
-            "defra-native-fs-runner".to_string(),
-            "--".to_string(),
-            "--root".to_string(),
-            root.to_string_lossy().into_owned(),
-        ],
-        cwd: repo_root,
-    }
+    Err(anyhow!(
+        "native filesystem runner binary not found; set {RUNNER_ENV} or install defra-native-fs-runner next to the defra-agent binary"
+    )
+    .into())
 }
 
 fn adjacent_runner_binary() -> Option<PathBuf> {

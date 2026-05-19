@@ -78,6 +78,7 @@ pub(crate) fn render_healthz_payload(
                         "status": liveness_status,
                         "active_request_count": data.liveness.active_request_ids.len(),
                         "active_tool_call_count": data.liveness.active_tool_calls.len(),
+                        "active_native_executors_available": data.liveness.active_native_executors_available,
                         "active_native_executor_count": data.liveness.active_native_executors.len(),
                         "expired_processing_count": data.liveness.expired_processing_count,
                     },
@@ -193,6 +194,7 @@ mod tests {
                     running_age_ms: 270_000,
                     deadline_expired: true,
                 }],
+                active_native_executors_available: true,
                 active_native_executors: Vec::new(),
             },
         };

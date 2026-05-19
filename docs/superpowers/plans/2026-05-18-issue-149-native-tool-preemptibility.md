@@ -46,7 +46,9 @@ Implementation closeout, 2026-05-18:
 - Tasks 5-8 landed Unix ManagedExec process-group ownership, the
   `defra-native-fs-runner` binary crate, and migrated `list_files`, `glob`, and
   `grep` to `managedExecProcessGroupBoundary`. `read_file` remains in-process on
-  `tokio::fs::read` by design.
+  `tokio::fs::read` by design. Production runner resolution requires
+  `DEFRA_NATIVE_FS_RUNNER` or an adjacent runner binary; it does not invoke
+  `cargo run` at request time.
 - Task 9 is satisfied through request-scoped runtime context handoff into the
   native runner and ManagedExec timeout/cancel outcomes returning the existing
   lifecycle markers consumed by the hook.

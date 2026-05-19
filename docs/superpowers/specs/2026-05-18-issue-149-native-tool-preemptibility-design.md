@@ -15,6 +15,9 @@ Implementation closeout, 2026-05-18:
   request/response protocol.
 - `list_files`, `glob`, and `grep` now execute through the managed runner;
   `read_file` remains on `tokio::fs::read`.
+- Production runner resolution requires `DEFRA_NATIVE_FS_RUNNER` or an adjacent
+  `defra-native-fs-runner` binary; it does not invoke `cargo run` at request
+  time.
 - Lean conformance now includes the `ManagedExec` state machine and liveness
   witness rows, and native filesystem boundary witnesses now name
   `managedExecProcessGroupBoundary`.

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use defra_node::EmbeddedNode;
@@ -268,6 +268,26 @@ fn temp_root(name: &str) -> PathBuf {
     path
 }
 
+fn ensure_native_fs_runner_for_test() {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("defra-agent manifest should be under workspace crates/")
+            .to_path_buf();
+        let status = std::process::Command::new("cargo")
+            .args(["build", "-p", "defra-native-fs-runner"])
+            .current_dir(repo_root)
+            .status()
+            .expect("building defra-native-fs-runner test binary");
+        assert!(
+            status.success(),
+            "defra-native-fs-runner test binary must build before native filesystem tool tests"
+        );
+    });
+}
+
 fn compact_meta(output: &str) -> serde_json::Value {
     let first_line = output.lines().next().expect("metadata line");
     let raw = first_line
@@ -308,6 +328,7 @@ impl Drop for EnvVarGuard {
 
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-native-boundary");
     std::fs::write(root.join("first.txt"), "first request\n").unwrap();
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
@@ -537,6 +558,7 @@ async fn write_and_edit_file_work_under_root() {
 
 #[tokio::test]
 async fn raw_json_escape_hatch_returns_structured_output() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-raw-json");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
@@ -571,6 +593,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
 async fn list_files_skips_permission_denied_subtrees() {
     use std::os::unix::fs::PermissionsExt;
 
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-perms");
     std::fs::write(root.join("visible.txt"), "ok").unwrap();
     let restricted = root.join("restricted");
@@ -603,6 +626,7 @@ async fn list_files_skips_permission_denied_subtrees() {
 
 #[tokio::test]
 async fn list_files_ignores_common_generated_directories_by_default() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-ignored");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
@@ -634,6 +658,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
 
 #[tokio::test]
 async fn glob_returns_compact_matches() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-glob");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
@@ -664,6 +689,7 @@ async fn glob_returns_compact_matches() {
 
 #[tokio::test]
 async fn grep_returns_compact_line_numbered_matches() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-grep");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
@@ -698,6 +724,7 @@ async fn grep_returns_compact_line_numbered_matches() {
 
 #[tokio::test]
 async fn compact_list_output_is_smaller_than_representative_pretty_json() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-smaller");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("README.md"), "hello\n").unwrap();

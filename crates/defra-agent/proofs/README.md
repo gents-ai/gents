@@ -207,6 +207,11 @@ managed-exec unit tests and `state_machine_conformance`, while native
 filesystem boundary cases now name `managedExecProcessGroupBoundary` for
 `list_files`, `glob`, and `grep`.
 
+The Lean `pendingSpawn` state is intentionally one step finer than the Rust
+registry surface: Rust records an active executor only after `Command::spawn`
+returns a child pid, which corresponds to the model's `running` state. Spawn
+failure is still modeled explicitly through `spawnFailed`.
+
 The same JSON includes `coverage_ledger`, maintained in
 `Proofs/Conformance/CoverageLedger.lean`. The Rust test
 `lean_contract_coverage_ledger_accounts_for_every_emitted_domain` compares that
