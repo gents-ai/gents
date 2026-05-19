@@ -303,6 +303,14 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases"
       "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract"
   , consumerCoverage
+      "r6_background_theorem_witnesses"
+      "BackgroundBudgetBoundedTheoremWitness"
+      "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant"
+  , consumerCoverage
+      "r6_background_theorem_witnesses"
+      "CascadeCancelsChildTheoremWitness"
+      "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace"
+  , consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
       "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes"
@@ -365,14 +373,6 @@ def caseCoverage : List CoverageEntry :=
 
 def followUpHookCoverage : List CoverageEntry :=
   [ followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.backgrounded_budget_bounded"
-      "Subagent.BridgedState.backgrounded_budget_bounded proves that reachable bridged states keep live backgrounded tools at or below maxBackgroundedPerParent. Follow-up: emit witness row via `theorem_witness` discriminator in `Proofs/Conformance/ContractCases/R6Background.lean`."
-  , followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.cascade_cancels_child"
-      "Subagent.BridgedState.cascade_cancels_child proves cascade parent termination interrupts a linked processing child; related Lean-only negative form: Subagent.BridgedState.detach_does_not_cancel_child. Follow-up: emit witness row via `theorem_witness` discriminator in `Proofs/Conformance/ContractCases/R6Background.lean`."
-  , followUpCoverage
       "follow_up_hook"
       "Subagent.BridgedState.foreground_blocks_parent_advance"
       "Subagent.BridgedState.foreground_blocks_parent_advance proves live foreground tools block parent progress/message advance; related aliases: Subagent.BridgedState.subagent_depth_bounded and Subagent.BridgedState.bridge_link_symmetric. Accepted Lean-only today because the invariant is a proof-layer bridge guard rather than an emitted runtime witness."

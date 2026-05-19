@@ -621,6 +621,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R6BackgroundingCases".to_string(),
         ));
     }
+    if !lean_r6_background_theorem_witnesses().is_empty() {
+        emitted.insert((
+            "r6_background_theorem_witnesses".to_string(),
+            "BackgroundBudgetBoundedTheoremWitness".to_string(),
+        ));
+        emitted.insert((
+            "r6_background_theorem_witnesses".to_string(),
+            "CascadeCancelsChildTheoremWitness".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -658,6 +668,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "identity_contracts",
         "r4c_background_work_cases",
         "r6_background_cases",
+        "r6_background_theorem_witnesses",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
