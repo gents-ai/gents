@@ -49,6 +49,7 @@ structure ApplyReconcileCase where
   manifest : List ContractDoc
   preDesired : List ContractDoc
   preLive : List ContractLiveDoc
+  expectedExternalStateAfterAbort : List ContractLiveDoc
   expectedCreate : List DocRef
   expectedUpdate : List DocRef
   expectedUnchanged : List DocRef
