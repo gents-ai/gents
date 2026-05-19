@@ -3,7 +3,8 @@ import Proofs.Conformance.Contracts.Machines.Process
 import Proofs.Conformance.Contracts.Machines.Persistence
 import Proofs.Conformance.Contracts.Machines.StorageObservation
 import Proofs.Conformance.Contracts.Machines.RuntimeReconcile
-import Proofs.Conformance.Contracts.Machines.PairingSession
+import Proofs.Conformance.Contracts.Machines.PairingReconcile
+import Proofs.Conformance.Contracts.Machines.SessionRecovery
 import Proofs.Conformance.Contracts.Machines.InferenceCall
 import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
