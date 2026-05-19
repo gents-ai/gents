@@ -325,6 +325,13 @@ jobs:
               exit 1
             fi
 
+            entitlements_output="$(codesign -d --entitlements - "${binary_path}" 2>&1)"
+            printf '%s\n' "${entitlements_output}"
+            if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
+              echo "::error::Signed release artifact missing keychain-access-groups entitlement."
+              exit 1
+            fi
+
             spctl_required="${REQUIRE_SPCTL_VAR:-false}"
             if [[ "${spctl_required}" == "true" ]]; then
               spctl --assess --type execute --verbose=4 "${binary_path}"
