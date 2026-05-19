@@ -1,4 +1,4 @@
-import Proofs.Composed
+import Proofs.CrossMachineComposed
 import Proofs.Background.State
 
 /-!

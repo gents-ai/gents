@@ -5,7 +5,7 @@ import Proofs.StorageObservation
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.InferenceCall
-import Proofs.Composed
+import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.SessionRecovery
 import Proofs.Session.Properties

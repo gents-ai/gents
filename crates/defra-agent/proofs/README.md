@@ -110,7 +110,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
-| `Proofs/Composed.lean` | Cross-layer composition and guards |
+| `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Fleet-level scheduling and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
@@ -692,7 +692,7 @@ only that a reported successful mutation is durable before the next retry.
 ### Interrupted Inference Calls
 
 `Proofs/InferenceCall.lean` models queued, running, cancelled, completed, and
-failed call states. `Proofs/Composed.lean` proves
+failed call states. `Proofs/CrossMachineComposed.lean` proves
 `ComposedState.interrupted_request_cancels_live_linked_call`: when a request is
 interrupted, any queued or running call linked by `request_id` has a valid model
 path to `cancelled`.
