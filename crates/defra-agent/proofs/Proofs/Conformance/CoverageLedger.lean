@@ -309,7 +309,7 @@ def caseCoverage : List CoverageEntry :=
   , consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
-      "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
+      "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract"
   , consumerCoverage
       "identity_structural_cases"
       "IdentityStructuralCases"

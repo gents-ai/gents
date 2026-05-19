@@ -586,7 +586,7 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     }
 }
 
-pub(super) async fn generated_transcript_cases_pin_agent_message_ordering_contract() {
+pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
     assert_transcript_case_shape();
 
     let ordering = lean_transcript_case("ordering_user_assistant_tool_result");
