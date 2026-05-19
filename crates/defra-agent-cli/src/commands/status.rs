@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
@@ -96,10 +96,38 @@ pub(crate) async fn load_runtime_status_output(
 }
 
 pub(crate) async fn load_liveness_value(graphql: &str) -> Value {
+    if let Some(liveness) = load_live_http_liveness_value(graphql).await {
+        return liveness;
+    }
     match crate::http::prometheus::load_metrics_query_data(graphql).await {
         Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
         Err(_) => Value::Null,
     }
+}
+
+async fn load_live_http_liveness_value(graphql: &str) -> Option<Value> {
+    let status_url = runtime_status_url(graphql).ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let response = client.get(status_url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    body.get("liveness").cloned()
+}
+
+fn runtime_status_url(graphql: &str) -> Result<String> {
+    // The live liveness fast path targets the embedded Defra HTTP server shape
+    // (`/api/v0/graphql` and `/status` on the same authority). Deployments that
+    // split or rewrite those routes fall back to GraphQL-derived liveness.
+    let mut url = reqwest::Url::parse(graphql).context("parsing GraphQL endpoint URL")?;
+    url.set_path("/status");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 async fn load_live_unavailable_behaviors(
@@ -304,6 +332,14 @@ mod tests {
                 &"behavior broken-tools references missing tool selection missing-tools"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn runtime_status_url_points_at_server_status_root() {
+        assert_eq!(
+            runtime_status_url("http://127.0.0.1:9191/api/v0/graphql?ignored=true").unwrap(),
+            "http://127.0.0.1:9191/status"
         );
     }
 }

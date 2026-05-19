@@ -8,6 +8,7 @@ members = [
     "crates/defra-agent-desktop-core",
     "crates/defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2",
     "crates/defra-agent-lenses/agent_subagent_v2_to_v3",
+    "crates/defra-native-fs-runner",
     "crates/defra-agent-protocol",
 ]
 # Exclude the WASM lens crate from default workspace builds. Its cdylib target

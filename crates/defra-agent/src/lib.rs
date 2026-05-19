@@ -26,9 +26,11 @@ pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod lifecycle;
+pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
 pub mod migration;
+pub mod native_executor_status;
 pub mod oneshot;
 pub mod prompt;
 pub(crate) mod registry;
@@ -87,6 +89,7 @@ pub use lifecycle::{
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
+pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use schema::{

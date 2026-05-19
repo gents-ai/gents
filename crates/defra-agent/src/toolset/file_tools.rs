@@ -2,42 +2,32 @@
 // glob, grep) that share private helpers defined in the same file. Splitting
 // each tool into its own file would scatter the shared defaults and make
 // cross-tool consistency harder to verify.
-use std::collections::BTreeSet;
-
 use anyhow::{anyhow, Context as _, Result};
-use glob::Pattern;
+use defra_native_fs_runner::protocol::{
+    GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
+    NativeFsRunnerRequest,
+};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
-use super::shared::{
-    collect_entries, collect_glob_matches, collect_grep_matches, default_ignored_names,
-    render_file_contents, truncate_inline, truncate_text, FilesystemEntry, ToolContext, ToolError,
-};
+use super::native_runner::NativeFsRunner;
+use super::shared::{render_file_contents, truncate_text, ToolContext, ToolError};
 
-const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
-
-async fn run_filesystem_boundary<F, T>(operation: F) -> Result<T, ToolError>
-where
-    F: FnOnce() -> Result<T, ToolError> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|error| ToolError(anyhow!("filesystem tool boundary failed: {error}")))?
-}
 
 #[derive(Clone)]
 pub(super) struct ListFilesTool {
     context: ToolContext,
+    native_runner: NativeFsRunner,
     default_max_entries: usize,
 }
 
 impl ListFilesTool {
     pub(super) fn new(context: ToolContext, default_max_entries: usize) -> Self {
         Self {
+            native_runner: NativeFsRunner::new(&context),
             context,
             default_max_entries,
         }
@@ -61,14 +51,14 @@ impl ReadFileTool {
 
 #[derive(Clone)]
 pub(super) struct GlobTool {
-    context: ToolContext,
+    native_runner: NativeFsRunner,
     default_max_matches: usize,
 }
 
 impl GlobTool {
     pub(super) fn new(context: ToolContext, default_max_matches: usize) -> Self {
         Self {
-            context,
+            native_runner: NativeFsRunner::new(&context),
             default_max_matches,
         }
     }
@@ -76,14 +66,14 @@ impl GlobTool {
 
 #[derive(Clone)]
 pub(super) struct GrepTool {
-    context: ToolContext,
+    native_runner: NativeFsRunner,
     default_max_matches: usize,
 }
 
 impl GrepTool {
     pub(super) fn new(context: ToolContext, default_max_matches: usize) -> Self {
         Self {
-            context,
+            native_runner: NativeFsRunner::new(&context),
             default_max_matches,
         }
     }
@@ -156,43 +146,17 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let context = self.context.clone();
-        let default_max_entries = self.default_max_entries;
-
-        run_filesystem_boundary(move || {
-            let dir = context.resolve_existing_dir(args.path.as_deref())?;
-            let entries = collect_entries(
-                &context,
-                &dir,
-                args.recursive,
-                args.max_entries.max(1).min(default_max_entries.max(1)),
-            )?;
-
-            let metadata = ListFilesMetadata {
-                ok: true,
-                status: "success",
-                tool: Self::NAME,
-                path: context.display_path(&dir),
-                recursive: args.recursive,
-                returned_count: entries.items.len(),
-                total_count: total_count(entries.items.len(), entries.truncated),
-                truncated: entries.truncated,
-                default_ignored: default_ignored_names(),
-                summary: summarize_entries(&entries.items),
-            };
-            let output = ListFilesOutput {
-                metadata,
-                entries: entries.items,
-            };
-
-            Ok(render_tool_output(
-                &output.metadata,
-                format_entries("entries", &output.entries),
-                &output,
-                args.raw_json,
-            )?)
-        })
-        .await
+        self.native_runner
+            .run(
+                NativeFsRunnerRequest::ListFiles(NativeListFilesArgs {
+                    path: args.path,
+                    recursive: args.recursive,
+                    max_entries: args.max_entries.max(1).min(self.default_max_entries.max(1)),
+                    raw_json: args.raw_json,
+                }),
+                Self::NAME,
+            )
+            .await
     }
 }
 
@@ -320,43 +284,17 @@ impl Tool for GlobTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let context = self.context.clone();
-        let default_max_matches = self.default_max_matches;
-
-        run_filesystem_boundary(move || {
-            let dir = context.resolve_existing_dir(args.path.as_deref())?;
-            let pattern = Pattern::new(&args.pattern)
-                .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
-            let matches = collect_glob_matches(
-                &context,
-                &dir,
-                &pattern,
-                args.max_matches.min(default_max_matches).max(1),
-            )?;
-
-            let output = GlobOutput {
-                metadata: GlobMetadata {
-                    ok: true,
-                    status: "success",
-                    tool: Self::NAME,
+        self.native_runner
+            .run(
+                NativeFsRunnerRequest::Glob(NativeGlobArgs {
                     pattern: args.pattern,
-                    path: context.display_path(&dir),
-                    returned_count: matches.items.len(),
-                    total_count: total_count(matches.items.len(), matches.truncated),
-                    truncated: matches.truncated,
-                    default_ignored: default_ignored_names(),
-                },
-                matches: matches.items,
-            };
-
-            Ok(render_tool_output(
-                &output.metadata,
-                format_entries("matches", &output.matches),
-                &output,
-                args.raw_json,
-            )?)
-        })
-        .await
+                    path: args.path,
+                    max_matches: args.max_matches.min(self.default_max_matches).max(1),
+                    raw_json: args.raw_json,
+                }),
+                Self::NAME,
+            )
+            .await
     }
 }
 
@@ -407,59 +345,18 @@ impl Tool for GrepTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let context = self.context.clone();
-        let default_max_matches = self.default_max_matches;
-
-        run_filesystem_boundary(move || {
-            let dir = context.resolve_existing_dir(args.path.as_deref())?;
-            let max_matches = args.max_matches.min(default_max_matches).max(1);
-            let collected = collect_grep_matches(
-                &context,
-                &dir,
-                &args.pattern,
-                args.case_sensitive,
-                max_matches,
-            )?;
-
-            let mut files_with_matches = BTreeSet::new();
-            let matches = collected
-                .items
-                .into_iter()
-                .map(|entry| {
-                    files_with_matches.insert(entry.path.clone());
-                    GrepOutputMatch {
-                        path: entry.path,
-                        line_number: entry.line_number,
-                        preview: truncate_inline(&entry.line, DEFAULT_GREP_PREVIEW_CHARS),
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            let output = GrepOutput {
-                metadata: GrepMetadata {
-                    ok: true,
-                    status: "success",
-                    tool: Self::NAME,
+        self.native_runner
+            .run(
+                NativeFsRunnerRequest::Grep(NativeGrepArgs {
                     pattern: args.pattern,
-                    path: context.display_path(&dir),
+                    path: args.path,
                     case_sensitive: args.case_sensitive,
-                    returned_count: matches.len(),
-                    total_count: total_count(matches.len(), collected.truncated),
-                    files_with_matches: files_with_matches.len(),
-                    truncated: collected.truncated,
-                    default_ignored: default_ignored_names(),
-                },
-                matches,
-            };
-
-            Ok(render_tool_output(
-                &output.metadata,
-                format_grep_matches(&output.matches),
-                &output,
-                args.raw_json,
-            )?)
-        })
-        .await
+                    max_matches: args.max_matches.min(self.default_max_matches).max(1),
+                    raw_json: args.raw_json,
+                }),
+                Self::NAME,
+            )
+            .await
     }
 }
 
@@ -706,33 +603,6 @@ impl Tool for EditFileTool {
 }
 
 #[derive(Serialize)]
-struct EntrySummary {
-    files: usize,
-    directories: usize,
-}
-
-#[derive(Serialize)]
-struct ListFilesMetadata {
-    ok: bool,
-    status: &'static str,
-    tool: &'static str,
-    path: String,
-    recursive: bool,
-    returned_count: usize,
-    total_count: Option<usize>,
-    truncated: bool,
-    default_ignored: &'static [&'static str],
-    summary: EntrySummary,
-}
-
-#[derive(Serialize)]
-struct ListFilesOutput {
-    #[serde(flatten)]
-    metadata: ListFilesMetadata,
-    entries: Vec<FilesystemEntry>,
-}
-
-#[derive(Serialize)]
 struct ReadFileMetadata {
     ok: bool,
     status: &'static str,
@@ -750,55 +620,6 @@ struct ReadFileOutput {
     #[serde(flatten)]
     metadata: ReadFileMetadata,
     content: String,
-}
-
-#[derive(Serialize)]
-struct GlobMetadata {
-    ok: bool,
-    status: &'static str,
-    tool: &'static str,
-    pattern: String,
-    path: String,
-    returned_count: usize,
-    total_count: Option<usize>,
-    truncated: bool,
-    default_ignored: &'static [&'static str],
-}
-
-#[derive(Serialize)]
-struct GlobOutput {
-    #[serde(flatten)]
-    metadata: GlobMetadata,
-    matches: Vec<FilesystemEntry>,
-}
-
-#[derive(Serialize)]
-struct GrepMetadata {
-    ok: bool,
-    status: &'static str,
-    tool: &'static str,
-    pattern: String,
-    path: String,
-    case_sensitive: bool,
-    returned_count: usize,
-    total_count: Option<usize>,
-    files_with_matches: usize,
-    truncated: bool,
-    default_ignored: &'static [&'static str],
-}
-
-#[derive(Serialize)]
-struct GrepOutput {
-    #[serde(flatten)]
-    metadata: GrepMetadata,
-    matches: Vec<GrepOutputMatch>,
-}
-
-#[derive(Serialize)]
-struct GrepOutputMatch {
-    path: String,
-    line_number: usize,
-    preview: String,
 }
 
 #[derive(Serialize)]
@@ -838,58 +659,6 @@ struct EditFileMetadata {
 struct EditFileOutput {
     #[serde(flatten)]
     metadata: EditFileMetadata,
-}
-
-fn summarize_entries(entries: &[FilesystemEntry]) -> EntrySummary {
-    let mut files = 0;
-    let mut directories = 0;
-    for entry in entries {
-        match entry.entry_type {
-            "file" => files += 1,
-            "directory" => directories += 1,
-            _ => {}
-        }
-    }
-    EntrySummary { files, directories }
-}
-
-fn total_count(returned_count: usize, truncated: bool) -> Option<usize> {
-    (!truncated).then_some(returned_count)
-}
-
-fn format_entries(label: &str, entries: &[FilesystemEntry]) -> String {
-    let mut out = String::from(label);
-    out.push(':');
-    if entries.is_empty() {
-        out.push_str("\n(none)");
-        return out;
-    }
-
-    for entry in entries {
-        out.push('\n');
-        out.push_str(entry.entry_type);
-        out.push(' ');
-        out.push_str(&entry.path);
-    }
-    out
-}
-
-fn format_grep_matches(matches: &[GrepOutputMatch]) -> String {
-    let mut out = String::from("matches:");
-    if matches.is_empty() {
-        out.push_str("\n(none)");
-        return out;
-    }
-
-    for entry in matches {
-        out.push('\n');
-        out.push_str(&entry.path);
-        out.push_str(":L");
-        out.push_str(&entry.line_number.to_string());
-        out.push_str(": ");
-        out.push_str(&entry.preview);
-    }
-    out
 }
 
 fn render_tool_output(

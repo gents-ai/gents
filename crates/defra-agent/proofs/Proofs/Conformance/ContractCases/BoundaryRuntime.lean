@@ -238,7 +238,7 @@ def nativeFilesystemBoundaryCase (toolName : String) : NativeFilesystemBoundaryC
   { name := toolName ++ "_single_poll_blocker_times_out_and_queue_advances"
   , toolName := toolName
   , workClass := "filesystemTraversal"
-  , boundary := "spawnBlockingRuntimeBoundary"
+  , boundary := "managedExecProcessGroupBoundary"
   , innerPollBlocks := true
   , requestDeadlineMs := 15
   , blockerMs := 200

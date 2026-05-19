@@ -474,6 +474,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "NativeFilesystemBoundaryCases".to_string(),
         ));
     }
+    if !snapshot.managed_exec_liveness_cases.is_empty() {
+        emitted.insert((
+            "managed_exec_cases".to_string(),
+            "ManagedExecLivenessCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),
@@ -634,6 +640,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "storage_observation_cases",
         "backend_health_cases",
         "native_filesystem_boundary_cases",
+        "managed_exec_cases",
         "frontend_client_shell_cases",
         "desktop_client_shell_cases",
         "tool_cases",

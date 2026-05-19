@@ -150,6 +150,19 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .is_some_and(|rows| !rows.is_empty()),
         "expected /status to include P2P listen addresses: {status}"
     );
+    assert!(
+        status
+            .pointer("/liveness/active_native_executors")
+            .and_then(Value::as_array)
+            .is_some(),
+        "expected /status liveness to include active_native_executors: {status}"
+    );
+    assert_eq!(
+        status
+            .pointer("/liveness/active_native_executors_available")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 
     let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))

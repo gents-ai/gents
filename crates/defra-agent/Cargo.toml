@@ -15,6 +15,7 @@ async-trait = "0.1"
 chrono.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
+defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
 dirs.workspace = true
@@ -23,6 +24,7 @@ futures = "0.3"
 glob = "0.3"
 hostname.workspace = true
 identity.workspace = true
+libc = "0.2"
 minijinja.workspace = true
 rand.workspace = true
 serde.workspace = true

@@ -13,6 +13,7 @@ mod cancellable;
 mod cli_tool;
 mod delegate;
 mod file_tools;
+mod native_runner;
 mod shared;
 mod subagent;
 #[cfg(test)]

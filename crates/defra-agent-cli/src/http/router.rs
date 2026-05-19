@@ -10,7 +10,9 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::http::healthz::render_healthz_payload;
-use crate::http::prometheus::{load_metrics_query_data, render_prometheus_metrics};
+use crate::http::prometheus::{
+    load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
+};
 use crate::http::version::version_response;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -64,6 +66,7 @@ async fn version_handler() -> impl IntoResponse {
 async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
     match load_metrics_query_data(&state.graphql).await {
         Ok(data) => {
+            let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
             let status = if health.get("ok") == Some(&serde_json::Value::Bool(true)) {
                 StatusCode::OK
@@ -83,6 +86,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     let p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
     let mut body = match load_metrics_query_data(&state.graphql).await {
         Ok(data) => {
+            let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
             let runtime = data
                 .agent_runtimes

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use defra_node::EmbeddedNode;
@@ -14,9 +14,9 @@ use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
 use super::shared::{
-    block_next_sorted_children_for_test, build_shell_env_from_vars, select_sandbox_for_policy,
-    validate_command_policy, validate_read_only_command, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, ToolContext,
+    build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
+    validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    ToolContext,
 };
 use super::*;
 use crate::ensure_schemas;
@@ -268,6 +268,50 @@ fn temp_root(name: &str) -> PathBuf {
     path
 }
 
+fn ensure_native_fs_runner_for_test() {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        if native_fs_runner_binary_for_current_test().is_some() {
+            return;
+        }
+
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("defra-agent manifest should be under workspace crates/")
+            .to_path_buf();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = std::process::Command::new(cargo)
+            .args(["build", "-p", "defra-native-fs-runner"])
+            .current_dir(repo_root)
+            .status()
+            .expect("building defra-native-fs-runner test binary");
+        assert!(
+            status.success(),
+            "defra-native-fs-runner test binary must build before native filesystem tool tests"
+        );
+        assert!(
+            native_fs_runner_binary_for_current_test().is_some(),
+            "defra-native-fs-runner test binary must be adjacent to test binary after build"
+        );
+    });
+}
+
+fn native_fs_runner_binary_for_current_test() -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "defra-native-fs-runner.exe"
+    } else {
+        "defra-native-fs-runner"
+    };
+
+    let current = std::env::current_exe().ok()?;
+    let parent = current.parent()?;
+    [parent.to_path_buf(), parent.parent()?.to_path_buf()]
+        .into_iter()
+        .map(|dir| dir.join(exe_name))
+        .find(|candidate| candidate.is_file())
+}
+
 fn compact_meta(output: &str) -> serde_json::Value {
     let first_line = output.lines().next().expect("metadata line");
     let raw = first_line
@@ -284,14 +328,41 @@ fn compact_exec_meta(output: &str) -> serde_json::Value {
     serde_json::from_str(raw).expect("metadata json")
 }
 
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(previous) => std::env::set_var(self.key, previous),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-native-boundary");
     std::fs::write(root.join("first.txt"), "first request\n").unwrap();
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
-    let _blocker = block_next_sorted_children_for_test(context.root(), Duration::from_millis(200));
+    let _block_dir = EnvVarGuard::set(
+        "DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR",
+        context.root().as_os_str(),
+    );
+    let _block_ms = EnvVarGuard::set("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS", "200");
     let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
         context.clone(),
         DEFAULT_MAX_MATCHES,
@@ -357,7 +428,7 @@ fn generated_native_filesystem_boundary_cases_match_preemptible_boundary_contrac
             case.name
         );
         assert_eq!(case.work_class, "filesystemTraversal");
-        assert_eq!(case.boundary, "spawnBlockingRuntimeBoundary");
+        assert_eq!(case.boundary, "managedExecProcessGroupBoundary");
         assert!(case.inner_poll_blocks);
         assert!(case.request_deadline_ms <= 20);
         assert!(case.blocker_ms >= 200);
@@ -511,6 +582,7 @@ async fn write_and_edit_file_work_under_root() {
 
 #[tokio::test]
 async fn raw_json_escape_hatch_returns_structured_output() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-raw-json");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
@@ -545,6 +617,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
 async fn list_files_skips_permission_denied_subtrees() {
     use std::os::unix::fs::PermissionsExt;
 
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-perms");
     std::fs::write(root.join("visible.txt"), "ok").unwrap();
     let restricted = root.join("restricted");
@@ -577,6 +650,7 @@ async fn list_files_skips_permission_denied_subtrees() {
 
 #[tokio::test]
 async fn list_files_ignores_common_generated_directories_by_default() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-ignored");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
@@ -608,6 +682,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
 
 #[tokio::test]
 async fn glob_returns_compact_matches() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-glob");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
@@ -638,6 +713,7 @@ async fn glob_returns_compact_matches() {
 
 #[tokio::test]
 async fn grep_returns_compact_line_numbered_matches() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-grep");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
@@ -672,6 +748,7 @@ async fn grep_returns_compact_line_numbered_matches() {
 
 #[tokio::test]
 async fn compact_list_output_is_smaller_than_representative_pretty_json() {
+    ensure_native_fs_runner_for_test();
     let root = temp_root("defra-agent-list-files-smaller");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("README.md"), "hello\n").unwrap();

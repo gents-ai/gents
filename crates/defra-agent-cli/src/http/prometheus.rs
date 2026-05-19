@@ -4,7 +4,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::http::liveness::{
-    compute_liveness_summary, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
+    compute_request_liveness_summary, with_active_native_executors, LivenessRequestRow,
+    LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
 
@@ -71,6 +72,7 @@ where
 
 pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
     let data = load_metrics_query_data(graphql).await?;
+    let data = with_local_native_executors(data);
 
     let mut lines = Vec::new();
     push_metric_prelude(
@@ -297,6 +299,32 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
         &[],
         data.liveness.expired_processing_count,
     );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_active_native_executors",
+        "Number of active managed native executor processes visible in this HTTP server process.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_active_native_executors",
+        &[],
+        data.liveness.active_native_executors.len() as i64,
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_active_native_executors_available",
+        "Per-instance gauge set to 1 when active native executor process snapshots were collected from this HTTP server process; aggregate with min/max rather than average.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_active_native_executors_available",
+        &[],
+        if data.liveness.active_native_executors_available {
+            1
+        } else {
+            0
+        },
+    );
 
     lines.push(String::new());
     Ok(lines.join("\n"))
@@ -355,12 +383,19 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
-    let liveness = compute_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
+    let liveness =
+        compute_request_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
     Ok(MetricsQueryData {
         agent_runtimes: envelope.agent_runtimes,
         inference_backends: envelope.inference_backends,
         liveness,
     })
+}
+
+pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
+    data.liveness =
+        with_active_native_executors(data.liveness, defra_agent::active_native_executors());
+    data
 }
 
 fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {

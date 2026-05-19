@@ -5,7 +5,7 @@ import Proofs.StorageObservation
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.InferenceCall
-import Proofs.Composed
+import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.SessionRecovery
 import Proofs.Session.Properties
@@ -18,6 +18,7 @@ import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolExecution
+import Proofs.ManagedExec
 import Proofs.MCPHealth
 import Proofs.StreamingResponse
 import Proofs.Background
