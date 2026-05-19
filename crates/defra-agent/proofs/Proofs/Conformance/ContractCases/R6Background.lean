@@ -106,4 +106,28 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (some "background_completion:900")
   ]
 
+def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
+  [ { theoremName := "Subagent.BridgedState.backgrounded_budget_bounded"
+    , witnessKind := "state_invariant"
+    , scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
+    , numericBound := Subagent.maxBackgroundedPerParent
+    , kindFields :=
+        [ ("await_mode", "background")
+        , ("cancel_policy", "cascade")
+        , ("error_code_on_violation", "background_tool_budget_exceeded")
+        ]
+    }
+  , { theoremName := "Subagent.BridgedState.cascade_cancels_child"
+    , witnessKind := "reachability_trace"
+    , scenario := "parent_terminal_with_cascade_bridge_interrupts_processing_child"
+    , numericBound := 2
+    , kindFields :=
+        [ ("cancel_policy", "cascade")
+        , ("child_pre_state", "processing")
+        , ("child_pre_admission", "executing")
+        , ("child_post_state", "interrupted")
+        ]
+    }
+  ]
+
 end Conformance.ContractCases
