@@ -166,7 +166,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , consumerCoverage
       "state_machine"
       "RuntimeReconcile"
-      "runtime_status::tests::rust_reconcile_phase_vocabulary_matches_lean_model"
+      "runtime_status::tests::runtime_reconcile_state_machine_contract_is_complete"
   , consumerCoverage
       "state_machine"
       "PairingReconcile"

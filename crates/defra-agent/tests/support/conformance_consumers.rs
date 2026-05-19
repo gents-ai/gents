@@ -252,6 +252,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_reconcile_phase_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
+            id: "runtime_status::tests::runtime_reconcile_state_machine_contract_is_complete",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/runtime_status/tests.rs",
+            module_path: "runtime_status::tests",
+            function: "runtime_reconcile_state_machine_contract_is_complete",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
