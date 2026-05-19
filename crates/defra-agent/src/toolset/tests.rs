@@ -271,6 +271,10 @@ fn temp_root(name: &str) -> PathBuf {
 fn ensure_native_fs_runner_for_test() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
+        if native_fs_runner_binary_for_current_test().is_some() {
+            return;
+        }
+
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
@@ -286,7 +290,26 @@ fn ensure_native_fs_runner_for_test() {
             status.success(),
             "defra-native-fs-runner test binary must build before native filesystem tool tests"
         );
+        assert!(
+            native_fs_runner_binary_for_current_test().is_some(),
+            "defra-native-fs-runner test binary must be adjacent to test binary after build"
+        );
     });
+}
+
+fn native_fs_runner_binary_for_current_test() -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "defra-native-fs-runner.exe"
+    } else {
+        "defra-native-fs-runner"
+    };
+
+    let current = std::env::current_exe().ok()?;
+    let parent = current.parent()?;
+    [parent.to_path_buf(), parent.parent()?.to_path_buf()]
+        .into_iter()
+        .map(|dir| dir.join(exe_name))
+        .find(|candidate| candidate.is_file())
 }
 
 fn compact_meta(output: &str) -> serde_json::Value {
