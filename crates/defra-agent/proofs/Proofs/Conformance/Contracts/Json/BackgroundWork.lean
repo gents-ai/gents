@@ -182,6 +182,20 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey
     ++ "}"
 
+def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :=
+  "{"
+    ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","
+    ++ "\"witness_kind\":" ++ jsonString witness.witnessKind ++ ","
+    ++ "\"scenario\":" ++ jsonString witness.scenario ++ ","
+    ++ "\"numeric_bound\":" ++ toString witness.numericBound ++ ","
+    ++ "\"kind_fields\":"
+      ++ jsonArray (witness.kindFields.map (fun (key, value) =>
+            "{"
+              ++ "\"key\":" ++ jsonString key ++ ","
+              ++ "\"value\":" ++ jsonString value
+              ++ "}"))
+    ++ "}"
+
 def transcriptCaseJson (witness : TranscriptCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
