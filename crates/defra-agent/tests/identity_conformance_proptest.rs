@@ -56,7 +56,11 @@ fn build_stub_behavior_factory(
 }
 
 fn arb_did() -> impl Strategy<Value = String> {
-    proptest::string::string_regex("did:agent:[a-z]{1,6}").unwrap()
+    prop_oneof![
+        Just("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string()),
+        Just("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR".to_string()),
+        Just("did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH".to_string()),
+    ]
 }
 
 fn arb_behavior_id() -> impl Strategy<Value = String> {

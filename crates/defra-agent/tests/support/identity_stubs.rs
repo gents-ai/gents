@@ -1,10 +1,10 @@
 //! Test-only `AgentIdentity` impl that returns a chosen DID string.
 //!
 //! `KeyIdentity` derives its DID from a generated key and cannot return
-//! a chosen DID like `"did:agent:amy"`. The identity-conformance tests
-//! need to construct principals whose DIDs match the Lean rows, so they
-//! use this stub. Routing tests never sign or verify; both methods
-//! panic if called.
+//! a chosen DID like `"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"`.
+//! The identity-conformance tests need to construct principals whose DIDs
+//! match the Lean rows, so they use this stub. Routing tests never sign or
+//! verify; both methods panic if called.
 
 use std::sync::Arc;
 

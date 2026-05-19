@@ -17,7 +17,7 @@
       "op": "WriteAgentRequest",
       "node": "A",
       "request_id": "parent-req-b-crash",
-      "agent_did": "did:agent:a-parent",
+      "agent_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
       "behavior_id": "parent-behavior",
       "state": "processing"
     },
@@ -48,7 +48,7 @@
       "op": "WriteAgentRequest",
       "node": "B",
       "request_id": "child-req-b-crash",
-      "agent_did": "did:agent:b-child",
+      "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
       "behavior_id": "child-behavior",
       "state": "processing",
       "caused_by_parent_request_id": "parent-req-b-crash",

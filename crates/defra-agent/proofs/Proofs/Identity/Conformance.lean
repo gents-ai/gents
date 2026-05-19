@@ -12,6 +12,15 @@ the runtime permission decision engine (tracked in #193).
 
 namespace Identity.Conformance
 
+def amyDid : String :=
+  "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+
+def ruminationDid : String :=
+  "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
+
+def ghostDid : String :=
+  "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+
 /-- Flat principal payload for JSON emission. -/
 structure PrincipalCase where
   did     : String
@@ -51,72 +60,72 @@ structure IdentityStructuralCase where
 
 def structuralCases : List IdentityStructuralCase :=
   [ { name        := "amy_general_and_amy_code_share_principal"
-    , principals  := [{ did := "did:agent:amy", enabled := true }]
+    , principals  := [{ did := amyDid, enabled := true }]
     , behaviors   :=
-        [ { id := "amy-general", principal := "did:agent:amy", enabled := true }
-        , { id := "amy-code",    principal := "did:agent:amy", enabled := true } ]
+        [ { id := "amy-general", principal := amyDid, enabled := true }
+        , { id := "amy-code",    principal := amyDid, enabled := true } ]
     , deployments :=
         [ { id := "deploy-amy"
-          , principal := "did:agent:amy"
+          , principal := amyDid
           , hostId := "host-1.local"
           , enabled := true } ]
     , wellFormed  := true
     }
   , { name        := "amy_rumination_separate_principal"
     , principals  :=
-        [ { did := "did:agent:amy",        enabled := true }
-        , { did := "did:agent:rumination", enabled := true } ]
+        [ { did := amyDid,        enabled := true }
+        , { did := ruminationDid, enabled := true } ]
     , behaviors   :=
-        [ { id := "amy-general",     principal := "did:agent:amy",        enabled := true }
-        , { id := "amy-rumination",  principal := "did:agent:rumination", enabled := true } ]
+        [ { id := "amy-general",     principal := amyDid,        enabled := true }
+        , { id := "amy-rumination",  principal := ruminationDid, enabled := true } ]
     , deployments :=
         [ { id := "deploy-amy"
-          , principal := "did:agent:amy"
+          , principal := amyDid
           , hostId := "host-1.local"
           , enabled := true }
         , { id := "deploy-rumination"
-          , principal := "did:agent:rumination"
+          , principal := ruminationDid
           , hostId := "host-2.local"
           , enabled := true } ]
     , wellFormed  := true
     }
   , { name        := "dangling_behavior_fk_violates"
-    , principals  := [{ did := "did:agent:amy", enabled := true }]
+    , principals  := [{ did := amyDid, enabled := true }]
     , behaviors   :=
-        [ { id := "orphan", principal := "did:agent:ghost", enabled := true } ]
+        [ { id := "orphan", principal := ghostDid, enabled := true } ]
     , deployments := []
     , wellFormed  := false
     }
   , { name        := "duplicate_behavior_id_violates"
-    , principals  := [{ did := "did:agent:amy", enabled := true }]
+    , principals  := [{ did := amyDid, enabled := true }]
     , behaviors   :=
-        [ { id := "amy-general", principal := "did:agent:amy", enabled := true }
-        , { id := "amy-general", principal := "did:agent:amy", enabled := false } ]
+        [ { id := "amy-general", principal := amyDid, enabled := true }
+        , { id := "amy-general", principal := amyDid, enabled := false } ]
     , deployments := []
     , wellFormed  := false
     }
   , { name        := "deployment_fk_violates"
-    , principals  := [{ did := "did:agent:amy", enabled := true }]
+    , principals  := [{ did := amyDid, enabled := true }]
     , behaviors   := []
     , deployments :=
         [ { id := "ghost-deploy"
-          , principal := "did:agent:ghost"
+          , principal := ghostDid
           , hostId := "host-3.local"
           , enabled := true } ]
     , wellFormed  := false
     }
   , { name        := "two_deployments_different_principals_ok"
     , principals  :=
-        [ { did := "did:agent:amy",        enabled := true }
-        , { did := "did:agent:rumination", enabled := true } ]
+        [ { did := amyDid,        enabled := true }
+        , { did := ruminationDid, enabled := true } ]
     , behaviors   := []
     , deployments :=
         [ { id := "deploy-amy"
-          , principal := "did:agent:amy"
+          , principal := amyDid
           , hostId := "host-1.local"
           , enabled := true }
         , { id := "deploy-rumination"
-          , principal := "did:agent:rumination"
+          , principal := ruminationDid
           , hostId := "host-2.local"
           , enabled := true } ]
     , wellFormed  := true
@@ -242,39 +251,39 @@ def mkIdentityPermissionCase
   }
 
 def amyPrincipal : PrincipalCase :=
-  { did := "did:agent:amy", enabled := true }
+  { did := amyDid, enabled := true }
 
 def ruminationPrincipal : PrincipalCase :=
-  { did := "did:agent:rumination", enabled := true }
+  { did := ruminationDid, enabled := true }
 
 def amyGeneralBehavior : BehaviorCase :=
-  { id := "amy-general", principal := "did:agent:amy", enabled := true }
+  { id := "amy-general", principal := amyDid, enabled := true }
 
 def amyCodeBehavior : BehaviorCase :=
-  { id := "amy-code", principal := "did:agent:amy", enabled := true }
+  { id := "amy-code", principal := amyDid, enabled := true }
 
 def amyRuminationBehavior : BehaviorCase :=
-  { id := "amy-rumination", principal := "did:agent:rumination", enabled := true }
+  { id := "amy-rumination", principal := ruminationDid, enabled := true }
 
 def amyDeployment : DeploymentCase :=
   { id := "deploy-amy"
-  , principal := "did:agent:amy"
+  , principal := amyDid
   , hostId := "host-1.local"
   , enabled := true
   }
 
 def ruminationDeployment : DeploymentCase :=
   { id := "deploy-rumination"
-  , principal := "did:agent:rumination"
+  , principal := ruminationDid
   , hostId := "host-2.local"
   , enabled := true
   }
 
 def amyRowReadPermission : String :=
-  "row:did:agent:amy:memory.read"
+  "row:" ++ amyDid ++ ":memory.read"
 
 def ruminationRowReadPermission : String :=
-  "row:did:agent:rumination:journal.read"
+  "row:" ++ ruminationDid ++ ":journal.read"
 
 def grant (principal permission : String) : PermissionGrantCase :=
   { principal := principal, permission := permission }
@@ -285,9 +294,9 @@ def identityPermissionCases : List IdentityPermissionCase :=
       [amyPrincipal]
       [amyGeneralBehavior, amyCodeBehavior]
       [amyDeployment]
-      [grant "did:agent:amy" amyRowReadPermission]
+      [grant amyDid amyRowReadPermission]
       amyRowReadPermission
-      "did:agent:amy"
+      amyDid
       "amy-general"
       "amy-code"
       "deploy-amy"
@@ -296,9 +305,9 @@ def identityPermissionCases : List IdentityPermissionCase :=
       [amyPrincipal, ruminationPrincipal]
       [amyGeneralBehavior, amyRuminationBehavior]
       [amyDeployment, ruminationDeployment]
-      [grant "did:agent:amy" amyRowReadPermission]
+      [grant amyDid amyRowReadPermission]
       amyRowReadPermission
-      "did:agent:amy"
+      amyDid
       "amy-general"
       "amy-rumination"
       "deploy-amy"
@@ -307,10 +316,10 @@ def identityPermissionCases : List IdentityPermissionCase :=
       [amyPrincipal, ruminationPrincipal]
       [amyGeneralBehavior, amyRuminationBehavior]
       [amyDeployment, ruminationDeployment]
-      [ grant "did:agent:amy" amyRowReadPermission
-      , grant "did:agent:rumination" amyRowReadPermission ]
+      [ grant amyDid amyRowReadPermission
+      , grant ruminationDid amyRowReadPermission ]
       amyRowReadPermission
-      "did:agent:amy"
+      amyDid
       "amy-general"
       "amy-rumination"
       "deploy-rumination"
@@ -319,9 +328,9 @@ def identityPermissionCases : List IdentityPermissionCase :=
       [amyPrincipal, ruminationPrincipal]
       [amyGeneralBehavior, amyCodeBehavior, amyRuminationBehavior]
       [amyDeployment, ruminationDeployment]
-      [grant "did:agent:rumination" ruminationRowReadPermission]
+      [grant ruminationDid ruminationRowReadPermission]
       ruminationRowReadPermission
-      "did:agent:rumination"
+      ruminationDid
       "amy-code"
       "amy-rumination"
       "deploy-rumination"
