@@ -210,6 +210,11 @@ fn lean_emits_child_terminal_vocabulary_and_projections() {
 }
 
 #[test]
+fn lean_tool_call_cancel_actions_name_cancel_cause() {
+    tool_call::lean_tool_call_cancel_actions_name_cancel_cause();
+}
+
+#[test]
 fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     tooling_slots_queue_command::generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
     );

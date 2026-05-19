@@ -110,6 +110,10 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_call_lifecycle::tests::rust_tool_call_state_vocabulary_matches_lean_model"
   , consumerCoverage
       "vocabulary"
+      "CancelCause"
+      "tool_call_lifecycle::tests::rust_cancel_cause_vocabulary_matches_lean_model"
+  , consumerCoverage
+      "vocabulary"
       "ManagedExecState"
       "managed_exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model"
   , consumerCoverage

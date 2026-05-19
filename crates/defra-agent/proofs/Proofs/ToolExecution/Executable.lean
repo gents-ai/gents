@@ -13,15 +13,19 @@ namespace ToolCallContext
 /-- Executable tool-call actions mirroring the state-changing constructors of
     `Transition`. The two non-state constructors (`timeAdvance`,
     `persistenceStep`) are not exposed here; they are internal to trace
-    construction in liveness proofs. -/
+    construction in liveness proofs.
+
+    Cancel causes are transition metadata: `step?` returns the same post-state
+    for each cause, while `step_refines_transition` carries the selected cause
+    into the relational witness. -/
 inductive Action where
   | dispatch
   | spawnFailed (failure : FailureClass)
   | complete
   | fail (failure : FailureClass)
   | timeout
-  | cancelBeforeDispatch
-  | cancelDuringRun
+  | cancelBeforeDispatch (cause : CancelCause)
+  | cancelDuringRun (cause : CancelCause)
   deriving DecidableEq, Repr
 
 /-- Executable transition function for the tool-call layer. -/
@@ -51,12 +55,12 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
         some { pre with state := .timedOut }
       else
         none
-  | .cancelBeforeDispatch =>
+  | .cancelBeforeDispatch _ =>
       if pre.state = .pending then
         some { pre with state := .cancelled }
       else
         none
-  | .cancelDuringRun =>
+  | .cancelDuringRun _ =>
       if pre.state = .running then
         some { pre with state := .cancelled }
       else
@@ -88,14 +92,14 @@ theorem step_refines_transition
       simp [step?] at h_step
       rcases h_step with ⟨⟨h_state, h_deadline⟩, h_post⟩
       exact Transition.timeout (h_state := h_state) (h_deadline := h_deadline) (h_post := h_post.symm)
-  | cancelBeforeDispatch =>
+  | cancelBeforeDispatch cause =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
-      exact Transition.cancelBeforeDispatch (h_state := h_state) (h_post := h_post.symm)
-  | cancelDuringRun =>
+      exact Transition.cancelBeforeDispatch cause (h_state := h_state) (h_post := h_post.symm)
+  | cancelDuringRun cause =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
-      exact Transition.cancelDuringRun (h_state := h_state) (h_post := h_post.symm)
+      exact Transition.cancelDuringRun cause (h_state := h_state) (h_post := h_post.symm)
 
 end ToolCallContext
 end ToolExecution

@@ -13,15 +13,25 @@ def toolCallStates : List ToolExecution.ToolCallState :=
 def toolCallStateNames : List String :=
   toolCallStates.map ToolExecution.ToolCallState.toDefraDB
 
+def toolCallCancelCauses : List ToolExecution.CancelCause :=
+  ToolExecution.CancelCause.all
+
+def toolCallCancelCauseNames : List String :=
+  toolCallCancelCauses.map ToolExecution.CancelCause.toDefraDB
+
+def toolCallCancelActions : List (String × ToolExecution.ToolCallContext.Action) :=
+  toolCallCancelCauses.flatMap fun cause =>
+    [ ("cancelBeforeDispatch_" ++ cause.toDefraDB, .cancelBeforeDispatch cause)
+    , ("cancelDuringRun_" ++ cause.toDefraDB, .cancelDuringRun cause)
+    ]
+
 def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
   [ ("dispatch", .dispatch)
   , ("spawnFailed_external", .spawnFailed .external)
   , ("complete", .complete)
   , ("fail_external", .fail .external)
   , ("timeout", .timeout)
-  , ("cancelBeforeDispatch", .cancelBeforeDispatch)
-  , ("cancelDuringRun", .cancelDuringRun)
-  ]
+  ] ++ toolCallCancelActions
 
 def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.ToolCallContext :=
   { callId := 1

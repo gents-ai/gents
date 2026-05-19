@@ -45,15 +45,22 @@ theorem interrupted_request_cancels_live_linked_call
   · exact InferenceCall.cancel_state pre.call
 
 
-/-- C2: An interrupted request cancels every live linked tool call. -/
+/-- C2: An interrupted request cancels every live linked tool call.
+
+The witness preserves the parent request and re-emits its `.interrupted`
+state before the tool-membership/cancelled/linkage facts. The inner tool
+transition is tagged with `CancelCause.interrupted`; a future composed
+`CauseCoherent` invariant can make that tag/state agreement global. -/
 theorem interrupted_request_cancels_live_linked_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in           : toolPre ∈ pre.tools)
-    (h_interrupted  : pre.request.state = .interrupted)  -- documentary, tracked by #153
+    (h_interrupted  : pre.request.state = .interrupted)
     (h_live         : toolPre.cancellable)
     (h_coherent     : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.state = .interrupted ∧
       toolPost ∈ post.tools ∧
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
@@ -64,10 +71,10 @@ theorem interrupted_request_cancels_live_linked_tools
   | inl h_pending =>
     have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
                       { toolPre with state := .cancelled } :=
-      ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch h_pending rfl
+      ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch .interrupted h_pending rfl
     let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
     let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-    refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
+    refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
     · refine Trace.step ?_ Trace.refl
       -- Discharge the foreground-flip guard: `cancelBeforeDispatch` only changes
       -- `state`, so `toolPost.awaitMode = toolPre.awaitMode`. If `toolPre` is
@@ -81,10 +88,10 @@ theorem interrupted_request_cancels_live_linked_tools
   | inr h_running =>
     have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
                       { toolPre with state := .cancelled } :=
-      ToolExecution.ToolCallContext.Transition.cancelDuringRun h_running rfl
+      ToolExecution.ToolCallContext.Transition.cancelDuringRun .interrupted h_running rfl
     let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
     let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-    refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
+    refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
     · refine Trace.step ?_ Trace.refl
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
@@ -144,13 +151,14 @@ theorem deadline_exceeded_request_timesOut_running_tools
 
 /-- C1': A request whose deadline is exceeded cancels every Pending linked
     tool. Companion to C1 — a Pending tool never ran, so it reaches
-    .cancelled rather than .timedOut.
+    .cancelled rather than .timedOut. The inner cancellation is tagged with
+    `.deadline`, tying this composed path to the deadline hypothesis even
+    though the single-machine pending-cancel transition itself has no deadline
+    guard.
 
-    Note: `h_deadline` is documentary — `cancelBeforeDispatch` has no deadline
-    guard. The hypothesis captures the operational context (deadline-driven
-    cancellation path) rather than a proof-relevant constraint. Tracked under
-    issue #153 alongside C2/C3's documentary hypotheses for a future
-    CancelCause tightening pass. -/
+    The witness preserves the parent request and re-emits
+    `post.request.deadlineExceeded` before the tool-membership/cancelled/linkage
+    facts. -/
 theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
@@ -159,6 +167,8 @@ theorem deadline_exceeded_request_cancels_pending_tools
     (h_coherent  : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.deadlineExceeded ∧
       toolPost ∈ post.tools ∧
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
@@ -167,10 +177,10 @@ theorem deadline_exceeded_request_cancels_pending_tools
   -- Inner cancelBeforeDispatch transition
   have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
                     { toolPre with state := .cancelled } :=
-    ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch h_pending rfl
+    ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch .deadline h_pending rfl
   let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
   let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-  refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
+  refine ⟨post, toolPost, ?_, rfl, h_deadline, ?_, rfl, h_linked⟩
   · refine Trace.step ?_ Trace.refl
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
             ⟨h_linked, h_deadline_eq, h_time_eq⟩
@@ -184,7 +194,11 @@ theorem deadline_exceeded_request_cancels_pending_tools
 /-- C3: A request whose linked tools are all terminal can resume making progress.
     Multi-flight form: ∀-quantified over `pre.tools`. Semantic complement of
     issue #149: when every linked tool is terminal, the foreground-blocking
-    guard on `request_step` is satisfied and the request can `advance`. -/
+    guard on `request_step` is satisfied and the request can `advance`.
+
+    This theorem performs no tool-call cancellation, so `CancelCause` has no
+    natural role here; future causal audit work should introduce a separate
+    progress-unblock witness rather than forcing a cancel cause into C3. -/
 theorem all_tools_terminal_unblocks_request_progress
     {pre : ComposedState}
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)

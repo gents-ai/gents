@@ -310,6 +310,9 @@ impl ToolCallLifecycle {
 
     /// Pending → Cancelled. Used when a tool call is cancelled before
     /// dispatch creates a running row.
+    ///
+    /// TODO(#249): accept and persist `CancelCause` once AgentToolCall has a
+    /// cancel_cause field.
     pub async fn cancel_before_dispatch(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
 

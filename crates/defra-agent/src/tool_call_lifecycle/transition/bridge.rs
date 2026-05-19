@@ -302,6 +302,8 @@ impl ToolCallLifecycle {
         &mut self,
         remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()> {
+        // TODO(#249): accept and persist `CancelCause` once AgentToolCall has
+        // a cancel_cause field.
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
         let doc_id = self.doc_id.as_ref().ok_or_else(|| {
