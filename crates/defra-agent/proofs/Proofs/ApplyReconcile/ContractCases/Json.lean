@@ -63,6 +63,8 @@ def applyReconcileCaseJson (witness : ApplyReconcileCase) : String :=
     ++ "\"manifest\":" ++ jsonArray (witness.manifest.map desiredDocJson) ++ ","
     ++ "\"pre_desired\":" ++ jsonArray (witness.preDesired.map desiredDocJson) ++ ","
     ++ "\"pre_live\":" ++ jsonArray (witness.preLive.map liveDocJson) ++ ","
+    ++ "\"expected_external_state_after_abort\":"
+      ++ jsonArray (witness.expected_external_state_after_abort.map liveDocJson) ++ ","
     ++ "\"expected_create\":"
       ++ jsonArray (witness.expectedCreate.map docRefJson) ++ ","
     ++ "\"expected_update\":"

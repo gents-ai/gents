@@ -108,6 +108,7 @@ pub(crate) struct LeanApplyReconcileCase {
     pub(crate) manifest: Vec<LeanApplyDesiredDoc>,
     pub(crate) pre_desired: Vec<LeanApplyDesiredDoc>,
     pub(crate) pre_live: Vec<LeanApplyLiveDoc>,
+    pub(crate) expected_external_state_after_abort: Vec<LeanApplyLiveDoc>,
     pub(crate) expected_create: Vec<LeanApplyDocRef>,
     pub(crate) expected_update: Vec<LeanApplyDocRef>,
     pub(crate) expected_unchanged: Vec<LeanApplyDocRef>,

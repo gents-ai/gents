@@ -135,6 +135,7 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , manifest := scenario.manifest
   , preDesired := scenario.preDesired
   , preLive := scenario.preLive
+  , expected_external_state_after_abort := scenario.preLive
   , expectedCreate := diffCreate scenario
   , expectedUpdate := diffUpdate scenario
   , expectedUnchanged := diffUnchanged scenario
