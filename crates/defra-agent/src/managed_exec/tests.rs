@@ -56,11 +56,7 @@ async fn managed_exec_deadline_kills_process_group() {
     let snapshot = wait_for_native_executor(tool_name).await;
     assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
     assert_eq!(snapshot.tool_name.as_deref(), Some(tool_name));
-    assert!(
-        snapshot.argv0.ends_with("sh"),
-        "active executor snapshot must expose argv0, got {:?}",
-        snapshot.argv0
-    );
+    assert_eq!(snapshot.argv0, "/bin/sh");
     chrono::DateTime::parse_from_rfc3339(&snapshot.started_at)
         .expect("active executor snapshot must expose RFC3339 started_at");
     let snapshot_id = snapshot.id;
@@ -117,6 +113,7 @@ async fn managed_exec_deadline_kills_process_group() {
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_cancellation_kills_process_group() {
+    let tool_name = "r3-cancel-blocker";
     let token = CancellationToken::new();
     let child_token = token.clone();
     let handle = tokio::spawn(async move {
@@ -131,15 +128,12 @@ async fn managed_exec_cancellation_kills_process_group() {
             cancellation_token: child_token,
             max_output_bytes: 1024,
             stdin: Vec::new(),
-            tool_name: Some("test".to_string()),
+            tool_name: Some(tool_name.to_string()),
         })
         .await
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(
-        !active_executor_snapshots().is_empty(),
-        "executor should be visible while child is running"
-    );
+    let snapshot = wait_for_native_executor(tool_name).await;
+    assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
     token.cancel();
 
     match handle.await.expect("managed exec task should join") {
