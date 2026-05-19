@@ -1,0 +1,132 @@
+import Proofs.Conformance.Contracts.Json.Core
+import Proofs.Conformance.Contracts.Json.Runtime
+import Proofs.Conformance.Contracts.Json.Scheduling
+import Proofs.Conformance.Contracts.Json.ToolExecution
+import Proofs.Conformance.Contracts.Json.CommandPolicy
+import Proofs.Conformance.Contracts.Json.ClientRuntime
+import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Triggers.Contracts
+import Proofs.Conformance.ClientShell.Contracts
+import Proofs.ApplyReconcile.ContractCases
+import Proofs.Conformance.Deviations
+import Proofs.Conformance.CoverageLedger
+import Proofs.Identity.Conformance
+import Proofs.Conformance.EventDelivery
+
+/-!
+# Conformance Snapshot Assembly
+
+Top-level JSON snapshot emitted for Rust conformance tests.
+-/
+
+namespace Conformance.Contracts
+
+open Conformance.ContractCases
+
+def snapshotJson : String :=
+  "{"
+    ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
+    ++ "\"vocabularies\":"
+      ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
+    ++ "\"state_machines\":"
+      ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"request_transition_cases\":"
+      ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
+    ++ "\"process_transition_cases\":"
+      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
+    ++ "\"trigger_dispatch_case_count\":"
+      ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
+    ++ "\"trigger_dispatch_cases\":"
+      ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
+    ++ "\"frontend_client_shell_case_count\":"
+      ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
+    ++ "\"frontend_client_shell_cases\":"
+      ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
+    ++ "\"desktop_client_shell_case_count\":"
+      ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
+    ++ "\"desktop_client_shell_cases\":"
+      ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"runtime_reconcile_cases\":"
+      ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
+    ++ "\"apply_reconcile_cases\":"
+      ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
+    ++ "\"session_recovery_cases\":"
+      ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
+    ++ "\"inference_slot_accounting_cases\":"
+      ++ jsonArray (inferenceSlotAccountingCases.map inferenceSlotAccountingCaseJson) ++ ","
+    ++ "\"fleet_slot_accounting_cases\":"
+      ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
+    ++ "\"persistence_failure_policy_cases\":"
+      ++ jsonArray
+        (persistenceFailurePolicyCases.map persistenceFailurePolicyCaseJson) ++ ","
+    ++ "\"storage_observation_runtime_cases\":"
+      ++ jsonArray
+        (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
+    ++ "\"backend_health_admission_cases\":"
+      ++ jsonArray
+        (backendHealthAdmissionCases.map backendHealthAdmissionCaseJson) ++ ","
+    ++ "\"native_filesystem_boundary_cases\":"
+      ++ jsonArray
+        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
+    ++ "\"managed_exec_liveness_cases\":"
+      ++ jsonArray
+        (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
+    ++ "\"tool_preflight_cases\":"
+      ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
+    ++ "\"tool_retry_cases\":"
+      ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"boundaries\":"
+      ++ boundariesJson ++ ","
+    ++ "\"deviations\":"
+      ++ deviationsJson ++ ","
+    ++ "\"command_policy_cases\":"
+      ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
+    ++ "\"command_sandbox_cases\":"
+      ++ jsonArray (CommandPolicy.commandSandboxCases.map commandSandboxCaseJson) ++ ","
+    ++ "\"command_env_cases\":"
+      ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
+    ++ "\"live_overlay_cases\":"
+      ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
+    ++ "\"queue_deadline_conformance_cases\":"
+      ++ jsonArray
+        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
+    ++ "\"recovery_sweep_cases\":"
+      ++ jsonArray
+        (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"r4c_background_work_cases\":"
+      ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
+    ++ "\"r6_backgrounding_cases\":"
+      ++ jsonArray
+        (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
+    ++ "\"transcript_conformance_cases\":"
+      ++ jsonArray
+        (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"streaming_response_cases\":"
+      ++ jsonArray
+        (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
+    ++ "\"compaction_reducer_cases\":"
+      ++ jsonArray
+        (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
+    ++ "\"mcp_health_cases\":"
+      ++ jsonArray
+        (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
+    ++ "\"follow_up_hooks\":[],"
+    ++ "\"event_delivery_transition_case_count\":"
+      ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
+    ++ "\"event_delivery_transition_cases\":"
+      ++ Conformance.EventDelivery.transitionCasesJson ++ ","
+    ++ "\"event_delivery_source_instances\":"
+      ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
+    ++ "\"event_delivery_convergence_traces\":"
+      ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
+    ++ "\"coverage_ledger\":"
+      ++ coverageLedgerJson
+    ++ ",\"identity_structural_cases\":"
+      ++ Identity.Conformance.structuralCasesJson
+    ++ ",\"identity_permission_cases\":"
+      ++ Identity.Conformance.identityPermissionCasesJson
+    ++ ",\"identity_contracts\":"
+      ++ Identity.Conformance.identityContractsJson
+    ++ "}"
+
+end Conformance.Contracts
