@@ -314,11 +314,10 @@ def caseCoverage : List CoverageEntry :=
       "identity_structural_cases"
       "IdentityStructuralCases"
       "identity_conformance::identity_structural_cases_match_lean_verdicts"
-  , consumerWithFollowUpCoverage
+  , consumerCoverage
       "identity_permission_cases"
       "IdentityPermissionCases"
       "identity_conformance::identity_permission_cases_pin_runtime_permission_contract_shape"
-      "Issue #193 replaces the Rust mirror in identity_conformance::identity_permission_cases_pin_runtime_permission_contract_shape with the runtime permission decision module and deployment hostability lookup."
   , consumerCoverage
       "identity_contracts"
       "IdentityContracts"
