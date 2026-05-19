@@ -276,7 +276,8 @@ fn ensure_native_fs_runner_for_test() {
             .nth(2)
             .expect("defra-agent manifest should be under workspace crates/")
             .to_path_buf();
-        let status = std::process::Command::new("cargo")
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = std::process::Command::new(cargo)
             .args(["build", "-p", "defra-native-fs-runner"])
             .current_dir(repo_root)
             .status()

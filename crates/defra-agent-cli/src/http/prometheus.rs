@@ -313,7 +313,7 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
     push_metric_prelude(
         &mut lines,
         "defra_agent_active_native_executors_available",
-        "Whether active native executor process snapshots were collected from this HTTP server process.",
+        "Per-instance gauge set to 1 when active native executor process snapshots were collected from this HTTP server process; aggregate with min/max rather than average.",
     );
     push_metric_sample(
         &mut lines,
