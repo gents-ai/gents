@@ -251,11 +251,20 @@ jobs:
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
+          apple_team_id="$(sed -nE 's/^.*\(([A-Za-z0-9]+)\)$/\1/p' <<< "${signing_identity}" | tail -n 1)"
+          entitlements_path="${RUNNER_TEMP}/entitlements.rendered.plist"
 
           if [[ -z "${keychain_path}" || -z "${signing_identity}" ]]; then
             echo "::error::Native signing keychain preflight did not provide SIGNING_KEYCHAIN/SIGNING_IDENTITY_NAME."
             exit 1
           fi
+          if [[ -z "${apple_team_id}" ]]; then
+            echo "::error::Could not extract Apple Team ID from SIGNING_IDENTITY_NAME '${signing_identity}'."
+            exit 1
+          fi
+          sed "s/__APPLE_TEAM_ID__/${apple_team_id}/g" release/entitlements.plist > "${entitlements_path}"
+          plutil -lint "${entitlements_path}"
+
           security unlock-keychain -p "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" "${keychain_path}"
           echo "Signing with native macOS identity from ${keychain_path}."
 
@@ -265,6 +274,8 @@ jobs:
               --force \
               --sign "${signing_identity}" \
               --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+              --options runtime \
+              --entitlements "${entitlements_path}" \
               "${timestamp_arg}" \
               "${binary_path}"
           }
@@ -311,6 +322,13 @@ jobs:
             printf '%s\n' "${designated_requirement}"
             if grep -q 'designated => cdhash' <<< "${designated_requirement}"; then
               echo "::error::Signed release artifact still has an ad-hoc cdhash designated requirement."
+              exit 1
+            fi
+
+            entitlements_output="$(codesign -d --entitlements - "${binary_path}" 2>&1)"
+            printf '%s\n' "${entitlements_output}"
+            if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
+              echo "::error::Signed release artifact missing keychain-access-groups entitlement."
               exit 1
             fi
 
