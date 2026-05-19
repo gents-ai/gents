@@ -48,8 +48,8 @@ def managedExecLivenessCases : List ManagedExecLivenessCase :=
     , maxSteps := 1
     , killSignalRequired := false
     }
-  , { name := "timeout_with_partial_stdout_preserves_metadata"
-    , trigger := "deadlineElapsedPartialStdout"
+  , { name := "deadline_timeout_preserves_partial_stdout_metadata"
+    , trigger := "deadlineElapsed"
     , preExecState := ManagedExecState.toDefraDB .running
     , preToolState := ToolExecution.ToolCallState.toDefraDB .running
     , expectedExecState := ManagedExecState.toDefraDB .killSignaled
