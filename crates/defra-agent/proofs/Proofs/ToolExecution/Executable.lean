@@ -13,7 +13,11 @@ namespace ToolCallContext
 /-- Executable tool-call actions mirroring the state-changing constructors of
     `Transition`. The two non-state constructors (`timeAdvance`,
     `persistenceStep`) are not exposed here; they are internal to trace
-    construction in liveness proofs. -/
+    construction in liveness proofs.
+
+    Cancel causes are transition metadata: `step?` returns the same post-state
+    for each cause, while `step_refines_transition` carries the selected cause
+    into the relational witness. -/
 inductive Action where
   | dispatch
   | spawnFailed (failure : FailureClass)

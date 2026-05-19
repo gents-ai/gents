@@ -169,6 +169,9 @@ impl CancelPolicy {
 }
 
 /// Why a tool-call cancellation was requested at the state-machine boundary.
+///
+/// This is mirrored from Lean for conformance first. Runtime methods still
+/// need to accept and persist it on AgentToolCall; tracked by #249.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CancelCause {
     Interrupted,

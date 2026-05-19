@@ -45,7 +45,12 @@ theorem interrupted_request_cancels_live_linked_call
   · exact InferenceCall.cancel_state pre.call
 
 
-/-- C2: An interrupted request cancels every live linked tool call. -/
+/-- C2: An interrupted request cancels every live linked tool call.
+
+The witness preserves the parent request and re-emits its `.interrupted`
+state before the tool-membership/cancelled/linkage facts. The inner tool
+transition is tagged with `CancelCause.interrupted`; a future composed
+`CauseCoherent` invariant can make that tag/state agreement global. -/
 theorem interrupted_request_cancels_live_linked_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in           : toolPre ∈ pre.tools)
@@ -149,7 +154,11 @@ theorem deadline_exceeded_request_timesOut_running_tools
     .cancelled rather than .timedOut. The inner cancellation is tagged with
     `.deadline`, tying this composed path to the deadline hypothesis even
     though the single-machine pending-cancel transition itself has no deadline
-    guard. -/
+    guard.
+
+    The witness preserves the parent request and re-emits
+    `post.request.deadlineExceeded` before the tool-membership/cancelled/linkage
+    facts. -/
 theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
