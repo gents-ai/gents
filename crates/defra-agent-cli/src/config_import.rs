@@ -792,8 +792,8 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
 #[cfg(test)]
 mod lean_apply_write_boundary_tests {
     use super::lean_vocab_test::{
-        lean_apply_reconcile_cases, LeanApplyDesiredDoc, LeanApplyDocRef, LeanApplyReconcileCase,
-        LeanApplySelectedDoc,
+        lean_apply_reconcile_cases, LeanApplyDesiredDoc, LeanApplyDocRef, LeanApplyLiveDoc,
+        LeanApplyReconcileCase, LeanApplySelectedDoc,
     };
     use super::*;
     use axum::{extract::State, routing::post, Json, Router};
@@ -849,6 +849,15 @@ mod lean_apply_write_boundary_tests {
                 all.extend(writes.iter().cloned());
             }
             all
+        }
+
+        fn pending_state(&self) -> Vec<ObservedWrite> {
+            self.transactions
+                .lock()
+                .expect("tx lock")
+                .values()
+                .flat_map(|writes| writes.iter().cloned())
+                .collect()
         }
 
         fn tx_lifecycle_counts(&self) -> (u64, u64, u64) {
@@ -936,7 +945,13 @@ mod lean_apply_write_boundary_tests {
             );
 
             if case.prefix_len > 0 {
-                let (graphql, recorder) = start_recording_graphql().await;
+                let initial_external_state = case
+                    .pre_live
+                    .iter()
+                    .map(observed_write_from_lean_live_doc)
+                    .collect::<Vec<_>>();
+                let (graphql, recorder) =
+                    start_recording_graphql_with_committed_state(initial_external_state).await;
                 let access = ConfigAccess::Graphql(graphql);
 
                 // Begin a tx. The recorder hands out sequential numeric ids starting at 0;
@@ -954,6 +969,7 @@ mod lean_apply_write_boundary_tests {
                     case.prefix_len,
                     case.name,
                 );
+                let pending_after_failure = recorder.pending_state();
 
                 // discard errors are not under test here; the apply error path is what we're verifying.
                 let _ = txn.discard().await;
@@ -966,17 +982,22 @@ mod lean_apply_write_boundary_tests {
                     case.name,
                 );
 
-                assert!(
-                    recorder.committed_state().is_empty(),
-                    "failure path must leave externally-observed committed state empty (= pre_live) for Lean case {}",
+                let observed = recorder.committed_state();
+                let expected = case
+                    .expected_external_state_after_abort
+                    .iter()
+                    .map(observed_write_from_lean_live_doc)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    observed, expected,
+                    "failure path must leave externally-observed committed state equal to Lean expected_external_state_after_abort for case {}",
                     case.name,
                 );
 
-                let observed = recorder.observed_writes();
                 assert!(
-                    observed.len() <= case.prefix_len,
+                    pending_after_failure.len() <= case.prefix_len,
                     "failure path observed {} writes; the batch containing the failing write must be rejected and writes after it must not happen — cap is prefix_len = {} for Lean case {}",
-                    observed.len(),
+                    pending_after_failure.len(),
                     case.prefix_len,
                     case.name,
                 );
@@ -1251,7 +1272,14 @@ mod lean_apply_write_boundary_tests {
     }
 
     async fn start_recording_graphql() -> (String, RecordingGraphqlState) {
+        start_recording_graphql_with_committed_state(Vec::new()).await
+    }
+
+    async fn start_recording_graphql_with_committed_state(
+        committed: Vec<ObservedWrite>,
+    ) -> (String, RecordingGraphqlState) {
         let state = RecordingGraphqlState::default();
+        *state.committed.lock().expect("committed lock") = committed;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind recording GraphQL listener");
@@ -1744,6 +1772,13 @@ mod lean_apply_write_boundary_tests {
         ObservedWrite {
             collection,
             unique_value: doc.unique_value.clone(),
+        }
+    }
+
+    fn observed_write_from_lean_live_doc(doc: &LeanApplyLiveDoc) -> ObservedWrite {
+        ObservedWrite {
+            collection: collection_from_lean_name(&doc.collection),
+            unique_value: doc.id.clone(),
         }
     }
 
