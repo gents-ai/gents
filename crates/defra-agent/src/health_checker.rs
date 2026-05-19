@@ -189,7 +189,26 @@ async fn run_health_check(
     let services: Vec<RegistryServiceEntry> =
         serde_json::from_value(raw_services).context("parsing ToolServiceRegistry entries")?;
 
-    let now = Utc::now();
+    run_health_check_cycle(
+        services,
+        Utc::now(),
+        mcp_pool,
+        health_map,
+        local_hostname,
+        local_subnet,
+    )
+    .await
+}
+
+// Production transition step once the registry query has supplied online rows.
+async fn run_health_check_cycle(
+    services: Vec<RegistryServiceEntry>,
+    now: DateTime<Utc>,
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    local_hostname: &str,
+    local_subnet: Option<&str>,
+) -> Result<()> {
     let mut online_service_ids = HashSet::new();
 
     for service in services {
@@ -372,8 +391,15 @@ mod registry_parsing_tests {
 
 #[cfg(test)]
 mod transitions_tests {
-    use super::HealthStatus;
+    use chrono::Duration as ChronoDuration;
+    use rmcp::model::ListToolsResult;
+
+    use super::{
+        run_health_check_cycle, HealthStatus, RegistryServiceEntry, ServiceHealth,
+        ServiceHealthMap, STALENESS_THRESHOLD_SECS,
+    };
     use crate::lean_vocab_test::{lean_mcp_health_k1_cases, LeanMcpHealthCase};
+    use crate::mcp_pool::McpPool;
 
     /// Project a Lean K=1 case's `rust_projection` to a `HealthStatus` for
     /// today's Rust to assert against. `None` means the service was removed
@@ -391,31 +417,6 @@ mod transitions_tests {
         })
     }
 
-    /// Simulate one tick of `run_health_check`'s decision logic for a given
-    /// case: given a starting `HealthStatus` and a probe event, what does
-    /// today's Rust assign?
-    ///
-    /// Mirrors the inline logic at `health_checker.rs:247–308` but drives it
-    /// with the case's event rather than a real probe call.
-    fn rust_simulated_next(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
-        match case.event.as_str() {
-            "registryAbsent" => None,
-            "backoffExpiry" => {
-                // Today's Rust has no backoffExpiry behavior — backoff is not
-                // armed at K=1. Express this by mapping back through the
-                // starting projection (no observable change at K=1).
-                Some(start_status(case))
-            }
-            "probeSuccessFresh" => Some(HealthStatus::Healthy),
-            "probeSuccessStale" => Some(HealthStatus::Stale),
-            "probeFail" => Some(HealthStatus::Unreachable),
-            other => panic!(
-                "Lean MCP health case {} produced unknown event {:?}",
-                case.name, other
-            ),
-        }
-    }
-
     fn start_status(case: &LeanMcpHealthCase) -> HealthStatus {
         match case.start_state.as_str() {
             "healthy" => HealthStatus::Healthy,
@@ -430,8 +431,82 @@ mod transitions_tests {
         }
     }
 
-    #[test]
-    fn generated_mcp_health_k1_cases_match_health_checker_transitions() {
+    async fn run_health_check_projection(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
+        const SERVICE_ID: &str = "lean-mcp-health-service";
+
+        let now = chrono::Utc::now();
+        let health_map = ServiceHealthMap::new();
+        health_map
+            .set_for_test(
+                SERVICE_ID,
+                ServiceHealth {
+                    status: start_status(case),
+                    last_seen: now,
+                    last_error: None,
+                },
+            )
+            .await;
+
+        let services = match case.event.as_str() {
+            "registryAbsent" => Vec::new(),
+            "probeSuccessFresh" | "probeFail" => vec![registry_entry(SERVICE_ID, now)],
+            "probeSuccessStale" => vec![registry_entry(
+                SERVICE_ID,
+                now - ChronoDuration::seconds(STALENESS_THRESHOLD_SECS + 30),
+            )],
+            "backoffExpiry" => {
+                // At K=1 Rust does not arm a backoff timer, so there is no
+                // runtime health-check tick to drive for this Lean event. The
+                // observable production state is unchanged until Stage 2 adds
+                // K>=2 backoff behavior.
+                return Some(start_status(case));
+            }
+            other => panic!(
+                "Lean MCP health case {} produced unknown event {:?}",
+                case.name, other
+            ),
+        };
+
+        let pool = mcp_pool_for_event(&case.event);
+        run_health_check_cycle(services, now, &pool, &health_map, "local-host", None)
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "run_health_check_cycle failed for Lean MCP health case {}: {error}",
+                    case.name
+                )
+            });
+
+        health_map.get(SERVICE_ID).await.map(|health| health.status)
+    }
+
+    fn mcp_pool_for_event(event: &str) -> McpPool {
+        let probe_fails = event == "probeFail";
+        McpPool::new_with_list_tools_handler(move |_service_id, _endpoint| async move {
+            if probe_fails {
+                anyhow::bail!("Lean probeFail")
+            }
+            Ok(ListToolsResult::default())
+        })
+    }
+
+    fn registry_entry(
+        service_id: &str,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> RegistryServiceEntry {
+        RegistryServiceEntry {
+            service_id: service_id.to_string(),
+            hostname: "remote-host".to_string(),
+            tailscale_ip: "100.64.0.1".to_string(),
+            lan_ip: String::new(),
+            mcp_port: Some(9201),
+            mcp_path: "/mcp".to_string(),
+            updated_at: Some(updated_at.to_rfc3339()),
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_mcp_health_k1_cases_match_health_checker_transitions() {
         let cases = lean_mcp_health_k1_cases();
         assert!(
             !cases.is_empty(),
@@ -439,8 +514,14 @@ mod transitions_tests {
         );
 
         for case in cases {
+            assert_eq!(case.threshold_k, 1, "test must only consume K=1 rows");
+            assert_eq!(
+                case.start_count, 0,
+                "K=1 Lean MCP health rows must start at failureCount=0"
+            );
+
             let expected = projected_health_status(case);
-            let actual = rust_simulated_next(case);
+            let actual = run_health_check_projection(case).await;
             assert_eq!(
                 actual, expected,
                 "Lean MCP health K=1 case {} must match Rust HealthStatus assignment",

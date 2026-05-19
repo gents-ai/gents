@@ -353,10 +353,14 @@ def caseCoverage : List CoverageEntry :=
       "EventDeliveryConvergenceTraces"
       "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation"
       "Issue #252 replaces the InMemoryEventDeliverySource replay with a thin driver over the production DefraWatcher/EventSource/SubagentSource event-delivery loops."
-  , consumerCoverage
+  -- 2026-05-19 conformance audit section 10 / section 6 item #2:
+  -- Stage 1 drives the K=1 runtime health-check path; Stage 2 issue #253
+  -- must add K>=2 backoff behavior and drop the lean_mcp_health_k1_cases filter.
+  , consumerWithFollowUpCoverage
       "mcp_health_cases"
       "MCPHealthCases"
       "health_checker::tests::generated_mcp_health_k1_cases_match_health_checker_transitions"
+      "Issue #253 adds K>=2 MCPHealth backoff behavior in Rust and drops the lean_mcp_health_k1_cases() filter so the full emitted mcp_health_cases domain is consumed."
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

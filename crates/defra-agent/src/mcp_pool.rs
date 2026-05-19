@@ -177,6 +177,34 @@ impl McpPool {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_list_tools_handler<F, Fut>(handler: F) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
+    {
+        let handler = Arc::new(handler);
+        Self::new_with_connector(move |service_id, endpoint| {
+            let handler = Arc::clone(&handler);
+            async move {
+                let service_id_for_list = service_id.clone();
+                let endpoint_for_list = endpoint.clone();
+                Ok(McpConnection {
+                    endpoint,
+                    list_tools_fn: Box::new(move || {
+                        let handler = Arc::clone(&handler);
+                        let service_id = service_id_for_list.clone();
+                        let endpoint = endpoint_for_list.clone();
+                        Box::pin(async move { handler(service_id, endpoint).await })
+                    }),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        })
+    }
+
     /// List the tools exposed by the MCP server at `endpoint`.
     ///
     /// Connects lazily — if no cached connection exists for `service_id`, one is
