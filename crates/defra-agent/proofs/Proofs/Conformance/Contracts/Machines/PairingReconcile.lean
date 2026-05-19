@@ -1,14 +1,11 @@
 import Proofs.PairingReconcile
-import Proofs.Conformance.Contracts.Machines.Request
-import Proofs.Conformance.ContractCases.SessionRecovery
+import Proofs.Conformance.ContractTypes
 
 /-!
-# Pairing and Session-Recovery Conformance Machines
+# Pairing-Reconcile Conformance Machine
 -/
 
 namespace Conformance.Contracts
-
-open Conformance.ContractCases
 
 def pairingReconcileStates : List PairingReconcile.PairingPhase :=
   [ .idle, .diverged, .converged, .crashed ]
@@ -34,20 +31,5 @@ def pairingReconcileMachine : StateMachineContract :=
       pairingReconcileActions
       PairingReconcile.step?
       PairingReconcile.PairingPhase.toContract)
-
-def sessionRecoveryLegalTransitions : List TransitionPair :=
-  sessionRecoveryCases.filterMap fun witness =>
-    if witness.legal then
-      some { source := witness.preLatestState, target := witness.postLatestState }
-    else
-      none
-
-def sessionRecoveryMachine : StateMachineContract :=
-  machineContract
-    "SessionRecovery"
-    requestStateNames
-    []
-    ["reissueFailed"]
-    sessionRecoveryLegalTransitions
 
 end Conformance.Contracts

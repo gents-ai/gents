@@ -108,8 +108,8 @@ fn generated_r4c_background_work_cases_pin_observable_shapes() {
 }
 
 #[tokio::test]
-async fn generated_transcript_cases_pin_agent_message_ordering_contract() {
-    transcript_background::generated_transcript_cases_pin_agent_message_ordering_contract().await;
+async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
+    transcript_background::generated_transcript_cases_drive_agent_message_ordering_contract().await;
 }
 
 #[tokio::test]

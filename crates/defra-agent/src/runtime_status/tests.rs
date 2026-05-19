@@ -244,6 +244,10 @@ fn rust_reconcile_phase_vocabulary_matches_lean_model() {
         rust_source: "ReconcilePhase::{Idle, Debouncing, Resolving, Diffing, Applying}",
         rust_values: &rust_phases,
     });
+}
+
+#[test]
+fn runtime_reconcile_state_machine_contract_is_complete() {
     assert_state_machine_contract_is_complete("RuntimeReconcile");
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
 }
