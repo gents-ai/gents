@@ -75,4 +75,26 @@ theorem running_tool_times_out_after_deadline_bounded
       (h_post := rfl)
   exact ⟨post, BoundedTrace.step h_step BoundedTrace.refl, rfl, rfl⟩
 
+theorem running_tool_cancelled_in_bounded_steps
+    (pre : ManagedExecComposedState)
+    (h_tool : pre.tool.state = .running)
+    (h_exec : pre.exec.state = .running) :
+    exists post,
+      BoundedTrace pre post maxTimeoutSteps
+      ∧ post.tool.state = .cancelled
+      ∧ post.exec.state = .killSignaled := by
+  let post : ManagedExecComposedState :=
+    { pre with
+      tool := { pre.tool with state := .cancelled }
+    , exec := { pre.exec with state := .killSignaled
+                              , now := pre.now
+                              , killSignaledAt := some pre.now }
+    }
+  have h_step : Transition pre post :=
+    Transition.cancelRequested
+      (h_tool := h_tool)
+      (h_exec := h_exec)
+      (h_post := rfl)
+  exact ⟨post, BoundedTrace.step h_step BoundedTrace.refl, rfl, rfl⟩
+
 end ManagedExec
