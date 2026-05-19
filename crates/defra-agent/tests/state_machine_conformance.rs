@@ -7,21 +7,28 @@ use defra_agent::event_delivery_contract::{
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use defra_agent::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
+use defra_agent::tool_call_lifecycle::{
+    AwaitMode, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
+};
 use defra_agent::{
-    write_manual_agent_request, DefraSessionHook, DefraStreamWriter, FailurePolicy, InferenceCall,
-    RequestLifecycle,
+    fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
+    write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
+    DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,
 };
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, ToolDefinition,
+};
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
+use rig::tool::{ToolDyn, ToolError};
+use rig::wasm_compat::WasmBoxedFuture;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[path = "../src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
@@ -41,7 +48,8 @@ use lean_vocab_test::{
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
     lean_inference_slot_accounting_case, lean_managed_exec_liveness_cases, lean_mcp_health_cases,
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
+    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_cases,
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
     lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
@@ -100,6 +108,18 @@ async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
 #[test]
 fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
     transcript_background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
+}
+
+#[tokio::test]
+async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
+    transcript_background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant()
+        .await;
+}
+
+#[tokio::test]
+async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
+    transcript_background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
+        .await;
 }
 
 #[test]
