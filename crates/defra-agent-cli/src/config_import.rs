@@ -851,6 +851,9 @@ mod lean_apply_write_boundary_tests {
             all
         }
 
+        /// Returns in-flight writes across open transactions only. This excludes
+        /// committed state, so failure-path caps can measure per-tx writes after
+        /// an injected error and before discard removes the transaction.
         fn pending_state(&self) -> Vec<ObservedWrite> {
             self.transactions
                 .lock()
@@ -983,6 +986,9 @@ mod lean_apply_write_boundary_tests {
                 );
 
                 let observed = recorder.committed_state();
+                // Today Lean emits `pre_live` here because apply has no live-write
+                // constructor; #57 can make this projection diverge without
+                // changing the Rust assertion shape.
                 let expected = case
                     .expected_external_state_after_abort
                     .iter()

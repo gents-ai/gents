@@ -1,4 +1,5 @@
 import Proofs.ApplyReconcile.ContractCases.Types
+import Proofs.ApplyReconcile.Prefix
 
 /-! Diff, retry, and prefix projections for apply/reconcile contract cases. -/
 
@@ -121,6 +122,24 @@ def allProductionPrefixesReferrersClosed
     prefixReferrersClosed prefixDesired prefixSteps &&
       desiredReferencesClosed prefixDesired
 
+/-- Contract-case projection for externally visible state after an aborted
+    apply prefix. Today this is exactly `preLive`, mirroring the model
+    theorems `ApplyReconcile.applyPrefix_preserves_live` and
+    `ApplyReconcile.retry_after_prefix_preserves_live`: current apply steps
+    have no live-write/delete constructor. #57 should replace this helper
+    when external-state mutation semantics become non-trivial. -/
+def expectedExternalStateAfterAbort
+    (scenario : ApplyReconcileScenario) : List ContractLiveDoc :=
+  scenario.preLive
+
+/-- Semantic theorem behind `expectedExternalStateAfterAbort`: in the current
+    apply model, aborting any prefix leaves the external/live projection equal
+    to the state before the prefix. -/
+theorem abort_prefix_preserves_external_state
+    {M : Manifest} {L : LiveState} (p : ApplyPrefix M L) :
+    p.state.live = L.live :=
+  applyPrefix_preserves_live p
+
 def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   let steps := diffSteps scenario.manifest scenario.preDesired
   let productionSteps := productionOrderedSteps steps
@@ -135,7 +154,7 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , manifest := scenario.manifest
   , preDesired := scenario.preDesired
   , preLive := scenario.preLive
-  , expected_external_state_after_abort := scenario.preLive
+  , expectedExternalStateAfterAbort := expectedExternalStateAfterAbort scenario
   , expectedCreate := diffCreate scenario
   , expectedUpdate := diffUpdate scenario
   , expectedUnchanged := diffUnchanged scenario
@@ -164,5 +183,14 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
       prefixReferrersClosed prefixDesired prefixSteps
   , desiredReferencesClosedAfterPrefix := desiredReferencesClosed prefixDesired
   }
+
+/-- Current finite witnesses expose the same external state after abort that
+    they started with. This theorem is intentionally small: it names the
+    current no-live-write coupling so #57 can update one projection point when
+    delete semantics introduce divergent abort expectations. -/
+theorem buildCase_expectedExternalStateAfterAbort_eq_preLive
+    (scenario : ApplyReconcileScenario) :
+    (buildCase scenario).expectedExternalStateAfterAbort = scenario.preLive := by
+  rfl
 
 end ApplyReconcile.ContractCases
