@@ -4,7 +4,7 @@ import Proofs.ToolExecution.Transition
 # Tool Call Single-Machine Properties
 
 T1..T5 — daemon-visible invariants over `ToolCallContext.Transition`.
-Composition theorems C1, C1', C2, C3 live in `Proofs/Composed.lean`.
+Composition theorems C1, C1', C2, C3 live in `Proofs/CrossMachineComposed.lean`.
 -/
 
 namespace ToolExecution

@@ -1,4 +1,4 @@
-import Proofs.Composed
+import Proofs.CrossMachineComposed
 
 /-!
 # Safety Properties S1-S6
