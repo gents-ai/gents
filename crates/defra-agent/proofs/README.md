@@ -672,8 +672,11 @@ Current boundaries:
   failed mutations, stale reads/events, and minimum visibility paths. DefraDB
   storage-engine correctness remains external.
 
-`Proofs/Conformance/Deviations.lean` is now reserved only for real unresolved
-Rust/spec mismatches. There are currently no known active spec deviations.
+`Proofs/Conformance/Deviations.lean` is reserved only for real unresolved
+Rust/spec mismatches. Active deviations are expected to name an accepted failure
+mode or a follow-up tracker. Current entries cover live event-source rescan gaps
+and the defradb.rs durable P2P subscription-state gap tracked upstream at
+sourcenetwork/defradb.rs#957.
 
 ## Known Limitations
 
