@@ -1,3 +1,4 @@
+import Proofs.ToolExecution.CancelCause
 import Proofs.ToolExecution.State
 
 /-!
@@ -44,12 +45,12 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post     : post = { pre with state := .timedOut })
       : Transition pre post
 
-  | cancelBeforeDispatch {pre post : ToolCallContext}
+  | cancelBeforeDispatch {pre post : ToolCallContext} (cause : CancelCause)
       (h_state : pre.state = .pending)
       (h_post  : post = { pre with state := .cancelled })
       : Transition pre post
 
-  | cancelDuringRun {pre post : ToolCallContext}
+  | cancelDuringRun {pre post : ToolCallContext} (cause : CancelCause)
       (h_state : pre.state = .running)
       (h_post  : post = { pre with state := .cancelled })
       : Transition pre post

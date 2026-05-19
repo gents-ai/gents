@@ -23,8 +23,8 @@ theorem terminal_irreversible
   | complete h_state _ _ _          => simp_all [isTerminal]
   | fail _ h_state _                => simp_all [isTerminal]
   | timeout h_state _ _             => simp_all [isTerminal]
-  | cancelBeforeDispatch h_state _  => simp_all [isTerminal]
-  | cancelDuringRun h_state _       => simp_all [isTerminal]
+  | cancelBeforeDispatch _ h_state _ => simp_all [isTerminal]
+  | cancelDuringRun _ h_state _      => simp_all [isTerminal]
   | background h_state _ _          => simp_all [isTerminal]
   | foreground h_state _ _          => simp_all [isTerminal]
   | detach h_live _ _               => simp_all [isTerminal]
@@ -56,8 +56,8 @@ theorem timedOut_requires_deadline_exceeded
   | complete _ _ _ h_post'          => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ h_deadline _          => exact h_deadline
-  | cancelBeforeDispatch _ h_post'  => simp_all
-  | cancelDuringRun _ h_post'       => simp_all
+  | cancelBeforeDispatch _ _ h_post' => simp_all
+  | cancelDuringRun _ _ h_post'      => simp_all
   | background _ _ h_post'          => simp_all
   | foreground _ _ h_post'          => simp_all
   | detach _ _ h_post'              => simp_all
@@ -79,8 +79,8 @@ theorem completed_implies_committed
   | complete _ h_persist _ h_post'  => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ _ h_post'             => simp_all
-  | cancelBeforeDispatch _ h_post'  => simp_all
-  | cancelDuringRun _ h_post'       => simp_all
+  | cancelBeforeDispatch _ _ h_post' => simp_all
+  | cancelDuringRun _ _ h_post'      => simp_all
   | background _ _ h_post'          => simp_all
   | foreground _ _ h_post'          => simp_all
   | detach _ _ h_post'              => simp_all
@@ -102,7 +102,7 @@ theorem live_call_reaches_terminal
   | .pending =>
       let post : ToolCallContext := { c with state := .cancelled }
       have h_trans : Transition c post :=
-        Transition.cancelBeforeDispatch (h_state := h_state) (h_post := rfl)
+        Transition.cancelBeforeDispatch .userCancelled (h_state := h_state) (h_post := rfl)
       exact ⟨post, Trace.step h_trans Trace.refl, Or.inr (Or.inr (Or.inr rfl))⟩
   | .running =>
       -- If deadline is already exceeded, timeout in 1 step; otherwise advance time first.
@@ -150,8 +150,8 @@ theorem transition_preserves_requestId
   | complete _ _ _ h_post          => rw [h_post]
   | fail _ _ h_post                => rw [h_post]
   | timeout _ _ h_post             => rw [h_post]
-  | cancelBeforeDispatch _ h_post  => rw [h_post]
-  | cancelDuringRun _ h_post       => rw [h_post]
+  | cancelBeforeDispatch _ _ h_post => rw [h_post]
+  | cancelDuringRun _ _ h_post      => rw [h_post]
   | background _ _ h_post          => rw [h_post]
   | foreground _ _ h_post          => rw [h_post]
   | detach _ _ h_post              => rw [h_post]
@@ -172,8 +172,8 @@ theorem transition_preserves_callId
   | complete _ _ _ h_post          => rw [h_post]
   | fail _ _ h_post                => rw [h_post]
   | timeout _ _ h_post             => rw [h_post]
-  | cancelBeforeDispatch _ h_post  => rw [h_post]
-  | cancelDuringRun _ h_post       => rw [h_post]
+  | cancelBeforeDispatch _ _ h_post => rw [h_post]
+  | cancelDuringRun _ _ h_post      => rw [h_post]
   | background _ _ h_post          => rw [h_post]
   | foreground _ _ h_post          => rw [h_post]
   | detach _ _ h_post              => rw [h_post]
@@ -193,8 +193,8 @@ theorem dispatch_sets_startedAt
   | complete h_state _ _ h_post'    => exfalso; simp_all
   | fail _ h_state h_post'           => exfalso; simp_all
   | timeout h_state _ h_post'       => exfalso; simp_all
-  | cancelBeforeDispatch _ h_post'  => exfalso; rw [h_post'] at h_post; simp at h_post
-  | cancelDuringRun h_state h_post' => exfalso; simp_all
+  | cancelBeforeDispatch _ _ h_post' => exfalso; rw [h_post'] at h_post; simp at h_post
+  | cancelDuringRun _ h_state h_post' => exfalso; simp_all
   | background h_state _ h_post'    => exfalso; simp_all
   | foreground h_state _ h_post'    => exfalso; simp_all
   | detach h_live _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
@@ -217,8 +217,8 @@ theorem startedAt_preserved_outside_dispatch
   | complete _ _ _ h_post'          => rw [h_post']
   | fail _ _ h_post'                => rw [h_post']
   | timeout _ _ h_post'             => rw [h_post']
-  | cancelBeforeDispatch _ h_post'  => rw [h_post']
-  | cancelDuringRun _ h_post'       => rw [h_post']
+  | cancelBeforeDispatch _ _ h_post' => rw [h_post']
+  | cancelDuringRun _ _ h_post'      => rw [h_post']
   | background _ _ h_post'          => rw [h_post']
   | foreground _ _ h_post'          => rw [h_post']
   | detach _ _ h_post'              => rw [h_post']
