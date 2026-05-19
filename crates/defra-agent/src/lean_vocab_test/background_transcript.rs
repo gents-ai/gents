@@ -97,6 +97,36 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) queue_key: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanBackgroundTheoremWitness {
+    pub(crate) theorem_name: String,
+    pub(crate) witness_kind: String,
+    pub(crate) scenario: String,
+    pub(crate) numeric_bound: usize,
+    pub(crate) kind_fields: Vec<LeanBackgroundTheoremKindField>,
+}
+
+impl LeanBackgroundTheoremWitness {
+    pub(crate) fn kind_field(&self, key: &str) -> &str {
+        self.kind_fields
+            .iter()
+            .find(|field| field.key == key)
+            .map(|field| field.value.as_str())
+            .unwrap_or_else(|| {
+                panic!(
+                    "Lean Background theorem witness {:?} omitted kind field {:?}",
+                    self.theorem_name, key
+                )
+            })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanBackgroundTheoremKindField {
+    pub(crate) key: String,
+    pub(crate) value: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanTranscriptCase {
     pub(crate) name: String,
