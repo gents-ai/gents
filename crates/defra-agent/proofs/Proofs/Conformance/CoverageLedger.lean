@@ -360,7 +360,37 @@ def caseCoverage : List CoverageEntry :=
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
-  []
+  [ followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.backgrounded_budget_bounded"
+      "Subagent.BridgedState.backgrounded_budget_bounded proves that reachable bridged states keep live backgrounded tools at or below maxBackgroundedPerParent. Follow-up: emit witness row via `theorem_witness` discriminator in `Proofs/Conformance/ContractCases/R6Background.lean`."
+  , followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.cascade_cancels_child"
+      "Subagent.BridgedState.cascade_cancels_child proves cascade parent termination interrupts a linked processing child; related Lean-only negative form: Subagent.BridgedState.detach_does_not_cancel_child. Follow-up: emit witness row via `theorem_witness` discriminator in `Proofs/Conformance/ContractCases/R6Background.lean`."
+  , followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.foreground_blocks_parent_advance"
+      "Subagent.BridgedState.foreground_blocks_parent_advance proves live foreground tools block parent progress/message advance; related aliases: Subagent.BridgedState.subagent_depth_bounded and Subagent.BridgedState.bridge_link_symmetric. Accepted Lean-only today because the invariant is a proof-layer bridge guard rather than an emitted runtime witness."
+  , followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.bridged_child_completion_propagates"
+      "Subagent.BridgedState.bridged_child_completion_propagates proves child completion projects to parent bridge-tool completion; related failure projection: Subagent.BridgedState.bridged_child_failure_projects. Accepted Lean-only today because R6Background emits data-shape cases and this theorem remains a formal trace projection."
+  , followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.inv_depth"
+      "Subagent.BridgedState.inv_depth proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.inv_link. Accepted Lean-only today because these are structural trace invariants with no current Rust witness surface."
+  , followUpCoverage
+      "follow_up_hook"
+      "Subagent.BridgedState.bridgedUniqueCallIds_preserved"
+      "Subagent.BridgedState.bridgedUniqueCallIds_preserved proves parent and child tool call ids remain unique across bridged traces. Accepted Lean-only today because the theorem lifts a structural uniqueness proof rather than an operational R6 witness."
+  ]
+
+def followUpHookIds : List String :=
+  followUpHookCoverage.map (fun entry => entry.domain)
+
+def followUpHooksJson : String :=
+  jsonArray (followUpHookIds.map jsonString)
 
 def coverageLedger : List CoverageEntry :=
   vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage
