@@ -109,6 +109,7 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         "{} should cross deployments",
         case.name
     );
+    assert!(case.child_owned_by_target_deployment, "{}", case.name);
 
     let child_agent = boot_child_agent(case).await;
     let parent_db = test_p2p_db(&format!("{}-parent", case.name)).await;
@@ -118,6 +119,9 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         &["AgentRequest", "AgentToolCall"],
     )
     .await;
+    // The parent deliberately has no pairing row for B. Production R5 routing
+    // treats the missing local target behavior as a remote bridge write; the
+    // installed replicator carries that bridge to B.
     let (parent_db, hook, parent_session_id, _parent_behavior_id) =
         setup_parent_hook_on_db(case, false, parent_db).await;
 
@@ -162,7 +166,6 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         "{}: cross-deployment child must be locally owned by B",
         case.name
     );
-    assert!(case.child_owned_by_target_deployment, "{}", case.name);
 
     let RunningChildAgent {
         db: child_db,
@@ -170,6 +173,7 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         _endpoint,
     } = child_agent;
     booted.shutdown().await;
+    // BootedAgent only stops DefraAgent::run; P2P belongs to the embedded node.
     parent_db.node.shutdown().await;
     child_db.node.shutdown().await;
 }
@@ -185,6 +189,9 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
 
     let (parent_db, hook, parent_session_id, _parent_behavior_id) =
         setup_parent_hook(case, true).await;
+    // A local target behavior makes spawn_subagent materialize the child
+    // synchronously in the production hook, so no SubagentSource runtime is
+    // needed for the single-deployment fallback row.
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
 
     let bridge = fetch_tool_call(
@@ -501,6 +508,8 @@ async fn install_one_way_replicator(
         .add_collections(collection_names.clone())
         .await
         .expect("add receiver p2p collections");
+    // DefraDB needs both the sender-side push target and the receiver-side
+    // authorization record. The data-flow under test remains sender -> receiver.
     receiver_p2p
         .add_replicator(
             collection_names.clone(),
@@ -528,10 +537,9 @@ async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
         if let Some(addr) = addrs.first() {
             return addr.clone();
         }
-        assert!(
-            Instant::now() < deadline,
-            "node never exposed a P2P listen address"
-        );
+        if Instant::now() >= deadline {
+            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -548,10 +556,9 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
         if !peers.is_empty() {
             return;
         }
-        assert!(
-            Instant::now() < deadline,
-            "node never reported a connected peer"
-        );
+        if Instant::now() >= deadline {
+            panic!("node never reported a connected peer; last_peers={peers:?}");
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -619,10 +626,10 @@ async fn wait_for_request(node: &EmbeddedNode, request_id: &str) -> AgentRequest
         if let Some(request) = fetch_child_request_optional(node, request_id).await {
             return request;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "request {request_id} was not replicated"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let diagnostic = agent_request_diagnostic(node).await;
+            panic!("request {request_id} was not replicated; {diagnostic}");
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -637,10 +644,10 @@ async fn wait_for_tool_call(
         if let Some(tool_call) = fetch_tool_call_optional(node, session_id, tool_call_id).await {
             return tool_call;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "tool call {tool_call_id} was not replicated"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let diagnostic = agent_tool_call_diagnostic(node).await;
+            panic!("tool call {tool_call_id} was not replicated; {diagnostic}");
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -651,12 +658,55 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
         if let Some(child) = fetch_child_request_optional(node, child_request_id).await {
             return child;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "child request {child_request_id} was not materialized"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let diagnostic = agent_request_diagnostic(node).await;
+            panic!("child request {child_request_id} was not materialized; {diagnostic}");
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+async fn agent_request_diagnostic(node: &EmbeddedNode) -> String {
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest {
+                    request_id
+                    agent_did
+                    behavior_id
+                    caused_by_parent_request_id
+                    caused_by_parent_tool_call_id
+                    caused_by_trigger_id
+                    caused_by_trigger_kind
+                }
+            }"#,
+        )
+        .await;
+    format!(
+        "AgentRequest errors={:?} data={:?}",
+        response.errors, response.data
+    )
+}
+
+async fn agent_tool_call_diagnostic(node: &EmbeddedNode) -> String {
+    let response = node
+        .execute(
+            r#"{
+                AgentToolCall {
+                    request_id
+                    session_id
+                    tool_name
+                    tool_call_id
+                    lifecycle_state
+                    child_request_id
+                }
+            }"#,
+        )
+        .await;
+    format!(
+        "AgentToolCall errors={:?} data={:?}",
+        response.errors, response.data
+    )
 }
 
 fn assert_bridge_matches_case(
