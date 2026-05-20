@@ -182,6 +182,37 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey
     ++ "}"
 
+def r5CrossDeploymentCaseJson (witness : R5CrossDeploymentCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"route\":" ++ jsonString witness.route ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"parent_deployment\":" ++ jsonString witness.parentDeployment ++ ","
+    ++ "\"child_deployment\":" ++ jsonString witness.childDeployment ++ ","
+    ++ "\"parent_request_id\":" ++ jsonString witness.parentRequestId ++ ","
+    ++ "\"parent_tool_call_id\":" ++ jsonString witness.parentToolCallId ++ ","
+    ++ "\"child_request_id\":" ++ jsonString witness.childRequestId ++ ","
+    ++ "\"target_behavior_id\":" ++ jsonString witness.targetBehaviorId ++ ","
+    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
+    ++ "\"parent_trigger_persisted\":"
+      ++ boolString witness.parentTriggerPersisted ++ ","
+    ++ "\"child_materialized\":" ++ boolString witness.childMaterialized ++ ","
+    ++ "\"child_owned_by_target_deployment\":"
+      ++ boolString witness.childOwnedByTargetDeployment ++ ","
+    ++ "\"caused_by_parent_request_id_matches\":"
+      ++ boolString witness.causedByParentRequestIdMatches ++ ","
+    ++ "\"caused_by_parent_tool_call_id_matches\":"
+      ++ boolString witness.causedByParentToolCallIdMatches ++ ","
+    ++ "\"caused_by_trigger_kind\":"
+      ++ jsonString witness.causedByTriggerKind ++ ","
+    ++ "\"cross_deployment_routing_fired\":"
+      ++ boolString witness.crossDeploymentRoutingFired ++ ","
+    ++ "\"single_deployment_fallback\":"
+      ++ boolString witness.singleDeploymentFallback ++ ","
+    ++ "\"unclaimed_deadline_set\":" ++ boolString witness.unclaimedDeadlineSet
+    ++ "}"
+
 def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :=
   "{"
     ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","
