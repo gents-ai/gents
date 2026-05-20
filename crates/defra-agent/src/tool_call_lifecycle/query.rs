@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use super::{AwaitMode, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelCause, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ToolCallResultRow {
@@ -78,6 +78,7 @@ struct ToolCallRow {
     #[serde(default)]
     deadline_at: Option<String>,
     tool_failure_class: Option<String>,
+    cancel_cause: Option<String>,
     // v3 subagent fields — nullable for v2 rows that pre-date the schema migration.
     await_mode: Option<String>,
     cancel_policy: Option<String>,
@@ -113,6 +114,7 @@ impl ToolCallLifecycle {
                     started_at
                     deadline_at
                     tool_failure_class
+                    cancel_cause
                     await_mode
                     cancel_policy
                     child_request_id
@@ -165,6 +167,11 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(FailureClass::from_persisted);
 
+        let cancel_cause = row
+            .cancel_cause
+            .as_deref()
+            .and_then(CancelCause::from_persisted);
+
         // v3 subagent fields. v2 rows (where these columns are null) fall back
         // to the same defaults that Self::new() uses, preserving backwards compat.
         let await_mode = row
@@ -199,6 +206,7 @@ impl ToolCallLifecycle {
             state,
             started_at,
             failure_class,
+            cancel_cause,
             await_mode,
             cancel_policy,
             child_request_id,

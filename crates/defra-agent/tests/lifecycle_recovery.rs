@@ -292,6 +292,7 @@ async fn recover_all_times_out_expired_running_tool_calls() {
     let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "tool-timeout-session").await;
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].lifecycle_state.as_deref(), Some("timedOut"));
+    assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("deadline"));
     assert_eq!(snapshots[0].status, "completed");
     assert!(snapshots[0].result.contains("deadline exceeded"));
 }
@@ -352,6 +353,10 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
     assert_eq!(
         cancelled_snapshots[0].lifecycle_state.as_deref(),
         Some("cancelled")
+    );
+    assert_eq!(
+        cancelled_snapshots[0].cancel_cause.as_deref(),
+        Some("interrupted")
     );
 
     let unrelated_snapshots =

@@ -2,7 +2,7 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -186,6 +186,258 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             .pointer("/response/content")
             .and_then(Value::as_str),
         Some(expected_content.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-interrupt-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-interrupt-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let request_content = format!("CLI interrupt request {}", Uuid::new_v4());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let submitted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--content",
+            &request_content,
+            "--no-wait",
+        ],
+    )?;
+    let request_id = submitted
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .to_string();
+
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &request_id,
+        &["processing"],
+        Duration::from_secs(30),
+    )
+    .await?;
+    let capture_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if mock_endpoint
+            .captured_chat_requests()
+            .iter()
+            .any(|request| request_contains_role_text(request, "user", &request_content))
+        {
+            break;
+        }
+        if Instant::now() >= capture_deadline {
+            bail!("hanging mock endpoint did not capture the running request");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let interrupted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "interrupt",
+            "--graphql",
+            &graphql,
+            "--cause",
+            "userCancelled",
+            "--wait",
+            "--timeout",
+            "20s",
+            "--output",
+            "json",
+            &request_id,
+        ],
+    )?;
+    assert_eq!(
+        interrupted.get("request_id").and_then(Value::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        interrupted.get("cause").and_then(Value::as_str),
+        Some("userCancelled")
+    );
+    assert_eq!(
+        interrupted.get("lifecycle_state").and_then(Value::as_str),
+        Some("interrupted")
+    );
+    assert_eq!(
+        interrupted.get("terminal").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(
+        interrupted
+            .get("interrupt_landed_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "interrupt output should include landing time: {interrupted}"
+    );
+
+    let row = wait_for_request_lifecycle_state(
+        &graphql,
+        &request_id,
+        &["interrupted"],
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert!(
+        row.get("interrupt_requested_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "AgentRequest should retain interrupt_requested_at: {row}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-interrupt-completed-model-{}", Uuid::new_v4().simple());
+    let final_text = format!("completed-before-interrupt-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &final_text)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-interrupt-completed-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let request_content = format!("CLI completed interrupt request {}", Uuid::new_v4());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let submitted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--content",
+            &request_content,
+            "--timeout-secs",
+            "20",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+    let request_id = submitted
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .to_string();
+    assert_eq!(
+        submitted
+            .pointer("/response/content")
+            .and_then(Value::as_str),
+        Some(final_text.as_str())
+    );
+
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &request_id,
+        &["completed"],
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    let interrupted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "interrupt",
+            "--graphql",
+            &graphql,
+            "--output",
+            "json",
+            &request_id,
+        ],
+    )?;
+    assert_eq!(
+        interrupted.get("request_id").and_then(Value::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        interrupted.get("lifecycle_state").and_then(Value::as_str),
+        Some("completed")
+    );
+    assert_eq!(
+        interrupted.get("already_terminal").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        interrupted
+            .get("already_interrupted")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        interrupted
+            .get("interrupt_landed_at")
+            .is_none_or(Value::is_null),
+        "completed request should not report a new interrupt landing time: {interrupted}"
+    );
+    assert!(
+        interrupted
+            .get("interrupt_requested_at")
+            .is_none_or(Value::is_null),
+        "completed request should not latch interrupt_requested_at: {interrupted}"
+    );
+
+    let row = wait_for_request_lifecycle_state(
+        &graphql,
+        &request_id,
+        &["completed"],
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert!(
+        row.get("interrupt_requested_at").is_none_or(Value::is_null),
+        "completed AgentRequest should not be mutated by interrupt: {row}"
     );
 
     Ok(())

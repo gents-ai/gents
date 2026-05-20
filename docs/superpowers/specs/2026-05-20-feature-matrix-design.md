@@ -389,7 +389,7 @@ existing ledger rows the worked example (§7) tags with this feature.
 
 | Feature | Required | Deferred | Tag count |
 |---|---|---|---|
-| `request-lifecycle` | `agentFacing`, `runtimeInternal` | `operatorUi` (#TBD-request-lifecycle-ui-dedicated-row, see §7.6) | 5 |
+| `request-lifecycle` | `agentFacing`, `runtimeInternal` | `operatorUi` (#275, see §7.6) | 5 |
 | `process-lifecycle` | `runtimeInternal` | — | 3 |
 | `inference-call` | `agentFacing`, `runtimeInternal` | — | 4 |
 | `tool-call` | `agentFacing`, `runtimeInternal` | — | 7 |
@@ -397,24 +397,30 @@ existing ledger rows the worked example (§7) tags with this feature.
 | `pairing-reconcile` | `runtimeInternal` | — | 1 |
 | `runtime-reconcile` | `runtimeInternal` | — | 3 |
 | `session-recovery` | `runtimeInternal` | — | 3 |
-| `background-tools` | `agentFacing` | `operatorCli` (#TBD-cli-bg-listing), `operatorUi` (#TBD-ui-bg-panel) | 14 |
-| `subagents-cross-deployment` | — | `api` (#TBD-r5-api-row), `agentFacing` (#TBD-r5-lean-witness), `operatorUi` (#TBD-r5-ui-routing) | 0 (see §3.1) |
-| `interrupt-and-cancel` | `agentFacing` | `operatorCli` (#TBD-cli-cancel), `operatorUi` (#TBD-ui-cancel-button) | 1 |
-| `mcp-health` | `runtimeInternal` | `operatorUi` (#TBD-ui-mcp-status), `operatorCli` (#TBD-cli-mcp-probe) | 1 |
-| `identity-permission` | `runtimeInternal` | `api` (#TBD-identity-graphql-decide) | 3 |
-| `apply-reconcile` | `operatorCli` | `operatorUi` (#TBD-ui-apply-preview) | 1 |
+| `background-tools` | `agentFacing` | `operatorCli` (#268), `operatorUi` (#276) | 14 |
+| `subagents-cross-deployment` | — | `api` (#272), `agentFacing` (#273), `operatorUi` (#274) | 0 (see §3.1) |
+| `interrupt-and-cancel` | `agentFacing` | `operatorCli` (#266), `operatorUi` (#277) | 1 |
+| `mcp-health` | `runtimeInternal` | `operatorUi` (#278), `operatorCli` (#279) | 1 |
+| `identity-permission` | `runtimeInternal` | `api` (#280) | 3 |
+| `apply-reconcile` | `operatorCli` | `operatorUi` (#281) | 1 |
 | `event-delivery` | `runtimeInternal` | — | 3 |
-| `triggers` | `runtimeInternal` | `operatorCli` (#TBD-cli-task-run-lean), `operatorUi` (#TBD-ui-recent-runs-lean) | 1 |
+| `triggers` | `runtimeInternal` | `operatorCli` (#282), `operatorUi` (#283) | 1 |
 | `compaction` | `agentFacing` | — | 1 |
-| `transcript` | `agentFacing` | `operatorUi` (#TBD-ui-transcript-lean) | 1 |
-| `streaming-response` | `agentFacing` | `operatorUi` (#TBD-ui-stream-render-lean) | 1 |
+| `transcript` | `agentFacing` | `operatorUi` (#284) | 1 |
+| `streaming-response` | `agentFacing` | `operatorUi` (#285) | 1 |
 | `client-shell` | `operatorUi` | — | 3 |
-| `command-policy` | `agentFacing` | `operatorUi` (#TBD-ui-command-denial) | 3 |
+| `command-policy` | `agentFacing` | `operatorUi` (#286) | 3 |
 | `recovery` | `runtimeInternal` | — | 1 |
-| `fleet-slot-accounting` | `runtimeInternal` | `api` (#TBD-fleet-graphql-introspect) | 1 |
+| `fleet-slot-accounting` | `runtimeInternal` | `api` (#287) | 1 |
 | `storage-observation` | `runtimeInternal` | — | 4 |
 | `persistence-failure-policy` | `runtimeInternal` | — | 5 |
-| `backend-health` | `runtimeInternal` | `operatorUi` (#TBD-ui-backend-status) | 1 |
+| `backend-health` | `runtimeInternal` | `operatorUi` (#288) | 1 |
+
+Issue #268 adds the operator CLI consumer for `background-tools`:
+`crates/defra-agent-cli/tests/cli_background.rs::background_list_json_filters_and_lists_backgrounded_tool_calls`.
+When the matrix schema in this design lands, tag that consumer with
+`feature = "background-tools"` and `surfaces = [operatorCli]`, replacing
+the deferred `operatorCli` slot on the `background-tools` row.
 
 Tag-count totals: 74 row-tags across 74 distinct ledger rows. Under the
 single-tag rule (§3.2 / §6.2), each existing row is tagged exactly once.
@@ -438,13 +444,13 @@ Three follow-ups, all `deferred`:
 - **`api`.** Promote the existing schema introspection tests to ledger
   consumers by adding a row pointing at them with
   `category := "api_schema_cases"` (a new category). Tracked as
-  #TBD-r5-api-row.
+  #272.
 - **`agentFacing`.** Land an `r5_cross_deployment_cases` Lean domain
   emitting per-field witnesses (Lean already has the R5 model), then bind
-  it from a runtime-tool consumer. Tracked as #TBD-r5-lean-witness.
+  it from a runtime-tool consumer. Tracked as #273.
 - **`operatorUi`.** Surface cross-deployment routing in the desktop
   shell — a deployment badge or routing diagnostic on the chat shell.
-  Tracked as #TBD-r5-ui-routing.
+  Tracked as #274.
 
 The matrix v1 lists all three as `deferred` (no `required` slot) so the
 implementation PR ships without immediately failing the new drift test
@@ -567,10 +573,10 @@ serialized as:
                          "deferred_note": "" },
     "agentFacing":     { "coverage_strength": "deferred",
                          "row_count": 0, "pending_follow_ups": 0,
-                         "deferred_note": "#TBD-r5-lean-witness" },
+                         "deferred_note": "#273" },
     "operatorUi":      { "coverage_strength": "deferred",
                          "row_count": 0, "pending_follow_ups": 0,
-                         "deferred_note": "#TBD-r5-ui-routing" }
+                         "deferred_note": "#274" }
   },
   ...
 }
@@ -1084,7 +1090,7 @@ Two ways to resolve:
 The worked example chooses the soft option for v1. §3's table already
 reflects this: `request-lifecycle.required = [agentFacing,
 runtimeInternal]` and
-`deferred = [operatorUi (#TBD-request-lifecycle-ui-dedicated-row)]`.
+`deferred = [operatorUi (#275)]`.
 
 This is the only required-surface that the worked example downgrades
 to deferred during the v1 tagging pass. Every other `required` surface

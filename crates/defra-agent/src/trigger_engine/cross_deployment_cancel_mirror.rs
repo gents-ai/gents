@@ -453,6 +453,7 @@ mod tests {
                     args: "{}",
                     status: "completed",
                     lifecycle_state: "cancelled",
+                    cancel_cause: "interrupted",
                     started_at: "2026-05-15T00:00:00Z",
                     deadline_at: "2026-05-15T00:05:00Z",
                     completed_at: "2026-05-15T00:01:00Z",

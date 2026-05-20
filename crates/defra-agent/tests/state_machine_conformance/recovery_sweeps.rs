@@ -181,6 +181,18 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             Some("external"),
             "timeout recovery should persist external failure class"
         );
+        assert_eq!(
+            row.cancel_cause.as_deref(),
+            Some("deadline"),
+            "timeout recovery should persist cancel_cause=deadline"
+        );
+    }
+    if case.terminal_state == "cancelled" {
+        assert_eq!(
+            row.cancel_cause.as_deref(),
+            Some("interrupted"),
+            "cancel recovery should persist cancel_cause=interrupted"
+        );
     }
 }
 
@@ -586,6 +598,7 @@ struct ToolRecoveryRow {
     status: Option<String>,
     lifecycle_state: Option<String>,
     tool_failure_class: Option<String>,
+    cancel_cause: Option<String>,
 }
 
 async fn fetch_tool_recovery_row(node: &EmbeddedNode, tool_call_id: &str) -> ToolRecoveryRow {
@@ -596,6 +609,7 @@ async fn fetch_tool_recovery_row(node: &EmbeddedNode, tool_call_id: &str) -> Too
                 status
                 lifecycle_state
                 tool_failure_class
+                cancel_cause
             }}
         }}"#
     );

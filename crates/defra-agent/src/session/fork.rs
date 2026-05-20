@@ -337,7 +337,7 @@ async fn copy_tool_calls(
             ) {{
                 message_sequence tool_name tool_call_id args result status lifecycle_state
                 started_at completed_at selected_service_id selected_tool_name tool_failure_class
-                latency_ms
+                cancel_cause latency_ms
             }}
         }}"#
     );
@@ -376,6 +376,7 @@ async fn copy_tool_calls(
         let selected_service_id = row.get("selected_service_id").and_then(|v| v.as_str());
         let selected_tool_name = row.get("selected_tool_name").and_then(|v| v.as_str());
         let tool_failure_class = row.get("tool_failure_class").and_then(|v| v.as_str());
+        let cancel_cause = row.get("cancel_cause").and_then(|v| v.as_str());
         let latency_ms = row.get("latency_ms").and_then(json_i64);
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
@@ -395,6 +396,7 @@ async fn copy_tool_calls(
                     selected_service_id: {selected_service_id},
                     selected_tool_name: {selected_tool_name},
                     tool_failure_class: {tool_failure_class},
+                    cancel_cause: {cancel_cause},
                     latency_ms: {latency_ms}
                 }}) {{ _docID }}
             "#,
@@ -408,6 +410,7 @@ async fn copy_tool_calls(
             selected_service_id = nullable_string_literal(selected_service_id),
             selected_tool_name = nullable_string_literal(selected_tool_name),
             tool_failure_class = nullable_string_literal(tool_failure_class),
+            cancel_cause = nullable_string_literal(cancel_cause),
             latency_ms = nullable_i64_literal(latency_ms),
         ));
     }

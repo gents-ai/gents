@@ -18,6 +18,7 @@ type AgentToolCall @branchable {
     latency_ms: Int
     await_mode: String
     cancel_policy: String
+    cancel_cause: String
     child_request_id: String @index
     unclaimed_deadline_at: DateTime
     cancel_cascade_intent_at: DateTime

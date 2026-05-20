@@ -62,12 +62,67 @@ struct BackgroundTheoremToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    cancel_cause: Option<String>,
     cancel_cascade_intent_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
     lifecycle_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BackgroundTheoremChildRequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    agent_did: String,
+    behavior_id: Option<String>,
+    session_id: String,
+    content: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
+    execution_origin: Option<String>,
+    created_at: String,
+    deadline: Option<String>,
+    subagent_depth: Option<u32>,
+    caused_by_parent_request_id: Option<String>,
+    caused_by_parent_tool_call_id: Option<String>,
+    status: String,
+    lifecycle_state: Option<String>,
+}
+
+impl BackgroundTheoremChildRequestRow {
+    fn into_agent_request(self) -> defra_agent::watcher::AgentRequest {
+        defra_agent::watcher::AgentRequest {
+            doc_id: self.doc_id,
+            request_id: self.request_id,
+            agent_did: self.agent_did,
+            behavior_id: self
+                .behavior_id
+                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
+            session_id: self.session_id,
+            content: self.content,
+            temperature: self.temperature,
+            top_p: self.top_p,
+            top_k: self.top_k,
+            max_tokens: self.max_tokens,
+            metadata: self.metadata,
+            execution_origin: self
+                .execution_origin
+                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
+            created_at: self.created_at,
+            deadline: self
+                .deadline
+                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
+            subagent_depth: self.subagent_depth.unwrap_or(0),
+            caused_by_parent_request_id: self.caused_by_parent_request_id,
+            caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
+        }
+    }
 }
 
 fn background_tool_registry(
@@ -281,6 +336,7 @@ async fn fetch_background_theorem_tool_call(
                 await_mode
                 cancel_policy
                 child_request_id
+                cancel_cause
                 cancel_cascade_intent_at
             }}
         }}"#
@@ -357,6 +413,65 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
         .and_then(|value| value.as_array())
         .map(Vec::len)
         .unwrap_or(0)
+}
+
+async fn fetch_background_theorem_child_request(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> BackgroundTheoremChildRequestRow {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
+                execution_origin
+                created_at
+                deadline
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+                status
+                lifecycle_state
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentRequest")
+}
+
+async fn wait_for_background_theorem_child_lifecycle_state(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    expected_state: &str,
+) -> BackgroundTheoremChildRequestRow {
+    let timeout_at = tokio::time::Instant::now() + Duration::from_secs(3);
+
+    loop {
+        let row = fetch_background_theorem_child_request(node, child_request_id).await;
+        if row.lifecycle_state.as_deref() == Some(expected_state) {
+            return row;
+        }
+
+        if tokio::time::Instant::now() >= timeout_at {
+            panic!(
+                "timed out waiting for child {child_request_id} lifecycle_state={expected_state}; last row: {row:?}"
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 fn transcript_user_message(text: &str) -> Message {
@@ -852,11 +967,8 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     );
 }
 
-/// Drives the local cascade-dispatch half of the Lean trace witness.
-///
-/// This asserts `interrupt_requested_at.is_some()`, the request-layer
-/// precondition for the Lean post-state `interrupted`; issue #261 tracks the
-/// follow-up that pumps the child row to lifecycle_state `interrupted`.
+/// Drives the local cascade-dispatch trace witness through the child request's
+/// persisted `interrupted` post-state.
 pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
     let witness = lean_r6_background_theorem_witness("Subagent.BridgedState.cascade_cancels_child");
     assert_eq!(witness.witness_kind.as_str(), "reachability_trace");
@@ -911,13 +1023,37 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         Some(child_request_id.as_str())
     );
 
+    let child = fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
+    assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
+    let mut child_lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+        AGENT_DID,
+        child.into_agent_request(),
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(
+        child_lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    child_lifecycle.begin_execution().await.unwrap();
+    let child_pre =
+        fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
+    assert_eq!(child_pre.status.as_str(), "processing");
+    assert_eq!(
+        child_pre.lifecycle_state.as_deref(),
+        Some(witness.kind_field("child_pre_state"))
+    );
+
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-theorem-cascade")
             .await
             .expect("load bridge lifecycle")
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
         .await
         .expect("cancel bridge with cascade dispatch")
         .expect("cascade dispatch");
@@ -929,6 +1065,12 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     interrupt_request(db.node.as_ref(), &intent.child_request_id)
         .await
         .expect("interrupt child request");
+    // This isolated consumer has no daemon observer running, so explicitly
+    // drive the same request-lifecycle interrupt arm used by the daemon.
+    child_lifecycle
+        .transition_to_interrupted()
+        .await
+        .expect("drive child interrupt_processing transition");
 
     let tool = fetch_background_theorem_tool_call(
         db.node.as_ref(),
@@ -936,16 +1078,28 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         "internal-theorem-cascade",
     )
     .await;
+    assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     assert!(
         tool.cancel_cascade_intent_at.is_none(),
         "local cascade dispatch must not leave a remote bridge intent"
     );
-    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
+    let child_post = wait_for_background_theorem_child_lifecycle_state(
+        db.node.as_ref(),
+        &child_request_id,
+        child_post_state_expected,
+    )
+    .await;
+    assert_eq!(child_post.status.as_str(), child_post_state_expected);
+    assert_eq!(
+        child_post.lifecycle_state.as_deref(),
+        Some(child_post_state_expected)
+    );
+    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_post.request_id)
         .await
         .expect("fetch child interrupt_requested_at");
     assert!(
         child_interrupt.is_some(),
-        "cascade trace must leave child interrupt_requested_at set ({child_post_state_expected})"
+        "cascade trace must preserve child interrupt_requested_at through {child_post_state_expected}"
     );
 }
 

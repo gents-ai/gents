@@ -9,9 +9,9 @@ use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP, CONFIG_EXPORT_AFTER_HELP,
-    CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
-    P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
+    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
+    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
+    INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
     RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
     SUBAGENT_AFTER_HELP, TRACE_AFTER_HELP,
 };
@@ -70,6 +70,14 @@ pub(crate) enum Command {
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
+    #[command(
+        about = "Inspect backgrounded tool calls",
+        after_help = BACKGROUND_AFTER_HELP
+    )]
+    Background {
+        #[command(subcommand)]
+        command: BackgroundCommand,
+    },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
     #[command(about = "Inspect and write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
@@ -352,6 +360,50 @@ pub(crate) enum ShowCommand {
     Response(ResponseShowArgs),
     #[command(about = "Show the persisted AgentRuntime document")]
     Runtime(RuntimeShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BackgroundCommand {
+    #[command(
+        name = "list",
+        about = "List backgrounded AgentToolCall rows",
+        after_help = BACKGROUND_AFTER_HELP
+    )]
+    List(BackgroundListArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct BackgroundListArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long = "request",
+        value_name = "ID",
+        help = "Only show backgrounded tools for this parent request"
+    )]
+    pub(crate) request_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "STATE",
+        help = "Only show tool calls whose displayed state matches this value"
+    )]
+    pub(crate) state: Option<String>,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Only show calls older than this duration, e.g. 30s, 5m, 2h"
+    )]
+    pub(crate) age_gt: Option<String>,
+    #[arg(long, value_enum, default_value_t = BackgroundOutputFormat::Table)]
+    pub(crate) output: BackgroundOutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BackgroundOutputFormat {
+    Table,
+    Json,
 }
 
 #[derive(clap::Args)]
@@ -1037,6 +1089,32 @@ pub(crate) enum RequestCommand {
     Resend(RequestResendArgs),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RequestInterruptCauseArg {
+    #[value(name = "interrupted")]
+    Interrupted,
+    #[value(name = "deadline")]
+    Deadline,
+    #[value(name = "userCancelled")]
+    UserCancelled,
+}
+
+impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::CancelCause {
+    fn from(value: RequestInterruptCauseArg) -> Self {
+        match value {
+            RequestInterruptCauseArg::Interrupted => Self::Interrupted,
+            RequestInterruptCauseArg::Deadline => Self::Deadline,
+            RequestInterruptCauseArg::UserCancelled => Self::UserCancelled,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RequestInterruptOutputFormat {
+    Text,
+    Json,
+}
+
 #[derive(clap::Args)]
 pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
@@ -1084,6 +1162,29 @@ pub(crate) struct RequestInterruptArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptCauseArg::UserCancelled,
+        help = "Reason for the interrupt: userCancelled for operator action, deadline for timeout-driven cancellation, interrupted for propagated runtime interruption"
+    )]
+    pub(crate) cause: RequestInterruptCauseArg,
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        default_value = "30s",
+        help = "Maximum time to wait for a terminal request state when --wait is set"
+    )]
+    pub(crate) timeout: String,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptOutputFormat::Text,
+        help = "Output format; use json for scripts"
+    )]
+    pub(crate) output: RequestInterruptOutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]

@@ -116,6 +116,13 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let lifecycle_state_str = projected.as_str();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        // If an upstream cascade already cancelled this bridge with a more
+        // specific cause, this running-state compare fails and preserves that
+        // earlier write. A successful cancelled projection here only observes
+        // the child terminal .interrupted evidence.
+        let cancel_cause_field = (projected == ToolCallState::Cancelled)
+            .then(|| format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()))
+            .unwrap_or_default();
 
         // Build conditional fields: tool_failure_class and result are only
         // set when the child reached .failed (mirrors R1's fail() pattern).
@@ -140,6 +147,7 @@ impl ToolCallLifecycle {
                     }},
                     input: {{
                         {optional_fields}
+                        {cancel_cause_field}
                         status: "completed",
                         lifecycle_state: "{lifecycle_state_str}",
                         started_at: "{started_at_str}",
@@ -168,6 +176,8 @@ impl ToolCallLifecycle {
 
         self.state = projected;
         self.failure_class = failure_class_for_persist;
+        self.cancel_cause =
+            (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted);
         Ok(true)
     }
 
@@ -252,8 +262,8 @@ impl ToolCallLifecycle {
     /// Running → Cancelled. Called by request interruption handling and
     /// startup recovery for interrupted parent requests.
     ///
-    pub async fn cancel_during_run(&mut self) -> Result<()> {
-        self.cancel_during_run_inner(None).await
+    pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<()> {
+        self.cancel_during_run_inner(cause, None).await
     }
 
     /// Running -> Cancelled while dispatching a cascade cancel. For remote
@@ -262,6 +272,7 @@ impl ToolCallLifecycle {
     /// bridge without the remote signal.
     pub async fn cancel_during_run_with_cascade_dispatch(
         &mut self,
+        cause: CancelCause,
         local_did: &str,
     ) -> Result<Option<CascadeDispatch>> {
         self.ensure_state(
@@ -270,11 +281,11 @@ impl ToolCallLifecycle {
         )?;
 
         let Some(child_request_id) = self.child_request_id.clone() else {
-            self.cancel_during_run_inner(None).await?;
+            self.cancel_during_run_inner(cause, None).await?;
             return Ok(None);
         };
         if self.cancel_policy != CancelPolicy::Cascade {
-            self.cancel_during_run_inner(None).await?;
+            self.cancel_during_run_inner(cause, None).await?;
             return Ok(None);
         }
 
@@ -283,14 +294,14 @@ impl ToolCallLifecycle {
             at: chrono::Utc::now(),
         };
         if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
-            self.cancel_during_run_inner(None).await?;
+            self.cancel_during_run_inner(cause, None).await?;
             if self.is_cancelled() {
                 return Ok(Some(CascadeDispatch::Local(intent)));
             }
             return Ok(None);
         }
 
-        self.cancel_during_run_inner(Some(intent.at)).await?;
+        self.cancel_during_run_inner(cause, Some(intent.at)).await?;
         if self.is_cancelled() {
             Ok(Some(CascadeDispatch::RemoteIntentWritten))
         } else {
@@ -300,10 +311,9 @@ impl ToolCallLifecycle {
 
     async fn cancel_during_run_inner(
         &mut self,
+        cause: CancelCause,
         remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()> {
-        // TODO(#249): accept and persist `CancelCause` once AgentToolCall has
-        // a cancel_cause field.
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
         let doc_id = self.doc_id.as_ref().ok_or_else(|| {
@@ -318,6 +328,7 @@ impl ToolCallLifecycle {
         let escaped_doc_id = escape_graphql_string(doc_id);
         let escaped_result = escape_graphql_string("tool call cancelled");
         let now_str = now.to_rfc3339();
+        let cancel_cause = cause.as_str();
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
@@ -344,6 +355,7 @@ impl ToolCallLifecycle {
                         result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "cancelled",
+                        cancel_cause: "{cancel_cause}",
                         started_at: "{started_at_str}",
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
@@ -370,6 +382,7 @@ impl ToolCallLifecycle {
         }
 
         self.state = ToolCallState::Cancelled;
+        self.cancel_cause = Some(cause);
         Ok(())
     }
 }

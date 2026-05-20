@@ -14,8 +14,8 @@ use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
 
 use super::{
-    subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
-    ChildTerminal, FailureClass, ToolCallState,
+    subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelCause,
+    CancelPolicy, ChildTerminal, FailureClass, ToolCallState,
 };
 
 #[derive(Debug, Default)]
@@ -43,6 +43,8 @@ struct RunningToolCallRow {
     await_mode: Option<String>,
     #[serde(default)]
     cancel_policy: Option<String>,
+    #[serde(default)]
+    cancel_cause: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
     #[serde(default)]
@@ -455,6 +457,7 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
             deadline_at
             await_mode
             cancel_policy
+            cancel_cause
             child_request_id
             unclaimed_deadline_at
         }
@@ -661,6 +664,17 @@ async fn recover_bridge_failed_row(
     let latency_ms = (now - started_at).num_milliseconds().max(0);
     let escaped_doc_id = escape_graphql_string(&row.doc_id);
     let projected = terminal.projected_state().as_str();
+    let cancel_cause_field = if terminal.projected_state() == ToolCallState::Cancelled {
+        let cause = row
+            .cancel_cause
+            .as_deref()
+            .and_then(CancelCause::from_persisted)
+            .unwrap_or(CancelCause::Interrupted)
+            .as_str();
+        format!(r#"cancel_cause: "{cause}","#)
+    } else {
+        String::new()
+    };
     let optional_fields = match terminal {
         ChildTerminal::Failed {
             reason,
@@ -684,6 +698,7 @@ async fn recover_bridge_failed_row(
                 }},
                 input: {{
                     {optional_fields}
+                    {cancel_cause_field}
                     status: "completed",
                     lifecycle_state: "{projected}",
                     started_at: "{started_at}",
@@ -726,6 +741,10 @@ async fn recover_tool_call_row(
         .failure_class()
         .map(|failure| format!(r#", tool_failure_class: "{}""#, failure.as_str()))
         .unwrap_or_default();
+    let cancel_cause_field = outcome
+        .cancel_cause(row.cancel_cause.as_deref())
+        .map(|cause| format!(r#", cancel_cause: "{}""#, cause.as_str()))
+        .unwrap_or_default();
     let remote_cancel_intent_fields = remote_cancel_intent_at
         .map(|at| {
             format!(
@@ -746,7 +765,7 @@ async fn recover_tool_call_row(
                     started_at: "{started_at_str}"{deadline_field},
                     completed_at: "{completed_at_str}",
                     latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null{failure_class_field}{remote_cancel_intent_fields}
+                    unclaimed_deadline_at: null{failure_class_field}{cancel_cause_field}{remote_cancel_intent_fields}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -909,5 +928,15 @@ impl RecoveryOutcome {
                 "no peer claimed subagent spawn before the unclaimed spawn deadline".to_string()
             }
         }
+    }
+
+    fn cancel_cause(self, persisted: Option<&str>) -> Option<CancelCause> {
+        persisted
+            .and_then(CancelCause::from_persisted)
+            .or(match self {
+                Self::TimedOut => Some(CancelCause::Deadline),
+                Self::Cancelled | Self::BackgroundInterrupted => Some(CancelCause::Interrupted),
+                Self::Failed | Self::UnclaimedCrossDeploymentSpawn => None,
+            })
     }
 }
