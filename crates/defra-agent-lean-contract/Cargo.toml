@@ -1,0 +1,12 @@
+[package]
+name = "defra-agent-lean-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Test helper for loading defra-agent Lean conformance contracts"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

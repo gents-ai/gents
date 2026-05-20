@@ -36,5 +36,6 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+defra-agent-lean-contract.workspace = true
 regex = "1"
 tempfile = "3"

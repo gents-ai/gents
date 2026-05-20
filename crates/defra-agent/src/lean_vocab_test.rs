@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -245,8 +243,6 @@ enum LeanVocabularyParseError<'a> {
 }
 
 static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
-const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
-const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
 
 pub(crate) fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
@@ -824,111 +820,7 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let proofs_dir = proofs_dir();
-    run_lake_build(&proofs_dir);
-    let output = Command::new("lake")
-        .args(["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"])
-        .current_dir(&proofs_dir)
-        .output()
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to run Lean conformance contract generator in {}: {error}",
-                proofs_dir.display()
-            )
-        });
-
-    if !output.status.success() {
-        panic!(
-            "Lean conformance contract generator failed\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json = extract_contract_json(&stdout);
-    serde_json::from_str(json).unwrap_or_else(|error| {
-        panic!(
-            "failed to parse Lean conformance contract JSON: {error}\n  stdout:\n{}",
-            stdout
-        )
-    })
-}
-
-fn run_lake_build(proofs_dir: &Path) {
-    let output = Command::new("lake")
-        .args(["build", "Proofs.Conformance.Contracts"])
-        .current_dir(proofs_dir)
-        .output()
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to build Lean conformance contract target in {}: {error}",
-                proofs_dir.display()
-            )
-        });
-
-    if !output.status.success() {
-        panic!(
-            "Lean conformance contract build failed\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-fn proofs_dir() -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let direct = manifest_dir.join("proofs");
-    if direct.exists() {
-        return direct;
-    }
-    for ancestor in manifest_dir.ancestors() {
-        let candidate = ancestor.join("crates/defra-agent/proofs");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    manifest_dir
-        .parent()
-        .map(|parent| parent.join("defra-agent/proofs"))
-        .filter(|candidate| candidate.exists())
-        .unwrap_or(direct)
-}
-
-fn extract_contract_json(stdout: &str) -> &str {
-    let begin = unique_marker_position(stdout, CONTRACT_JSON_BEGIN);
-    let end = unique_marker_position(stdout, CONTRACT_JSON_END);
-    assert!(
-        begin < end,
-        "Lean contract JSON sentinel order is invalid\n  stdout:\n{}",
-        stdout
-    );
-
-    let json = stdout[begin + CONTRACT_JSON_BEGIN.len()..end].trim();
-    assert!(
-        !json.is_empty(),
-        "Lean contract JSON sentinel block was empty\n  stdout:\n{}",
-        stdout
-    );
-    json
-}
-
-fn unique_marker_position(stdout: &str, marker: &str) -> usize {
-    let positions = stdout
-        .match_indices(marker)
-        .map(|(position, _)| position)
-        .collect::<Vec<_>>();
-    match positions.as_slice() {
-        [position] => *position,
-        [] => panic!("Lean contract generator stdout did not contain {marker:?}: {stdout}"),
-        _ => panic!(
-            "Lean contract generator stdout contained duplicate {marker:?} sentinels: {stdout}"
-        ),
-    }
+    defra_agent_lean_contract::load_contract_snapshot().unwrap_or_else(|error| panic!("{error:#}"))
 }
 
 pub(crate) fn lean_to_defradb_values<'a>(
@@ -1231,10 +1123,15 @@ end Sample
     #[test]
     fn extracts_contract_json_between_sentinels() {
         let stdout = format!(
-            "debug {{noise}}\n{CONTRACT_JSON_BEGIN}\n{{\"ok\":true}}\n{CONTRACT_JSON_END}\nmore {{noise}}\n"
+            "debug {{noise}}\n{}\n{{\"ok\":true}}\n{}\nmore {{noise}}\n",
+            defra_agent_lean_contract::CONTRACT_JSON_BEGIN,
+            defra_agent_lean_contract::CONTRACT_JSON_END
         );
 
-        assert_eq!(extract_contract_json(&stdout), "{\"ok\":true}");
+        assert_eq!(
+            defra_agent_lean_contract::extract_contract_json(&stdout).unwrap(),
+            "{\"ok\":true}"
+        );
     }
 
     #[test]

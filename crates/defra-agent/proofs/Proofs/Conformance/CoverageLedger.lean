@@ -184,11 +184,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "triggers"
-    , required := [Surface.runtimeInternal]
-    , deferred :=
-        [ (Surface.operatorCli, "#282")
-        , (Surface.operatorUi, "#283")
-        ]
+    , required := [Surface.runtimeInternal, Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#283")]
     }
   , { feature := "compaction"
     , required := [Surface.agentFacing]
@@ -423,6 +420,11 @@ def caseCoverage : List CoverageEntry :=
       "TriggerDispatch"
       "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases")
       "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_cases"
+      "TriggerDispatch"
+      "cli_config_task_run::config_task_run_matches_lean_manual_dispatch_contract")
+      "triggers" [Surface.operatorCli]
   , tagged (consumerCoverage
       "runtime_cases"
       "RuntimeReconcileCases"

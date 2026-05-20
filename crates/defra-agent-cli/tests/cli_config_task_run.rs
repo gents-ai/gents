@@ -8,6 +8,9 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+#[path = "../../defra-agent/src/lean_vocab_test.rs"]
+mod lean_vocab_test;
+
 /// End-to-end test for `defra-agent config task run --task-id --args`.
 ///
 /// Seeds a `Task` + `AgentBehavior` via the standard apply path against a
@@ -19,7 +22,27 @@ use uuid::Uuid;
 ///   * `lifecycle_state` created as `pending`, possibly already advanced by the daemon,
 ///   * the rendered content from `prompt_template` after binding `args.*`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_task_run_creates_manual_agent_request() -> Result<()> {
+async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
+    let lean_case = lean_manual_dispatch_case()?;
+    assert_eq!(lean_case.name, "manual_unconditional");
+    assert_eq!(lean_case.trigger_id, None);
+    assert_eq!(lean_case.trigger_kind, "manual");
+    assert_eq!(lean_case.concurrency, "parallel");
+    assert_eq!(lean_case.expected_result, "fired");
+    assert_eq!(lean_case.expected_materialize_trigger_id, None);
+    assert_eq!(
+        lean_case.expected_materialize_trigger_kind.as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        lean_case.expected_execution_origin.as_deref(),
+        Some("interactive")
+    );
+    assert_eq!(
+        lean_case.request_count_after,
+        lean_case.request_count_before + 1
+    );
+
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -179,17 +202,23 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
     );
     assert_eq!(
         row.get("execution_origin").and_then(Value::as_str),
-        Some("interactive")
+        lean_case.expected_execution_origin.as_deref()
     );
     assert_eq!(
         row.get("caused_by_trigger_kind").and_then(Value::as_str),
-        Some("manual")
+        lean_case.expected_materialize_trigger_kind.as_deref()
     );
-    assert!(
-        row.get("caused_by_trigger_id").is_some_and(Value::is_null),
-        "caused_by_trigger_id must be null for manual runs, got {:?}",
-        row.get("caused_by_trigger_id")
-    );
+    match lean_case.expected_materialize_trigger_id.as_deref() {
+        Some(expected_id) => assert_eq!(
+            row.get("caused_by_trigger_id").and_then(Value::as_str),
+            Some(expected_id)
+        ),
+        None => assert!(
+            row.get("caused_by_trigger_id").is_some_and(Value::is_null),
+            "caused_by_trigger_id must be null for manual runs, got {:?}",
+            row.get("caused_by_trigger_id")
+        ),
+    }
 
     Ok(())
 }
@@ -296,4 +325,17 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn lean_manual_dispatch_case() -> Result<&'static lean_vocab_test::LeanTriggerDispatchCase> {
+    let cases = lean_vocab_test::lean_trigger_dispatch_cases();
+    assert_eq!(
+        lean_vocab_test::lean_trigger_dispatch_case_count(),
+        cases.len(),
+        "Lean trigger dispatch case-count sentinel drifted"
+    );
+    cases
+        .iter()
+        .find(|case| case.name == "manual_unconditional")
+        .ok_or_else(|| anyhow!("Lean TriggerDispatch contracts did not emit manual_unconditional"))
 }

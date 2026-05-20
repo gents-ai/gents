@@ -28,5 +28,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+defra-agent-lean-contract.workspace = true
 tempfile = "3"
 wiremock = "0.6"
