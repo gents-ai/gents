@@ -51,6 +51,7 @@ pub mod watcher;
 
 pub use collection::Collection;
 
+pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
@@ -95,6 +96,10 @@ pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
+pub use runtime_snapshot::{
+    ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
+    ResolvedTask,
+};
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,

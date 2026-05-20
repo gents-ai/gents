@@ -5,13 +5,13 @@ use anyhow::Result;
 use crate::backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BackendAdmissionConfig {
-    pub(crate) backend_id: String,
-    pub(crate) max_concurrent: usize,
-    pub(crate) max_queue_depth: usize,
-    pub(crate) enabled: bool,
-    pub(crate) probe_status: String,
-    pub(crate) config_fingerprint: String,
+pub struct BackendAdmissionConfig {
+    pub backend_id: String,
+    pub max_concurrent: usize,
+    pub max_queue_depth: usize,
+    pub enabled: bool,
+    pub probe_status: String,
+    pub config_fingerprint: String,
 }
 
 impl BackendAdmissionConfig {

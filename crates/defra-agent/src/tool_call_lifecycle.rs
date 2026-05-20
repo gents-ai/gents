@@ -20,7 +20,7 @@
 //! - Cross-principal delegation (R6) lands with sourcenetwork/defra-agent#9.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolCallState {
+pub enum ToolCallState {
     Pending,
     Running,
     Completed,
