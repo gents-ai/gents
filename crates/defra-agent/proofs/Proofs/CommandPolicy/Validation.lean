@@ -60,6 +60,7 @@ def argStartsWith (arg candidatePrefix : String) : Bool :=
 
 def sedArgumentDenied (arg : String) : Bool :=
   stringMatches arg "--in-place"
+    || argStartsWith arg "--in-place="
     || argStartsWith arg "-i"
 
 def validateSedArgs (args : List String) : Decision :=
