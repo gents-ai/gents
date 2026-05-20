@@ -7,6 +7,7 @@ import type {
 } from "../lib/types";
 import { displayBehaviorLabel } from "../lib/types";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
+import { OperationsRail, OperationsRailProvider } from "./operations";
 
 export type ChatWorkspaceProps = {
   selectedDeployment: DeploymentView | null;
@@ -80,7 +81,7 @@ export function ActiveChatWorkspace({
     )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
 
   return (
-    <>
+    <OperationsRailProvider tabs={[]}>
       <ChatHeader
         behaviorLabel={behaviorLabel}
         runtimeHealth={runtimeHealth}
@@ -111,7 +112,8 @@ export function ActiveChatWorkspace({
             onSend={onSend}
           />
         </div>
+        <OperationsRail />
       </section>
-    </>
+    </OperationsRailProvider>
   );
 }
