@@ -11,6 +11,7 @@ use crate::config::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
+use crate::health_checker::HealthCheckerOptions;
 use crate::hook::FailurePolicy;
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
@@ -77,6 +78,7 @@ pub struct DocumentRuntimeOptions {
     pub local_subnet: Option<String>,
     pub retry_policy: RetryPolicy,
     pub hook_failure_policy: FailurePolicy,
+    pub health_checker_options: HealthCheckerOptions,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
 }
 
@@ -98,6 +100,7 @@ pub struct DefraAgent {
     local_subnet: Option<String>,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
+    health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
     /// `ManualSource`. In-process callers that cloned this `DefraAgent`
@@ -168,6 +171,7 @@ impl DefraAgent {
             local_subnet: options.local_subnet,
             retry_policy: options.retry_policy,
             hook_failure_policy: options.hook_failure_policy,
+            health_checker_options: options.health_checker_options,
             process_state_observer: options.process_state_observer,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
