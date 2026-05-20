@@ -1,0 +1,343 @@
+@layer utilities {
+  /* ---------- CancelCause badges ---------- */
+  .cause-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    font-family: var(--font-body);
+    white-space: nowrap;
+  }
+
+  .cause-badge::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .cause-userCancelled {
+    color: var(--color-accent-strong);
+    background: rgb(var(--source-green-rgb) / 0.1);
+    border-color: rgb(var(--source-green-rgb) / 0.3);
+  }
+
+  .cause-interrupted {
+    color: var(--color-info);
+    background: rgb(var(--source-blue-rgb) / 0.1);
+    border-color: rgb(var(--source-blue-rgb) / 0.3);
+  }
+
+  .cause-deadline {
+    color: var(--color-warning);
+    background: rgb(var(--source-orange-rgb) / 0.12);
+    border-color: rgb(var(--source-orange-rgb) / 0.35);
+  }
+
+  .cause-unknown {
+    color: var(--color-text-muted);
+    background: rgb(255 255 255 / 0.04);
+    border-color: rgb(255 255 255 / 0.1);
+  }
+
+  /* Wrapper for cause evidence details list (CancelCauseDetails component) */
+  .cause-details {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+
+  .cause-details dt {
+    color: var(--color-text-soft);
+    font-weight: 500;
+  }
+
+  .cause-details dd {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--color-text-muted);
+  }
+
+  .cause-details code {
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    color: var(--color-text-warm);
+  }
+
+  /* ---------- Dialog backdrop and container ---------- */
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / 0.62);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 50;
+    padding: 64px 16px;
+    animation: fade-in 120ms ease-out;
+  }
+
+  .dialog-backdrop.open {
+    display: flex;
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .dialog {
+    background: var(--color-surface-deep);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    width: min(560px, 100%);
+    max-height: calc(100vh - 128px);
+    overflow: auto;
+    box-shadow: 0 24px 60px rgb(0 0 0 / 0.5);
+  }
+
+  .dialog header {
+    padding: 16px 20px 8px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .dialog header h3 {
+    margin: 0;
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .dialog header .sub {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .dialog header .sub code {
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    background: var(--color-surface-strong);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--color-text-warm);
+  }
+
+  .preview-updated-pill {
+    background: rgb(var(--source-orange-rgb) / 0.14);
+    color: var(--color-warning);
+    border: 1px solid rgb(var(--source-orange-rgb) / 0.4);
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .dialog .body {
+    padding: 12px 20px;
+  }
+
+  .dialog footer {
+    padding: 12px 20px 16px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
+  }
+
+  /* ---------- Group layout (will-interrupt, will-detach, etc) ---------- */
+  .group {
+    margin: 12px 0;
+  }
+
+  .group h4 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .group h4 .count {
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    border-radius: var(--radius-pill);
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .group.will-interrupt h4 {
+    color: var(--color-accent-strong);
+  }
+
+  .group.will-detach h4 {
+    color: var(--color-info);
+  }
+
+  .group.already-terminal h4 {
+    color: var(--color-text-muted);
+  }
+
+  .group.unknown-policy h4 {
+    color: var(--color-warning);
+  }
+
+  .group ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .group ul li {
+    padding: 8px 12px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: grid;
+    grid-template-columns: 100px 1fr auto;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .group ul li:last-child {
+    border-bottom: 0;
+  }
+
+  .group ul li .reqid {
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    color: var(--color-text);
+  }
+
+  .group ul li .desc {
+    color: var(--color-text-soft);
+  }
+
+  .group ul li .meta {
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    color: var(--color-text-muted);
+    font-size: 11px;
+  }
+
+  .group.unknown-policy ul {
+    border-color: rgb(var(--source-orange-rgb) / 0.35);
+  }
+
+  .group.unknown-policy li {
+    background: rgb(var(--source-orange-rgb) / 0.06);
+  }
+
+  .group.unknown-policy .warning-row {
+    grid-column: 1 / -1;
+    color: var(--color-warning);
+    font-size: 11.5px;
+    padding-top: 4px;
+  }
+
+  /* ---------- Button variants for cancel-ux components ---------- */
+  .btn {
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: 7px 14px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    cursor: pointer;
+  }
+
+  .btn:hover {
+    background: rgb(var(--source-green-rgb) / 0.08);
+    border-color: var(--border-strong);
+  }
+
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    background: var(--color-surface-strong);
+    color: var(--color-text-muted);
+  }
+
+  .btn-warn {
+    background: transparent;
+    color: var(--color-warning);
+    border-color: rgb(var(--source-orange-rgb) / 0.45);
+  }
+
+  .btn-warn:hover {
+    background: rgb(var(--source-orange-rgb) / 0.1);
+  }
+
+  .btn-danger {
+    background: rgb(var(--source-orange-rgb) / 0.16);
+    color: var(--color-warning);
+    border-color: rgb(var(--source-orange-rgb) / 0.55);
+    font-weight: 600;
+  }
+
+  .btn-danger:hover {
+    background: rgb(var(--source-orange-rgb) / 0.24);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--color-text-soft);
+  }
+
+  /* ---------- Notice strip (success, info, warn) ---------- */
+  .notice {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: 12.5px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .notice.success {
+    background: rgb(var(--source-green-rgb) / 0.08);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.28);
+    color: var(--color-success);
+  }
+
+  .notice.info {
+    background: rgb(var(--source-blue-rgb) / 0.08);
+    border: 1px solid rgb(var(--source-blue-rgb) / 0.28);
+    color: var(--color-info);
+  }
+
+  .notice.warn {
+    background: rgb(var(--source-orange-rgb) / 0.1);
+    border: 1px solid rgb(var(--source-orange-rgb) / 0.3);
+    color: var(--color-warning);
+  }
+
+  .notice strong {
+    font-weight: 600;
+  }
+}
