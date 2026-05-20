@@ -14,6 +14,10 @@ import { useOperationsSnapshot } from "./useOperationsSnapshot";
 type SortKey = "toolName" | "ageMs" | "requestId" | "awaitMode" | "derivedState" | "processLabel";
 type SortDir = "ascending" | "descending";
 
+// 8-slot ceiling per the operator-surfaces spec §"Panel 1". Hardcoded
+// until the bridge exposes a per-agent backgrounded-tool capacity.
+const MAX_BACKGROUND_SLOTS = 8;
+
 export type BackgroundedToolsPanelProps = {
   rootRequestId?: string | null;
 };
@@ -177,7 +181,7 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
 
       <div className="panel-summary">
         <div className="live-count">
-          <em>{filtered.length}</em> live <span className="root">/ 8 max</span>
+          <em>{filtered.length}</em> live <span className="root">/ {MAX_BACKGROUND_SLOTS} max</span>
         </div>
       </div>
 
@@ -221,7 +225,7 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
               </tr>
             )}
             {filtered.map((row) => {
-              const isWarn = row.derivedState === "stuck" || row.derivedState === "cancelPending";
+              const isWarn = ["stuck", "cancelPending", "deadline+"].includes(row.derivedState);
               return (
                 <tr
                   key={row.toolCallId}
@@ -252,8 +256,11 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                     <div className="row-actions">
                       <button
                         type="button"
+                        aria-label={`Open lineage for ${row.toolName} on ${row.requestId}`}
                         onClick={(e) => {
                           e.stopPropagation();
+                          // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
+                          // Until then, log to console so the developer can verify the action surface.
                           console.log("[backgroundedTools] open-lineage", row.toolCallId, row.requestId);
                         }}
                       >
@@ -262,8 +269,11 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                       <button
                         type="button"
                         className="danger"
+                        aria-label={`Interrupt parent request ${row.requestId}`}
                         onClick={(e) => {
                           e.stopPropagation();
+                          // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
+                          // Until then, log to console so the developer can verify the action surface.
                           console.log("[backgroundedTools] interrupt-parent", row.requestId);
                         }}
                       >

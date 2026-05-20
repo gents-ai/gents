@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 import { BackgroundedToolsPanel } from "../src/components/backgroundedTools";
@@ -167,5 +167,21 @@ describe("BackgroundedToolsPanel", () => {
     fireEvent.click(screen.getByRole("columnheader", { name: /age/i }));
     const rowsAsc = screen.getAllByRole("row").slice(1);
     expect(rowsAsc[0].textContent).toContain("grep_young");
+  });
+
+  it("marks a deadline-expired row with the row-stuck class", async () => {
+    setDesktopApiAdapterForTests(makeAdapter(async () =>
+      snapshot([
+        row({
+          toolCallId: "tc_deadline",
+          toolName: "fetch_remote",
+          deadlineExpired: true,
+        }),
+      ]),
+    ));
+    render(<BackgroundedToolsPanel />);
+    await waitFor(() => expect(screen.getByText("fetch_remote")).toBeInTheDocument());
+    const tr = screen.getByText("fetch_remote").closest("tr");
+    expect(tr?.className).toContain("row-stuck");
   });
 });
