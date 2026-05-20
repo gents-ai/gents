@@ -1039,16 +1039,6 @@ pub(crate) enum RequestInterruptCauseArg {
     UserCancelled,
 }
 
-impl RequestInterruptCauseArg {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Interrupted => "interrupted",
-            Self::Deadline => "deadline",
-            Self::UserCancelled => "userCancelled",
-        }
-    }
-}
-
 impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::CancelCause {
     fn from(value: RequestInterruptCauseArg) -> Self {
         match value {
@@ -1112,7 +1102,12 @@ pub(crate) struct RequestInterruptArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, value_enum, default_value_t = RequestInterruptCauseArg::UserCancelled)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptCauseArg::UserCancelled,
+        help = "Reason for the interrupt: userCancelled for operator action, deadline for timeout-driven cancellation, interrupted for propagated runtime interruption"
+    )]
     pub(crate) cause: RequestInterruptCauseArg,
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
@@ -1123,7 +1118,12 @@ pub(crate) struct RequestInterruptArgs {
         help = "Maximum time to wait for a terminal request state when --wait is set"
     )]
     pub(crate) timeout: String,
-    #[arg(long, value_enum, default_value_t = RequestInterruptOutputFormat::Text)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptOutputFormat::Text,
+        help = "Output format; use json for scripts"
+    )]
     pub(crate) output: RequestInterruptOutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,

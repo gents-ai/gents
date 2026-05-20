@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
+use defra_agent::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause};
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
@@ -135,12 +135,13 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    let _cancel_cause: defra_agent::tool_call_lifecycle::CancelCause = args.cause.into();
+    let cancel_cause: CancelCause = args.cause.into();
 
     let before = fetch_interrupt_request_row(&graphql, &request_id).await?;
     let already_interrupted = request_row_string(&before, "interrupt_requested_at").is_some();
+    let already_terminal = request_row_is_terminal(&before);
 
-    if !already_interrupted {
+    if !already_interrupted && !already_terminal {
         let now = chrono::Utc::now().to_rfc3339();
         let mutation = format!(
             r#"mutation {{
@@ -156,10 +157,10 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     }
 
     let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;
-    let interrupt_landed_at =
-        request_row_string(&row, "interrupt_requested_at").ok_or_else(|| {
-            anyhow::anyhow!("request {request_id} did not persist interrupt_requested_at")
-        })?;
+    let interrupt_landed_at = request_row_string(&row, "interrupt_requested_at");
+    if !already_terminal && interrupt_landed_at.is_none() {
+        anyhow::bail!("request {request_id} did not persist interrupt_requested_at");
+    }
 
     if args.wait && !request_row_is_terminal(&row) {
         let timeout = parse_duration_suffix(&args.timeout)?;
@@ -168,9 +169,10 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 
     let summary = request_interrupt_summary(
         &row,
-        args.cause.as_str(),
-        &interrupt_landed_at,
+        cancel_cause.as_str(),
+        interrupt_landed_at.as_deref(),
         already_interrupted,
+        already_terminal,
     );
     match args.output {
         RequestInterruptOutputFormat::Json => print_json(&summary)?,
@@ -180,6 +182,8 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 }
 
 async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<Value> {
+    // request_id is expected to be unique; keep DESC+limit defensive for older
+    // data and consistent with `request show`.
     let query = format!(
         r#"{{
             AgentRequest(
@@ -255,8 +259,9 @@ fn request_row_string(row: &Value, key: &str) -> Option<String> {
 fn request_interrupt_summary(
     row: &Value,
     cause: &str,
-    interrupt_landed_at: &str,
+    interrupt_landed_at: Option<&str>,
     already_interrupted: bool,
+    already_terminal: bool,
 ) -> Value {
     let lifecycle_state = request_row_string(row, "lifecycle_state").unwrap_or_default();
     json!({
@@ -271,6 +276,7 @@ fn request_interrupt_summary(
         "interrupt_landed_at": interrupt_landed_at,
         "cause": cause,
         "already_interrupted": already_interrupted,
+        "already_terminal": already_terminal,
         "terminal": is_terminal_lifecycle_state(&lifecycle_state),
         "created_at": request_row_string(row, "created_at"),
         "claimed_at": request_row_string(row, "claimed_at"),
@@ -301,12 +307,29 @@ fn print_interrupt_text(summary: &Value) -> Result<()> {
             .unwrap_or(false)
     );
     println!(
+        "already_terminal: {}",
+        summary
+            .get("already_terminal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    );
+    println!(
         "terminal: {}",
         summary
             .get("terminal")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     );
+    if summary
+        .get("already_terminal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && summary
+            .get("interrupt_landed_at")
+            .is_none_or(Value::is_null)
+    {
+        println!("note: request was already terminal; interrupt was not latched");
+    }
     if let Some(reason) = summary
         .get("failure_reason")
         .and_then(Value::as_str)
