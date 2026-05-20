@@ -3593,6 +3593,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "crypto",
+ "defra-agent-lean-contract",
  "defra-agent-protocol",
  "defra-core",
  "defra-native-fs-runner",
@@ -3633,6 +3634,7 @@ dependencies = [
  "chrono",
  "clap",
  "defra-agent",
+ "defra-agent-lean-contract",
  "defra-agent-protocol",
  "defra-node",
  "defra-p2p-adapter",
@@ -3677,6 +3679,7 @@ dependencies = [
  "chrono",
  "crypto",
  "defra-agent",
+ "defra-agent-lean-contract",
  "defra-agent-protocol",
  "defra-node",
  "defra-p2p-adapter",
@@ -3704,6 +3707,7 @@ dependencies = [
  "clap",
  "defra-agent",
  "defra-agent-desktop-core",
+ "defra-agent-lean-contract",
  "defra-agent-protocol",
  "reqwest 0.12.28",
  "rig-core",
@@ -3717,6 +3721,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "defra-agent-lean-contract"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

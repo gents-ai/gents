@@ -2,37 +2,14 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
-const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
-
-#[derive(Debug, Deserialize)]
-struct LeanTriggerContractSnapshot {
-    trigger_dispatch_case_count: usize,
-    trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LeanTriggerDispatchCase {
-    name: String,
-    trigger_id: Option<String>,
-    trigger_kind: String,
-    concurrency: String,
-    expected_result: String,
-    expected_materialize_trigger_id: Option<String>,
-    expected_materialize_trigger_kind: Option<String>,
-    expected_execution_origin: Option<String>,
-    request_count_before: usize,
-    request_count_after: usize,
-}
+#[path = "../../defra-agent/src/lean_vocab_test.rs"]
+mod lean_vocab_test;
 
 /// End-to-end test for `defra-agent config task run --task-id --args`.
 ///
@@ -350,94 +327,15 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     Ok(())
 }
 
-fn lean_manual_dispatch_case() -> Result<LeanTriggerDispatchCase> {
-    let snapshot = load_lean_trigger_contract_snapshot()?;
+fn lean_manual_dispatch_case() -> Result<&'static lean_vocab_test::LeanTriggerDispatchCase> {
+    let cases = lean_vocab_test::lean_trigger_dispatch_cases();
     assert_eq!(
-        snapshot.trigger_dispatch_case_count,
-        snapshot.trigger_dispatch_cases.len(),
+        lean_vocab_test::lean_trigger_dispatch_case_count(),
+        cases.len(),
         "Lean trigger dispatch case-count sentinel drifted"
     );
-    snapshot
-        .trigger_dispatch_cases
-        .into_iter()
+    cases
+        .iter()
         .find(|case| case.name == "manual_unconditional")
         .ok_or_else(|| anyhow!("Lean TriggerDispatch contracts did not emit manual_unconditional"))
-}
-
-fn load_lean_trigger_contract_snapshot() -> Result<LeanTriggerContractSnapshot> {
-    let proofs_dir = proofs_dir()?;
-    let build = Command::new("lake")
-        .args(["build", "Proofs.Conformance.Contracts"])
-        .current_dir(&proofs_dir)
-        .output()
-        .with_context(|| {
-            format!(
-                "building Lean conformance contract target in {}",
-                proofs_dir.display()
-            )
-        })?;
-    if !build.status.success() {
-        anyhow::bail!(
-            "Lean conformance contract build failed\ncwd: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            proofs_dir.display(),
-            build.status,
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-    }
-
-    let output = Command::new("lake")
-        .args(["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"])
-        .current_dir(&proofs_dir)
-        .output()
-        .with_context(|| {
-            format!(
-                "running Lean conformance contract generator in {}",
-                proofs_dir.display()
-            )
-        })?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "Lean conformance contract generator failed\ncwd: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let stdout = String::from_utf8(output.stdout).context("Lean stdout was not UTF-8")?;
-    let json = extract_contract_json(&stdout)?;
-    serde_json::from_str(json).context("parsing Lean conformance contract JSON")
-}
-
-fn proofs_dir() -> Result<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for ancestor in manifest_dir.ancestors() {
-        let candidate = ancestor.join("crates/defra-agent/proofs");
-        if candidate.join("lakefile.lean").exists() {
-            return Ok(candidate);
-        }
-    }
-    anyhow::bail!(
-        "could not locate crates/defra-agent/proofs from {}",
-        manifest_dir.display()
-    )
-}
-
-fn extract_contract_json(stdout: &str) -> Result<&str> {
-    let begin = stdout
-        .find(CONTRACT_JSON_BEGIN)
-        .ok_or_else(|| anyhow!("Lean contract JSON begin marker missing"))?;
-    let end = stdout
-        .find(CONTRACT_JSON_END)
-        .ok_or_else(|| anyhow!("Lean contract JSON end marker missing"))?;
-    if begin >= end {
-        anyhow::bail!("Lean contract JSON markers are out of order");
-    }
-    let json = stdout[begin + CONTRACT_JSON_BEGIN.len()..end].trim();
-    if json.is_empty() {
-        anyhow::bail!("Lean contract JSON marker block is empty");
-    }
-    Ok(json)
 }
