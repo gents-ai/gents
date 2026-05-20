@@ -145,9 +145,88 @@ async fn managed_exec_cancellation_kills_process_group() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+#[tokio::test]
+async fn managed_exec_deadline_kills_job_object() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("deadline-grandchild.pid");
+    let tool_name = "r3-windows-job-deadline";
+    let handle = tokio::spawn({
+        let cwd = temp.path().to_path_buf();
+        let argv = windows_grandchild_argv(&pid_file);
+        async move {
+            run_managed_exec(ManagedExecRequest {
+                argv,
+                cwd,
+                deadline_at: Some(Utc::now() + chrono::Duration::seconds(8)),
+                cancellation_token: CancellationToken::new(),
+                max_output_bytes: 1024,
+                stdin: Vec::new(),
+                tool_name: Some(tool_name.to_string()),
+            })
+            .await
+        }
+    });
+
+    let snapshot = wait_for_native_executor(tool_name).await;
+    assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
+    let grandchild_pid = wait_for_windows_grandchild_pid(&pid_file).await;
+
+    match handle.await.expect("managed exec task should join") {
+        ManagedExecOutcome::TimedOut { kill, .. } => {
+            assert!(kill.kill_signal_sent);
+            assert!(kill.reaped);
+        }
+        other => panic!("expected timeout outcome, got {other:?}"),
+    }
+
+    assert_windows_process_exited(grandchild_pid).await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn managed_exec_cancellation_kills_job_object() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("cancel-grandchild.pid");
+    let tool_name = "r3-windows-job-cancel";
+    let token = CancellationToken::new();
+    let child_token = token.clone();
+    let handle = tokio::spawn({
+        let cwd = temp.path().to_path_buf();
+        let argv = windows_grandchild_argv(&pid_file);
+        async move {
+            run_managed_exec(ManagedExecRequest {
+                argv,
+                cwd,
+                deadline_at: None,
+                cancellation_token: child_token,
+                max_output_bytes: 1024,
+                stdin: Vec::new(),
+                tool_name: Some(tool_name.to_string()),
+            })
+            .await
+        }
+    });
+
+    let snapshot = wait_for_native_executor(tool_name).await;
+    assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
+    let grandchild_pid = wait_for_windows_grandchild_pid(&pid_file).await;
+    token.cancel();
+
+    match handle.await.expect("managed exec task should join") {
+        ManagedExecOutcome::Cancelled { kill, .. } => {
+            assert!(kill.kill_signal_sent);
+            assert!(kill.reaped);
+        }
+        other => panic!("expected cancelled outcome, got {other:?}"),
+    }
+
+    assert_windows_process_exited(grandchild_pid).await;
+}
+
+#[cfg(any(unix, windows))]
 async fn wait_for_native_executor(tool_name: &str) -> crate::NativeExecutorStatus {
-    let timeout_at = Instant::now() + Duration::from_millis(200);
+    let timeout_at = Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(snapshot) = crate::active_native_executors()
             .into_iter()
@@ -159,6 +238,86 @@ async fn wait_for_native_executor(tool_name: &str) -> crate::NativeExecutorStatu
             panic!("timed out waiting for active native executor snapshot for {tool_name}");
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[cfg(windows)]
+fn windows_grandchild_argv(pid_file: &std::path::Path) -> Vec<String> {
+    let pid_file = powershell_single_quoted(pid_file);
+    let script = format!(
+        "$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 30\"' -PassThru; Set-Content -Path {pid_file} -Value $p.Id; Write-Output \"grandchild=$($p.Id)\"; Start-Sleep -Seconds 30"
+    );
+    vec![
+        "powershell.exe".to_string(),
+        "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
+        "-Command".to_string(),
+        script,
+    ]
+}
+
+#[cfg(windows)]
+fn powershell_single_quoted(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
+}
+
+#[cfg(windows)]
+async fn wait_for_windows_grandchild_pid(pid_file: &std::path::Path) -> u32 {
+    let timeout_at = Instant::now() + Duration::from_secs(6);
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(pid_file) {
+            if let Ok(pid) = contents.trim().parse::<u32>() {
+                return pid;
+            }
+        }
+        if Instant::now() >= timeout_at {
+            panic!(
+                "timed out waiting for managed exec grandchild pid file {}",
+                pid_file.display()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[cfg(windows)]
+async fn assert_windows_process_exited(pid: u32) {
+    let timeout_at = Instant::now() + Duration::from_secs(2);
+    loop {
+        match windows_process_is_running(pid) {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => panic!("checking Windows process {pid} failed: {error}"),
+        }
+        if Instant::now() >= timeout_at {
+            panic!("managed exec grandchild process {pid} survived job termination");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_is_running(pid: u32) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return Ok(false);
+    }
+    let wait = unsafe { WaitForSingleObject(handle, 0) };
+    unsafe {
+        CloseHandle(handle);
+    }
+
+    match wait {
+        WAIT_OBJECT_0 => Ok(false),
+        WAIT_TIMEOUT => Ok(true),
+        _ => Err(std::io::Error::last_os_error()),
     }
 }
 
