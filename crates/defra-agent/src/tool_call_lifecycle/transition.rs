@@ -18,8 +18,8 @@ use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
 
 use super::{
-    AwaitMode, CancelPolicy, CascadeDispatch, CascadeIntent, ChildTerminal, FailureClass,
-    ToolCallLifecycle, ToolCallState,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, CascadeIntent, ChildTerminal,
+    FailureClass, ToolCallLifecycle, ToolCallState,
 };
 
 /// Error returned when a transition method is called from an illegal
@@ -83,6 +83,7 @@ impl ToolCallLifecycle {
         self.state = current.state;
         self.started_at = current.started_at;
         self.failure_class = current.failure_class;
+        self.cancel_cause = current.cancel_cause;
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;
@@ -120,6 +121,7 @@ impl ToolCallLifecycle {
         self.state = current.state;
         self.started_at = current.started_at;
         self.failure_class = current.failure_class;
+        self.cancel_cause = current.cancel_cause;
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;

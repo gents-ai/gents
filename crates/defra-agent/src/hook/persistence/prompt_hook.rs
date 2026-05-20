@@ -326,7 +326,9 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 if let Some(mut lc) = lifecycle {
                     match terminal {
                         ManagedToolTerminal::TimedOut => lc.timeout().await?,
-                        ManagedToolTerminal::Cancelled => lc.cancel_during_run().await?,
+                        ManagedToolTerminal::Cancelled => {
+                            lc.cancel_during_run(CancelCause::Interrupted).await?
+                        }
                     }
                 } else {
                     tracing::debug!(

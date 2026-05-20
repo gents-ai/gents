@@ -10,7 +10,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::session;
-use crate::tool_call_lifecycle::{AwaitMode, CascadeDispatch, ChildTerminal, ToolCallLifecycle};
+use crate::tool_call_lifecycle::{
+    AwaitMode, CancelCause, CascadeDispatch, ChildTerminal, ToolCallLifecycle,
+};
 use crate::truncation::TruncationLimits;
 
 mod persistence;
@@ -477,7 +479,7 @@ impl DefraSessionHook {
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
             let dispatch = lifecycle
-                .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+                .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &self.agent_did)
                 .await?;
             if lifecycle.is_cancelled() {
                 if let Some(dispatch) = dispatch {

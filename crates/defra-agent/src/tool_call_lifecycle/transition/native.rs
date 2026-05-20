@@ -278,6 +278,7 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let failure_class = FailureClass::External.as_str();
+        let cancel_cause = CancelCause::Deadline.as_str();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
@@ -289,6 +290,7 @@ impl ToolCallLifecycle {
                         status: "completed",
                         lifecycle_state: "timedOut",
                         tool_failure_class: "{failure_class}",
+                        cancel_cause: "{cancel_cause}",
                         started_at: "{started_at_str}",
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
@@ -305,15 +307,14 @@ impl ToolCallLifecycle {
 
         self.state = ToolCallState::TimedOut;
         self.failure_class = Some(FailureClass::External);
+        self.cancel_cause = Some(CancelCause::Deadline);
         Ok(())
     }
 
     /// Pending → Cancelled. Used when a tool call is cancelled before
     /// dispatch creates a running row.
     ///
-    /// TODO(#249): accept and persist `CancelCause` once AgentToolCall has a
-    /// cancel_cause field.
-    pub async fn cancel_before_dispatch(&mut self) -> Result<()> {
+    pub async fn cancel_before_dispatch(&mut self, cause: CancelCause) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
 
         // Pending: row may not exist yet. Create directly in Cancelled.
@@ -327,6 +328,7 @@ impl ToolCallLifecycle {
         let escaped_args = escape_graphql_string(&self.args);
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
+        let cancel_cause = cause.as_str();
 
         let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
 
@@ -343,6 +345,7 @@ impl ToolCallLifecycle {
                     result: "{escaped_result}",
                     status: "completed",
                     lifecycle_state: "cancelled",
+                    cancel_cause: "{cancel_cause}",
                     started_at: null,
                     deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
@@ -359,6 +362,7 @@ impl ToolCallLifecycle {
 
         self.doc_id = Some(doc_id);
         self.state = ToolCallState::Cancelled;
+        self.cancel_cause = Some(cause);
         Ok(())
     }
 }
