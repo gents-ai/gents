@@ -1,16 +1,20 @@
-//! Pure-Rust classifier that maps a cancelled tool call or response onto one of
-//! four `CancelCause` variants with an evidence trail.
-//!
-//! Derivation precedence (operator-surfaces spec §470-491):
-//!  1. `deadline`   — tool lifecycle_state == "timedOut" (or timed_out flag).
-//!  2. `interrupted` — request has caused_by_parent_request_id AND tool's
-//!                     cancel_policy == "cascade" (parent cascade wins over
-//!                     user-cancel evidence on the child).
-//!  3. `userCancelled` — root request has interrupt_requested_at and no parent.
-//!  4. `unknown`    — cancelled terminal row without attributable evidence;
-//!                     evidence field enumerates what was checked and found empty.
-//!
-//! No IO. All inputs are plain Rust structs.
+// Pure-Rust classifier that maps a cancelled tool call or response onto one of
+// four `CancelCause` variants with an evidence trail.
+//
+// Derivation precedence (operator-surfaces spec §470-491):
+//  1. `deadline`   — tool lifecycle_state == "timedOut" (or timed_out flag).
+//  2. `interrupted` — request has caused_by_parent_request_id AND tool's
+//                     cancel_policy == "cascade" (parent cascade wins over
+//                     user-cancel evidence on the child).
+//  3. `userCancelled` — root request has interrupt_requested_at and no parent.
+//  4. `unknown`    — cancelled terminal row without attributable evidence;
+//                     evidence field enumerates what was checked and found empty.
+//
+// Inner doc-comments (//!) intentionally avoided here because this file is
+// `include!`-ed into the bin's manually-assembled bridge module
+// (apps/desktop-tauri/src-tauri/src/bin/bridge_runner.rs) and inner docs at
+// the top of an include! body trip E0753 in that context.
+// No IO. All inputs are plain Rust structs.
 
 use crate::bridge::types::DerivedCancelCauseView;
 
