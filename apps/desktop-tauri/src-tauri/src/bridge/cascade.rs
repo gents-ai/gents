@@ -13,6 +13,13 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
 use serde_json::Value;
 
+use crate::bridge::snapshot::{
+    compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
+};
+use crate::bridge::types::{
+    CascadeAffectedRequest, CascadeCancelPreview, DesktopPreviewInterruptCascadeRequest,
+};
+
 /// Maximum descent depth to match the CLI walker's safety limit.
 const MAX_CASCADE_DEPTH: usize = 8;
 
@@ -268,6 +275,74 @@ async fn fetch_request(
         .and_then(|rows| rows.first())
         .cloned()
         .ok_or_else(|| format!("request {request_id} not found in AgentRequest collection"))
+}
+
+/// Builds a `CascadeCancelPreview` by walking the descendant tree of
+/// `req.request_id` and grouping rows into the four classification buckets,
+/// then computing a BLAKE3 preview signature over the result.
+///
+/// This is the bridge-level helper called by both `desktop_preview_interrupt_cascade`
+/// and any tests that need the full preview pipeline.
+pub(crate) async fn build_cascade_preview(
+    core: &Arc<ClientCore>,
+    req: &DesktopPreviewInterruptCascadeRequest,
+) -> Result<CascadeCancelPreview, String> {
+    let walk_req = CascadeWalkRequest {
+        root_request_id: req.request_id.clone(),
+        agent_did: req.agent_did.clone(),
+        include_terminal: req.include_terminal.unwrap_or(true),
+    };
+    let result = walk(core, &walk_req).await?;
+
+    let mut will_interrupt = Vec::new();
+    let mut will_detach = Vec::new();
+    let mut already_terminal = Vec::new();
+    let mut unknown_policy = Vec::new();
+    let mut sig_rows = Vec::new();
+
+    for row in &result.rows {
+        let view = CascadeAffectedRequest {
+            request_id: row.request_id.clone(),
+            session_id: row.session_id.clone(),
+            behavior_id: row.behavior_id.clone(),
+            lifecycle_state: row.lifecycle_state.clone(),
+            parent_request_id: row.parent_request_id.clone(),
+            parent_tool_call_id: row.parent_tool_call_id.clone(),
+            tool_name: row.tool_name.clone(),
+            await_mode: row.await_mode.clone(),
+            cancel_policy: row.cancel_policy.clone(),
+        };
+        sig_rows.push(PreviewSignatureRow {
+            request_id: row.request_id.clone(),
+            lifecycle_state: row.lifecycle_state.clone(),
+            await_mode: row.await_mode.clone(),
+            cancel_policy: row.cancel_policy.clone(),
+            parent_tool_call_id: row.parent_tool_call_id.clone(),
+        });
+        match row.classification {
+            CascadeClassification::WillInterrupt => will_interrupt.push(view),
+            CascadeClassification::WillDetach => will_detach.push(view),
+            CascadeClassification::AlreadyTerminal => already_terminal.push(view),
+            CascadeClassification::UnknownPolicy => unknown_policy.push(view),
+        }
+    }
+
+    let preview_signature = compute_preview_signature(&PreviewSignatureInput {
+        root_request_id: req.request_id.clone(),
+        root_state: result.root_state.clone(),
+        root_interrupt_requested_at: result.root_interrupt_requested_at.clone(),
+        affected: sig_rows,
+    });
+
+    Ok(CascadeCancelPreview {
+        root_request_id: req.request_id.clone(),
+        preview_signature,
+        root_state: result.root_state,
+        will_interrupt,
+        will_detach,
+        already_terminal,
+        unknown_policy,
+    })
 }
 
 /// Extract a non-empty string field from a JSON object.

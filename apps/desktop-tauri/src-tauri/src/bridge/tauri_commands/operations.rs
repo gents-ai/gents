@@ -352,14 +352,12 @@ mod subagent_tree_url_tests {
 
 #[tauri::command]
 pub(crate) async fn desktop_preview_interrupt_cascade(
-    _state: State<'_, DesktopAppState>,
-    _request: DesktopPreviewInterruptCascadeRequest,
+    state: State<'_, DesktopAppState>,
+    request: DesktopPreviewInterruptCascadeRequest,
 ) -> Result<CascadeCancelPreview, String> {
-    Err(
-        "desktop_preview_interrupt_cascade not implemented yet; landing via panel #286 \
-         (cascade cancel UX)"
-            .to_string(),
-    )
+    let core = super::super::state::current_core(&state)
+        .ok_or_else(|| "desktop bridge core not initialized".to_string())?;
+    crate::bridge::cascade::build_cascade_preview(&core, &request).await
 }
 
 #[tauri::command]

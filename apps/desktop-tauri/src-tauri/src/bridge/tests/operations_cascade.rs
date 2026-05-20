@@ -1,4 +1,5 @@
-use crate::bridge::cascade::{CascadeClassification, CascadeWalkRequest, CascadeWalkRow};
+use crate::bridge::cascade::{build_cascade_preview, CascadeClassification, CascadeWalkRequest, CascadeWalkRow};
+use crate::bridge::types::DesktopPreviewInterruptCascadeRequest;
 
 #[test]
 fn cascade_request_default_shape() {
@@ -89,6 +90,29 @@ async fn walk_returns_classified_descendants_for_five_child_fixture() {
         Some("processing"),
         "root_state mismatch"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preview_returns_four_classified_groups_and_a_signature() {
+    let (core, _tmp) = super::support::seed_cascade_fixture().await;
+    let preview = build_cascade_preview(
+        &core,
+        &DesktopPreviewInterruptCascadeRequest {
+            request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
+            include_terminal: Some(true),
+        },
+    )
+    .await
+    .expect("preview ok");
+
+    assert_eq!(preview.root_request_id, "req_root");
+    assert_eq!(preview.root_state.as_deref(), Some("processing"));
+    assert_eq!(preview.will_interrupt.len(), 3);
+    assert_eq!(preview.will_detach.len(), 1);
+    assert_eq!(preview.already_terminal.len(), 1);
+    assert_eq!(preview.unknown_policy.len(), 1);
+    assert_eq!(preview.preview_signature.len(), 64); // blake3 hex
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
