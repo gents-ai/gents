@@ -1,5 +1,9 @@
 use defra_agent_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
+use super::super::cause_derivation::{
+    derive_response_cause, derive_tool_call_cause, RequestEvidence, ResponseEvidence,
+    ToolCallEvidence,
+};
 use super::super::types::{
     normalize_optional, turn_state_label, DesktopSessionSnapshot, MessageView, PendingTurnView,
     ResponseView, ToolCallView, ToolResultView,
@@ -89,25 +93,40 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 |agent_did| store.latest_response_for_request_for_agent(request_id, agent_did),
             )
         })
-        .map(|row| ResponseView {
-            status: normalize_optional(row.status.as_deref()),
-            content: row
-                .content
-                .as_deref()
-                .map(normalize_markdown_text)
-                .filter(|value| !value.is_empty()),
-            reasoning: row
-                .reasoning
-                .as_deref()
-                .map(normalize_markdown_text)
-                .filter(|value| !value.is_empty()),
-            error_message: normalize_optional(row.error_message.as_deref()),
-            token_count: row.token_count,
-            materialized_message_sequence: row.materialized_message_sequence,
-            materialized_at: normalize_optional(row.materialized_at.as_deref()),
-            interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
-            completed_at: normalize_optional(row.completed_at.as_deref()),
-            cancel_cause: None,
+        .map(|row| {
+            let req_evidence = latest_request
+                .map(|r| RequestEvidence {
+                    request_id: r.request_id.clone(),
+                    interrupt_requested_at: r.interrupt_requested_at.clone(),
+                    caused_by_parent_request_id: r.retry_parent_request.clone(),
+                    deadline_breached: false,
+                })
+                .unwrap_or_default();
+            let resp_evidence = ResponseEvidence {
+                interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
+                completed_at: normalize_optional(row.completed_at.as_deref()),
+            };
+            let cancel_cause = derive_response_cause(&req_evidence, &resp_evidence);
+            ResponseView {
+                status: normalize_optional(row.status.as_deref()),
+                content: row
+                    .content
+                    .as_deref()
+                    .map(normalize_markdown_text)
+                    .filter(|value| !value.is_empty()),
+                reasoning: row
+                    .reasoning
+                    .as_deref()
+                    .map(normalize_markdown_text)
+                    .filter(|value| !value.is_empty()),
+                error_message: normalize_optional(row.error_message.as_deref()),
+                token_count: row.token_count,
+                materialized_message_sequence: row.materialized_message_sequence,
+                materialized_at: normalize_optional(row.materialized_at.as_deref()),
+                interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
+                completed_at: normalize_optional(row.completed_at.as_deref()),
+                cancel_cause,
+            }
         });
     let active_response_overlay = latest_response.clone().filter(|response| {
         let response_status = response
@@ -177,19 +196,42 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         })
         .collect::<Vec<_>>();
 
+    let tool_call_req_evidence = latest_request
+        .map(|r| RequestEvidence {
+            request_id: r.request_id.clone(),
+            interrupt_requested_at: r.interrupt_requested_at.clone(),
+            caused_by_parent_request_id: r.retry_parent_request.clone(),
+            deadline_breached: false,
+        })
+        .unwrap_or_default();
     let tool_calls = transcript
         .tool_calls
         .into_iter()
-        .map(|row| ToolCallView {
-            tool_call_key: row.tool_call_key.clone(),
-            message_sequence: row.message_sequence,
-            tool_name: normalize_optional(row.tool_name.as_deref()),
-            tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
-            args: normalize_optional(row.args.as_deref()),
-            result: normalize_optional(row.result.as_deref()),
-            status: normalize_optional(row.status.as_deref()),
-            started_at: normalize_optional(row.started_at.as_deref()),
-            completed_at: normalize_optional(row.completed_at.as_deref()),
+        .map(|row| {
+            let tool_evidence = ToolCallEvidence {
+                tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
+                lifecycle_state: row.lifecycle_state.clone(),
+                deadline_at: row.deadline_at.clone(),
+                // TODO(#277-followup): cancel_policy not on AgentToolCallRow yet — see follow-up
+                // for promoting that field through the protocol crate so tool-call
+                // interrupted-via-cascade can be derived from snapshot data.
+                cancel_policy: None,
+                completed_at: row.completed_at.clone(),
+                timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+            };
+            let cancel_cause = derive_tool_call_cause(&tool_call_req_evidence, &tool_evidence);
+            ToolCallView {
+                tool_call_key: row.tool_call_key.clone(),
+                message_sequence: row.message_sequence,
+                tool_name: normalize_optional(row.tool_name.as_deref()),
+                tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
+                args: normalize_optional(row.args.as_deref()),
+                result: normalize_optional(row.result.as_deref()),
+                status: normalize_optional(row.status.as_deref()),
+                started_at: normalize_optional(row.started_at.as_deref()),
+                completed_at: normalize_optional(row.completed_at.as_deref()),
+                cancel_cause,
+            }
         })
         .collect::<Vec<_>>();
 

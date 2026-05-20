@@ -29,6 +29,8 @@ pub(crate) struct ToolCallView {
     pub status: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
