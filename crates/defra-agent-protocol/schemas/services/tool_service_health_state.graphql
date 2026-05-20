@@ -1,0 +1,14 @@
+type ToolServiceHealthState {
+    service_id: String @index(unique: true)
+    agent_did: String @index
+    endpoint: String
+    status: String @index
+    failure_count: Int
+    k_max: Int
+    backoff_until: DateTime
+    last_probe_at: DateTime @index(direction: DESC)
+    last_seen: DateTime
+    last_error_class: String
+    last_error_message: String
+    updated_at: DateTime @index(direction: DESC)
+}
