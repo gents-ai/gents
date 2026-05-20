@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { fetchOperationsSnapshot } from "../../lib/desktop-api";
 import type {
@@ -21,12 +21,10 @@ export function useOperationsSnapshot(
   const [snapshot, setSnapshot] = useState<DesktopOperationsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const reqRef = useRef(request);
-  reqRef.current = request;
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetchOperationsSnapshot(reqRef.current);
+      const next = await fetchOperationsSnapshot(request);
       setSnapshot(next);
       setError(null);
     } catch (e) {
@@ -34,7 +32,7 @@ export function useOperationsSnapshot(
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [request]);
 
   useEffect(() => {
     let cancelled = false;
