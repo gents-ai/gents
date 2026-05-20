@@ -196,3 +196,50 @@ pub(crate) struct EventTriggerSaveRequest {
     pub enabled: Option<bool>,
     pub concurrency: Option<String>,
 }
+
+// --- operator-surfaces request params (issue #302) ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopOperationsSnapshotRequest {
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub root_request_id: Option<String>,
+    #[serde(default)]
+    pub include_terminal: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopListSubagentTreeRequest {
+    pub root_request_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub include_terminal: Option<bool>,
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopPreviewInterruptCascadeRequest {
+    pub request_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub include_terminal: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopInterruptRequest {
+    pub request_id: String,
+    /// Currently always `"userCancelled"` per spec line 907. Kept as a String
+    /// so future cause variants don't require an enum migration here.
+    pub cause: String,
+    pub cascade: bool,
+    #[serde(default)]
+    pub expected_preview_signature: Option<String>,
+}
