@@ -4,7 +4,8 @@ use super::*;
 mod lean_vocab_test;
 
 use lean_vocab_test::{
-    lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases, LeanClientShellCase,
+    lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
+    lean_response_transition_cases, LeanClientShellCase, LeanResponseTransitionCase,
 };
 
 #[test]
@@ -377,6 +378,86 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
 }
 
 #[test]
+fn session_snapshot_streaming_response_overlay_consumes_generated_transition_cases() {
+    let cases = lean_response_transition_cases();
+    assert_eq!(
+        cases.len(),
+        12,
+        "desktop streaming renderer should consume every Lean response transition case"
+    );
+
+    for case in cases {
+        let store = streaming_response_contract_store(case);
+        let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+            .unwrap_or_else(|| panic!("case {} should produce a session snapshot", case.name));
+
+        assert_eq!(
+            snapshot
+                .latest_response
+                .as_ref()
+                .and_then(|response| response.status.as_deref()),
+            Some(case.post_status.as_str()),
+            "case {} should expose the Lean post response status",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .latest_response
+                .as_ref()
+                .and_then(|response| response.token_count)
+                .map(|count| count as usize),
+            Some(case.post_token_count),
+            "case {} should expose the Lean post token count",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .latest_response
+                .as_ref()
+                .and_then(|response| response.materialized_message_sequence)
+                .map(|sequence| sequence as usize),
+            case.post_materialized_seq,
+            "case {} should expose the Lean materialization sequence",
+            case.name
+        );
+
+        let expected_live_overlay = streaming_case_should_render_live_overlay(case);
+        assert_eq!(
+            snapshot.active_response_overlay.is_some(),
+            expected_live_overlay,
+            "case {} active overlay visibility should follow the Lean streaming post state",
+            case.name
+        );
+
+        let live_items = snapshot
+            .timeline_items
+            .iter()
+            .filter_map(|item| match item {
+                RenderedTimelineItem::LiveAssistant {
+                    content, reasoning, ..
+                } => Some((content.as_deref(), reasoning.as_deref())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            live_items.len(),
+            usize::from(expected_live_overlay),
+            "case {} should render exactly the Lean-visible live assistant item count",
+            case.name
+        );
+        if expected_live_overlay {
+            let (expected_content, expected_reasoning) = streaming_case_tail(case);
+            assert_eq!(
+                live_items[0],
+                (expected_content.as_deref(), expected_reasoning.as_deref()),
+                "case {} live assistant item should carry the Lean live tail",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
 fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
     let submitted = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
@@ -717,5 +798,118 @@ fn response_status_for_turn(turn_state: Option<&str>) -> Option<&'static str> {
         Some("failed") => Some("error"),
         Some("waitingForClaim") | Some("superseded") | Some("interrupted") | None => None,
         Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
+    }
+}
+
+fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> ClientStore {
+    let (content, reasoning) = streaming_case_tail(case);
+    let lifecycle_state = request_lifecycle_for_streaming_post_status(case.post_status.as_str());
+
+    ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Contract Agent".to_string()),
+            agent_did: Some("did:defra:contract-agent".to_string()),
+            behavior_id: Some("contract-behavior".to_string()),
+            title: Some("streaming response contract".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("contract prompt".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:01:00Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:contract-agent".to_string()),
+            behavior_id: Some("contract-behavior".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("contract prompt".to_string()),
+            status: Some(request_status_for_lifecycle(lifecycle_state).to_string()),
+            lifecycle_state: Some(lifecycle_state.to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:contract-agent".to_string()),
+            behavior_id: Some("contract-behavior".to_string()),
+            session_id: Some("session-1".to_string()),
+            content,
+            reasoning,
+            status: Some(case.post_status.clone()),
+            error_message: case.error_reason.clone(),
+            token_count: Some(case.post_token_count as i64),
+            progress_seq: Some(1),
+            materialized_message_sequence: case
+                .post_materialized_seq
+                .map(|sequence| sequence as i64),
+            materialized_at: case
+                .post_materialized_seq
+                .map(|_| "2026-04-21T12:01:05Z".to_string()),
+            created_at: Some("2026-04-21T12:00:01Z".to_string()),
+            completed_at: matches!(case.post_status.as_str(), "complete" | "error")
+                .then(|| "2026-04-21T12:01:05Z".to_string()),
+            interrupted_at: (case.action == "set_interrupted_at")
+                .then(|| "2026-04-21T12:01:03Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    })
+}
+
+fn streaming_case_should_render_live_overlay(case: &LeanResponseTransitionCase) -> bool {
+    case.post_status == "streaming"
+        && case.post_live_tail == "nonEmpty"
+        && case.post_materialized_seq.is_none()
+        && case.action != "set_interrupted_at"
+}
+
+fn streaming_case_tail(case: &LeanResponseTransitionCase) -> (Option<String>, Option<String>) {
+    if case.post_live_tail != "nonEmpty" {
+        return (None, None);
+    }
+    if case.action == "write_reasoning" {
+        return (
+            None,
+            Some(format!(
+                "{} reasoning live tail",
+                case.name.replace('_', " ")
+            )),
+        );
+    }
+    (
+        Some(format!("{} content live tail", case.name.replace('_', " "))),
+        None,
+    )
+}
+
+fn request_lifecycle_for_streaming_post_status(status: &str) -> &'static str {
+    match status {
+        "streaming" => "processing",
+        "complete" => "completed",
+        "error" => "failed",
+        other => panic!("unsupported Lean streaming response post status {other:?}"),
+    }
+}
+
+fn request_status_for_lifecycle(lifecycle_state: &str) -> &str {
+    match lifecycle_state {
+        "completed" => "completed",
+        "failed" => "error",
+        other => other,
     }
 }
