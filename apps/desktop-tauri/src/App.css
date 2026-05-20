@@ -17,6 +17,7 @@
 @import "./styles/chat.css";
 @import "./styles/fleet/layout.css";
 @import "./styles/fleet/table.css";
+@import "./styles/mcp-health.css";
 @import "./styles/config/workspace.css";
 @import "./styles/config/agent-behavior.css";
 @import "./styles/config/documents.css";
