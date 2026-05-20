@@ -100,6 +100,7 @@ struct ToolCallRow {
     tool_name: Option<String>,
     result: Option<String>,
     lifecycle_state: Option<String>,
+    cancel_cause: Option<String>,
     await_mode: Option<String>,
     child_request_id: Option<String>,
 }
@@ -247,6 +248,7 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
                 tool_name
                 result
                 lifecycle_state
+                cancel_cause
                 await_mode
                 child_request_id
             }}
@@ -499,6 +501,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
 
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_tool").await,
         0

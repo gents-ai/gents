@@ -169,9 +169,6 @@ impl CancelPolicy {
 }
 
 /// Why a tool-call cancellation was requested at the state-machine boundary.
-///
-/// This is mirrored from Lean for conformance first. Runtime methods still
-/// need to accept and persist it on AgentToolCall; tracked by #249.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CancelCause {
     Interrupted,
@@ -281,6 +278,7 @@ pub struct ToolCallLifecycle {
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
+    cancel_cause: Option<CancelCause>,
     pub(crate) await_mode: AwaitMode,
     pub(crate) cancel_policy: CancelPolicy,
     pub(crate) child_request_id: Option<String>,
@@ -313,6 +311,7 @@ impl ToolCallLifecycle {
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
+            cancel_cause: None,
             await_mode: AwaitMode::Foreground,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
@@ -350,6 +349,7 @@ impl ToolCallLifecycle {
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
+            cancel_cause: None,
             await_mode,
             cancel_policy,
             child_request_id: Some(child_request_id),
@@ -382,6 +382,7 @@ impl ToolCallLifecycle {
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
+            cancel_cause: None,
             await_mode: AwaitMode::Background,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,

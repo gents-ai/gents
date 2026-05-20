@@ -29,7 +29,7 @@ use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, CascadeDispatch,
+    create_subagent_request_with_request_id, AwaitMode, CancelCause, CancelPolicy, CascadeDispatch,
     ChildTerminal, FailureClass, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{

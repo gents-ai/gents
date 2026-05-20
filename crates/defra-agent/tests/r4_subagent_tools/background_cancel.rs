@@ -210,7 +210,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
             .unwrap()
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
         .await
         .unwrap()
         .expect("cascade dispatch");
@@ -220,6 +220,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     );
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-xdep-cancel").await;
+    assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     assert!(
         tool.cancel_cascade_intent_at.is_some(),
         "remote branch must set cancel_cascade_intent_at"
@@ -270,7 +271,7 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
             .unwrap()
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
         .await
         .unwrap()
         .expect("cascade dispatch");
@@ -278,6 +279,8 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         panic!("local child should use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
+    assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     interrupt_request(db.node.as_ref(), &intent.child_request_id)
         .await
         .unwrap();

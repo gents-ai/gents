@@ -244,7 +244,10 @@ impl DefraSessionHook {
             {
                 crate::interrupt::interrupt_request(&self.node, &active_request_id).await?;
                 let _descendants_cancelled = self
-                    .cancel_live_subagent_descendants(&edge.child_session_id)
+                    .cancel_live_subagent_descendants(
+                        &edge.child_session_id,
+                        CancelCause::UserCancelled,
+                    )
                     .await?;
                 interrupted_active_request_id = Some(active_request_id);
             }
@@ -355,13 +358,14 @@ impl DefraSessionHook {
             &parent_context.session_id,
             &edge.parent_tool_call_id,
             "root",
+            CancelCause::UserCancelled,
         )
         .await?;
         let active_interrupted =
             crate::interrupt::interrupt_active_session_request(&self.node, &edge.child_session_id)
                 .await?;
         let descendants_cancelled = self
-            .cancel_live_subagent_descendants(&edge.child_session_id)
+            .cancel_live_subagent_descendants(&edge.child_session_id, CancelCause::UserCancelled)
             .await?;
         queued_drained += crate::interrupt::cancel_subagent_session_queue(
             &self.node,

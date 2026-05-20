@@ -465,7 +465,8 @@ impl DefraSessionHook {
         }
 
         let notification_tool_name = lifecycle.tool_name().to_string();
-        self.cancel_background_tool_lifecycle(lifecycle).await?;
+        self.cancel_background_tool_lifecycle(lifecycle, CancelCause::UserCancelled)
+            .await?;
         let notification_reason = parsed
             .reason
             .as_deref()

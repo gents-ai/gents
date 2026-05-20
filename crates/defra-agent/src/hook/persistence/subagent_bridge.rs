@@ -4,6 +4,7 @@ impl DefraSessionHook {
     pub(super) async fn cancel_live_subagent_descendants(
         &self,
         child_session_id: &str,
+        cause: CancelCause,
     ) -> anyhow::Result<usize> {
         let tool_call_ids = running_subagent_bridge_ids(&self.node, child_session_id).await?;
         let mut cancelled = 0;
@@ -13,6 +14,7 @@ impl DefraSessionHook {
                     child_session_id,
                     &tool_call_id,
                     "descendant",
+                    cause,
                 )
                 .await?
             {
@@ -27,6 +29,7 @@ impl DefraSessionHook {
         session_id: &str,
         tool_call_id: &str,
         bridge_kind: &str,
+        cause: CancelCause,
     ) -> anyhow::Result<bool> {
         let Some(mut lifecycle) = self
             .take_or_load_in_flight_lifecycle(session_id, tool_call_id)
@@ -39,7 +42,7 @@ impl DefraSessionHook {
         }
 
         let dispatch = lifecycle
-            .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+            .cancel_during_run_with_cascade_dispatch(cause, &self.agent_did)
             .await?;
         if !lifecycle.is_cancelled() {
             return Ok(false);
@@ -66,6 +69,7 @@ impl DefraSessionHook {
         session_id: &str,
         tool_call_id: &str,
         bridge_kind: &str,
+        cause: CancelCause,
     ) -> anyhow::Result<bool> {
         let Some(mut lifecycle) =
             ToolCallLifecycle::load(self.node.clone(), session_id, tool_call_id).await?
@@ -77,7 +81,7 @@ impl DefraSessionHook {
         }
 
         let dispatch = lifecycle
-            .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+            .cancel_during_run_with_cascade_dispatch(cause, &self.agent_did)
             .await?;
         if !lifecycle.is_cancelled() {
             return Ok(false);
@@ -361,7 +365,10 @@ impl DefraSessionHook {
                     .await?
                 {
                     let dispatch = match lifecycle
-                        .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+                        .cancel_during_run_with_cascade_dispatch(
+                            CancelCause::Interrupted,
+                            &self.agent_did,
+                        )
                         .await
                     {
                         Ok(dispatch) => dispatch,
@@ -847,7 +854,8 @@ impl DefraSessionHook {
                 .await?
                 .is_some()
             {
-                self.cancel_background_tool_lifecycle(lifecycle).await?;
+                self.cancel_background_tool_lifecycle(lifecycle, CancelCause::Interrupted)
+                    .await?;
                 let lifecycle = self
                     .load_authorized_background_tool(parent_request_id, tool_call_id)
                     .await?;
@@ -857,7 +865,8 @@ impl DefraSessionHook {
             }
 
             if now >= parent_deadline_at {
-                self.cancel_background_tool_lifecycle(lifecycle).await?;
+                self.cancel_background_tool_lifecycle(lifecycle, CancelCause::Deadline)
+                    .await?;
                 let lifecycle = self
                     .load_authorized_background_tool(parent_request_id, tool_call_id)
                     .await?;
@@ -876,6 +885,7 @@ impl DefraSessionHook {
     pub(super) async fn cancel_background_tool_lifecycle(
         &self,
         mut lifecycle: ToolCallLifecycle,
+        cause: CancelCause,
     ) -> anyhow::Result<()> {
         if let Some(execution) = self
             .background_executions
@@ -887,7 +897,7 @@ impl DefraSessionHook {
             execution.cancellation_token.cancel();
         }
         if lifecycle.is_running() {
-            lifecycle.cancel_during_run().await?;
+            lifecycle.cancel_during_run(cause).await?;
         }
         Ok(())
     }

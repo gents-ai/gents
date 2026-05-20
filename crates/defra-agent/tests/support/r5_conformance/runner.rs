@@ -6,7 +6,7 @@ use defra_agent::background_completion::{
     reconcile_unclaimed_cross_deployment_spawns,
 };
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{CascadeDispatch, ToolCallLifecycle};
+use defra_agent::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use defra_agent::{
     interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
     RequestLifecycle, ToolSelectionDocument,
@@ -59,6 +59,7 @@ pub struct BridgeObservation {
     pub tool_call_id: String,
     pub lifecycle_state: String,
     pub child_request_id: Option<String>,
+    pub cancel_cause: Option<String>,
     pub cancel_cascade_intent_at: Option<String>,
     pub cancel_pending_remote_ack: Option<bool>,
     pub stuck_since: Option<String>,
@@ -452,7 +453,7 @@ async fn export_doc(
     };
     let fields = match collection {
         "AgentRequest" => "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at",
-        "AgentToolCall" => "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since",
+        "AgentToolCall" => "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since",
         "AgentResponse" => "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at",
         "AgentMessage" => "message_key session_id sequence role content timestamp",
         _ => unreachable!(),
@@ -710,7 +711,9 @@ async fn cancel_parent_on_a(node: &HarnessNode, parent_tool_call_id: &str) -> Re
         ToolCallLifecycle::load(node.db.node.clone(), &session_id, parent_tool_call_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("bridge {parent_tool_call_id} not found"))?;
-    lifecycle.cancel_during_run().await?;
+    lifecycle
+        .cancel_during_run(CancelCause::Interrupted)
+        .await?;
     if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(NODE_A_DID).await? {
         if let CascadeDispatch::Local(intent) = dispatch {
             interrupt_request(node.db.node.as_ref(), &intent.child_request_id).await?;
@@ -858,6 +861,7 @@ async fn load_bridge_rows(node: &HarnessNode) -> Result<Vec<BridgeObservation>> 
             tool_call_id
             lifecycle_state
             child_request_id
+            cancel_cause
             cancel_cascade_intent_at
             cancel_pending_remote_ack
             stuck_since
@@ -1075,6 +1079,7 @@ fn optional_tool_fields(row: &serde_json::Value) -> String {
     for field in [
         "completed_at",
         "tool_failure_class",
+        "cancel_cause",
         "unclaimed_deadline_at",
         "cancel_cascade_intent_at",
         "stuck_since",

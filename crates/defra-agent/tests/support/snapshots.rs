@@ -523,6 +523,8 @@ pub struct ToolCallSnapshot {
     #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
+    pub cancel_cause: Option<String>,
+    #[serde(default)]
     pub latency_ms: Option<i64>,
 }
 
@@ -539,7 +541,7 @@ pub async fn fetch_tool_call_snapshots_for_session(
             ) {{
                 tool_call_key request_id session_id message_sequence tool_name tool_call_id
                 args result status lifecycle_state started_at deadline_at completed_at
-                selected_service_id selected_tool_name tool_failure_class latency_ms
+                selected_service_id selected_tool_name tool_failure_class cancel_cause latency_ms
             }}
         }}"#
     );

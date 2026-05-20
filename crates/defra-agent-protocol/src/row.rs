@@ -304,7 +304,11 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
+    pub lifecycle_state: Option<String>,
+    #[serde(default)]
     pub started_at: Option<String>,
+    #[serde(default)]
+    pub deadline_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
     #[serde(default)]
@@ -313,6 +317,8 @@ pub struct AgentToolCallRow {
     pub selected_tool_name: Option<String>,
     #[serde(default)]
     pub tool_failure_class: Option<String>,
+    #[serde(default)]
+    pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
 }

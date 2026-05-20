@@ -10,6 +10,7 @@ use support::{create_request, first_row, test_db, AGENT_DID};
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     lifecycle_state: Option<String>,
+    cancel_cause: Option<String>,
     result: String,
 }
 
@@ -32,6 +33,7 @@ async fn load_tool_call(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
                 lifecycle_state
+                cancel_cause
                 result
             }}
         }}"#
@@ -126,6 +128,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
 
     let row = load_tool_call(db.node.as_ref(), "r6-recovery-tool").await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(row.cancel_cause.as_deref(), Some("interrupted"));
     assert!(row.result.contains("interrupted on restart"));
 
     let messages = load_messages(db.node.as_ref(), "r6-recovery-session").await;
