@@ -167,6 +167,11 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
             r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"deadline_at","Kind":10}}"#,
         );
     }
+    if !collection_has_field(collection, "cancel_cause") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cause","Kind":11}}"#,
+        );
+    }
 
     if field_patches.is_empty() {
         tracing::debug!("AgentToolCall already has all runtime lifecycle fields; migration no-op");
