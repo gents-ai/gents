@@ -165,8 +165,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         ]
     }
   , { feature := "mcp-health"
-    , required := [Surface.runtimeInternal, Surface.operatorCli]
-    , deferred := [(Surface.operatorUi, "#278")]
+    , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "identity-permission"
     , required := [Surface.runtimeInternal, Surface.api]
@@ -657,6 +657,13 @@ def caseCoverage : List CoverageEntry :=
       "MCPHealthCases"
       "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service")
       "mcp-health" [Surface.operatorCli]
+  -- Closed by #278: the desktop bridge view consumes the same Lean transitions
+  -- and asserts the K-model bookkeeping survives row -> view projection.
+  , tagged (consumerCoverage
+      "mcp_health_cases"
+      "MCPHealthCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::mcp_health::mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition")
+      "mcp-health" [Surface.operatorUi]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

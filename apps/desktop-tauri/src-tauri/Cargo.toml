@@ -21,6 +21,7 @@ blake3 = "1"
 defra-agent = { path = "../../../crates/defra-agent" }
 defra-agent-desktop-core.workspace = true
 defra-agent-protocol = { path = "../../../crates/defra-agent-protocol" }
+hostname.workspace = true
 reqwest.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

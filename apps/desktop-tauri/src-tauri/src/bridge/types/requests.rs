@@ -243,3 +243,9 @@ pub(crate) struct DesktopInterruptRequest {
     #[serde(default)]
     pub expected_preview_signature: Option<String>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopProbeMcpServiceRequest {
+    pub service_id: String,
+}

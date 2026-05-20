@@ -12,6 +12,8 @@ import type {
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
   InitSummary,
+  MCPServiceHealthView,
+  McpServiceProbeResult,
   PeerAddRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
@@ -116,6 +118,8 @@ export type DesktopApiAdapter = {
     request: DesktopListSubagentTreeRequest,
   ) => Promise<SubagentTreeView>;
   listBackendsWithHealth: () => Promise<BackendHealth[]>;
+  listMcpServicesWithHealth: () => Promise<MCPServiceHealthView[]>;
+  probeMcpService: (serviceId: string) => Promise<McpServiceProbeResult>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -215,6 +219,16 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   listBackendsWithHealth() {
     return invokeDesktop<BackendHealth[]>("desktop_list_backends_with_health");
+  },
+  listMcpServicesWithHealth() {
+    return invokeDesktop<MCPServiceHealthView[]>(
+      "desktop_list_mcp_services_with_health",
+    );
+  },
+  probeMcpService(serviceId) {
+    return invokeDesktop<McpServiceProbeResult>("desktop_probe_mcp_service", {
+      request: { serviceId },
+    });
   },
 };
 
@@ -348,4 +362,12 @@ export async function listSubagentTree(request: DesktopListSubagentTreeRequest) 
 
 export async function listBackendsWithHealth() {
   return desktopApiAdapter().listBackendsWithHealth();
+}
+
+export async function listMcpServicesWithHealth() {
+  return desktopApiAdapter().listMcpServicesWithHealth();
+}
+
+export async function probeMcpService(serviceId: string) {
+  return desktopApiAdapter().probeMcpService(serviceId);
 }

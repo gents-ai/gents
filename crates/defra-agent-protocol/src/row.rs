@@ -587,6 +587,41 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
+/// Persisted snapshot of one MCP service's health, written by the agent's
+/// `health_checker` on every probe cycle. `status` carries the precise
+/// `HealthStateInternal` projection ("healthy" / "stale" / "evicted" /
+/// "reconnecting") so the operator UI can distinguish back-off from
+/// in-flight retry without going through the collapsed three-state
+/// `HealthStatus`. `failure_count` / `k_max` / `backoff_until` give the
+/// K-model context per the design in
+/// `Proofs/MCPHealth/{State,Transition}.lean`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolServiceHealthStateRow {
+    pub service_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub failure_count: Option<i64>,
+    #[serde(default)]
+    pub k_max: Option<i64>,
+    #[serde(default)]
+    pub backoff_until: Option<String>,
+    #[serde(default)]
+    pub last_probe_at: Option<String>,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default)]
+    pub last_error_class: Option<String>,
+    #[serde(default)]
+    pub last_error_message: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

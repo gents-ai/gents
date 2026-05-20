@@ -2,6 +2,8 @@
 mod chat;
 #[path = "commands/config.rs"]
 mod config;
+#[path = "commands/mcp_health.rs"]
+mod mcp_health;
 #[path = "commands/peer.rs"]
 mod peer;
 #[path = "commands/task.rs"]
@@ -16,6 +18,7 @@ pub(crate) use config::{
     save_agent_config, save_backend_config, save_behavior_config, save_inference_profile_config,
     save_tool_selection_config,
 };
+pub(crate) use mcp_health::{load_mcp_services_with_health, probe_mcp_service};
 pub(crate) use peer::{add_peer, repair_p2p};
 pub(crate) use task::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,

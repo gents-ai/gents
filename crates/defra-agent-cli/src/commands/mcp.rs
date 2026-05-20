@@ -157,6 +157,7 @@ async fn probe_service(
             local_hostname,
             local_subnet,
             &HealthCheckerOptions::default(),
+            None,
         ),
     )
     .await;

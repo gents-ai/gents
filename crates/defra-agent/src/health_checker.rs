@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use defra_agent_protocol::graphql::escape_graphql_string;
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -71,19 +72,29 @@ impl std::fmt::Display for HealthStatus {
 struct ServiceHealthEntry {
     health: ServiceHealth,
     model: ServiceModelInternal,
+    endpoint: Option<String>,
+    last_probe_at: DateTime<Utc>,
 }
 
 impl ServiceHealthEntry {
     #[cfg(test)]
     fn from_public(health: ServiceHealth) -> Self {
         let model = ServiceModelInternal::from_status(health.status);
-        Self { health, model }
+        let last_probe_at = health.last_seen;
+        Self {
+            health,
+            model,
+            endpoint: None,
+            last_probe_at,
+        }
     }
 
     fn from_model(
         model: ServiceModelInternal,
         last_seen: DateTime<Utc>,
         last_error: Option<String>,
+        endpoint: Option<String>,
+        last_probe_at: DateTime<Utc>,
     ) -> Self {
         Self {
             health: ServiceHealth {
@@ -92,6 +103,8 @@ impl ServiceHealthEntry {
                 last_error,
             },
             model,
+            endpoint,
+            last_probe_at,
         }
     }
 }
@@ -110,6 +123,29 @@ impl HealthStateInternal {
             Self::Healthy => HealthStatus::Healthy,
             Self::Degraded => HealthStatus::Stale,
             Self::Evicted | Self::Reconnecting => HealthStatus::Unreachable,
+        }
+    }
+
+    /// String form persisted to the `ToolServiceHealthState` DefraDB
+    /// collection. Mirrors `HealthState.toDefraDB` in
+    /// `Proofs/MCPHealth/State.lean` exactly — including `degraded` rather
+    /// than the public `HealthStatus::Stale` projection name. Operators read
+    /// the precise internal-state vocabulary so the panel can distinguish
+    /// the staleness flavor of degraded (heartbeat lag, `failure_count = 0`)
+    /// from the failure-count flavor (`1 <= failure_count < K`).
+    ///
+    /// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in
+    /// the Lean model; the production cycle does not emit that event today
+    /// (the loop skips while backoff is active, then probes directly), so
+    /// rows with `status: "reconnecting"` will only appear once the cycle
+    /// is extended to bridge the gap. The persisted vocabulary covers it
+    /// so future production emission needs no schema change.
+    fn to_defradb(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Evicted => "evicted",
+            Self::Reconnecting => "reconnecting",
         }
     }
 }
@@ -153,6 +189,26 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
+/// Full MCP service health snapshot exposed to operators (CLI table, desktop
+/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
+///
+/// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
+/// that the public `HealthStatus` projection collapses. `status` is the
+/// internal `HealthStateInternal` projected to its DefraDB string
+/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
+#[derive(Debug, Clone, Serialize)]
+pub struct MCPServiceHealthSnapshot {
+    pub service_id: String,
+    pub endpoint: Option<String>,
+    pub status: String,
+    pub failure_count: u32,
+    pub k_max: u32,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub last_probe_at: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct ServiceHealthMap {
     inner: Arc<RwLock<HashMap<String, ServiceHealthEntry>>>,
@@ -179,6 +235,30 @@ impl ServiceHealthMap {
             .await
             .iter()
             .map(|(service_id, entry)| (service_id.clone(), entry.health.clone()))
+            .collect()
+    }
+
+    /// Full per-service snapshot including the K-model fields. The
+    /// `snapshot()` projection drops `failure_count` / `backoff_until` /
+    /// the internal `HealthState`; this one preserves them for operator
+    /// surfaces (the desktop panel, the persisted DefraDB row).
+    pub async fn snapshot_full(&self, k_max: u32) -> Vec<MCPServiceHealthSnapshot> {
+        let k_max = k_max.max(1);
+        self.inner
+            .read()
+            .await
+            .iter()
+            .map(|(service_id, entry)| MCPServiceHealthSnapshot {
+                service_id: service_id.clone(),
+                endpoint: entry.endpoint.clone(),
+                status: entry.model.state.to_defradb().to_string(),
+                failure_count: entry.model.failure_count,
+                k_max,
+                backoff_until: entry.model.backoff_until,
+                last_probe_at: entry.last_probe_at,
+                last_seen: entry.health.last_seen,
+                last_error: entry.health.last_error.clone(),
+            })
             .collect()
     }
 
@@ -211,6 +291,16 @@ impl ServiceHealthMap {
     }
 }
 
+/// Context for persisting `MCPServiceHealthSnapshot` rows to DefraDB at the
+/// end of every health-check cycle. The production `spawn_health_checker`
+/// builds one of these per agent; CLI one-shot probes (`defra-agent mcp
+/// probe`) and tests pass `None` to skip persistence.
+#[derive(Clone, Copy)]
+pub struct HealthPersistenceContext<'a> {
+    pub node: &'a EmbeddedNode,
+    pub agent_did: &'a str,
+}
+
 impl Default for ServiceHealthMap {
     fn default() -> Self {
         Self::new()
@@ -240,8 +330,13 @@ pub fn spawn_health_checker(
     local_subnet: Option<String>,
     cancel: CancellationToken,
     options: HealthCheckerOptions,
+    agent_did: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let persistence = HealthPersistenceContext {
+            node: node.as_ref(),
+            agent_did: agent_did.as_str(),
+        };
         if let Err(error) = run_health_check(
             node.as_ref(),
             &mcp_pool,
@@ -249,6 +344,7 @@ pub fn spawn_health_checker(
             &local_hostname,
             local_subnet.as_deref(),
             &options,
+            Some(persistence),
         )
         .await
         {
@@ -266,6 +362,10 @@ pub fn spawn_health_checker(
                     return;
                 }
                 _ = ticker.tick() => {
+                    let persistence = HealthPersistenceContext {
+                        node: node.as_ref(),
+                        agent_did: agent_did.as_str(),
+                    };
                     if let Err(error) = run_health_check(
                         node.as_ref(),
                         &mcp_pool,
@@ -273,6 +373,7 @@ pub fn spawn_health_checker(
                         &local_hostname,
                         local_subnet.as_deref(),
                         &options,
+                        Some(persistence),
                     ).await {
                         tracing::warn!(error = %error, "health check cycle failed");
                     }
@@ -289,6 +390,7 @@ async fn run_health_check(
     local_hostname: &str,
     local_subnet: Option<&str>,
     options: &HealthCheckerOptions,
+    persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
     let query = r#"{
   ToolServiceRegistry(
@@ -327,6 +429,7 @@ async fn run_health_check(
         local_hostname,
         local_subnet,
         options,
+        persistence,
     )
     .await
 }
@@ -340,6 +443,7 @@ pub async fn run_health_check_cycle(
     local_hostname: &str,
     local_subnet: Option<&str>,
     options: &HealthCheckerOptions,
+    persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
     let mut online_service_ids = HashSet::new();
 
@@ -357,7 +461,17 @@ pub async fn run_health_check_cycle(
             .as_ref()
             .map(|entry| entry.health.last_seen)
             .unwrap_or(heartbeat_seen_at);
+        let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
 
+        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
+        // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
+        // `Evicted` cycle and the next probe. The production loop does not
+        // emit that event today — it skips while backoff is active, then
+        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
+        // So persisted rows never carry `status: "reconnecting"` until the
+        // cycle is extended to bridge that gap (a future task; tracked
+        // alongside the K≥2 design pass in #303). The persisted vocabulary
+        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
@@ -369,6 +483,7 @@ pub async fn run_health_check_cycle(
                 &service_id,
                 previous_model,
                 previous_last_seen,
+                previous_endpoint,
                 "registry entry missing mcp_port".to_string(),
                 now,
                 options,
@@ -387,6 +502,7 @@ pub async fn run_health_check_cycle(
                 &service_id,
                 previous_model,
                 previous_last_seen,
+                previous_endpoint,
                 "registry entry missing address fields".to_string(),
                 now,
                 options,
@@ -428,7 +544,13 @@ pub async fn run_health_check_cycle(
                 health_map
                     .set_entry(
                         service_id.clone(),
-                        ServiceHealthEntry::from_model(next_model, now, None),
+                        ServiceHealthEntry::from_model(
+                            next_model,
+                            now,
+                            None,
+                            Some(endpoint.clone()),
+                            now,
+                        ),
                     )
                     .await;
             }
@@ -445,6 +567,7 @@ pub async fn run_health_check_cycle(
                     &service_id,
                     previous_model,
                     previous_last_seen,
+                    Some(endpoint.clone()),
                     error.to_string(),
                     now,
                     options,
@@ -463,6 +586,7 @@ pub async fn run_health_check_cycle(
                     &service_id,
                     previous_model,
                     previous_last_seen,
+                    Some(endpoint.clone()),
                     "probe timed out".to_string(),
                     now,
                     options,
@@ -473,6 +597,35 @@ pub async fn run_health_check_cycle(
     }
 
     health_map.retain_services(&online_service_ids).await;
+
+    if let Some(persistence) = persistence {
+        let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
+        persist_health_snapshot(&persistence, &snapshot, now).await;
+        // Source the stale-row set from DefraDB scoped to this agent rather
+        // than from the in-memory map: the in-memory entry is dropped by
+        // `retain_services` above, and the map is empty on a fresh start, so
+        // an in-memory diff misses rows persisted by a previous run (or by
+        // an earlier failed delete). Querying the persisted collection makes
+        // both restart-after-shutdown and delete-retry-on-error work.
+        match load_persisted_service_ids(&persistence).await {
+            Ok(persisted_ids) => {
+                for service_id in persisted_ids
+                    .difference(&online_service_ids)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                {
+                    delete_persisted_health_state(&persistence, &service_id).await;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "failed to load persisted ToolServiceHealthState rows for stale-row reconciliation",
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -482,6 +635,7 @@ async fn apply_probe_failure(
     service_id: &str,
     previous_model: ServiceModelInternal,
     previous_last_seen: DateTime<Utc>,
+    endpoint: Option<String>,
     error: String,
     now: DateTime<Utc>,
     options: &HealthCheckerOptions,
@@ -494,7 +648,13 @@ async fn apply_probe_failure(
     health_map
         .set_entry(
             service_id.to_string(),
-            ServiceHealthEntry::from_model(next_model, previous_last_seen, Some(error)),
+            ServiceHealthEntry::from_model(
+                next_model,
+                previous_last_seen,
+                Some(error),
+                endpoint,
+                now,
+            ),
         )
         .await;
 }
@@ -581,6 +741,193 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Coarse classification of `last_error` strings persisted alongside the
+/// raw message so the panel can render a stable error-class chip
+/// independent of the freeform error text. Drift to the message is
+/// expected — the class is best-effort.
+fn classify_last_error(error: &str) -> &'static str {
+    let lower = error.to_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("connection refused") || lower.contains("refused") {
+        "connection_refused"
+    } else if lower.contains("no route") || lower.contains("unreachable") {
+        "network_unreachable"
+    } else if lower.contains("missing mcp_port") || lower.contains("missing address") {
+        "registry_invalid"
+    } else if lower.contains("stream closed") || lower.contains("eof") {
+        "stream_closed"
+    } else {
+        "other"
+    }
+}
+
+async fn persist_health_snapshot(
+    persistence: &HealthPersistenceContext<'_>,
+    snapshot: &[MCPServiceHealthSnapshot],
+    now: DateTime<Utc>,
+) {
+    for entry in snapshot {
+        if let Err(error) = upsert_persisted_health_state(persistence, entry, now).await {
+            tracing::warn!(
+                service_id = %entry.service_id,
+                error = %error,
+                "failed to persist ToolServiceHealthState",
+            );
+        }
+    }
+}
+
+async fn upsert_persisted_health_state(
+    persistence: &HealthPersistenceContext<'_>,
+    entry: &MCPServiceHealthSnapshot,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let service_id = escape_graphql_string(&entry.service_id);
+    let agent_did = escape_graphql_string(persistence.agent_did);
+    let endpoint = entry.endpoint.as_deref().unwrap_or("");
+    let endpoint = escape_graphql_string(endpoint);
+    let status = escape_graphql_string(&entry.status);
+    let last_seen = entry.last_seen.to_rfc3339();
+    let last_probe_at = entry.last_probe_at.to_rfc3339();
+    let updated_at = now.to_rfc3339();
+    let backoff_until_fragment = match entry.backoff_until {
+        Some(dt) => format!(r#""{}""#, dt.to_rfc3339()),
+        None => "null".to_string(),
+    };
+    let (last_error_class, last_error_message) = match entry.last_error.as_deref() {
+        Some(error) => (
+            format!(r#""{}""#, classify_last_error(error)),
+            format!(r#""{}""#, escape_graphql_string(error)),
+        ),
+        None => ("null".to_string(), "null".to_string()),
+    };
+
+    // The persisted-row identity is the compound (service_id, agent_did) —
+    // see the schema comment in
+    // crates/defra-agent-protocol/schemas/services/tool_service_health_state.graphql.
+    // The upsert filter must match on both so two agents that register the
+    // same service_id don't overwrite each other's row.
+    //
+    // Predictable cost: one upsert per service per health-check cycle.
+    // Default `cycle_interval` = 30s + handful of services = far under 1 write/s.
+    let mutation = format!(
+        r#"mutation {{
+            upsert_ToolServiceHealthState(
+                filter: {{ _and: [
+                    {{ service_id: {{ _eq: "{service_id}" }} }},
+                    {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ] }},
+                add: {{
+                    service_id: "{service_id}",
+                    agent_did: "{agent_did}",
+                    endpoint: "{endpoint}",
+                    status: "{status}",
+                    failure_count: {failure_count},
+                    k_max: {k_max},
+                    backoff_until: {backoff_until_fragment},
+                    last_probe_at: "{last_probe_at}",
+                    last_seen: "{last_seen}",
+                    last_error_class: {last_error_class},
+                    last_error_message: {last_error_message},
+                    updated_at: "{updated_at}"
+                }},
+                update: {{
+                    endpoint: "{endpoint}",
+                    status: "{status}",
+                    failure_count: {failure_count},
+                    k_max: {k_max},
+                    backoff_until: {backoff_until_fragment},
+                    last_probe_at: "{last_probe_at}",
+                    last_seen: "{last_seen}",
+                    last_error_class: {last_error_class},
+                    last_error_message: {last_error_message},
+                    updated_at: "{updated_at}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        failure_count = entry.failure_count,
+        k_max = entry.k_max,
+    );
+
+    let resp = persistence.node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "upsert_ToolServiceHealthState failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
+async fn delete_persisted_health_state(
+    persistence: &HealthPersistenceContext<'_>,
+    service_id: &str,
+) {
+    let escaped_service = escape_graphql_string(service_id);
+    let escaped_agent = escape_graphql_string(persistence.agent_did);
+    let mutation = format!(
+        r#"mutation {{
+            delete_ToolServiceHealthState(
+                filter: {{ _and: [
+                    {{ service_id: {{ _eq: "{escaped_service}" }} }},
+                    {{ agent_did: {{ _eq: "{escaped_agent}" }} }}
+                ] }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = persistence.node.execute(&mutation).await;
+    if resp.has_errors() {
+        tracing::warn!(
+            service_id = %service_id,
+            errors = ?resp.errors,
+            "failed to delete stale ToolServiceHealthState row",
+        );
+    }
+}
+
+/// Source-of-truth read of every persisted `ToolServiceHealthState`
+/// service_id scoped to the writing agent — used by the cycle's stale-row
+/// reconciliation so restart-after-shutdown and one-off delete failures
+/// converge to the registry's current state.
+async fn load_persisted_service_ids(
+    persistence: &HealthPersistenceContext<'_>,
+) -> Result<HashSet<String>> {
+    let agent_did = escape_graphql_string(persistence.agent_did);
+    let query = format!(
+        r#"{{
+            ToolServiceHealthState(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+            ) {{
+                service_id
+            }}
+        }}"#
+    );
+    let resp = persistence.node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "load_persisted_service_ids failed: {:?}",
+            resp.errors
+        );
+    }
+    let raw = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceHealthState"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(raw
+        .into_iter()
+        .filter_map(|value| {
+            value
+                .get("service_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .collect())
 }
 
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
@@ -795,6 +1142,7 @@ mod tests {
                 "local-host",
                 None,
                 &options,
+                None,
             )
             .await
             .unwrap();
@@ -823,6 +1171,7 @@ mod tests {
             "local-host",
             None,
             &options,
+            None,
         )
         .await
         .unwrap();
@@ -841,6 +1190,7 @@ mod tests {
             "local-host",
             None,
             &options,
+            None,
         )
         .await
         .unwrap();
@@ -862,6 +1212,7 @@ mod tests {
             "local-host",
             None,
             &options,
+            None,
         )
         .await
         .unwrap();
@@ -907,6 +1258,7 @@ mod tests {
             "local-host",
             None,
             &HealthCheckerOptions::default(),
+            None,
         )
         .await
         .unwrap();

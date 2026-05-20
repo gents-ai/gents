@@ -77,8 +77,8 @@ pub use document_config::{
     ToolSelectionDocument,
 };
 pub use health_checker::{
-    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthStatus,
-    McpHealthCheckService, ServiceHealth, ServiceHealthMap,
+    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
+    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
 };
 pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{
@@ -106,7 +106,7 @@ pub use schema::{
     AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
     AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
     INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA,
-    TOOL_SELECTION_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
+    TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
 pub use session::{fork, ForkError, ForkOutcome, ForkParams};

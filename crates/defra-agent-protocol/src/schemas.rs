@@ -53,6 +53,9 @@ pub const INFERENCE_PROFILE: &str = include_str!("../schemas/inference/inference
 pub const TOOL_SERVICE_REGISTRY_NAME: &str = "ToolServiceRegistry";
 pub const TOOL_SERVICE_REGISTRY: &str =
     include_str!("../schemas/services/tool_service_registry.graphql");
+pub const TOOL_SERVICE_HEALTH_STATE_NAME: &str = "ToolServiceHealthState";
+pub const TOOL_SERVICE_HEALTH_STATE: &str =
+    include_str!("../schemas/services/tool_service_health_state.graphql");
 
 /// Schemas that must be registered before the runtime can start reconciling.
 /// Mirrors the legacy `defra_agent::schema::RUNTIME_ALL`.
@@ -80,6 +83,7 @@ pub const ALL: &[&str] = &[
     SCHEDULE,
     EVENT_TRIGGER,
     TOOL_SERVICE_REGISTRY,
+    TOOL_SERVICE_HEALTH_STATE,
     PEER_PAIRING_DESIRED,
 ];
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
@@ -101,6 +105,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
     TOOL_SERVICE_REGISTRY_NAME,
+    TOOL_SERVICE_HEALTH_STATE_NAME,
     PEER_PAIRING_DESIRED_NAME,
 ];
 
@@ -129,7 +134,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            19,
+            20,
             "ALL should enumerate every non-runtime schema"
         );
     }

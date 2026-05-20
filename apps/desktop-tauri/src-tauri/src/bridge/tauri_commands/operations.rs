@@ -1,8 +1,7 @@
-//! Tauri command stubs for operator-surfaces panels. Each command returns
-//! an `Err` describing the panel issue that will replace it; returning an
-//! error rather than `unimplemented!()` keeps the desktop backend from
-//! panicking if these are accidentally invoked before the real bodies
-//! land. Panel PRs replace the body with the real implementation.
+//! Tauri commands for operator-surfaces panels. Stubs return an `Err`
+//! describing the panel issue that will replace them; real implementations
+//! land via their own panel PRs. The MCP-health commands (panel #278) are
+//! live.
 
 use std::time::Duration;
 
@@ -12,11 +11,13 @@ use defra_agent::graphql::escape_graphql_string;
 use reqwest::Url;
 use tauri::State;
 
+use super::super::commands::{load_mcp_services_with_health, probe_mcp_service};
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, InferenceCallSummaryView, InterruptRequestResult,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
+    InferenceCallSummaryView, InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult,
     SubagentTreeView,
 };
 
@@ -335,4 +336,36 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
         prompt_tokens: row.get("prompt_tokens").and_then(|v| v.as_i64()),
         completion_tokens: row.get("completion_tokens").and_then(|v| v.as_i64()),
     }
+}
+
+/// Panel #278: returns the persisted `ToolServiceHealthState` rows the
+/// agent writes every health-check cycle. The desktop renders these into
+/// the MCP health status panel — see `apps/desktop-tauri/src/components/mcpHealth/`.
+#[tauri::command]
+pub(crate) async fn desktop_list_mcp_services_with_health(
+    state: State<'_, DesktopAppState>,
+) -> Result<Vec<MCPServiceHealthView>, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+    load_mcp_services_with_health(core.as_ref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Panel #278: kicks off a one-shot probe of a single registered MCP
+/// service and returns the resulting `ProbeResult`. K-state is not
+/// updated by this call — the running agent's health checker remains the
+/// authority for `failure_count` / `backoff_until` / persisted state.
+#[tauri::command]
+pub(crate) async fn desktop_probe_mcp_service(
+    state: State<'_, DesktopAppState>,
+    request: DesktopProbeMcpServiceRequest,
+) -> Result<McpServiceProbeResult, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+    probe_mcp_service(core.as_ref(), &request.service_id)
+        .await
+        .map_err(|error| error.to_string())
 }

@@ -233,3 +233,46 @@ pub(crate) struct InferenceCallSummaryView {
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
 }
+
+/// One row in the MCP health status panel (panel-278).
+///
+/// Mirrors the persisted `ToolServiceHealthState` collection — the agent's
+/// `health_checker` upserts these every cycle (default 30 s) so the
+/// desktop sees the K-model state evolve over time without needing an
+/// in-process agent runtime.
+///
+/// `status` is the internal `HealthStateInternal` projection
+/// (`healthy` / `stale` / `evicted` / `reconnecting`) so the operator UI
+/// can distinguish back-off from in-flight retry; the public three-state
+/// `HealthStatus` collapses `evicted` and `reconnecting` to `unreachable`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MCPServiceHealthView {
+    pub service_id: String,
+    pub agent_did: Option<String>,
+    pub endpoint: Option<String>,
+    pub status: Option<String>,
+    pub failure_count: Option<i64>,
+    pub k_max: Option<i64>,
+    pub backoff_until: Option<String>,
+    pub last_probe_at: Option<String>,
+    pub last_seen: Option<String>,
+    pub last_error_class: Option<String>,
+    pub last_error_message: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// Result envelope for `desktop_probe_mcp_service`. The probe runs a
+/// one-shot `run_health_check_cycle` against the named service against
+/// a fresh `McpPool` (mirrors `defra-agent mcp probe`) — `failure_count`
+/// always reports `0` here because the cycle starts from an initial
+/// `ServiceModel`. For accumulated K-state, the panel reads the persisted
+/// `ToolServiceHealthState` row via `desktop_list_mcp_services_with_health`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpServiceProbeResult {
+    pub service_id: String,
+    pub status: String,
+    pub latency_ms: u64,
+    pub last_error: Option<String>,
+}
