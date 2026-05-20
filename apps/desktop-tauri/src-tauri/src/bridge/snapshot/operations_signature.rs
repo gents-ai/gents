@@ -84,6 +84,11 @@ pub(crate) struct LivenessSignatureRequest {
 pub(crate) struct LivenessSignatureToolCall {
     pub tool_call_id: String,
     pub lifecycle_state: Option<String>,
+    /// Included even though the design spec's listed field set (line 775)
+    /// omits it: stuck-tool diagnostics depend on this transition, so a
+    /// running tool crossing its deadline must invalidate the signature or
+    /// the rail/banner would stay stale until some other change.
+    pub deadline_expired: bool,
 }
 
 pub(crate) fn compute_liveness_signature(input: &LivenessSignatureInput) -> String {
@@ -119,6 +124,8 @@ pub(crate) fn compute_liveness_signature(input: &LivenessSignatureInput) -> Stri
         hasher.update(row.tool_call_id.as_bytes());
         hasher.update(&[0x1D]);
         hasher.update(row.lifecycle_state.as_deref().unwrap_or("").as_bytes());
+        hasher.update(&[0x1D]);
+        hasher.update(&[row.deadline_expired as u8]);
     }
 
     hasher.finalize().to_hex().to_string()
@@ -300,11 +307,38 @@ mod tests {
             tool_calls: vec![LivenessSignatureToolCall {
                 tool_call_id: "tc-1".into(),
                 lifecycle_state: Some("running".into()),
+                deadline_expired: false,
             }],
         };
         assert_eq!(
             compute_liveness_signature(&base),
             compute_liveness_signature(&base.clone())
+        );
+    }
+
+    #[test]
+    fn liveness_signature_changes_when_tool_call_deadline_expires() {
+        // Crossing a tool's deadline must change the signature even when
+        // nothing else moves — stuck-tool diagnostics depend on this.
+        let base = LivenessSignatureInput {
+            expired_processing_count: 0,
+            active_native_executors_available: true,
+            requests: vec![LivenessSignatureRequest {
+                request_id: "req-1".into(),
+                lifecycle_state: Some("processing".into()),
+                deadline_expired: false,
+            }],
+            tool_calls: vec![LivenessSignatureToolCall {
+                tool_call_id: "tc-1".into(),
+                lifecycle_state: Some("running".into()),
+                deadline_expired: false,
+            }],
+        };
+        let mut expired = base.clone();
+        expired.tool_calls[0].deadline_expired = true;
+        assert_ne!(
+            compute_liveness_signature(&base),
+            compute_liveness_signature(&expired)
         );
     }
 
