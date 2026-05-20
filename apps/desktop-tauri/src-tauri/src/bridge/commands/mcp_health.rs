@@ -12,37 +12,49 @@ use defra_agent_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRo
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
-/// Read every persisted `ToolServiceHealthState` row from the local
-/// DefraDB node. Bridges directly to the GraphQL store rather than the
-/// in-memory `ServiceHealthMap` because the agent runtime (and therefore
-/// the in-memory state) lives in a separate process — the persisted
-/// collection is the only path the desktop has to the K-model state.
+/// Read every persisted `ToolServiceHealthState` row scoped to the
+/// desktop's currently selected agent. Bridges directly to the GraphQL
+/// store rather than the in-memory `ServiceHealthMap` because the agent
+/// runtime (and therefore the in-memory state) lives in a separate
+/// process — the persisted collection is the only path the desktop has
+/// to the K-model state.
 ///
-/// Each returned `MCPServiceHealthView` represents a single MCP service's
-/// most recent probe result; the agent's health checker rewrites the row
-/// every `cycle_interval` (30 s by default) per the design in
-/// `Proofs/MCPHealth/{State,Transition}.lean`.
+/// Rows are written by an `agent_did`; on a multi-agent node the local
+/// DefraDB sees rows from every replicated agent. The selected-agent
+/// filter keeps the rail's view consistent with the rest of the desktop
+/// (the same `selected_agent_did` scopes config, transcripts, and
+/// triggers). Returns an empty Vec when no agent is selected — the rail
+/// renders the existing empty state.
 pub(crate) async fn load_mcp_services_with_health(
     core: &ClientCore,
 ) -> Result<Vec<MCPServiceHealthView>> {
-    let query = r#"{
-        ToolServiceHealthState(order: { service_id: ASC }) {
-            service_id
-            agent_did
-            endpoint
-            status
-            failure_count
-            k_max
-            backoff_until
-            last_probe_at
-            last_seen
-            last_error_class
-            last_error_message
-            updated_at
-        }
-    }"#;
+    let Some(agent_did) = core.selected_agent_did() else {
+        return Ok(Vec::new());
+    };
+    let escaped_agent = escape_graphql_string(&agent_did);
+    let query = format!(
+        r#"{{
+            ToolServiceHealthState(
+                filter: {{ agent_did: {{ _eq: "{escaped_agent}" }} }},
+                order: {{ service_id: ASC }}
+            ) {{
+                service_id
+                agent_did
+                endpoint
+                status
+                failure_count
+                k_max
+                backoff_until
+                last_probe_at
+                last_seen
+                last_error_class
+                last_error_message
+                updated_at
+            }}
+        }}"#
+    );
 
-    let response = core.node().execute(query).await;
+    let response = core.node().execute(&query).await;
     if response.has_errors() {
         bail!(
             "list_mcp_services_with_health query failed: {:?}",
@@ -119,12 +131,18 @@ pub(crate) async fn probe_mcp_service(
     let started = std::time::Instant::now();
     let options = HealthCheckerOptions::default();
     let timeout = options.probe_timeout * 2;
+    // Resolve the local hostname so `resolve_mcp_url` substitutes 127.0.0.1
+    // for services advertised on this host. Mirrors the CLI's
+    // `defra-agent mcp probe` (crates/defra-agent-cli/src/commands/mcp.rs).
+    let local_hostname = hostname::get()
+        .map(|host| host.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
     let cycle = run_health_check_cycle(
         vec![service],
         Utc::now(),
         &pool,
         &health_map,
-        "",
+        &local_hostname,
         None,
         &options,
         None,
@@ -167,10 +185,17 @@ pub(crate) async fn probe_mcp_service(
 
 async fn load_registry_entry(core: &ClientCore, service_id: &str) -> Result<ToolServiceRegistryRow> {
     let escaped = escape_graphql_string(service_id);
+    // Match `defra-agent mcp probe`'s scoping: only online registry rows are
+    // probe targets; an offline/dropped row should fail loudly with "no
+    // online MCP service matched ..." rather than be probed and reported as
+    // unreachable.
     let query = format!(
         r#"{{
             ToolServiceRegistry(
-                filter: {{ service_id: {{ _eq: "{escaped}" }} }},
+                filter: {{ _and: [
+                    {{ status: {{ _eq: "online" }} }},
+                    {{ service_id: {{ _eq: "{escaped}" }} }}
+                ] }},
                 limit: 1
             ) {{
                 service_id
@@ -198,6 +223,6 @@ async fn load_registry_entry(core: &ClientCore, service_id: &str) -> Result<Tool
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| anyhow!("no ToolServiceRegistry row for service_id={service_id}"))?;
+        .ok_or_else(|| anyhow!("no online ToolServiceRegistry row for service_id={service_id}"))?;
     serde_json::from_value(row).map_err(Into::into)
 }
