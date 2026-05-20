@@ -294,6 +294,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_r6_backgrounding_cases_pin_tool_backgrounding_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_r5_cross_deployment_cases_drive_production_dispatch",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_r5_cross_deployment_cases_drive_production_dispatch",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
