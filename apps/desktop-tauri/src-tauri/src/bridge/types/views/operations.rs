@@ -194,3 +194,42 @@ pub(crate) struct InterruptRequestResult {
     pub stale_preview: bool,
     pub preview: Option<CascadeCancelPreview>,
 }
+
+/// One backend's persisted health + recent admission outcomes. Read-only
+/// projection of `InferenceBackend` joined with the last N `InferenceCall`
+/// rows for that backend. `display_state` is derived from
+/// `(enabled, probe_status)` per the prototype's mapping (matches
+/// `InferenceBackend::is_available` and the Lean `backendAvailable`
+/// witness in `BoundaryRuntime.lean`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackendHealthView {
+    pub backend_id: String,
+    pub name: String,
+    pub provider_kind: String,
+    pub endpoint: String,
+    pub enabled: bool,
+    pub probe_status: String,
+    pub display_state: String,
+    pub last_probe: Option<String>,
+    pub max_concurrent: i64,
+    pub max_queue_depth: i64,
+    pub models: Vec<String>,
+    pub recent_calls: Vec<InferenceCallSummaryView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InferenceCallSummaryView {
+    pub call_id: String,
+    pub call_seq: i64,
+    pub call_kind: String,
+    pub call_state: String,
+    pub failure_reason: Option<String>,
+    pub queued_at: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub queue_depth_at_enqueue: Option<i64>,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+}

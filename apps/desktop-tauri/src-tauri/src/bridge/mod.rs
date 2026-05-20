@@ -60,7 +60,8 @@ pub fn run() {
             tauri_commands::operations::desktop_operations_snapshot,
             tauri_commands::operations::desktop_list_subagent_tree,
             tauri_commands::operations::desktop_preview_interrupt_cascade,
-            tauri_commands::operations::desktop_interrupt_request
+            tauri_commands::operations::desktop_interrupt_request,
+            tauri_commands::operations::desktop_list_backends_with_health
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

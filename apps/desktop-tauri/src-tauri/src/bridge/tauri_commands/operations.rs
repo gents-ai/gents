@@ -6,17 +6,27 @@
 
 use std::time::Duration;
 
+use defra_agent::backend_registry::{derive_display_state, list_all_backends};
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
 use reqwest::Url;
 use tauri::State;
 
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
-    CascadeCancelPreview, DesktopInterruptRequest, DesktopListSubagentTreeRequest,
-    DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, InterruptRequestResult, SubagentTreeView,
+    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
+    DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    DesktopPreviewInterruptCascadeRequest, InferenceCallSummaryView, InterruptRequestResult,
+    SubagentTreeView,
 };
 
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Number of most-recent `InferenceCall` rows surfaced per backend in the
+/// health panel. Picked to give the operator enough history to see a
+/// pattern (e.g. consecutive `QueueFull` rejections) without overwhelming
+/// the row's expanded detail.
+const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 #[tauri::command]
 pub(crate) async fn desktop_operations_snapshot(
@@ -201,4 +211,128 @@ pub(crate) async fn desktop_interrupt_request(
          (interrupt button)"
             .to_string(),
     )
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_list_backends_with_health(
+    state: State<'_, DesktopAppState>,
+) -> Result<Vec<BackendHealthView>, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    let node = core.node();
+    let backends = list_all_backends(node).await.map_err(|err| err.to_string())?;
+
+    let mut views = Vec::with_capacity(backends.len());
+    for backend in backends {
+        let recent_calls = fetch_recent_calls(node, &backend.backend_id)
+            .await
+            .map_err(|err| err.to_string())?;
+        let display_state = derive_display_state(backend.enabled, &backend.probe_status).to_string();
+        views.push(BackendHealthView {
+            backend_id: backend.backend_id,
+            name: backend.name,
+            provider_kind: backend.provider_kind.as_str().to_string(),
+            endpoint: backend.endpoint,
+            enabled: backend.enabled,
+            probe_status: backend.probe_status,
+            display_state,
+            // `last_probe` is a DateTime on the schema but not currently
+            // surfaced via `InferenceBackend::from_value`. Returning None
+            // keeps the wire shape stable for a follow-up that exposes
+            // probe metadata; the panel renders "never" when absent.
+            last_probe: None,
+            max_concurrent: backend.max_concurrent,
+            max_queue_depth: backend.max_queue_depth,
+            models: backend.models,
+            recent_calls,
+        });
+    }
+    Ok(views)
+}
+
+async fn fetch_recent_calls(
+    node: &EmbeddedNode,
+    backend_id: &str,
+) -> Result<Vec<InferenceCallSummaryView>, anyhow::Error> {
+    let escaped_id = escape_graphql_string(backend_id);
+    let query = format!(
+        r#"query {{
+            InferenceCall(
+                filter: {{ backend_id: {{ _eq: "{escaped_id}" }} }},
+                order: {{ queued_at: DESC }},
+                limit: {limit}
+            ) {{
+                call_id
+                call_seq
+                call_kind
+                call_state
+                failure_reason
+                queued_at
+                started_at
+                ended_at
+                queue_depth_at_enqueue
+                prompt_tokens
+                completion_tokens
+            }}
+        }}"#,
+        limit = RECENT_CALLS_PER_BACKEND,
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "list InferenceCall for backend {backend_id} failed: {:?}",
+            resp.errors
+        );
+    }
+
+    Ok(resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+        .and_then(|value| value.as_array())
+        .map(|rows| rows.iter().map(parse_call_row).collect::<Vec<_>>())
+        .unwrap_or_default())
+}
+
+fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
+    InferenceCallSummaryView {
+        call_id: row
+            .get("call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        call_seq: row.get("call_seq").and_then(|v| v.as_i64()).unwrap_or(0),
+        call_kind: row
+            .get("call_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        call_state: row
+            .get("call_state")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        failure_reason: row
+            .get("failure_reason")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        queued_at: row
+            .get("queued_at")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        started_at: row
+            .get("started_at")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        ended_at: row
+            .get("ended_at")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        queue_depth_at_enqueue: row.get("queue_depth_at_enqueue").and_then(|v| v.as_i64()),
+        prompt_tokens: row.get("prompt_tokens").and_then(|v| v.as_i64()),
+        completion_tokens: row.get("completion_tokens").and_then(|v| v.as_i64()),
+    }
 }

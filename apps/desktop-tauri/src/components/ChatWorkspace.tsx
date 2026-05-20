@@ -6,6 +6,7 @@ import type {
   P2PHealth,
 } from "../lib/types";
 import { displayBehaviorLabel } from "../lib/types";
+import { BackendHealthPanel } from "./backendHealth";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
@@ -96,11 +97,17 @@ export function ActiveChatWorkspace({
           />
         ),
       },
+      {
+        id: "backend-health",
+        label: "Backends",
+        render: () => <BackendHealthPanel />,
+      },
     ];
   }, [session?.latestRequestId, selectedDeployment.agentDid]);
 
   return (
     <OperationsRailProvider tabs={operationsRailTabs}>
+
       <ChatHeader
         behaviorLabel={behaviorLabel}
         runtimeHealth={runtimeHealth}
