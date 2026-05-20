@@ -18,9 +18,11 @@ pub(crate) async fn desktop_operations_snapshot(
     _state: State<'_, DesktopAppState>,
     _request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot, String> {
-    Err("desktop_operations_snapshot not implemented yet; landing via panel #277 \
+    Err(
+        "desktop_operations_snapshot not implemented yet; landing via panel #277 \
          (backgrounded tools / operations projection)"
-        .to_string())
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -28,9 +30,11 @@ pub(crate) async fn desktop_list_subagent_tree(
     _state: State<'_, DesktopAppState>,
     _request: DesktopListSubagentTreeRequest,
 ) -> Result<SubagentTreeView, String> {
-    Err("desktop_list_subagent_tree not implemented yet; landing via panel #285 \
+    Err(
+        "desktop_list_subagent_tree not implemented yet; landing via panel #285 \
          (subagent lineage view)"
-        .to_string())
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -38,9 +42,11 @@ pub(crate) async fn desktop_preview_interrupt_cascade(
     _state: State<'_, DesktopAppState>,
     _request: DesktopPreviewInterruptCascadeRequest,
 ) -> Result<CascadeCancelPreview, String> {
-    Err("desktop_preview_interrupt_cascade not implemented yet; landing via panel #286 \
+    Err(
+        "desktop_preview_interrupt_cascade not implemented yet; landing via panel #286 \
          (cascade cancel UX)"
-        .to_string())
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -48,7 +54,9 @@ pub(crate) async fn desktop_interrupt_request(
     _state: State<'_, DesktopAppState>,
     _request: DesktopInterruptRequest,
 ) -> Result<InterruptRequestResult, String> {
-    Err("desktop_interrupt_request not implemented yet; landing via panel #283 \
+    Err(
+        "desktop_interrupt_request not implemented yet; landing via panel #283 \
          (interrupt button)"
-        .to_string())
+            .to_string(),
+    )
 }
