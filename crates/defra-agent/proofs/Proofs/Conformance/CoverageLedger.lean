@@ -194,8 +194,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := [(Surface.operatorUi, "#284")]
     }
   , { feature := "streaming-response"
-    , required := [Surface.agentFacing]
-    , deferred := [(Surface.operatorUi, "#285")]
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "client-shell"
     , required := [Surface.operatorUi]
@@ -597,6 +597,11 @@ def caseCoverage : List CoverageEntry :=
       "ResponseTransitionCases"
       "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract")
       "streaming-response" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "streaming_response_cases"
+      "ResponseTransitionCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases")
+      "streaming-response" [Surface.operatorUi]
   , tagged (consumerCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
