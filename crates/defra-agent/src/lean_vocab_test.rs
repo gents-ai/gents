@@ -1,11 +1,13 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
+
+pub(crate) type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LeanVocabulary<'a> {
@@ -66,6 +68,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
+    pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
+    pub(crate) feature_matrix: LeanFeatureMatrix,
     pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
     pub(crate) identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub(crate) identity_contracts: Vec<LeanIdentityContract>,
@@ -120,6 +124,53 @@ pub(crate) struct LeanCoverageEntry {
     pub(crate) consumer: String,
     pub(crate) accepted_boundary: String,
     pub(crate) accepted_follow_up: String,
+    #[serde(default)]
+    pub(crate) feature: String,
+    #[serde(default)]
+    pub(crate) surfaces: Vec<LeanSurface>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanSurface {
+    AgentFacing,
+    OperatorCli,
+    OperatorUi,
+    Api,
+    RuntimeInternal,
+}
+
+impl LeanSurface {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentFacing => "agentFacing",
+            Self::OperatorCli => "operatorCli",
+            Self::OperatorUi => "operatorUi",
+            Self::Api => "api",
+            Self::RuntimeInternal => "runtimeInternal",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanFeatureSurfaceRequirement {
+    pub(crate) feature: String,
+    pub(crate) required: Vec<LeanSurface>,
+    pub(crate) deferred: Vec<LeanFeatureSurfaceDeferral>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanFeatureSurfaceDeferral {
+    pub(crate) surface: LeanSurface,
+    pub(crate) note: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanFeatureMatrixCell {
+    pub(crate) coverage_strength: String,
+    pub(crate) row_count: usize,
+    pub(crate) pending_follow_ups: usize,
+    pub(crate) deferred_note: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,6 +264,14 @@ pub(crate) fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMac
         .iter()
         .find(|contract| contract.domain == domain)
         .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
+}
+
+pub(crate) fn lean_feature_surface_requirements() -> &'static [LeanFeatureSurfaceRequirement] {
+    &lean_contract_snapshot().feature_surface_requirements
+}
+
+pub(crate) fn lean_feature_matrix() -> &'static LeanFeatureMatrix {
+    &lean_contract_snapshot().feature_matrix
 }
 
 pub(crate) fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {

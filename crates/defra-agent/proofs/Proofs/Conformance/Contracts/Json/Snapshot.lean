@@ -125,6 +125,10 @@ def snapshotJson : String :=
       ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
+    ++ ",\"feature_surface_requirements\":"
+      ++ featureSurfaceRequirementsJson
+    ++ ",\"feature_matrix\":"
+      ++ featureMatrixJson
     ++ ",\"identity_structural_cases\":"
       ++ Identity.Conformance.structuralCasesJson
     ++ ",\"identity_permission_cases\":"
