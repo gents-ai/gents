@@ -95,6 +95,33 @@ impl InferenceBackend {
     pub fn is_available(&self) -> bool {
         self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
     }
+
+    /// Operator-UI rollup of `(enabled, probe_status)` into a single label.
+    /// `available` is the only state in which `is_available()` is true; the
+    /// other states split the unavailable cases for operator visibility.
+    /// Mirrors the panel-288 prototype's JS mapping.
+    pub fn display_state(&self) -> &'static str {
+        derive_display_state(self.enabled, &self.probe_status)
+    }
+}
+
+/// Pure function backing [`InferenceBackend::display_state`]. Lives outside
+/// the impl so the Tauri bridge can call it on raw `(enabled, probe_status)`
+/// pairs from the Lean witness fixtures without constructing a full
+/// `InferenceBackend`.
+pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
+    if !enabled {
+        return "disabled";
+    }
+    match probe_status {
+        "healthy" => "available",
+        "unhealthy" => "unhealthy",
+        "stale" => "stale",
+        "rate_limited" => "rate-limited",
+        "circuit_open" => "circuit-open",
+        "unknown" => "unknown",
+        _ => "unknown",
+    }
 }
 
 pub async fn lookup_backend(
@@ -225,6 +252,17 @@ pub(crate) async fn list_backend_records(
         .unwrap_or_default();
 
     Ok(backends)
+}
+
+/// Lists every registered backend, including disabled ones — the operator
+/// UI needs to surface disabled rows so the operator can see why a backend
+/// isn't accepting work.
+pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
+    Ok(list_backend_records(node)
+        .await?
+        .into_iter()
+        .map(|(_, backend)| backend)
+        .collect())
 }
 
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {

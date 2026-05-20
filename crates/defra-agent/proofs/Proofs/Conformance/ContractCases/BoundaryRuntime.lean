@@ -31,6 +31,8 @@ inductive BackendProbeStatus where
   | unhealthy
   | unknown
   | stale
+  | rateLimited
+  | circuitOpen
   deriving DecidableEq, Repr
 
 namespace BackendProbeStatus
@@ -40,6 +42,8 @@ def toDefraDB : BackendProbeStatus -> String
   | .unhealthy => "unhealthy"
   | .unknown => "unknown"
   | .stale => "stale"
+  | .rateLimited => "rate_limited"
+  | .circuitOpen => "circuit_open"
 
 end BackendProbeStatus
 
@@ -232,6 +236,14 @@ def backendHealthAdmissionCases : List BackendHealthAdmissionCase :=
       "enabled_stale_backend_is_unavailable_from_observed_document"
       true
       .stale
+  , backendHealthAdmissionCase
+      "enabled_rate_limited_backend_is_unavailable_from_observed_document"
+      true
+      .rateLimited
+  , backendHealthAdmissionCase
+      "enabled_circuit_open_backend_is_unavailable_from_observed_document"
+      true
+      .circuitOpen
   ]
 
 def nativeFilesystemBoundaryCase (toolName : String) : NativeFilesystemBoundaryCase :=

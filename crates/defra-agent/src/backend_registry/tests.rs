@@ -90,7 +90,7 @@ fn is_available_requires_enabled_and_healthy() {
 #[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     let cases = lean_backend_health_admission_cases();
-    assert_eq!(cases.len(), 5);
+    assert_eq!(cases.len(), 7);
 
     for case in cases {
         let backend = InferenceBackend {
@@ -141,5 +141,56 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             "{} must not claim endpoint/provider freshness",
             case.name
         );
+    }
+}
+
+/// Operator-UI projection of `(enabled, probe_status)`. Drives every Lean
+/// witness through `derive_display_state` and asserts:
+///   * the derivation is total (every witness maps to a known bucket);
+///   * the `available` bucket coincides exactly with the Lean
+///     `expected_available` verdict.
+///
+/// This is the bridge-snapshot consumer test for the
+/// `backend-health.operatorUi` row of the feature matrix — registered in
+/// `CoverageLedger.lean` and `conformance_consumers.rs`.
+#[test]
+fn display_state_matches_every_lean_backend_health_admission_case() {
+    let cases = lean_backend_health_admission_cases();
+    assert_eq!(
+        cases.len(),
+        7,
+        "Lean witness count drifted from operator UI expectations"
+    );
+
+    for case in cases {
+        let actual = derive_display_state(case.enabled, &case.probe_status);
+        let expected = expected_display_state(case.enabled, &case.probe_status);
+        assert_eq!(
+            actual, expected,
+            "case {} mapped probe_status {} to {} but expected {}",
+            case.name, case.probe_status, actual, expected
+        );
+
+        let panel_says_available = actual == "available";
+        assert_eq!(
+            panel_says_available, case.expected_available,
+            "case {} drifted from Lean availability witness",
+            case.name
+        );
+    }
+
+    fn expected_display_state(enabled: bool, probe_status: &str) -> &'static str {
+        if !enabled {
+            return "disabled";
+        }
+        match probe_status {
+            "healthy" => "available",
+            "unhealthy" => "unhealthy",
+            "stale" => "stale",
+            "rate_limited" => "rate-limited",
+            "circuit_open" => "circuit-open",
+            "unknown" => "unknown",
+            _ => "unknown",
+        }
     }
 }
