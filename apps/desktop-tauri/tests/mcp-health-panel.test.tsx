@@ -28,12 +28,12 @@ function svc(overrides: Partial<MCPServiceHealthView> & { serviceId: string }): 
 }
 
 describe("McpHealthPanelView", () => {
-  it("renders distinct labels for healthy / stale / evicted / reconnecting / stuck / unknown", () => {
+  it("renders distinct labels for healthy / degraded / evicted / reconnecting / stuck / unknown", () => {
     const services: MCPServiceHealthView[] = [
       svc({ serviceId: "ok-svc", status: "healthy", failureCount: 0 }),
       svc({
-        serviceId: "stale-svc",
-        status: "stale",
+        serviceId: "degraded-svc",
+        status: "degraded",
         failureCount: 1,
         lastErrorClass: "stream_closed",
         lastErrorMessage: "list_tools: stream closed by peer",
@@ -81,17 +81,35 @@ describe("McpHealthPanelView", () => {
       expect(cell).toHaveTextContent(label);
     };
     expect_status("ok-svc", "healthy");
-    expect_status("stale-svc", "degraded");
+    expect_status("degraded-svc", "degraded");
     expect_status("evicted-svc", "evicted (backoff)");
     expect_status("reconnecting-svc", "reconnecting");
     expect_status("stuck-svc", "stuck");
     expect_status("unknown-svc", "unknown");
   });
 
+  it("accepts the legacy 'stale' status string and renders it as degraded", () => {
+    // Back-compat with any rows persisted before the Lean-vocab alignment.
+    const services = [svc({ serviceId: "legacy-stale", status: "stale" })];
+    render(
+      <McpHealthPanelView
+        services={services}
+        loading={false}
+        error={null}
+        lastFetchedAt={null}
+        probingServiceId={null}
+        onProbe={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+    const cell = screen.getByTestId("mcp-health-status-legacy-stale");
+    expect(cell).toHaveTextContent("degraded");
+  });
+
   it("filter chip 'unhealthy' hides the healthy row but keeps degraded/evicted/reconnecting", () => {
     const services = [
       svc({ serviceId: "ok-svc", status: "healthy" }),
-      svc({ serviceId: "stale-svc", status: "stale", failureCount: 1 }),
+      svc({ serviceId: "degraded-svc", status: "degraded", failureCount: 1 }),
       svc({ serviceId: "evicted-svc", status: "evicted", failureCount: 3 }),
     ];
     render(
@@ -107,7 +125,7 @@ describe("McpHealthPanelView", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /Unhealthy/i }));
     expect(screen.queryByTestId("mcp-health-row-ok-svc")).toBeNull();
-    expect(screen.getByTestId("mcp-health-row-stale-svc")).toBeInTheDocument();
+    expect(screen.getByTestId("mcp-health-row-degraded-svc")).toBeInTheDocument();
     expect(screen.getByTestId("mcp-health-row-evicted-svc")).toBeInTheDocument();
   });
 

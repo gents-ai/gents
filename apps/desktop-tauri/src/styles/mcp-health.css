@@ -255,7 +255,7 @@
   }
 
   .mcp-health-status-healthy { color: var(--color-success); }
-  .mcp-health-status-stale { color: var(--color-warning); }
+  .mcp-health-status-degraded { color: var(--color-warning); }
   .mcp-health-status-evicted { color: var(--color-error); }
   .mcp-health-status-reconnecting { color: var(--color-info); }
   .mcp-health-status-stuck { color: var(--color-error-strong); }

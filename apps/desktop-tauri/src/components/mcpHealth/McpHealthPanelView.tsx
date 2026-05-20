@@ -16,14 +16,18 @@ export type McpHealthPanelViewProps = {
 
 type VisualState =
   | "healthy"
-  | "stale"
+  | "degraded"
   | "evicted"
   | "reconnecting"
   | "stuck"
   | "unknown";
 
 function visualState(service: MCPServiceHealthView): VisualState {
-  const status = (service.status ?? "").toLowerCase();
+  // Accept both the persisted vocabulary ("degraded") and the public
+  // HealthStatus name ("stale") so the panel keeps working if any older
+  // row was written before the schema/vocab alignment landed.
+  const raw = (service.status ?? "").toLowerCase();
+  const status = raw === "stale" ? "degraded" : raw;
   const failureCount = service.failureCount ?? 0;
   const kMax = service.kMax ?? 1;
   // Derived "stuck" badge — failure_count >= 2K or last_seen older than 5 min.
@@ -37,8 +41,8 @@ function visualState(service: MCPServiceHealthView): VisualState {
   switch (status) {
     case "healthy":
       return "healthy";
-    case "stale":
-      return "stale";
+    case "degraded":
+      return "degraded";
     case "evicted":
       return "evicted";
     case "reconnecting":
@@ -57,7 +61,7 @@ function isLastSeenOlderThan(service: MCPServiceHealthView, ms: number): boolean
 
 function projectStatus(visual: VisualState): "healthy" | "stale" | "unreachable" | "unknown" {
   if (visual === "healthy") return "healthy";
-  if (visual === "stale") return "stale";
+  if (visual === "degraded") return "stale";
   if (visual === "evicted" || visual === "reconnecting" || visual === "stuck") {
     return "unreachable";
   }
@@ -68,7 +72,7 @@ function statusLabel(visual: VisualState): string {
   switch (visual) {
     case "healthy":
       return "healthy";
-    case "stale":
+    case "degraded":
       return "degraded";
     case "evicted":
       return "evicted (backoff)";
@@ -144,7 +148,7 @@ export function McpHealthPanelView({
   const summary = useMemo(() => {
     const buckets = {
       healthy: 0,
-      stale: 0,
+      degraded: 0,
       reconnecting: 0,
       evicted: 0,
       stuck: 0,
@@ -217,7 +221,7 @@ export function McpHealthPanelView({
 
       <div className="mcp-health-summary" aria-label="Service health summary">
         <SummaryPill color="green" count={summary.healthy} label="healthy" />
-        <SummaryPill color="yellow" count={summary.stale} label="degraded" />
+        <SummaryPill color="yellow" count={summary.degraded} label="degraded" />
         <SummaryPill color="blue" count={summary.reconnecting} label="reconnecting" />
         <SummaryPill color="red" count={summary.evicted} label="evicted" />
         <SummaryPill color="red" count={summary.stuck} label="stuck" />
@@ -368,7 +372,7 @@ function ServiceRows({
   onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => void;
   onProbe: () => void;
 }) {
-  const dotClass = visual === "stale" ? "yellow"
+  const dotClass = visual === "degraded" ? "yellow"
     : visual === "healthy" ? "green"
     : visual === "reconnecting" ? "blue"
     : "red";

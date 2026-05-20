@@ -173,13 +173,15 @@ export type DesktopInterruptRequestRequest = {
 
 // MCP health panel (panel #278) — mirrors `MCPServiceHealthView` and
 // `McpServiceProbeResult` in bridge/types/views/operations.rs. `status`
-// carries the internal `HealthStateInternal` projection so the panel can
-// distinguish back-off (`evicted`) from in-flight retry (`reconnecting`).
+// is the precise `HealthState.toDefraDB` projection from
+// Proofs/MCPHealth/State.lean so the panel can distinguish back-off
+// (`evicted`) from in-flight retry (`reconnecting`) — the public
+// three-state `HealthStatus` collapses both to `unreachable`.
 export type MCPServiceHealthView = {
   serviceId: string;
   agentDid?: string | null;
   endpoint?: string | null;
-  status?: "healthy" | "stale" | "evicted" | "reconnecting" | string | null;
+  status?: "healthy" | "degraded" | "evicted" | "reconnecting" | string | null;
   failureCount?: number | null;
   kMax?: number | null;
   backoffUntil?: string | null;

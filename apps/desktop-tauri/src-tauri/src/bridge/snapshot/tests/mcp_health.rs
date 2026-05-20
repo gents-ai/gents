@@ -18,11 +18,15 @@ use crate::bridge::types::MCPServiceHealthView;
 
 /// Translate an internal Lean `HealthState` name to the DefraDB-persisted
 /// string vocabulary used by `health_checker::HealthStateInternal::to_defradb`.
-/// `degraded` collapses to `stale` to match the public projection naming.
+/// Identity for every internal state — the persisted vocabulary mirrors
+/// `Proofs/MCPHealth/State.lean :: HealthState.toDefraDB` exactly. The
+/// public `HealthStatus` collapse (degraded → stale, evicted+reconnecting
+/// → unreachable) is a separate projection applied in
+/// `lean_state_to_health_status_projection` below.
 fn lean_state_to_defradb_status(state: &str) -> &'static str {
     match state {
         "healthy" => "healthy",
-        "degraded" => "stale",
+        "degraded" => "degraded",
         "evicted" => "evicted",
         "reconnecting" => "reconnecting",
         other => panic!("Lean MCP health case produced unknown state {other:?}"),
@@ -132,7 +136,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
         if let Some(projection) = case.rust_projection.as_deref() {
             let view_projection = match view.status.as_deref().unwrap_or("") {
                 "healthy" => "healthy",
-                "stale" => "stale",
+                "degraded" => "stale",
                 "evicted" | "reconnecting" => "unreachable",
                 other => panic!("unexpected view status {other:?}"),
             };
