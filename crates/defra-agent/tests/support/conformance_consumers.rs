@@ -196,6 +196,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/operations_snapshot/tests.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::snapshot::operations_snapshot::tests",
+            function: "project_filters_to_background_await_mode_only",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/hook/tests.rs",
