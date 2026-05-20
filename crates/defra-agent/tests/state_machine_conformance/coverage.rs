@@ -747,6 +747,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
     let mut ledger_domains = BTreeSet::new();
+    let mut ledger_domain_surfaces = BTreeSet::new();
     let mut ledger_consumers = BTreeSet::new();
 
     for entry in &snapshot.coverage_ledger {
@@ -793,6 +794,19 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         }
 
         ledger_domains.insert((entry.category.clone(), entry.domain.clone()));
+        for surface in &entry.surfaces {
+            assert!(
+                ledger_domain_surfaces.insert((
+                    entry.category.clone(),
+                    entry.domain.clone(),
+                    *surface
+                )),
+                "duplicate coverage ledger entry for {:?} / {:?} / {:?}",
+                entry.category,
+                entry.domain,
+                surface
+            );
+        }
     }
 
     let missing = emitted

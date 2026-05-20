@@ -41,6 +41,9 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    // The CLI has no persisted local-subnet source today; this matches the
+    // server's default health-check runtime options unless a future subnet
+    // option is added there too.
     let snapshots = probe_services(services, timeout, &local_hostname, None).await;
     let report = McpProbeReport {
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -97,9 +100,38 @@ async fn probe_services(
     local_subnet: Option<&str>,
 ) -> Vec<McpProbeSnapshot> {
     let pool = McpPool::new();
-    let mut snapshots = Vec::with_capacity(services.len());
+    let mut handles = Vec::with_capacity(services.len());
     for service in services {
-        snapshots.push(probe_service(service, &pool, timeout, local_hostname, local_subnet).await);
+        let service_id = service.service_id.clone();
+        let pool = pool.clone();
+        let local_hostname = local_hostname.to_string();
+        let local_subnet = local_subnet.map(ToOwned::to_owned);
+        handles.push((
+            service_id,
+            tokio::spawn(async move {
+                probe_service(
+                    service,
+                    &pool,
+                    timeout,
+                    &local_hostname,
+                    local_subnet.as_deref(),
+                )
+                .await
+            }),
+        ));
+    }
+
+    let mut snapshots = Vec::with_capacity(handles.len());
+    for (service_id, handle) in handles {
+        match handle.await {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(error) => snapshots.push(McpProbeSnapshot {
+                service: service_id,
+                health_state: HealthStatus::Unreachable.to_string(),
+                latency_ms: 0,
+                last_error: Some(format!("probe task failed: {error}")),
+            }),
+        }
     }
     snapshots
 }
