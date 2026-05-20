@@ -1253,7 +1253,7 @@ pub(crate) struct SubagentCancelArgs {
     #[arg(
         long,
         default_value = "userCancelled",
-        help = "CancelCause vocabulary value echoed in output only until cause persistence lands (#249): interrupted, deadline, or userCancelled"
+        help = "CancelCause vocabulary value included in output and persisted for local bridge lifecycle cancellations: interrupted, deadline, or userCancelled"
     )]
     pub(crate) cause: String,
     #[arg(

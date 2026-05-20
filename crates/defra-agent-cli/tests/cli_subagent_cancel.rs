@@ -222,8 +222,20 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
 
     let cancel = run_cli_json(
         &home_dir,
-        &["subagent", "cancel", &child_request_id, "--output", "json"],
+        &[
+            "subagent",
+            "cancel",
+            &child_request_id,
+            "--cause",
+            "deadline",
+            "--output",
+            "json",
+        ],
     )?;
+    assert_eq!(
+        cancel.get("cause").and_then(Value::as_str),
+        Some("deadline")
+    );
     let interrupted_ids = cancel
         .get("interrupted_request_ids")
         .and_then(Value::as_array)
@@ -270,6 +282,14 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
     assert_eq!(
         local_tool_lifecycle_state(node.as_ref(), &child_session_id, &child_tool_call_id).await?,
         "cancelled"
+    );
+    assert_eq!(
+        local_tool_cancel_cause(node.as_ref(), &parent_session_id, &parent_tool_call_id).await?,
+        "deadline"
+    );
+    assert_eq!(
+        local_tool_cancel_cause(node.as_ref(), &child_session_id, &child_tool_call_id).await?,
+        "deadline"
     );
     Ok(())
 }
@@ -449,6 +469,37 @@ async fn local_tool_lifecycle_state(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("AgentToolCall {session_id}:{tool_call_id} missing state: {row}"))
+}
+
+async fn local_tool_cancel_cause(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Result<String> {
+    let response = local_query(
+        node,
+        &format!(
+            r#"{{
+                AgentToolCall(
+                    filter: {{
+                        session_id: {{ _eq: "{}" }},
+                        tool_call_id: {{ _eq: "{}" }}
+                    }},
+                    limit: 1
+                ) {{
+                    cancel_cause
+                }}
+            }}"#,
+            support::escape_graphql_string(session_id),
+            support::escape_graphql_string(tool_call_id),
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&response, "AgentToolCall")?;
+    row.get("cancel_cause")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("AgentToolCall {session_id}:{tool_call_id} missing cause: {row}"))
 }
 
 async fn local_query(node: &EmbeddedNode, query: &str) -> Result<Value> {

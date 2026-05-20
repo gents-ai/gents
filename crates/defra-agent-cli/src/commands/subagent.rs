@@ -57,7 +57,8 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
             let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
                 .context("resolving local agent_did for cascade ownership checks")?;
             let affected =
-                cancel_subagent_local(node.clone(), &agent_did, &request_id, args.cascade).await?;
+                cancel_subagent_local(node.clone(), &agent_did, &request_id, args.cascade, cause)
+                    .await?;
             if let Some(timeout) = wait_timeout {
                 wait_for_terminal_local(node.as_ref(), &affected, timeout).await?
             } else {
@@ -179,13 +180,14 @@ async fn cancel_subagent_local(
     agent_did: &str,
     request_id: &str,
     cascade: bool,
+    cause: CancelCause,
 ) -> Result<Vec<String>> {
     let target = fetch_request_row_local(node.as_ref(), request_id).await?;
     let mut affected = Vec::new();
     let mut seen_requests = BTreeSet::new();
 
     if cascade {
-        cancel_parent_bridge_local(node.clone(), agent_did, &target).await?;
+        cancel_parent_bridge_local(node.clone(), cause, agent_did, &target).await?;
     }
     interrupt_request_local(node.as_ref(), &mut affected, &mut seen_requests, request_id).await?;
 
@@ -193,6 +195,7 @@ async fn cancel_subagent_local(
         if let Some(session_id) = target.session_id.as_deref() {
             cancel_descendant_bridges_local(
                 node.clone(),
+                cause,
                 agent_did,
                 session_id,
                 &mut affected,
@@ -207,6 +210,7 @@ async fn cancel_subagent_local(
 
 async fn cancel_parent_bridge_local(
     node: Arc<EmbeddedNode>,
+    cause: CancelCause,
     agent_did: &str,
     target: &RequestRow,
 ) -> Result<()> {
@@ -222,6 +226,7 @@ async fn cancel_parent_bridge_local(
     };
     cancel_bridge_local(
         node,
+        cause,
         agent_did,
         parent_session_id,
         parent_tool_call_id,
@@ -233,6 +238,7 @@ async fn cancel_parent_bridge_local(
 
 async fn cancel_descendant_bridges_local(
     node: Arc<EmbeddedNode>,
+    cause: CancelCause,
     agent_did: &str,
     root_session_id: &str,
     affected: &mut Vec<String>,
@@ -247,6 +253,7 @@ async fn cancel_descendant_bridges_local(
         for bridge in running_subagent_bridges_local(node.as_ref(), &session_id).await? {
             let dispatch = cancel_bridge_local(
                 node.clone(),
+                cause,
                 agent_did,
                 &session_id,
                 &bridge.tool_call_id,
@@ -270,6 +277,7 @@ async fn cancel_descendant_bridges_local(
 
 async fn cancel_bridge_local(
     node: Arc<EmbeddedNode>,
+    cause: CancelCause,
     agent_did: &str,
     session_id: &str,
     tool_call_id: &str,
@@ -289,7 +297,7 @@ async fn cancel_bridge_local(
         return Ok(None);
     };
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(agent_did)
+        .cancel_during_run_with_cascade_dispatch(cause, agent_did)
         .await
         .with_context(|| {
             format!(
