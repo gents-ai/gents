@@ -90,4 +90,10 @@ def desktopClientShellCasesJson : String :=
 def desktopClientShellCaseCount : Nat :=
   desktopClientShellCases.length
 
+def requestLifecycleOperatorUiCases : List ClientShellContractCase :=
+  desktopClientShellCases.filter (fun witness => witness.desktopObservedTurnState.isSome)
+
+def requestLifecycleOperatorUiCasesJson : String :=
+  jsonArray (requestLifecycleOperatorUiCases.map ClientShellContractCase.toJson)
+
 end Conformance.ClientShellContracts

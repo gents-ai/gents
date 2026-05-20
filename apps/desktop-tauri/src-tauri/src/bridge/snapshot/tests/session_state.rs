@@ -3,7 +3,9 @@ use super::*;
 #[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
-use lean_vocab_test::{lean_desktop_client_shell_cases, LeanClientShellCase};
+use lean_vocab_test::{
+    lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases, LeanClientShellCase,
+};
 
 #[test]
 fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observed() {
@@ -304,6 +306,74 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
             );
         }
     }
+}
+
+#[test]
+fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
+    let cases = lean_request_lifecycle_operator_ui_cases();
+    assert!(
+        !cases.is_empty(),
+        "request-lifecycle operator UI contract cases should be emitted"
+    );
+
+    let mut saw_nonterminal_turn = false;
+    let mut saw_terminal_turn = false;
+
+    for case in cases {
+        let name = case.name.as_str();
+        let observed_turn = case
+            .desktop_observed_turn_state
+            .as_deref()
+            .expect("request-lifecycle UI cases must observe a request turn");
+        let (_request_status, lifecycle_state) = request_state_for_turn(Some(observed_turn));
+        saw_nonterminal_turn |= matches!(observed_turn, "waitingForClaim" | "streaming");
+        saw_terminal_turn |= !matches!(observed_turn, "waitingForClaim" | "streaming");
+
+        let store = client_shell_contract_store(case);
+        let selected_session_id = contract_session_id(
+            case.desktop_selected_session_id
+                .expect("request-lifecycle UI cases should select a session"),
+        );
+        let preferred_request_id = case.desktop_preferred_request_id.map(contract_request_id);
+        let snapshot = build_session_snapshot_from_store(
+            &store,
+            &selected_session_id,
+            preferred_request_id.as_deref(),
+        )
+        .expect("request-lifecycle UI case should build a desktop session snapshot");
+
+        assert_eq!(
+            snapshot.latest_request_id.as_deref(),
+            case.desktop_expected_latest_request_id
+                .map(contract_request_id)
+                .as_deref(),
+            "case {name} should bind the UI snapshot to the observed lifecycle request"
+        );
+        assert_eq!(
+            snapshot.turn_state.as_deref(),
+            Some(observed_turn),
+            "case {name} should expose request lifecycle state as the UI turn state"
+        );
+        if let Some(expect_pending) = case.desktop_expect_pending_turn {
+            assert_eq!(
+                snapshot.pending_turn.is_some(),
+                expect_pending,
+                "case {name} pending-turn visibility drifted from lifecycle state"
+            );
+        }
+        if let Some(pending_turn) = snapshot.pending_turn.as_ref() {
+            assert_eq!(
+                pending_turn.lifecycle_state.as_deref(),
+                Some(lifecycle_state),
+                "case {name} should carry the raw lifecycle state for UI badges"
+            );
+        }
+    }
+
+    assert!(
+        saw_nonterminal_turn && saw_terminal_turn,
+        "request-lifecycle UI cases should cover active and terminal turn bindings"
+    );
 }
 
 #[test]

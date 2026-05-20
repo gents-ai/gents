@@ -154,6 +154,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "session_snapshot_projection_consumes_generated_client_shell_contract_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/session_state.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state",
+            function: "session_snapshot_binds_request_lifecycle_operator_ui_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/hook/tests.rs",
