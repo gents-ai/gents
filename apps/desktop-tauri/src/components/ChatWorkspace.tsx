@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useMemo, type FormEvent } from "react";
 
 import type {
   DeploymentView,
@@ -8,6 +8,8 @@ import type {
 import { displayBehaviorLabel } from "../lib/types";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
 import { OperationsRail, OperationsRailProvider } from "./operations";
+import type { OperationsRailTabDescriptor } from "./operations";
+import { SubagentLineageView } from "./subagentLineage";
 
 export type ChatWorkspaceProps = {
   selectedDeployment: DeploymentView | null;
@@ -80,8 +82,25 @@ export function ActiveChatWorkspace({
       (behavior) => behavior.behaviorId === activeBehaviorId,
     )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
 
+  const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
+    const rootRequestId = session?.latestRequestId ?? null;
+    const lineageAgentDid = selectedDeployment.agentDid;
+    return [
+      {
+        id: "lineage",
+        label: "Lineage",
+        render: () => (
+          <SubagentLineageView
+            rootRequestId={rootRequestId}
+            agentDid={lineageAgentDid}
+          />
+        ),
+      },
+    ];
+  }, [session?.latestRequestId, selectedDeployment.agentDid]);
+
   return (
-    <OperationsRailProvider tabs={[]}>
+    <OperationsRailProvider tabs={operationsRailTabs}>
       <ChatHeader
         behaviorLabel={behaviorLabel}
         runtimeHealth={runtimeHealth}

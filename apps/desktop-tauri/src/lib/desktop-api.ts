@@ -6,6 +6,7 @@ import type {
   BehaviorSaveRequest,
   ChatSendResult,
   DesktopClientSnapshot,
+  DesktopListSubagentTreeRequest,
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
@@ -13,6 +14,7 @@ import type {
   PeerAddRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
+  SubagentTreeView,
   TaskRunRequest,
   TaskRunResult,
   TaskSaveRequest,
@@ -109,6 +111,9 @@ export type DesktopApiAdapter = {
     request: EventTriggerSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   runTask: (request: TaskRunRequest) => Promise<TaskRunResult>;
+  listSubagentTree: (
+    request: DesktopListSubagentTreeRequest,
+  ) => Promise<SubagentTreeView>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -200,6 +205,11 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   runTask(request) {
     return invokeDesktop<TaskRunResult>("desktop_task_run", { request });
+  },
+  listSubagentTree(request) {
+    return invokeDesktop<SubagentTreeView>("desktop_list_subagent_tree", {
+      request,
+    });
   },
 };
 
@@ -325,4 +335,8 @@ export async function saveEventTriggerConfig(
 
 export async function runTask(request: TaskRunRequest) {
   return desktopApiAdapter().runTask(request);
+}
+
+export async function listSubagentTree(request: DesktopListSubagentTreeRequest) {
+  return desktopApiAdapter().listSubagentTree(request);
 }
