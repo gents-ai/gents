@@ -129,7 +129,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/DefraAgent.lean` | Mapping from Lean state to Rust/DefraDB state |
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
-| `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches; currently empty |
+| `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
@@ -674,9 +674,8 @@ Current boundaries:
 
 `Proofs/Conformance/Deviations.lean` is reserved only for real unresolved
 Rust/spec mismatches. Active deviations are expected to name an accepted failure
-mode or a follow-up tracker. Current entries cover live event-source rescan gaps
-and the defradb.rs durable P2P subscription-state gap tracked upstream at
-sourcenetwork/defradb.rs#957.
+mode or a follow-up tracker. Current entries cover live event-source rescan
+gaps.
 
 ## Known Limitations
 
