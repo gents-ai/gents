@@ -195,7 +195,6 @@ pub(crate) struct InterruptRequestResult {
     pub preview: Option<CascadeCancelPreview>,
 }
 
-<<<<<<< HEAD
 /// One backend's persisted health + recent admission outcomes. Read-only
 /// projection of `InferenceBackend` joined with the last N `InferenceCall`
 /// rows for that backend. `display_state` is derived from

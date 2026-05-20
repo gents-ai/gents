@@ -214,7 +214,6 @@ pub(crate) async fn desktop_interrupt_request(
     )
 }
 
-<<<<<<< HEAD
 #[tauri::command]
 pub(crate) async fn desktop_list_backends_with_health(
     state: State<'_, DesktopAppState>,
