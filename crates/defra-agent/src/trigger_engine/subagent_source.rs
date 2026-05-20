@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -26,14 +26,16 @@ use crate::tool_call_lifecycle::subagent_request::{
     create_subagent_request_with_request_id, create_subagent_request_with_trusted_parent_request_id,
 };
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
+use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
 
-pub(crate) struct SubagentSource {
+pub struct SubagentSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
+    subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
@@ -83,7 +85,16 @@ struct SpawnArgs {
 }
 
 impl SubagentSource {
-    pub(crate) fn new(
+    pub fn new(
+        snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        node: Arc<EmbeddedNode>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self::with_subscription_source(node.clone(), snapshot_rx, node, cancel)
+    }
+
+    pub fn with_subscription_source(
+        subs: Arc<dyn UpdateSubscriptionSource>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
         cancel: CancellationToken,
@@ -91,6 +102,7 @@ impl SubagentSource {
         Self {
             snapshot_rx,
             node,
+            subscription_source: subs,
             subscription: None,
             cancel,
             collection_id_to_name: HashMap::new(),
@@ -100,7 +112,7 @@ impl SubagentSource {
 
     fn ensure_subscription(&mut self) {
         if self.subscription.is_none() {
-            self.subscription = Some(self.node.subscribe(&[EventName::Update]));
+            self.subscription = Some(self.subscription_source.subscribe_updates());
             tracing::info!("subagent source opened global Update subscription");
         }
     }

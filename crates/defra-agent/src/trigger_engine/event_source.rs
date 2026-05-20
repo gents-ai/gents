@@ -20,12 +20,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
 
@@ -47,9 +48,10 @@ const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 /// and filters incoming events by `desired_collections` on the dispatch hot
 /// path. That set is recomputed from the snapshot whenever
 /// `snapshot.generation` bumps.
-pub(crate) struct EventSource {
+pub struct EventSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
+    subscription_source: Arc<dyn UpdateSubscriptionSource>,
     /// Single global subscription. Task 19 populates this on first
     /// reconciliation; Task 20's `next_fire` consumes from it.
     subscription: Option<events::Subscription>,
@@ -201,7 +203,16 @@ impl EventSource {
     /// The subscription itself is not created here — Task 19's
     /// `reconcile_subscriptions` opens it on the first tick once the
     /// snapshot's `active_event_triggers` have been read.
-    pub(crate) fn new(
+    pub fn new(
+        snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        node: Arc<EmbeddedNode>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self::with_subscription_source(node.clone(), snapshot_rx, node, cancel)
+    }
+
+    pub fn with_subscription_source(
+        subs: Arc<dyn UpdateSubscriptionSource>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
         cancel: CancellationToken,
@@ -209,6 +220,7 @@ impl EventSource {
         Self {
             snapshot_rx,
             node,
+            subscription_source: subs,
             subscription: None,
             desired_collections: HashSet::new(),
             reconciled_generation: 0,
@@ -322,7 +334,7 @@ impl EventSource {
         // first non-empty desired set so a runtime with no event triggers
         // never materializes an unused subscription.
         if self.subscription.is_none() && !self.desired_collections.is_empty() {
-            let subscription = self.node.subscribe(&[EventName::Update]);
+            let subscription = self.subscription_source.subscribe_updates();
             tracing::info!(
                 collections = self.desired_collections.len(),
                 generation = snapshot.generation,

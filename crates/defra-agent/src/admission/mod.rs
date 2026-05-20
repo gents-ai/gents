@@ -13,7 +13,8 @@ pub(crate) use client::{
     scope_call, scope_call_with_token, scope_request, AdmissionCallContext,
     AdmittedCompletionClient, CallKind,
 };
-pub(crate) use config::{backend_admission_configs_from_backends, BackendAdmissionConfig};
+pub(crate) use config::backend_admission_configs_from_backends;
+pub use config::BackendAdmissionConfig;
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
 

@@ -386,6 +386,16 @@ two structs and the new trait, period.
 
 `DefraWatcher` is already `pub` at `lib.rs:119`; no change there.
 
+Post-implementation amendment: the visibility lift also extends to
+`ActiveRuntimeSnapshot` and the transitive `pub(crate)` field types needed to
+name and construct it from integration tests (`ResolvedTask`,
+`ResolvedSchedule`, `ResolvedEventTrigger`, `ConcurrencyMode`,
+`DispatcherMap`, and `BackendAdmissionConfig`). The constructors take a
+receiver over the snapshot type; if the type is not public, the constructor
+cannot be called from outside the crate. A test-helper constructor was
+considered but rejected as additional indirection without proportional API
+hygiene benefit — the snapshot type is already documented and stable.
+
 ### Why not `pub mod trigger_engine`
 
 Lifting the entire `trigger_engine` module to `pub` would expose

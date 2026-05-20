@@ -11,7 +11,7 @@ use crate::identity::AgentPrincipal;
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
-pub(crate) type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
+pub type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 
 /// Resolved view of a `Task` document ready for the trigger engine to fire.
 ///
@@ -20,13 +20,13 @@ pub(crate) type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 /// reference. Other `Task` fields (descriptions, timestamps, runtime-owned
 /// status) stay in `DocumentRuntimeView`.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedTask {
-    pub(crate) task_id: String,
-    pub(crate) name: Option<String>,
-    pub(crate) behavior_id: String,
-    pub(crate) prompt_template: String,
+pub struct ResolvedTask {
+    pub task_id: String,
+    pub name: Option<String>,
+    pub behavior_id: String,
+    pub prompt_template: String,
     #[allow(dead_code)]
-    pub(crate) output_schema_ref: Option<String>,
+    pub output_schema_ref: Option<String>,
 }
 
 impl ResolvedTask {
@@ -46,15 +46,15 @@ impl ResolvedTask {
 /// a resolvable task and an enabled, runnable behavior end up here; the rest
 /// go in `unavailable_schedules`.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedSchedule {
-    pub(crate) schedule_id: String,
+pub struct ResolvedSchedule {
+    pub schedule_id: String,
     #[allow(dead_code)]
-    pub(crate) task_id: String,
-    pub(crate) task: ResolvedTask,
-    pub(crate) interval_secs: i64,
+    pub task_id: String,
+    pub task: ResolvedTask,
+    pub interval_secs: i64,
     #[allow(dead_code)]
-    pub(crate) enabled: bool,
-    pub(crate) concurrency: ConcurrencyMode,
+    pub enabled: bool,
+    pub concurrency: ConcurrencyMode,
 }
 
 /// How a schedule handles overlapping runs when the previous fire has not
@@ -64,7 +64,7 @@ pub(crate) struct ResolvedSchedule {
 /// * `Serial` — skip a tick if a prior run is still in flight.
 /// * `LatestOnly` — supersede the in-flight run with the newer tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ConcurrencyMode {
+pub enum ConcurrencyMode {
     Parallel,
     Serial,
     LatestOnly,
@@ -91,19 +91,19 @@ impl ConcurrencyMode {
 /// fire time. Only triggers with a resolvable task and an enabled, runnable
 /// behavior end up here; the rest go in `unavailable_event_triggers`.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedEventTrigger {
-    pub(crate) trigger_id: String,
+pub struct ResolvedEventTrigger {
+    pub trigger_id: String,
     #[allow(dead_code)]
-    pub(crate) task_id: String,
-    pub(crate) task: ResolvedTask,
-    pub(crate) source_collection: String,
+    pub task_id: String,
+    pub task: ResolvedTask,
+    pub source_collection: String,
     /// Currently always `"created"`; future PRs may add `"updated"` /
     /// `"deleted"` support.
-    pub(crate) event_kind: String,
-    pub(crate) filter: Option<String>,
+    pub event_kind: String,
+    pub filter: Option<String>,
     #[allow(dead_code)]
-    pub(crate) enabled: bool,
-    pub(crate) concurrency: ConcurrencyMode,
+    pub enabled: bool,
+    pub concurrency: ConcurrencyMode,
 }
 
 #[derive(Clone, Debug)]
@@ -276,22 +276,22 @@ impl ResolvedRuntimeSnapshot {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ActiveRuntimeSnapshot {
-    pub(crate) generation: u64,
-    pub(crate) principal: Option<Arc<AgentPrincipal>>,
-    pub(crate) local_did: String,
-    pub(crate) paired_peer_dids: HashSet<String>,
-    pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
-    pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-    pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub(crate) unavailable_behaviors: HashMap<String, String>,
-    pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: HashSet<String>,
-    pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: HashSet<String>,
-    pub(crate) active_tasks: HashMap<String, ResolvedTask>,
-    pub(crate) dispatchers: DispatcherMap,
+pub struct ActiveRuntimeSnapshot {
+    pub generation: u64,
+    pub principal: Option<Arc<AgentPrincipal>>,
+    pub local_did: String,
+    pub paired_peer_dids: HashSet<String>,
+    pub default_behavior_id: String,
+    pub behaviors: HashMap<String, Arc<AgentBehavior>>,
+    pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
+    pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
+    pub unavailable_behaviors: HashMap<String, String>,
+    pub active_schedules: HashMap<String, ResolvedSchedule>,
+    pub unavailable_schedules: HashSet<String>,
+    pub active_event_triggers: HashMap<String, ResolvedEventTrigger>,
+    pub unavailable_event_triggers: HashSet<String>,
+    pub active_tasks: HashMap<String, ResolvedTask>,
+    pub dispatchers: DispatcherMap,
 }
 
 impl ActiveRuntimeSnapshot {

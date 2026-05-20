@@ -52,12 +52,7 @@ pub(crate) fn compute_preview_signature(input: &PreviewSignatureInput) -> String
         hasher.update(&[0x1D]);
         hasher.update(row.cancel_policy.as_deref().unwrap_or("").as_bytes());
         hasher.update(&[0x1D]);
-        hasher.update(
-            row.parent_tool_call_id
-                .as_deref()
-                .unwrap_or("")
-                .as_bytes(),
-        );
+        hasher.update(row.parent_tool_call_id.as_deref().unwrap_or("").as_bytes());
     }
 
     hasher.finalize().to_hex().to_string()
@@ -171,9 +166,7 @@ impl LivenessEmitFloor {
 
         // Track when we first observed this changed signature so we can
         // honour the 2-second coalescing ceiling.
-        let first_seen = *self
-            .pending_change_first_seen_at
-            .get_or_insert(now);
+        let first_seen = *self.pending_change_first_seen_at.get_or_insert(now);
 
         // Inter-emit floor: 250ms minimum.
         if let Some(last) = self.last_emit_at {
@@ -267,7 +260,9 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(sig.len(), 64, "BLAKE3 hex is 64 chars");
-        assert!(sig.chars().all(|c| c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase())));
+        assert!(sig
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase())));
     }
 
     #[test]
