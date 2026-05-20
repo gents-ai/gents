@@ -2,11 +2,37 @@ mod support;
 use support::*;
 
 use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
+
+const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
+const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
+
+#[derive(Debug, Deserialize)]
+struct LeanTriggerContractSnapshot {
+    trigger_dispatch_case_count: usize,
+    trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeanTriggerDispatchCase {
+    name: String,
+    trigger_id: Option<String>,
+    trigger_kind: String,
+    concurrency: String,
+    expected_result: String,
+    expected_materialize_trigger_id: Option<String>,
+    expected_materialize_trigger_kind: Option<String>,
+    expected_execution_origin: Option<String>,
+    request_count_before: usize,
+    request_count_after: usize,
+}
 
 /// End-to-end test for `defra-agent config task run --task-id --args`.
 ///
@@ -19,7 +45,27 @@ use uuid::Uuid;
 ///   * `lifecycle_state` created as `pending`, possibly already advanced by the daemon,
 ///   * the rendered content from `prompt_template` after binding `args.*`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_task_run_creates_manual_agent_request() -> Result<()> {
+async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
+    let lean_case = lean_manual_dispatch_case()?;
+    assert_eq!(lean_case.name, "manual_unconditional");
+    assert_eq!(lean_case.trigger_id, None);
+    assert_eq!(lean_case.trigger_kind, "manual");
+    assert_eq!(lean_case.concurrency, "parallel");
+    assert_eq!(lean_case.expected_result, "fired");
+    assert_eq!(lean_case.expected_materialize_trigger_id, None);
+    assert_eq!(
+        lean_case.expected_materialize_trigger_kind.as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        lean_case.expected_execution_origin.as_deref(),
+        Some("interactive")
+    );
+    assert_eq!(
+        lean_case.request_count_after,
+        lean_case.request_count_before + 1
+    );
+
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -179,17 +225,23 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
     );
     assert_eq!(
         row.get("execution_origin").and_then(Value::as_str),
-        Some("interactive")
+        lean_case.expected_execution_origin.as_deref()
     );
     assert_eq!(
         row.get("caused_by_trigger_kind").and_then(Value::as_str),
-        Some("manual")
+        lean_case.expected_materialize_trigger_kind.as_deref()
     );
-    assert!(
-        row.get("caused_by_trigger_id").is_some_and(Value::is_null),
-        "caused_by_trigger_id must be null for manual runs, got {:?}",
-        row.get("caused_by_trigger_id")
-    );
+    match lean_case.expected_materialize_trigger_id.as_deref() {
+        Some(expected_id) => assert_eq!(
+            row.get("caused_by_trigger_id").and_then(Value::as_str),
+            Some(expected_id)
+        ),
+        None => assert!(
+            row.get("caused_by_trigger_id").is_some_and(Value::is_null),
+            "caused_by_trigger_id must be null for manual runs, got {:?}",
+            row.get("caused_by_trigger_id")
+        ),
+    }
 
     Ok(())
 }
@@ -296,4 +348,96 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn lean_manual_dispatch_case() -> Result<LeanTriggerDispatchCase> {
+    let snapshot = load_lean_trigger_contract_snapshot()?;
+    assert_eq!(
+        snapshot.trigger_dispatch_case_count,
+        snapshot.trigger_dispatch_cases.len(),
+        "Lean trigger dispatch case-count sentinel drifted"
+    );
+    snapshot
+        .trigger_dispatch_cases
+        .into_iter()
+        .find(|case| case.name == "manual_unconditional")
+        .ok_or_else(|| anyhow!("Lean TriggerDispatch contracts did not emit manual_unconditional"))
+}
+
+fn load_lean_trigger_contract_snapshot() -> Result<LeanTriggerContractSnapshot> {
+    let proofs_dir = proofs_dir()?;
+    let build = Command::new("lake")
+        .args(["build", "Proofs.Conformance.Contracts"])
+        .current_dir(&proofs_dir)
+        .output()
+        .with_context(|| {
+            format!(
+                "building Lean conformance contract target in {}",
+                proofs_dir.display()
+            )
+        })?;
+    if !build.status.success() {
+        anyhow::bail!(
+            "Lean conformance contract build failed\ncwd: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            proofs_dir.display(),
+            build.status,
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+    }
+
+    let output = Command::new("lake")
+        .args(["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"])
+        .current_dir(&proofs_dir)
+        .output()
+        .with_context(|| {
+            format!(
+                "running Lean conformance contract generator in {}",
+                proofs_dir.display()
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Lean conformance contract generator failed\ncwd: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            proofs_dir.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("Lean stdout was not UTF-8")?;
+    let json = extract_contract_json(&stdout)?;
+    serde_json::from_str(json).context("parsing Lean conformance contract JSON")
+}
+
+fn proofs_dir() -> Result<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let candidate = ancestor.join("crates/defra-agent/proofs");
+        if candidate.join("lakefile.lean").exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "could not locate crates/defra-agent/proofs from {}",
+        manifest_dir.display()
+    )
+}
+
+fn extract_contract_json(stdout: &str) -> Result<&str> {
+    let begin = stdout
+        .find(CONTRACT_JSON_BEGIN)
+        .ok_or_else(|| anyhow!("Lean contract JSON begin marker missing"))?;
+    let end = stdout
+        .find(CONTRACT_JSON_END)
+        .ok_or_else(|| anyhow!("Lean contract JSON end marker missing"))?;
+    if begin >= end {
+        anyhow::bail!("Lean contract JSON markers are out of order");
+    }
+    let json = stdout[begin + CONTRACT_JSON_BEGIN.len()..end].trim();
+    if json.is_empty() {
+        anyhow::bail!("Lean contract JSON marker block is empty");
+    }
+    Ok(json)
 }
