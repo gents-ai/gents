@@ -416,6 +416,12 @@ existing ledger rows the worked example (§7) tags with this feature.
 | `persistence-failure-policy` | `runtimeInternal` | — | 5 |
 | `backend-health` | `runtimeInternal` | `operatorUi` (#TBD-ui-backend-status) | 1 |
 
+Issue #268 adds the operator CLI consumer for `background-tools`:
+`crates/defra-agent-cli/tests/cli_background.rs::background_list_json_filters_and_lists_backgrounded_tool_calls`.
+When the matrix schema in this design lands, tag that consumer with
+`feature = "background-tools"` and `surfaces = [operatorCli]`, replacing
+the deferred `operatorCli` slot on the `background-tools` row.
+
 Tag-count totals: 74 row-tags across 74 distinct ledger rows. Under the
 single-tag rule (§3.2 / §6.2), each existing row is tagged exactly once.
 The ledger has 74 rows (18 vocab + 15 state-machine + 37 case + 4
