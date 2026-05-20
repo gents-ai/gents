@@ -123,6 +123,7 @@ pub use toolset::{
     CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
     DELEGATE_TOOL_NAME,
 };
+pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 

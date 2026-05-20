@@ -19,6 +19,7 @@ pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 pub(crate) mod subagent_source;
+pub mod subscription_source;
 
 #[cfg(test)]
 mod tests;
