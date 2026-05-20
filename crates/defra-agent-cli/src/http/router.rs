@@ -4,7 +4,7 @@ use axum::{
     extract::State,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde_json::{json, Value};
@@ -46,6 +46,10 @@ pub(crate) fn runtime_contract_router(
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
         .route("/fleet/slots", get(fleet_slots_handler))
+        .route(
+            "/identity/decide",
+            post(crate::http::identity_decide::identity_decide_handler),
+        )
         .with_state(state)
 }
 
