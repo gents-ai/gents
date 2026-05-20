@@ -62,6 +62,7 @@ struct BackgroundTheoremToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    cancel_cause: Option<String>,
     cancel_cascade_intent_at: Option<String>,
 }
 
@@ -281,6 +282,7 @@ async fn fetch_background_theorem_tool_call(
                 await_mode
                 cancel_policy
                 child_request_id
+                cancel_cause
                 cancel_cascade_intent_at
             }}
         }}"#
@@ -917,7 +919,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
             .expect("load bridge lifecycle")
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
         .await
         .expect("cancel bridge with cascade dispatch")
         .expect("cascade dispatch");
@@ -936,6 +938,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         "internal-theorem-cascade",
     )
     .await;
+    assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     assert!(
         tool.cancel_cascade_intent_at.is_none(),
         "local cascade dispatch must not leave a remote bridge intent"

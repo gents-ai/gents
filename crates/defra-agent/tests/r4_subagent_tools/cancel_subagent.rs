@@ -132,6 +132,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
 
     let root_bridge = fetch_tool_call(db.node.as_ref(), &session_id, "internal-cancel-spawn").await;
     assert_eq!(root_bridge.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(root_bridge.cancel_cause.as_deref(), Some("userCancelled"));
     let descendant = fetch_tool_call(
         db.node.as_ref(),
         &child_session_id,
@@ -139,6 +140,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     )
     .await;
     assert_eq!(descendant.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(descendant.cancel_cause.as_deref(), Some("userCancelled"));
     let parent_collision =
         fetch_tool_call(db.node.as_ref(), &session_id, "internal-cancel-descendant").await;
     assert_eq!(

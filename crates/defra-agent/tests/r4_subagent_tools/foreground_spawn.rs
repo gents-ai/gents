@@ -121,7 +121,10 @@ async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_w
             .await
             .unwrap()
             .expect("foreground bridge should be persisted");
-    lifecycle.cancel_during_run().await.unwrap();
+    lifecycle
+        .cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
     let intent = lifecycle
         .bridge_cancel_cascade()
         .await

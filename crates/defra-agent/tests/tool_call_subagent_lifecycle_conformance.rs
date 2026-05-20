@@ -16,8 +16,8 @@ mod support;
 // remainder of Bucket 3 is filled in.
 #[allow(unused_imports)]
 use defra_agent::tool_call_lifecycle::{
-    create_subagent_request, AwaitMode, CancelPolicy, CascadeIntent, ChildTerminal, FailureClass,
-    IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    create_subagent_request, AwaitMode, CancelCause, CancelPolicy, CascadeIntent, ChildTerminal,
+    FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use support::test_db;
 
@@ -771,7 +771,10 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
         .await
         .unwrap()
         .expect("external owner should reload running bridge");
-    external.cancel_during_run().await.unwrap();
+    external
+        .cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
 
     let transitioned = bridge
         .bridge_complete("late child answer".to_string())
@@ -970,7 +973,9 @@ async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
         "child-req-cas-1".to_string(),
     );
     lc.start_running().await.unwrap();
-    lc.cancel_during_run().await.unwrap();
+    lc.cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
     let intent = lc.bridge_cancel_cascade().await.unwrap();
     assert!(intent.is_some());
     assert_eq!(intent.unwrap().child_request_id, "child-req-cas-1");
@@ -993,7 +998,9 @@ async fn integration_cascade_intent_for_detached_subagent_returns_none() {
         "child-req-cas-2".to_string(),
     );
     lc.start_running().await.unwrap();
-    lc.cancel_during_run().await.unwrap();
+    lc.cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
     let intent = lc.bridge_cancel_cascade().await.unwrap();
     assert!(intent.is_none(), "Detach policy returns None");
 }
@@ -1012,7 +1019,9 @@ async fn integration_cascade_intent_for_native_returns_none() {
         test_deadline(),
     );
     lc.start_running().await.unwrap();
-    lc.cancel_during_run().await.unwrap();
+    lc.cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
     let intent = lc.bridge_cancel_cascade().await.unwrap();
     assert!(
         intent.is_none(),

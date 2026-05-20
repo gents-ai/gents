@@ -8,7 +8,7 @@
 
 mod support;
 
-use defra_agent::tool_call_lifecycle::{FailureClass, ToolCallLifecycle};
+use defra_agent::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
 use support::snapshots::fetch_tool_call_snapshots_for_session;
 use support::test_db;
 
@@ -260,4 +260,60 @@ async fn lifecycle_load_preserves_deadline_for_terminal_update() {
         observed_deadline, deadline,
         "deadline_at should survive load and terminal update"
     );
+    assert_eq!(
+        snapshots[0].cancel_cause.as_deref(),
+        Some("deadline"),
+        "timeout() should persist cancel_cause=deadline"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_cancel_during_run_persists_cancel_cause() {
+    let db = test_db("tc-lc-cancel-cause-run").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "request-cancel-run".into(),
+        "test-session-cancel-run".into(),
+        "tool-call-cancel-run".into(),
+        0,
+        "test_tool".into(),
+        r#"{}"#.into(),
+        test_deadline(),
+    );
+
+    lc.start_running().await.unwrap();
+    lc.cancel_during_run(CancelCause::UserCancelled)
+        .await
+        .unwrap();
+
+    let snapshots =
+        fetch_tool_call_snapshots_for_session(&db.node, "test-session-cancel-run").await;
+    assert_eq!(snapshots[0].lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("userCancelled"));
+}
+
+#[tokio::test]
+async fn lifecycle_cancel_before_dispatch_persists_cancel_cause() {
+    let db = test_db("tc-lc-cancel-cause-pending").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "request-cancel-pending".into(),
+        "test-session-cancel-pending".into(),
+        "tool-call-cancel-pending".into(),
+        0,
+        "test_tool".into(),
+        r#"{}"#.into(),
+        test_deadline(),
+    );
+
+    lc.cancel_before_dispatch(CancelCause::Interrupted)
+        .await
+        .unwrap();
+
+    let snapshots =
+        fetch_tool_call_snapshots_for_session(&db.node, "test-session-cancel-pending").await;
+    assert_eq!(snapshots[0].lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("interrupted"));
 }

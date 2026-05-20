@@ -209,6 +209,7 @@ async fn agent_tool_call_has_r5_cross_deployment_fields() {
         "unclaimed_deadline_at",
         "cancel_cascade_intent_at",
         "cancel_pending_remote_ack",
+        "cancel_cause",
         "stuck_since",
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");

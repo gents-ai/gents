@@ -8,7 +8,7 @@ use defra_agent::event_delivery_contract::{
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::tool_call_lifecycle::{
-    AwaitMode, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
 };
 use defra_agent::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
