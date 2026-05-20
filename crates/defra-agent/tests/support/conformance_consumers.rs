@@ -182,6 +182,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "identity_permission_cases_pin_runtime_permission_contract_shape",
         },
         ConformanceConsumer::RustTest {
+            id: "http::identity_decide::tests::identity_decide_endpoint_matches_lean_permission_cases",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/src/http/identity_decide.rs",
+            module_path: "http::identity_decide::tests",
+            function: "identity_decide_endpoint_matches_lean_permission_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "identity_conformance::identity_respects_principal_contract_enforced_by_runtime_routing",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/identity_conformance.rs",

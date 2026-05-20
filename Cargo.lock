@@ -3629,6 +3629,7 @@ dependencies = [
 name = "defra-agent-cli"
 version = "0.1.5"
 dependencies = [
+ "acp",
  "anyhow",
  "axum",
  "chrono",
@@ -3639,6 +3640,7 @@ dependencies = [
  "defra-node",
  "defra-p2p-adapter",
  "hostname",
+ "identity",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

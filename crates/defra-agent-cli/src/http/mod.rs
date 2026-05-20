@@ -1,5 +1,6 @@
 pub(crate) mod fleet_slots;
 pub(crate) mod healthz;
+pub(crate) mod identity_decide;
 pub(crate) mod liveness;
 pub(crate) mod prometheus;
 pub(crate) mod router;

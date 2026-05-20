@@ -36,6 +36,8 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.13.0" }
 defra-agent-lean-contract.workspace = true
+identity.workspace = true
 regex = "1"
 tempfile = "3"

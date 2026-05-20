@@ -172,8 +172,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := [(Surface.operatorUi, "#278")]
     }
   , { feature := "identity-permission"
-    , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.api, "#280")]
+    , required := [Surface.runtimeInternal, Surface.api]
+    , deferred := []
     }
   , { feature := "apply-reconcile"
     , required := [Surface.operatorCli]
@@ -574,6 +574,11 @@ def caseCoverage : List CoverageEntry :=
       "IdentityPermissionCases"
       "identity_conformance::identity_permission_cases_pin_runtime_permission_contract_shape")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "identity_permission_cases"
+      "IdentityPermissionCases"
+      "http::identity_decide::tests::identity_decide_endpoint_matches_lean_permission_cases")
+      "identity-permission" [Surface.api]
   , tagged (consumerCoverage
       "identity_contracts"
       "IdentityContracts"
