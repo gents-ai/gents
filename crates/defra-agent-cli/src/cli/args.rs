@@ -13,7 +13,7 @@ use crate::{
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
     INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
     RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
-    SUBAGENT_AFTER_HELP, TRACE_AFTER_HELP,
+    SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -1233,8 +1233,35 @@ pub(crate) enum RequestShowOutputFormat {
 
 #[derive(Subcommand)]
 pub(crate) enum SubagentCommand {
+    #[command(
+        name = "list",
+        about = "List subagent dispatch lineage",
+        after_help = SUBAGENT_LIST_AFTER_HELP
+    )]
+    List(SubagentListArgs),
     #[command(about = "Cancel a subagent request and optionally cascade to linked children")]
     Cancel(SubagentCancelArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SubagentListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_name = "REQUEST_ID")]
+    pub(crate) root: Option<String>,
+    #[arg(long, value_name = "N")]
+    pub(crate) depth: Option<usize>,
+    #[arg(long, value_enum, default_value_t = SubagentListOutput::Tree)]
+    pub(crate) output: SubagentListOutput,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SubagentListOutput {
+    Tree,
+    Table,
+    Json,
 }
 
 #[derive(clap::Args)]

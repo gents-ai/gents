@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,21 +6,35 @@ use anyhow::{Context, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cli::args::{SubagentCancelArgs, SubagentCancelOutput, SubagentCommand};
+use crate::cli::args::{
+    SubagentCancelArgs, SubagentCancelOutput, SubagentCommand, SubagentListArgs,
+    SubagentListOutput,
+};
 use crate::config_writes::ConfigAccess;
 use crate::{
-    parse_duration_suffix, post_graphql, print_json, resolve_agent_did, resolve_config_access,
-    resolve_request_id,
+    graphql_rows, parse_duration_suffix, post_graphql, print_json, resolve_agent_did,
+    resolve_config_access, resolve_request_id,
 };
 
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const AGENT_REQUEST_FIELDS: &str = r#"
+    request_id
+    agent_did
+    behavior_id
+    status
+    lifecycle_state
+    created_at
+    claimed_at
+    caused_by_parent_request_id
+"#;
 
 pub(crate) async fn dispatch(command: SubagentCommand) -> Result<()> {
     match command {
+        SubagentCommand::List(args) => subagent_list(args).await,
         SubagentCommand::Cancel(args) => subagent_cancel(args).await,
     }
 }
@@ -653,4 +667,550 @@ struct SubagentCancelRender {
     cause: String,
     wait: bool,
     requests: Vec<RequestCancelSnapshot>,
+}
+
+async fn subagent_list(args: SubagentListArgs) -> Result<()> {
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let rows = match args.root.as_deref().and_then(non_empty_str) {
+        Some(root) => load_rooted_lineage(&access, root, args.depth).await?,
+        None => load_lineage_forest(&access, args.depth).await?,
+    };
+
+    match args.output {
+        SubagentListOutput::Tree => print_tree(&rows),
+        SubagentListOutput::Table => print_table(&rows),
+        SubagentListOutput::Json => print_lineage_json(args.root.as_deref(), args.depth, &rows),
+    }
+}
+
+async fn load_rooted_lineage(
+    access: &ConfigAccess,
+    root_request_id: &str,
+    max_depth: Option<usize>,
+) -> Result<Vec<LineageNode>> {
+    let root = load_request_by_id(access, root_request_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("AgentRequest {root_request_id} not found"))?;
+    let max_depth = max_depth.unwrap_or(usize::MAX);
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![(root, 0usize)];
+
+    while let Some((row, depth)) = stack.pop() {
+        let request_id = row.request_id.clone();
+        if !seen.insert(request_id.clone()) {
+            continue;
+        }
+        rows.push(LineageNode { row, depth });
+        if depth >= max_depth {
+            continue;
+        }
+
+        // TODO: replace per-parent child lookups with a batched load if large
+        // rooted trees make this operator command noticeably latent.
+        let children = load_children(access, &request_id).await?;
+        for child in children.into_iter().rev() {
+            stack.push((child, depth + 1));
+        }
+    }
+
+    Ok(rows)
+}
+
+async fn load_lineage_forest(
+    access: &ConfigAccess,
+    max_depth: Option<usize>,
+) -> Result<Vec<LineageNode>> {
+    let all_rows = load_all_requests(access).await?;
+    let mut rows_by_id = BTreeMap::new();
+    let mut children_by_parent = BTreeMap::<String, Vec<String>>::new();
+    let mut included_ids = BTreeSet::<String>::new();
+
+    for row in all_rows {
+        let request_id = row.request_id.clone();
+        if let Some(parent_request_id) = row.parent_request_id() {
+            included_ids.insert(parent_request_id.clone());
+            included_ids.insert(request_id.clone());
+            children_by_parent
+                .entry(parent_request_id)
+                .or_default()
+                .push(request_id.clone());
+        }
+        rows_by_id.insert(request_id, row);
+    }
+
+    let mut roots = included_ids
+        .iter()
+        .filter_map(|request_id| {
+            let row = rows_by_id.get(request_id)?;
+            let has_included_parent = row.parent_request_id().is_some_and(|parent| {
+                included_ids.contains(&parent) && rows_by_id.contains_key(&parent)
+            });
+            (!has_included_parent).then(|| request_id.clone())
+        })
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        roots = included_ids
+            .iter()
+            .filter(|request_id| rows_by_id.contains_key(*request_id))
+            .cloned()
+            .collect();
+    }
+    sort_request_ids(&mut roots, &rows_by_id);
+    for children in children_by_parent.values_mut() {
+        sort_request_ids(children, &rows_by_id);
+    }
+
+    let mut output = Vec::new();
+    let mut seen = HashSet::new();
+    let max_depth = max_depth.unwrap_or(usize::MAX);
+    for root in roots {
+        append_forest_node(
+            &root,
+            0,
+            max_depth,
+            &rows_by_id,
+            &children_by_parent,
+            &mut seen,
+            &mut output,
+        );
+    }
+
+    Ok(output)
+}
+
+fn append_forest_node(
+    request_id: &str,
+    depth: usize,
+    max_depth: usize,
+    rows_by_id: &BTreeMap<String, AgentRequestLineageRow>,
+    children_by_parent: &BTreeMap<String, Vec<String>>,
+    seen: &mut HashSet<String>,
+    output: &mut Vec<LineageNode>,
+) {
+    if !seen.insert(request_id.to_string()) {
+        return;
+    }
+    let Some(row) = rows_by_id.get(request_id) else {
+        return;
+    };
+    output.push(LineageNode {
+        row: row.clone(),
+        depth,
+    });
+    if depth >= max_depth {
+        return;
+    }
+    if let Some(children) = children_by_parent.get(request_id) {
+        for child in children {
+            append_forest_node(
+                child,
+                depth + 1,
+                max_depth,
+                rows_by_id,
+                children_by_parent,
+                seen,
+                output,
+            );
+        }
+    }
+}
+
+fn sort_request_ids(
+    request_ids: &mut [String],
+    rows_by_id: &BTreeMap<String, AgentRequestLineageRow>,
+) {
+    request_ids.sort_by(|left, right| {
+        let left_key = rows_by_id
+            .get(left)
+            .map(AgentRequestLineageRow::sort_key)
+            .unwrap_or(("", ""));
+        let right_key = rows_by_id
+            .get(right)
+            .map(AgentRequestLineageRow::sort_key)
+            .unwrap_or(("", ""));
+        left_key.cmp(&right_key)
+    });
+}
+
+async fn load_request_by_id(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Option<AgentRequestLineageRow>> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                {AGENT_REQUEST_FIELDS}
+            }}
+        }}"#
+    );
+    let mut rows = load_request_rows(access, &query).await?;
+    Ok(rows.pop())
+}
+
+async fn load_children(
+    access: &ConfigAccess,
+    parent_request_id: &str,
+) -> Result<Vec<AgentRequestLineageRow>> {
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped_parent_request_id}" }} }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+            ) {{
+                {AGENT_REQUEST_FIELDS}
+            }}
+        }}"#
+    );
+    load_request_rows(access, &query).await
+}
+
+async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestLineageRow>> {
+    let query = format!(
+        r#"{{
+            AgentRequest(order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
+                {AGENT_REQUEST_FIELDS}
+            }}
+        }}"#
+    );
+    load_request_rows(access, &query).await
+}
+
+async fn load_request_rows(
+    access: &ConfigAccess,
+    query: &str,
+) -> Result<Vec<AgentRequestLineageRow>> {
+    graphql_rows(access, "AgentRequest", query)
+        .await?
+        .into_iter()
+        .map(|value| {
+            serde_json::from_value(value).context("decoding AgentRequest lineage row from GraphQL")
+        })
+        .collect()
+}
+
+fn print_tree(rows: &[LineageNode]) -> Result<()> {
+    let output_rows = output_rows(rows, true);
+    if output_rows.is_empty() {
+        println!("No subagent requests found.");
+        return Ok(());
+    }
+    print!("{}", render_table(&output_rows));
+    Ok(())
+}
+
+fn print_table(rows: &[LineageNode]) -> Result<()> {
+    let output_rows = output_rows(rows, false);
+    if output_rows.is_empty() {
+        println!("No subagent requests found.");
+        return Ok(());
+    }
+    print!("{}", render_table(&output_rows));
+    Ok(())
+}
+
+fn print_lineage_json(
+    root: Option<&str>,
+    max_depth: Option<usize>,
+    rows: &[LineageNode],
+) -> Result<()> {
+    let output_rows = output_rows(rows, false);
+    let tree = tree_from_rows(&output_rows);
+    print_json(&serde_json::json!({
+        "root_request_id": root.and_then(non_empty_str),
+        "max_depth": max_depth,
+        "rows": output_rows,
+        "tree": tree,
+    }))
+}
+
+fn output_rows(rows: &[LineageNode], indent: bool) -> Vec<LineageOutputRow> {
+    rows.iter()
+        .map(|node| LineageOutputRow::from_node(node, indent))
+        .collect()
+}
+
+fn render_table(rows: &[LineageOutputRow]) -> String {
+    const HEADERS: [&str; 6] = [
+        "CHILD_REQUEST_ID",
+        "PARENT_REQUEST_ID",
+        "DEPLOYMENT",
+        "BEHAVIOR_ID",
+        "STATE",
+        "STARTED_AT",
+    ];
+    let mut table_rows = Vec::<[String; 6]>::new();
+    for row in rows {
+        table_rows.push([
+            row.display_request_id.clone(),
+            row.parent_request_id
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+            row.deployment.clone(),
+            row.behavior_id.clone(),
+            row.state.clone(),
+            row.started_at.clone(),
+        ]);
+    }
+
+    let mut widths = HEADERS.map(|header| header.chars().count());
+    for row in &table_rows {
+        for (idx, cell) in row.iter().enumerate() {
+            widths[idx] = widths[idx].max(cell.chars().count());
+        }
+    }
+
+    let mut output = String::new();
+    push_cells(&mut output, &HEADERS.map(ToOwned::to_owned), &widths);
+    for row in table_rows {
+        push_cells(&mut output, &row, &widths);
+    }
+    output
+}
+
+fn push_cells(output: &mut String, cells: &[String; 6], widths: &[usize; 6]) {
+    for (idx, cell) in cells.iter().enumerate() {
+        if idx > 0 {
+            output.push_str("  ");
+        }
+        output.push_str(cell);
+        for _ in cell.chars().count()..widths[idx] {
+            output.push(' ');
+        }
+    }
+    output.push('\n');
+}
+
+fn tree_from_rows(rows: &[LineageOutputRow]) -> Vec<LineageTreeNode> {
+    let rows_by_id = rows
+        .iter()
+        .map(|row| (row.request_id.clone(), row.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut children_by_parent = BTreeMap::<String, Vec<String>>::new();
+    let mut root_ids = Vec::new();
+
+    for row in rows {
+        if let Some(parent_request_id) = row.parent_request_id.as_deref() {
+            if rows_by_id.contains_key(parent_request_id) {
+                children_by_parent
+                    .entry(parent_request_id.to_string())
+                    .or_default()
+                    .push(row.request_id.clone());
+                continue;
+            }
+        }
+        root_ids.push(row.request_id.clone());
+    }
+
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+    for root_id in root_ids {
+        append_tree_node(
+            &root_id,
+            &rows_by_id,
+            &children_by_parent,
+            &mut seen,
+            &mut roots,
+        );
+    }
+    roots
+}
+
+fn append_tree_node(
+    request_id: &str,
+    rows_by_id: &BTreeMap<String, LineageOutputRow>,
+    children_by_parent: &BTreeMap<String, Vec<String>>,
+    seen: &mut HashSet<String>,
+    output: &mut Vec<LineageTreeNode>,
+) {
+    if !seen.insert(request_id.to_string()) {
+        return;
+    }
+    let Some(row) = rows_by_id.get(request_id) else {
+        return;
+    };
+    let mut children = Vec::new();
+    if let Some(child_ids) = children_by_parent.get(request_id) {
+        for child_id in child_ids {
+            append_tree_node(
+                child_id,
+                rows_by_id,
+                children_by_parent,
+                seen,
+                &mut children,
+            );
+        }
+    }
+    output.push(LineageTreeNode {
+        row: row.clone(),
+        children,
+    });
+}
+
+#[derive(Debug, Clone)]
+struct LineageNode {
+    row: AgentRequestLineageRow,
+    depth: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AgentRequestLineageRow {
+    request_id: String,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    behavior_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    claimed_at: Option<String>,
+    #[serde(default)]
+    caused_by_parent_request_id: Option<String>,
+}
+
+impl AgentRequestLineageRow {
+    fn parent_request_id(&self) -> Option<String> {
+        self.caused_by_parent_request_id
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(ToOwned::to_owned)
+    }
+
+    fn sort_key(&self) -> (&str, &str) {
+        (
+            self.created_at
+                .as_deref()
+                .and_then(non_empty_str)
+                .unwrap_or_default(),
+            self.request_id.as_str(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LineageOutputRow {
+    child_request_id: String,
+    request_id: String,
+    parent_request_id: Option<String>,
+    deployment: String,
+    agent_did: Option<String>,
+    behavior_id: String,
+    state: String,
+    started_at: String,
+    depth: usize,
+    #[serde(skip_serializing)]
+    display_request_id: String,
+}
+
+impl LineageOutputRow {
+    fn from_node(node: &LineageNode, indent: bool) -> Self {
+        let request_id = node.row.request_id.clone();
+        let display_request_id = if indent {
+            format!("{}{}", "  ".repeat(node.depth), request_id)
+        } else {
+            request_id.clone()
+        };
+        let agent_did = node
+            .row
+            .agent_did
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(ToOwned::to_owned);
+        let deployment = agent_did.clone().unwrap_or_else(|| "-".to_string());
+        let behavior_id = node
+            .row
+            .behavior_id
+            .as_deref()
+            .and_then(non_empty_str)
+            .unwrap_or("-")
+            .to_string();
+        let state = node
+            .row
+            .lifecycle_state
+            .as_deref()
+            .and_then(non_empty_str)
+            .or_else(|| node.row.status.as_deref().and_then(non_empty_str))
+            .unwrap_or("unknown")
+            .to_string();
+        let started_at = node
+            .row
+            .claimed_at
+            .as_deref()
+            .and_then(non_empty_str)
+            .or_else(|| node.row.created_at.as_deref().and_then(non_empty_str))
+            .unwrap_or("-")
+            .to_string();
+
+        Self {
+            child_request_id: request_id.clone(),
+            request_id,
+            parent_request_id: node.row.parent_request_id(),
+            deployment,
+            agent_did,
+            behavior_id,
+            state,
+            started_at,
+            depth: node.depth,
+            display_request_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LineageTreeNode {
+    #[serde(flatten)]
+    row: LineageOutputRow,
+    children: Vec<LineageTreeNode>,
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(request_id: &str, parent: Option<&str>, created_at: &str) -> AgentRequestLineageRow {
+        AgentRequestLineageRow {
+            request_id: request_id.to_string(),
+            agent_did: Some("did:key:zTest".to_string()),
+            behavior_id: Some(request_id.to_string()),
+            status: Some("pending".to_string()),
+            lifecycle_state: Some("pending".to_string()),
+            created_at: Some(created_at.to_string()),
+            claimed_at: None,
+            caused_by_parent_request_id: parent.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn table_renderer_indents_tree_request_column_only() {
+        let rows = vec![
+            LineageNode {
+                row: row("parent", None, "2026-05-20T00:00:00Z"),
+                depth: 0,
+            },
+            LineageNode {
+                row: row("child", Some("parent"), "2026-05-20T00:00:01Z"),
+                depth: 1,
+            },
+        ];
+        let rendered = render_table(&output_rows(&rows, true));
+        assert!(rendered.contains("CHILD_REQUEST_ID"));
+        assert!(rendered.contains("parent"));
+        assert!(rendered.contains("  child"));
+        assert!(rendered.contains("parent"));
+    }
 }

@@ -398,7 +398,7 @@ existing ledger rows the worked example (§7) tags with this feature.
 | `runtime-reconcile` | `runtimeInternal` | — | 3 |
 | `session-recovery` | `runtimeInternal` | — | 3 |
 | `background-tools` | `agentFacing` | `operatorCli` (#268), `operatorUi` (#276) | 14 |
-| `subagents-cross-deployment` | — | `api` (#272), `agentFacing` (#273), `operatorUi` (#274) | 0 (see §3.1) |
+| `subagents-cross-deployment` | `operatorCli` | `api` (#272), `agentFacing` (#273), `operatorUi` (#274) | 1 (see §3.1) |
 | `interrupt-and-cancel` | `agentFacing` | `operatorCli` (#266), `operatorUi` (#277) | 1 |
 | `mcp-health` | `runtimeInternal` | `operatorUi` (#278), `operatorCli` (#279) | 1 |
 | `identity-permission` | `runtimeInternal` | `api` (#280) | 3 |
@@ -422,16 +422,21 @@ When the matrix schema in this design lands, tag that consumer with
 `feature = "background-tools"` and `surfaces = [operatorCli]`, replacing
 the deferred `operatorCli` slot on the `background-tools` row.
 
-Tag-count totals: 74 row-tags across 74 distinct ledger rows. Under the
-single-tag rule (§3.2 / §6.2), each existing row is tagged exactly once.
-The ledger has 74 rows (18 vocab + 15 state-machine + 37 case + 4
-followUpHook) per `awk` ranges over `CoverageLedger.lean`; every one is
-accounted for in §7.
+Tag-count totals: 75 consumer tags: the 74 existing ledger rows plus the
+new #269 operator CLI lineage consumer. Under the single-tag rule
+(§3.2 / §6.2), each existing ledger row is tagged exactly once. The
+ledger has 74 rows (18 vocab + 15 state-machine + 37 case + 4
+followUpHook) per `awk` ranges over `CoverageLedger.lean`; every
+pre-#269 ledger row is accounted for in §7.
 
-### 3.1 The subagents-cross-deployment feature is all-deferred
+### 3.1 The subagents-cross-deployment feature starts all-deferred
 
-`subagents-cross-deployment` is the one feature with zero existing ledger
-rows. The runtime carries the R5 model in Lean (per the audit's §8
+`subagents-cross-deployment` was initially the one feature with zero
+existing ledger rows. Issue #269 adds the first bound operator surface:
+`defra-agent subagent list`, tagged as `operatorCli`, which lets operators
+inspect request lineage via `AgentRequest.caused_by_parent_request_id`.
+
+The runtime carries the R5 model in Lean (per the audit's §8
 subtree) and the protocol schema carries the R5 fields (exercised by
 `agent_tool_call_has_r5_cross_deployment_fields` and
 `tool_selection_has_cross_deployment_spawn_timeout` at
@@ -439,7 +444,7 @@ subtree) and the protocol schema carries the R5 fields (exercised by
 but those `#[tokio::test]` functions are not Lean-driven case consumers
 and are not in the ledger.
 
-Three follow-ups, all `deferred`:
+Three follow-ups remain `deferred`:
 
 - **`api`.** Promote the existing schema introspection tests to ledger
   consumers by adding a row pointing at them with
@@ -452,10 +457,10 @@ Three follow-ups, all `deferred`:
   shell — a deployment badge or routing diagnostic on the chat shell.
   Tracked as #274.
 
-The matrix v1 lists all three as `deferred` (no `required` slot) so the
-implementation PR ships without immediately failing the new drift test
-on this feature. When any of the three follow-ups land, the surface
-moves to `required` and the relevant ledger row is added.
+The matrix v1 lists the CLI lineage command as the first `required`
+surface for this feature and leaves the three follow-ups above as
+`deferred`. When any of the three follow-ups land, the surface moves to
+`required` and the relevant ledger row is added.
 
 ### 3.2 Multi-tag carve-out: `interrupt-and-cancel`
 
@@ -568,6 +573,9 @@ serialized as:
                          "deferred_note": "" }
   },
   "subagents-cross-deployment": {
+    "operatorCli":     { "coverage_strength": "consumer",
+                         "row_count": 1, "pending_follow_ups": 0,
+                         "deferred_note": "" },
     "api":             { "coverage_strength": "missing",
                          "row_count": 0, "pending_follow_ups": 0,
                          "deferred_note": "" },
@@ -1037,7 +1045,8 @@ Row counts per feature, matching the "Tag count" column in §3:
   `:198`, `:301`, `:305`, `:309`, `:313`, plus the four followUpHook
   rows `:374`, `:378`, `:382`, `:386` (which contribute to count but
   not to any surface cell because their `surfaces := []`).
-- `subagents-cross-deployment` — 0. All surfaces deferred. See §3.1.
+- `subagents-cross-deployment` — 1: operator CLI lineage consumer. The
+  API, agent-facing, and UI surfaces remain deferred. See §3.1.
 - `interrupt-and-cancel` — 1: `:113`. See §3.2.
 - `mcp-health` — 1: `:366`.
 - `identity-permission` — 3: `:321`, `:325`, `:329`. The audit §9
@@ -1132,10 +1141,10 @@ Per `PROMPT.md`'s out-of-scope list:
 - Do not rename rows. The audit at §13 and §3 (cosmetic deltas) flags
   renames; those are separate cleanup PRs.
 - Do not add new ledger rows beyond what the matrix surfaces as
-  required-and-missing. The `subagents-cross-deployment` row
-  promotion is a judgment call at implementation time; if the
-  implementer decides it is out of scope, move the surface to
-  `deferred` and file the follow-up.
+  required-and-missing. The remaining `subagents-cross-deployment`
+  API / agent-facing / UI row promotions are judgment calls at
+  implementation time; if the implementer decides one is out of scope,
+  move the surface to `deferred` and file the follow-up.
 - Do not change the JSON snapshot beyond the two new keys at `:126`.
 
 ### 8.3 If schema extension forces a constructor change

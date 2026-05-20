@@ -205,9 +205,15 @@ of the source. Child inherits principal; behavior can be swapped with \
 --behavior.";
 const SUBAGENT_AFTER_HELP: &str = "\
 Examples:
+  defra-agent subagent list
+  defra-agent subagent list --root REQUEST_ID
+  defra-agent subagent list --root REQUEST_ID --depth 2
+  defra-agent subagent list --root REQUEST_ID --output json
   defra-agent subagent cancel REQUEST_ID
   defra-agent subagent cancel REQUEST_ID --cascade=false
   defra-agent subagent cancel REQUEST_ID --wait --timeout 30s --output json";
+const SUBAGENT_LIST_AFTER_HELP: &str =
+    "Without --root, only requests that participate in subagent lineage are shown.";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
   defra-agent diagnose
