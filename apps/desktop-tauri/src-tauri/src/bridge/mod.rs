@@ -1,3 +1,4 @@
+mod cascade;
 mod commands;
 mod logging;
 mod snapshot;
