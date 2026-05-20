@@ -4,7 +4,7 @@
 //! own PRs (#276/#277/#278/#281/#283/#284/#285/#286/#288) build and populate
 //! these structs.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,7 +98,7 @@ pub(crate) struct StuckWorkDiagnosticView {
     pub stuck_since: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubagentTreeView {
     pub root_request_id: String,
@@ -107,29 +107,42 @@ pub(crate) struct SubagentTreeView {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubagentNodeView {
     pub request_id: String,
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub agent_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
+    #[serde(default)]
     pub lifecycle_state: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
     pub subagent_depth: Option<i64>,
+    #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,
+    #[serde(default)]
     pub caused_by_parent_tool_call_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubagentEdgeView {
     pub parent_request_id: String,
     pub child_request_id: String,
+    #[serde(default)]
     pub parent_tool_call_id: Option<String>,
+    #[serde(default)]
     pub tool_name: Option<String>,
+    #[serde(default)]
     pub await_mode: Option<String>,
+    #[serde(default)]
     pub cancel_policy: Option<String>,
+    #[serde(default)]
     pub lifecycle_state: Option<String>,
 }
 

@@ -51,6 +51,10 @@ pub(crate) fn runtime_contract_router(
             get(crate::http::r5_dispatch::subagent_dispatches_handler),
         )
         .route(
+            "/subagents/tree",
+            get(crate::http::subagent_tree::subagent_tree_handler),
+        )
+        .route(
             "/identity/decide",
             post(crate::http::identity_decide::identity_decide_handler),
         )

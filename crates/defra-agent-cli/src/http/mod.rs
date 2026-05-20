@@ -5,6 +5,7 @@ pub(crate) mod liveness;
 pub(crate) mod prometheus;
 pub(crate) mod r5_dispatch;
 pub(crate) mod router;
+pub(crate) mod subagent_tree;
 pub(crate) mod version;
 
 pub(crate) use router::runtime_contract_router;
