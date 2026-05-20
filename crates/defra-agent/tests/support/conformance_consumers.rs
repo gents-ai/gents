@@ -119,6 +119,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_apply_reconcile_cases_fence_production_apply_write_boundary",
         },
         ConformanceConsumer::RustTest {
+            id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/tests/cli_mcp_probe.rs",
+            module_path: "cli_mcp_probe",
+            function: "mcp_probe_json_reports_health_snapshot_for_registry_service",
+        },
+        ConformanceConsumer::RustTest {
             id: "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/backend_registry/tests.rs",

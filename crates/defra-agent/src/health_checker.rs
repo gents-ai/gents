@@ -92,18 +92,18 @@ impl Default for ServiceHealthMap {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RegistryServiceEntry {
-    service_id: String,
+pub struct McpHealthCheckService {
+    pub service_id: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    hostname: String,
+    pub hostname: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    tailscale_ip: String,
+    pub tailscale_ip: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    lan_ip: String,
-    mcp_port: Option<u16>,
+    pub lan_ip: String,
+    pub mcp_port: Option<u16>,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    mcp_path: String,
-    updated_at: Option<String>,
+    pub mcp_path: String,
+    pub updated_at: Option<String>,
 }
 
 pub fn spawn_health_checker(
@@ -186,7 +186,7 @@ async fn run_health_check(
         .cloned()
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
 
-    let services: Vec<RegistryServiceEntry> =
+    let services: Vec<McpHealthCheckService> =
         serde_json::from_value(raw_services).context("parsing ToolServiceRegistry entries")?;
 
     run_health_check_cycle(
@@ -201,8 +201,8 @@ async fn run_health_check(
 }
 
 // Production transition step once the registry query has supplied online rows.
-async fn run_health_check_cycle(
-    services: Vec<RegistryServiceEntry>,
+pub async fn run_health_check_cycle(
+    services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
     mcp_pool: &McpPool,
     health_map: &ServiceHealthMap,
@@ -342,7 +342,7 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod registry_parsing_tests {
-    use super::RegistryServiceEntry;
+    use super::McpHealthCheckService;
     use serde_json::json;
 
     #[test]
@@ -357,7 +357,7 @@ mod registry_parsing_tests {
             "updated_at": null,
         });
 
-        let entry: RegistryServiceEntry =
+        let entry: McpHealthCheckService =
             serde_json::from_value(raw).expect("null address fields must parse");
 
         assert_eq!(entry.service_id, "observability-mcp");
@@ -381,7 +381,7 @@ mod registry_parsing_tests {
             }
         ]);
 
-        let entries: Vec<RegistryServiceEntry> =
+        let entries: Vec<McpHealthCheckService> =
             serde_json::from_value(raw).expect("null lan_ip must not fail the batch parse");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].lan_ip, "");
@@ -395,7 +395,7 @@ mod transitions_tests {
     use rmcp::model::ListToolsResult;
 
     use super::{
-        run_health_check_cycle, HealthStatus, RegistryServiceEntry, ServiceHealth,
+        run_health_check_cycle, HealthStatus, McpHealthCheckService, ServiceHealth,
         ServiceHealthMap, STALENESS_THRESHOLD_SECS,
     };
     use crate::lean_vocab_test::{lean_mcp_health_k1_cases, LeanMcpHealthCase};
@@ -493,8 +493,8 @@ mod transitions_tests {
     fn registry_entry(
         service_id: &str,
         updated_at: chrono::DateTime<chrono::Utc>,
-    ) -> RegistryServiceEntry {
-        RegistryServiceEntry {
+    ) -> McpHealthCheckService {
+        McpHealthCheckService {
             service_id: service_id.to_string(),
             hostname: "remote-host".to_string(),
             tailscale_ip: "100.64.0.1".to_string(),

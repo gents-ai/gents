@@ -753,7 +753,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
-    let mut ledger = BTreeSet::new();
+    let mut ledger_domains = BTreeSet::new();
+    let mut ledger_domain_surfaces = BTreeSet::new();
     let mut ledger_consumers = BTreeSet::new();
 
     for entry in &snapshot.coverage_ledger {
@@ -799,23 +800,37 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             ledger_consumers.insert(entry.consumer.as_str());
         }
 
-        assert!(
-            ledger.insert((entry.category.clone(), entry.domain.clone())),
-            "duplicate coverage ledger entry for {:?} / {:?}",
-            entry.category,
-            entry.domain
-        );
+        ledger_domains.insert((entry.category.clone(), entry.domain.clone()));
+        for surface in &entry.surfaces {
+            assert!(
+                ledger_domain_surfaces.insert((
+                    entry.category.clone(),
+                    entry.domain.clone(),
+                    *surface
+                )),
+                "duplicate coverage ledger entry for {:?} / {:?} / {:?}",
+                entry.category,
+                entry.domain,
+                surface
+            );
+        }
     }
 
-    let missing = emitted.difference(&ledger).cloned().collect::<Vec<_>>();
-    let extra = ledger.difference(&emitted).cloned().collect::<Vec<_>>();
+    let missing = emitted
+        .difference(&ledger_domains)
+        .cloned()
+        .collect::<Vec<_>>();
+    let extra = ledger_domains
+        .difference(&emitted)
+        .cloned()
+        .collect::<Vec<_>>();
     assert!(
         missing.is_empty() && extra.is_empty(),
         "coverage ledger must exactly match emitted Lean contract domains\n  missing ledger entries: {:?}\n  extra ledger entries: {:?}\n  emitted: {:?}\n  ledger: {:?}",
         missing,
         extra,
         emitted,
-        ledger
+        ledger_domains
     );
     let unreferenced_consumers = registered_consumers
         .difference(&ledger_consumers)

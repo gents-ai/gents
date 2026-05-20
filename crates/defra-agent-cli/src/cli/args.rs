@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
-    INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
-    RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
-    SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
+    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
+    RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP,
+    STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -77,6 +77,11 @@ pub(crate) enum Command {
     Background {
         #[command(subcommand)]
         command: BackgroundCommand,
+    },
+    #[command(about = "Probe registered MCP service health", after_help = MCP_AFTER_HELP)]
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
@@ -370,6 +375,41 @@ pub(crate) enum BackgroundCommand {
         after_help = BACKGROUND_AFTER_HELP
     )]
     List(BackgroundListArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum McpCommand {
+    #[command(
+        name = "probe",
+        about = "Run a one-shot health probe for registered MCP services",
+        after_help = MCP_AFTER_HELP
+    )]
+    Probe(McpProbeArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct McpProbeArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to read registry rows instead of local home state"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, action = ArgAction::SetTrue, help = "Probe every online MCP service")]
+    pub(crate) all: bool,
+    #[arg(long, default_value = "5s", value_name = "DURATION")]
+    pub(crate) timeout: String,
+    #[arg(long, value_enum, default_value_t = McpProbeOutput::Text)]
+    pub(crate) output: McpProbeOutput,
+    #[arg(value_name = "SERVICE")]
+    pub(crate) service: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum McpProbeOutput {
+    Text,
+    Json,
 }
 
 #[derive(clap::Args)]

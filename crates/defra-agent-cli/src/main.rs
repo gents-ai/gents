@@ -66,6 +66,7 @@ Inspect the local runtime:
   defra-agent show runtime
   defra-agent show response REQUEST_ID
   defra-agent background list
+  defra-agent mcp probe --all
   defra-agent reset
 
 Update runtime documents:
@@ -164,6 +165,12 @@ Examples:
   defra-agent background list --request REQUEST_ID
   defra-agent background list --state running --age-gt 5m
   defra-agent background list --output json";
+const MCP_AFTER_HELP: &str = "\
+Examples:
+  defra-agent mcp probe SERVICE_ID
+  defra-agent mcp probe --all
+  defra-agent mcp probe SERVICE_ID --timeout 10s
+  defra-agent mcp probe --all --graphql http://127.0.0.1:9191/api/v0/graphql --output json";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
   defra-agent show runtime
@@ -310,6 +317,7 @@ async fn main() -> Result<()> {
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Background { command } => commands::background::dispatch(command).await,
+        Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => commands::request::dispatch(command).await,
