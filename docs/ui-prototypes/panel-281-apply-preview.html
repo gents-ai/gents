@@ -1,0 +1,1499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apply preview · panel-281</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --font-sans: "Inter", "SF Pro Text", system-ui, sans-serif;
+    --font-heading: "Funnel Display", "Inter", "SF Pro Display", system-ui, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+
+    --source-black: #000000;
+    --source-green: #06b250;
+    --source-dark-green: #1c2724;
+    --source-white: #ffffff;
+    --source-blue: #10cbff;
+    --source-orange: #ffa011;
+    --source-green-rgb: 6 178 80;
+    --source-dark-green-rgb: 28 39 36;
+    --source-blue-rgb: 16 203 255;
+    --source-orange-rgb: 255 160 17;
+
+    --color-bg: var(--source-black);
+    --color-surface: rgb(var(--source-dark-green-rgb) / 0.86);
+    --color-surface-strong: #07110e;
+    --color-surface-deep: #020504;
+    --color-surface-muted: rgb(var(--source-dark-green-rgb) / 0.58);
+    --color-surface-row: rgb(9 17 14 / 0.86);
+    --color-text: var(--source-white);
+    --color-text-muted: #95a49d;
+    --color-text-soft: #d6ddda;
+    --color-text-warm: #dff8e8;
+
+    --color-accent: var(--source-green);
+    --color-accent-strong: #39e27a;
+    --color-accent-muted: #58c779;
+    --color-success: #8df2b4;
+    --color-success-strong: var(--source-green);
+    --color-warning: var(--source-orange);
+    --color-info: var(--source-blue);
+    --color-error: #ffad9d;
+    --color-error-strong: #ff6f5f;
+
+    --border-subtle: rgb(var(--source-green-rgb) / 0.12);
+    --border-default: rgb(var(--source-green-rgb) / 0.18);
+    --border-strong: rgb(var(--source-green-rgb) / 0.28);
+    --border-selected: rgb(var(--source-green-rgb) / 0.48);
+
+    --diff-add-bg: rgb(var(--source-green-rgb) / 0.10);
+    --diff-add-border: rgb(var(--source-green-rgb) / 0.34);
+    --diff-update-bg: rgb(var(--source-orange-rgb) / 0.10);
+    --diff-update-border: rgb(var(--source-orange-rgb) / 0.32);
+    --diff-noop-bg: rgb(255 255 255 / 0.02);
+    --diff-noop-border: rgb(255 255 255 / 0.06);
+    --diff-delete-bg: rgb(255 111 95 / 0.07);
+    --diff-delete-border: rgb(255 111 95 / 0.22);
+
+    --radius-sm: 8px;
+    --radius-md: 8px;
+    --radius-lg: 8px;
+    --radius-pill: 999px;
+
+    --space-1: 4px;
+    --space-2: 6px;
+    --space-3: 8px;
+    --space-4: 10px;
+    --space-5: 12px;
+    --space-6: 14px;
+    --space-7: 16px;
+    --space-8: 18px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--source-black);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.45;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(ellipse at 72% -10%, rgb(var(--source-green-rgb) / 0.10), transparent 55%),
+      linear-gradient(180deg, rgb(0 0 0 / 0.96) 0%, rgb(2 8 6 / 0.98) 100%),
+      var(--color-bg);
+    padding: var(--space-8);
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    margin: 0;
+  }
+
+  h1 { font-size: 28px; line-height: 1.12; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 14px; }
+  h4 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent-muted); }
+
+  code, .mono { font-family: var(--font-mono); }
+
+  button {
+    font: inherit;
+    cursor: pointer;
+    background: transparent;
+    color: inherit;
+    border: 1px solid var(--border-default);
+    padding: var(--space-3) var(--space-5);
+    border-radius: var(--radius-sm);
+    transition: 120ms ease;
+  }
+  button:hover { background: rgb(var(--source-green-rgb) / 0.08); border-color: var(--border-strong); }
+  button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  button[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+  select {
+    font: inherit;
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    border: 1px solid var(--border-default);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
+  }
+
+  .panel {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  /* ─────────────────────────  HEAD  ───────────────────────── */
+  .panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-7);
+    flex-wrap: wrap;
+  }
+  .panel-head .titles {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .panel-head .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-accent-muted);
+  }
+  .panel-head .titles p {
+    margin: 0;
+    color: var(--color-text-soft);
+    font-size: 13px;
+    max-width: 60ch;
+  }
+  .panel-head .variation {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+
+  /* ─────────────────────  MANIFEST BAR  ─────────────────────── */
+  .manifest-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: var(--space-5);
+    background: var(--color-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-6);
+  }
+  .manifest-bar .cell {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .manifest-bar .cell .mono {
+    font-size: 12px;
+    color: var(--color-text-warm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .endpoint-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    padding: 2px var(--space-3);
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    color: var(--color-text-soft);
+    line-height: 1.6;
+  }
+  .badge.accent { border-color: var(--border-strong); background: rgb(var(--source-green-rgb) / 0.14); color: var(--color-text-warm); }
+  .badge.warn { border-color: rgb(var(--source-orange-rgb) / 0.32); background: rgb(var(--source-orange-rgb) / 0.10); color: var(--color-warning); }
+  .badge.info { border-color: rgb(var(--source-blue-rgb) / 0.32); background: rgb(var(--source-blue-rgb) / 0.10); color: var(--color-info); }
+  .badge.error { border-color: rgb(255 111 95 / 0.32); background: rgb(255 111 95 / 0.10); color: var(--color-error); }
+
+  /* ──────────────────────  SUMMARY  ───────────────────────── */
+  .summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-6);
+    background: var(--color-surface-strong);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-6) var(--space-7);
+  }
+  .summary-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+  .pill {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-5);
+    border-radius: var(--radius-pill);
+    font-size: 13px;
+    line-height: 1.4;
+    background: var(--color-surface-row);
+    border: 1px solid var(--border-subtle);
+  }
+  .pill .count {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    color: var(--color-text);
+  }
+  .pill .label {
+    color: var(--color-text-muted);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .pill.add { border-color: var(--diff-add-border); background: var(--diff-add-bg); }
+  .pill.add .count { color: var(--color-success); }
+  .pill.update { border-color: var(--diff-update-border); background: var(--diff-update-bg); }
+  .pill.update .count { color: var(--color-warning); }
+  .pill.noop .count { color: var(--color-text-soft); }
+  .pill.delete { border-color: var(--diff-delete-border); background: var(--diff-delete-bg); }
+  .pill.delete .count { color: var(--color-error); }
+
+  .summary-eta {
+    display: grid;
+    gap: 2px;
+    text-align: right;
+    min-width: 180px;
+  }
+  .summary-eta .eta-value {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    color: var(--color-accent-strong);
+  }
+  .summary-eta .eta-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+  .summary-eta .eta-note {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+
+  /* ─────────────────────  EMPTY/ERROR  ──────────────────────── */
+  .empty-state, .error-state {
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-8);
+    text-align: center;
+    color: var(--color-text-muted);
+    background: var(--color-surface-muted);
+  }
+  .error-state {
+    border-style: solid;
+    border-color: rgb(255 111 95 / 0.32);
+    background: rgb(72 15 10 / 0.42);
+    color: var(--color-error);
+    text-align: left;
+  }
+  .error-state h2 { color: var(--color-error-strong); margin-bottom: var(--space-3); }
+  .error-state ul { margin: var(--space-3) 0 0; padding-left: 18px; color: var(--color-text-warm); }
+  .error-state li { margin-bottom: var(--space-2); }
+  .error-state li .mono { color: var(--color-error); font-size: 12px; }
+
+  /* ─────────────────────  COLLECTIONS  ──────────────────────── */
+  .collections {
+    display: grid;
+    gap: var(--space-5);
+  }
+  .collection {
+    background: var(--color-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .collection-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    padding: var(--space-5) var(--space-6);
+    background: var(--color-surface-strong);
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    user-select: none;
+  }
+  .collection-head:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+  .collection-head .chev {
+    transition: transform 140ms ease;
+    color: var(--color-text-muted);
+    font-size: 10px;
+    width: 12px;
+    text-align: center;
+  }
+  .collection.open .chev { transform: rotate(90deg); }
+  .collection-head .name {
+    font-family: var(--font-heading);
+    font-size: 14px;
+    color: var(--color-text-warm);
+  }
+  .collection-head .order {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+  .collection-head .head-pills {
+    margin-left: auto;
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .head-pill {
+    font-size: 11px;
+    padding: 2px var(--space-3);
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-subtle);
+    background: var(--color-surface-row);
+    color: var(--color-text-soft);
+  }
+  .head-pill.add { color: var(--color-success); border-color: var(--diff-add-border); }
+  .head-pill.update { color: var(--color-warning); border-color: var(--diff-update-border); }
+  .head-pill.noop { color: var(--color-text-muted); }
+  .head-pill.delete { color: var(--color-error); border-color: var(--diff-delete-border); }
+  .head-pill.zero { opacity: 0.35; }
+
+  .collection-body {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-6);
+    max-height: 560px;
+    overflow: auto;
+  }
+  .collection:not(.open) .collection-body { display: none; }
+
+  .group h4 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4) 0 var(--space-3);
+  }
+  .group h4 .count-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-row);
+    color: var(--color-text-muted);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .group:first-child h4 { margin-top: 0; }
+
+  .row {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--diff-noop-border);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--diff-noop-bg);
+  }
+  .row .marker {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--color-text-muted);
+    line-height: 1;
+    padding-top: 2px;
+  }
+  .row .id {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text);
+    word-break: break-all;
+  }
+  .row .preview {
+    font-size: 12px;
+    color: var(--color-text-soft);
+    margin-top: var(--space-2);
+    display: grid;
+    gap: 2px;
+  }
+  .row .preview .kv {
+    display: grid;
+    grid-template-columns: 130px minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .row .preview .kv .k {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .row .preview .kv .v {
+    color: var(--color-text-warm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row.add { border-color: var(--diff-add-border); border-left-color: var(--color-accent); background: var(--diff-add-bg); }
+  .row.add .marker { color: var(--color-success); }
+  .row.update { border-color: var(--diff-update-border); border-left-color: var(--color-warning); background: var(--diff-update-bg); }
+  .row.update .marker { color: var(--color-warning); }
+  .row.noop { color: var(--color-text-muted); }
+  .row.noop .id { color: var(--color-text-soft); }
+  .row.delete { border-color: var(--diff-delete-border); border-left-color: var(--color-error-strong); background: var(--diff-delete-bg); }
+  .row.delete .marker { color: var(--color-error); }
+  .row.delete .id { color: var(--color-error); }
+
+  .row .field-diff {
+    margin-top: var(--space-3);
+    border-top: 1px dashed var(--diff-update-border);
+    padding-top: var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+  }
+  .field-diff .field {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--space-3);
+    font-size: 11px;
+    align-items: start;
+  }
+  .field-diff .fname {
+    color: var(--color-accent-muted);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    padding-top: 2px;
+  }
+  .field-diff .before,
+  .field-diff .after {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: 4px;
+    color: var(--color-text-warm);
+    word-break: break-word;
+  }
+  .field-diff .before {
+    background: rgb(255 111 95 / 0.10);
+    border: 1px solid rgb(255 111 95 / 0.22);
+    text-decoration: line-through;
+    text-decoration-color: rgb(255 111 95 / 0.55);
+  }
+  .field-diff .after {
+    background: rgb(var(--source-green-rgb) / 0.12);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.26);
+  }
+  .field-diff .arrow {
+    color: var(--color-text-muted);
+    text-align: center;
+    font-family: var(--font-mono);
+  }
+
+  .delete-banner {
+    margin-top: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border: 1px dashed var(--diff-delete-border);
+    border-radius: var(--radius-sm);
+    background: var(--diff-delete-bg);
+    color: var(--color-error);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .delete-banner strong { color: var(--color-error-strong); font-weight: 700; }
+  .delete-banner .right { margin-left: auto; font-size: 11px; color: var(--color-text-muted); }
+
+  .body-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    padding: 0 0 var(--space-3);
+    border-bottom: 1px dashed var(--border-subtle);
+  }
+  .body-controls .ghost {
+    border: 0;
+    padding: 2px var(--space-3);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    background: transparent;
+  }
+  .body-controls .ghost:hover { color: var(--color-accent); background: transparent; }
+
+  /* ───────────────────────  FOOTER  ─────────────────────────── */
+  .actions {
+    display: flex;
+    gap: var(--space-4);
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    padding: var(--space-6);
+    background: var(--color-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+  }
+  .actions .spacer { flex: 1; min-width: 0; color: var(--color-text-muted); font-size: 12px; }
+  .actions button.primary {
+    background: rgb(var(--source-green-rgb) / 0.16);
+    border-color: var(--border-selected);
+    color: var(--color-text-warm);
+    font-weight: 600;
+  }
+  .actions button.primary:hover { background: rgb(var(--source-green-rgb) / 0.24); }
+
+  .action-log {
+    background: var(--color-surface-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-5) var(--space-6);
+    max-height: 180px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.65;
+  }
+  .action-log .entry { white-space: pre-wrap; }
+  .action-log .entry.apply { color: var(--color-accent-strong); }
+  .action-log .entry.dryrun { color: var(--color-info); }
+  .action-log .entry.note { color: var(--color-text-muted); }
+  .action-log .ts { color: var(--color-text-muted); margin-right: var(--space-3); }
+
+  /* ──────────────────────  EXTRA PANELS  ────────────────────── */
+  details.panel-extra {
+    background: var(--color-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-5) var(--space-6);
+  }
+  details.panel-extra > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--color-text-warm);
+    font-family: var(--font-heading);
+    font-size: 14px;
+  }
+  details.panel-extra > summary::-webkit-details-marker { display: none; }
+  details.panel-extra > summary::before {
+    content: "▸";
+    color: var(--color-text-muted);
+    font-size: 10px;
+    transition: transform 140ms ease;
+  }
+  details.panel-extra[open] > summary::before { transform: rotate(90deg); }
+  details.panel-extra .extra-body {
+    margin-top: var(--space-5);
+    display: grid;
+    gap: var(--space-5);
+    font-size: 13px;
+    color: var(--color-text-soft);
+  }
+  details.panel-extra .extra-body p { margin: 0; }
+  details.panel-extra .extra-body h3 { margin: var(--space-3) 0 var(--space-2); color: var(--color-text-warm); }
+  details.panel-extra .extra-body code { color: var(--color-accent-strong); }
+  details.panel-extra .extra-body ul { margin: 0; padding-left: 18px; }
+  details.panel-extra .extra-body li { margin-bottom: var(--space-1); }
+  details.panel-extra .extra-body pre {
+    background: var(--color-surface-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: var(--space-4) var(--space-5);
+    margin: var(--space-2) 0 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-warm);
+    overflow: auto;
+    line-height: 1.5;
+  }
+
+  .atomicity {
+    background: var(--color-surface-strong);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-5) var(--space-6);
+    display: grid;
+    gap: var(--space-3);
+  }
+  .atomicity h3 { color: var(--color-info); font-family: var(--font-heading); }
+  .atomicity .sub { color: var(--color-text-muted); font-size: 12px; }
+  .atomicity .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-3);
+  }
+  .atomicity .cell {
+    background: var(--color-surface-row);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: var(--space-4) var(--space-5);
+    display: grid;
+    gap: 2px;
+  }
+  .atomicity .cell .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-accent-muted);
+  }
+  .atomicity .cell .value {
+    font-family: var(--font-mono);
+    color: var(--color-text-warm);
+    font-size: 12px;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: var(--space-5); }
+    .manifest-bar { grid-template-columns: 1fr; }
+    .summary { grid-template-columns: 1fr; }
+    .summary-eta { text-align: left; }
+    .row .preview .kv { grid-template-columns: 1fr; }
+    .field-diff .field { grid-template-columns: 1fr; }
+    .field-diff .arrow { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="panel" aria-label="Apply-reconcile preview">
+
+  <header class="panel-head">
+    <div class="titles">
+      <span class="eyebrow">UI prototype · panel-281</span>
+      <h1>Apply preview</h1>
+      <p>
+        Pre-apply diff of a desired-state manifest against the live DefraDB
+        node. Surfaces the structured <code class="mono">ApplyPreview</code>
+        a Tauri <code class="mono">preview_apply(manifest_path)</code> command
+        would return — derived from the same shape
+        <code class="mono">defra-agent-cli config diff</code> already emits.
+      </p>
+    </div>
+    <div class="variation" role="group" aria-label="Mock dataset selector">
+      <label for="variation">Mock dataset</label>
+      <select id="variation" aria-label="Select mock dataset">
+        <option value="small">Small diff (3 adds)</option>
+        <option value="large">Large diff (50 / 30 / 100)</option>
+        <option value="allNoop">All no-op</option>
+        <option value="empty">No manifest selected</option>
+        <option value="error">Validation error</option>
+      </select>
+    </div>
+  </header>
+
+  <!-- Manifest + endpoint bar (always rendered) -->
+  <section class="manifest-bar" id="manifest-bar" aria-label="Manifest and endpoint">
+    <div class="cell">
+      <h4>Manifest</h4>
+      <span class="mono" id="manifest-path">—</span>
+    </div>
+    <div class="cell">
+      <h4>Apply target</h4>
+      <div class="endpoint-row" id="endpoint-row"></div>
+    </div>
+  </section>
+
+  <!-- Summary (hidden in empty/error states) -->
+  <section class="summary" id="summary" aria-label="Diff summary" hidden>
+    <div class="summary-pills" id="summary-pills"></div>
+    <div class="summary-eta">
+      <span class="eta-value" id="eta-value">—</span>
+      <span class="eta-label">estimated runtime</span>
+      <span class="eta-note">~5ms per mutation × N (per <code class="mono">2026-05-20</code> tx audit)</span>
+    </div>
+  </section>
+
+  <!-- Empty state -->
+  <section class="empty-state" id="empty-state" hidden>
+    <h2 style="color:var(--color-text);">No manifest selected</h2>
+    <p style="margin-top: var(--space-3);">
+      Pick a manifest file (<code class="mono">agents/&lt;name&gt;/manifest.toml</code>)
+      to preview the apply diff.
+    </p>
+  </section>
+
+  <!-- Error state -->
+  <section class="error-state" id="error-state" role="alert" aria-live="polite" hidden>
+    <h2>Manifest validation failed</h2>
+    <p>Apply blocked. The CLI runs
+       <code class="mono">validate_manifest_against_live</code>
+       before opening a transaction; in the panel we surface the same
+       errors and disable the Apply button.</p>
+    <ul id="error-list"></ul>
+  </section>
+
+  <!-- Per-collection diff body -->
+  <section class="collections" id="collections" aria-label="Per-collection diffs" hidden></section>
+
+  <!-- Atomicity preview (#246 expected_external_state_after_abort) -->
+  <section class="atomicity" id="atomicity" aria-label="Atomicity preview" hidden>
+    <h3>If apply aborts mid-flight, readers see…</h3>
+    <span class="sub">
+      Preview of <code class="mono">expected_external_state_after_abort</code>
+      (issue #246). The transactional apply path commits as a single DefraDB
+      transaction; an abort discards every staged write, so reader-visible
+      state equals the pre-apply live state.
+    </span>
+    <div class="grid" id="atomicity-grid"></div>
+  </section>
+
+  <!-- Action footer -->
+  <footer class="actions" id="actions">
+    <div class="spacer" id="action-summary">—</div>
+    <button id="btn-dryrun" type="button" aria-label="Re-run preview as a dry-run">Dry run</button>
+    <button id="btn-apply" type="button" class="primary" aria-label="Apply this manifest (mock)">Apply</button>
+  </footer>
+
+  <section class="action-log" id="action-log" aria-label="Action log" aria-live="polite"></section>
+
+  <!-- Design notes -->
+  <details class="panel-extra" id="design-notes">
+    <summary>Design notes</summary>
+    <div class="extra-body">
+
+      <h3>Tauri command surface</h3>
+      <p>The panel renders a structured value, not raw CLI stdout. The
+         Tauri bridge would expose two commands:</p>
+      <pre>preview_apply(manifest_path: PathBuf) -> Result&lt;ApplyPreview, ApplyPreviewError&gt;
+apply(manifest_path: PathBuf, force: bool) -> Result&lt;ApplyResult, ApplyError&gt;</pre>
+      <p>
+        <code class="mono">ApplyPreview</code> is a superset of today's
+        <code class="mono">DesiredStateDiffReport</code>
+        (<code class="mono">crates/defra-agent-cli/src/desired_state/mod.rs:372</code>):
+        same per-collection <code class="mono">create</code> /
+        <code class="mono">update</code> / <code class="mono">unchanged</code> /
+        <code class="mono">live_only</code> ID lists, plus the manifest field
+        payloads (so updates can render field-level diffs) and the
+        per-collection <code class="mono">apply_order</code> rank from
+        <code class="mono">ApplyReconcile.Collections.applyOrder</code>.
+      </p>
+      <p>
+        <code class="mono">apply()</code> wraps
+        <code class="mono">apply_bound_desired_manifest</code>
+        (<code class="mono">commands/config/apply.rs:36</code>) and
+        returns the existing
+        <code class="mono">ConfigApplyReport</code>
+        (<code class="mono">shared.rs:241</code>) verbatim.
+      </p>
+
+      <h3>Data shape mirrors the ApplyReconcile Lean spec</h3>
+      <p>
+        Lean models the diff as
+        <code class="mono">ApplyStep</code> = <code class="mono">create</code> |
+        <code class="mono">update</code>
+        (<code class="mono">ApplyReconcile/Diff.lean:15</code>), enumerated
+        over the manifest's <code class="mono">support</code> and sorted by
+        <code class="mono">(collection.applyOrder, id)</code>. The panel groups
+        rows by collection in the same order — rank 0 (backends, profiles,
+        registries, selections) first, then 1 (behaviors), 2 (tasks,
+        schedules), 3 (principals, event triggers) — so the rendered diff
+        matches what the apply path would execute. Per-collection witness
+        rows live under
+        <code class="mono">crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases/Fixtures.lean</code>;
+        the mock datasets here are shaped to match those.
+      </p>
+
+      <h3>How the panel surfaces atomicity (#246)</h3>
+      <p>
+        The Atomicity preview block renders
+        <code class="mono">expected_external_state_after_abort</code> — a
+        compact "what readers see if apply fails at this point". Because
+        the apply path runs inside a single DefraDB transaction
+        (<code class="mono">apply.rs:70-89</code>), the answer is always
+        "exactly the pre-apply live state" — no partial visibility, no
+        staged-write leakage. The panel makes this property visible
+        without requiring the operator to read the Lean spec.
+      </p>
+
+      <h3>Out of scope (matches issue #281 / #57)</h3>
+      <ul>
+        <li>Delete semantics aren't applied; the diff shows
+          <code class="mono">live_only</code> documents as a reserved
+          red-tinted banner so a future Delete pass slots in without
+          reshuffling the layout (tracked in #57).</li>
+        <li>This is a UI prototype only — no Tauri bridge, no real apply,
+          no live-data fetch.</li>
+      </ul>
+
+      <h3>Accessibility</h3>
+      <ul>
+        <li>Each major region is a <code class="mono">&lt;section&gt;</code>
+          or <code class="mono">&lt;header&gt;</code> with an
+          <code class="mono">aria-label</code>.</li>
+        <li>Error state uses <code class="mono">role="alert"</code> with
+          <code class="mono">aria-live="polite"</code>.</li>
+        <li>Collection headers are focusable and toggle on
+          <code class="mono">Enter</code> / <code class="mono">Space</code>.</li>
+        <li>The action log advertises <code class="mono">aria-live="polite"</code>
+          so screen readers announce the result of Apply / Dry-run.</li>
+        <li>Color is never the only signal: every diff row also carries a
+          textual marker (<code class="mono">+</code>, <code class="mono">~</code>,
+          <code class="mono">·</code>, <code class="mono">−</code>) in a
+          mono-font column.</li>
+      </ul>
+
+      <h3>Performance hints (large diffs)</h3>
+      <ul>
+        <li>Each collection card caps its body at
+          <code class="mono">max-height: 560px</code> with
+          <code class="mono">overflow: auto</code>, so a 100-row no-op
+          group scrolls inside its card instead of stretching the page.</li>
+        <li>No-op groups collapse by default beyond the first 5 rows
+          (<em>Show all N…</em>) so large diffs stay legible without
+          drowning the meaningful changes.</li>
+        <li>For multi-thousand-row diffs the production version would
+          virtualize the no-op group; the design accommodates this with the
+          stable per-collection card boundary.</li>
+      </ul>
+
+    </div>
+  </details>
+</main>
+
+<script>
+"use strict";
+
+/* ────────────────────────────────────────────────────────────
+   Apply preview — mock data
+   Mirrors crates/defra-agent-cli/src/desired_state/mod.rs:
+     - DesiredStateDiffReport
+     - DesiredStateCollectionDiff { create, update, unchanged, live_only }
+   Plus payloads for create + before/after for update so the panel can
+   render field-level diffs (a Tauri preview_apply() would return this
+   richer shape; the existing diff JSON only carries IDs).
+   ──────────────────────────────────────────────────────────── */
+
+// Apply-order from ApplyReconcile.Collections.applyOrder (Lean spec).
+// Names mirror the GraphQL collection names under
+// crates/defra-agent-protocol/schemas/agent/*.
+const COLLECTIONS = [
+  { key: "inference_backends",      label: "InferenceBackend",     applyOrder: 0 },
+  { key: "inference_profiles",      label: "InferenceProfile",     applyOrder: 0 },
+  { key: "tool_service_registries", label: "ToolServiceRegistry",  applyOrder: 0 },
+  { key: "tool_selections",         label: "ToolSelection",        applyOrder: 0 },
+  { key: "agent_behaviors",         label: "AgentBehavior",        applyOrder: 1 },
+  { key: "tasks",                   label: "Task",                 applyOrder: 2 },
+  { key: "schedules",               label: "Schedule",             applyOrder: 2 },
+  { key: "agent_principals",        label: "AgentPrincipal",       applyOrder: 3 },
+  { key: "event_triggers",          label: "EventTrigger",         applyOrder: 3 },
+];
+
+function emptyCollections() {
+  const out = {};
+  for (const c of COLLECTIONS) {
+    out[c.key] = { create: [], update: [], unchanged: [], live_only: [] };
+  }
+  return out;
+}
+
+/* ─────────────  Small diff: realistic operator workflow  ───────── */
+const smallDataset = (() => {
+  const c = emptyCollections();
+  c.tasks.create.push(
+    {
+      id: "summarize_compliance_logs",
+      fields: {
+        prompt_template: "Summarize the last 24h of compliance events…",
+        target_behavior_id: "amy-general",
+        output_schema_ref: "schemas/compliance_summary.v1.json",
+      },
+    },
+    {
+      id: "rotate_inference_creds_check",
+      fields: {
+        prompt_template: "Confirm credentials rotated for {{args.profile}}.",
+        target_behavior_id: "amy-general",
+        output_schema_ref: "—",
+      },
+    },
+  );
+  c.schedules.create.push({
+    id: "compliance_summary_daily",
+    fields: {
+      cron: "0 7 * * *",
+      task_id: "summarize_compliance_logs",
+      enabled: "true",
+      concurrency_mode: "latest_only",
+    },
+  });
+  c.agent_behaviors.unchanged.push("amy-general", "amy-code");
+  c.inference_backends.unchanged.push("openai-prod");
+  c.tool_selections.unchanged.push("amy-general-tools");
+  c.agent_principals.unchanged.push("did:key:z6MkpTHR8VNs…");
+  return {
+    selected: true,
+    manifestPath: "agents/amy-general/manifest.toml",
+    endpoint: "http://127.0.0.1:9181",
+    accessMode: "embedded",
+    agentDid: "did:key:z6MkpTHR8VNs…",
+    validation: { ok: true, errors: [] },
+    collections: c,
+  };
+})();
+
+/* ─────────────  Large diff: stress test  ─────────── */
+const largeDataset = (() => {
+  const c = emptyCollections();
+  for (let i = 0; i < 50; i++) {
+    c.tasks.create.push({
+      id: `task_${String(i).padStart(3, "0")}`,
+      fields: {
+        prompt_template: `Synthetic task ${i} prompt…`,
+        target_behavior_id: i % 3 === 0 ? "amy-code" : "amy-general",
+        output_schema_ref: "—",
+      },
+    });
+  }
+  for (let i = 0; i < 30; i++) {
+    c.schedules.update.push({
+      id: `schedule_${String(i).padStart(3, "0")}`,
+      changedFields: [
+        { name: "cron", before: "*/15 * * * *", after: i % 2 ? "*/30 * * * *" : "0 */1 * * *" },
+        { name: "concurrency_mode", before: "queue", after: "latest_only" },
+      ],
+    });
+  }
+  for (let i = 0; i < 100; i++) {
+    c.tasks.unchanged.push(`task_legacy_${String(i).padStart(3, "0")}`);
+  }
+  c.agent_behaviors.unchanged.push("amy-general", "amy-code", "amy-rumination");
+  c.inference_backends.unchanged.push("openai-prod", "anthropic-prod");
+  c.inference_profiles.unchanged.push("amy-default", "amy-rumination");
+  c.tool_service_registries.unchanged.push("mcp-filesystem");
+  c.tool_selections.unchanged.push("amy-general-tools", "amy-code-tools");
+  c.event_triggers.live_only.push("legacy_event_trigger_pings");
+  c.agent_principals.unchanged.push("did:key:z6MkpTHR8VNs…");
+  return {
+    selected: true,
+    manifestPath: "fleet/region-us-west/manifest.toml",
+    endpoint: "https://defra.amy.internal:9181",
+    accessMode: "http",
+    agentDid: "did:key:z6MkfTHR8VNs…(fleet)",
+    validation: { ok: true, errors: [] },
+    collections: c,
+  };
+})();
+
+/* ─────────────  All no-op  ─────────── */
+const allNoopDataset = (() => {
+  const c = emptyCollections();
+  c.agent_behaviors.unchanged.push("amy-general", "amy-code");
+  c.inference_backends.unchanged.push("openai-prod");
+  c.inference_profiles.unchanged.push("amy-default");
+  c.tool_service_registries.unchanged.push("mcp-filesystem");
+  c.tool_selections.unchanged.push("amy-general-tools");
+  c.tasks.unchanged.push("summarize_compliance_logs", "rotate_inference_creds_check");
+  c.schedules.unchanged.push("compliance_summary_daily");
+  c.agent_principals.unchanged.push("did:key:z6MkpTHR8VNs…");
+  return {
+    selected: true,
+    manifestPath: "agents/amy-general/manifest.toml",
+    endpoint: "http://127.0.0.1:9181",
+    accessMode: "embedded",
+    agentDid: "did:key:z6MkpTHR8VNs…",
+    validation: { ok: true, errors: [] },
+    collections: c,
+  };
+})();
+
+/* ─────────────  Empty (no manifest)  ─────────── */
+const emptyDataset = {
+  selected: false,
+  manifestPath: null,
+  endpoint: "http://127.0.0.1:9181",
+  accessMode: "embedded",
+  agentDid: null,
+  validation: { ok: true, errors: [] },
+  collections: emptyCollections(),
+};
+
+/* ─────────────  Error: live-validation failed  ─────────── */
+const errorDataset = {
+  selected: true,
+  manifestPath: "agents/amy-general/manifest.toml",
+  endpoint: "http://127.0.0.1:9181",
+  accessMode: "embedded",
+  agentDid: "did:key:z6MkpTHR8VNs…",
+  validation: {
+    ok: false,
+    errors: [
+      {
+        location: "event_triggers[0].filter",
+        message: "filter syntax rejected by live DefraDB probe (limit:1)",
+      },
+      {
+        location: "event_triggers[0].source_collection",
+        message: "doc.user.tenant_id is not a field on collection User (live GraphQL schema)",
+      },
+      {
+        location: "agent_behaviors[1].backend_id",
+        message: "references unknown InferenceBackend \"openai-staging\" — not in manifest, not in live state",
+      },
+    ],
+  },
+  collections: emptyCollections(),
+};
+
+const DATASETS = {
+  small: smallDataset,
+  large: largeDataset,
+  allNoop: allNoopDataset,
+  empty: emptyDataset,
+  error: errorDataset,
+};
+
+/* ───────────────────────────────────────────────
+   Rendering
+   ─────────────────────────────────────────────── */
+
+const MS_PER_MUTATION = 5; // per audit: ~5ms per mutation, see panel header.
+const NOOP_FOLD_THRESHOLD = 5;
+
+const els = {
+  variation: document.getElementById("variation"),
+  manifestPath: document.getElementById("manifest-path"),
+  endpointRow: document.getElementById("endpoint-row"),
+  summary: document.getElementById("summary"),
+  summaryPills: document.getElementById("summary-pills"),
+  etaValue: document.getElementById("eta-value"),
+  empty: document.getElementById("empty-state"),
+  error: document.getElementById("error-state"),
+  errorList: document.getElementById("error-list"),
+  collections: document.getElementById("collections"),
+  atomicity: document.getElementById("atomicity"),
+  atomicityGrid: document.getElementById("atomicity-grid"),
+  actions: document.getElementById("actions"),
+  actionSummary: document.getElementById("action-summary"),
+  btnDryrun: document.getElementById("btn-dryrun"),
+  btnApply: document.getElementById("btn-apply"),
+  actionLog: document.getElementById("action-log"),
+};
+
+let currentName = "small";
+
+function totals(collections) {
+  let adds = 0, updates = 0, noops = 0, liveOnly = 0;
+  for (const c of COLLECTIONS) {
+    const d = collections[c.key];
+    adds += d.create.length;
+    updates += d.update.length;
+    noops += d.unchanged.length;
+    liveOnly += d.live_only.length;
+  }
+  return { adds, updates, noops, liveOnly };
+}
+
+function fmtEtaMs(ms) {
+  if (ms < 1000) return `${ms} ms`;
+  const s = (ms / 1000).toFixed(ms < 10_000 ? 2 : 1);
+  return `${s} s`;
+}
+
+function setBadge(label, kind) {
+  const b = document.createElement("span");
+  b.className = `badge ${kind || ""}`.trim();
+  b.textContent = label;
+  return b;
+}
+
+function setHidden(el, hidden) {
+  if (hidden) el.setAttribute("hidden", "");
+  else el.removeAttribute("hidden");
+}
+
+function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+function renderManifestBar(d) {
+  els.manifestPath.textContent = d.manifestPath || "(no manifest selected)";
+  clear(els.endpointRow);
+  els.endpointRow.appendChild(setBadge(d.endpoint, "info"));
+  els.endpointRow.appendChild(setBadge(`access_mode = ${d.accessMode}`, "accent"));
+  if (d.agentDid) {
+    const did = setBadge(d.agentDid, "");
+    did.classList.add("mono");
+    els.endpointRow.appendChild(did);
+  }
+}
+
+function renderSummary(t) {
+  clear(els.summaryPills);
+  const mk = (n, label, kind) => {
+    const p = document.createElement("span");
+    p.className = `pill ${kind}`;
+    p.innerHTML = `<span class="count">${n.toLocaleString()}</span><span class="label">${label}</span>`;
+    return p;
+  };
+  els.summaryPills.appendChild(mk(t.adds, "adds", "add"));
+  els.summaryPills.appendChild(mk(t.updates, "updates", "update"));
+  els.summaryPills.appendChild(mk(t.noops, "no-ops", "noop"));
+  // Deletes pill is visually reserved (#57 out of scope). Show
+  // live_only count so the layout accommodates a future delete pass.
+  const dpill = mk(t.liveOnly, "live-only", "delete");
+  dpill.title = "Delete semantics are out of scope (#57); shown for visual reserve.";
+  els.summaryPills.appendChild(dpill);
+
+  const muts = t.adds + t.updates;
+  els.etaValue.textContent = muts === 0 ? "—" : fmtEtaMs(muts * MS_PER_MUTATION);
+}
+
+function renderHeadPills(diff) {
+  const wrap = document.createElement("div");
+  wrap.className = "head-pills";
+  const mk = (n, label, kind) => {
+    const p = document.createElement("span");
+    p.className = `head-pill ${kind}${n === 0 ? " zero" : ""}`;
+    p.textContent = `${n} ${label}`;
+    return p;
+  };
+  wrap.appendChild(mk(diff.create.length, "+", "add"));
+  wrap.appendChild(mk(diff.update.length, "~", "update"));
+  wrap.appendChild(mk(diff.unchanged.length, "·", "noop"));
+  wrap.appendChild(mk(diff.live_only.length, "−", "delete"));
+  return wrap;
+}
+
+function renderCreateRow(item) {
+  const row = document.createElement("div");
+  row.className = "row add";
+  const fieldsHtml = item.fields
+    ? Object.entries(item.fields)
+        .map(
+          ([k, v]) =>
+            `<div class="kv"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(
+              String(v),
+            )}</span></div>`,
+        )
+        .join("")
+    : "";
+  row.innerHTML = `
+    <span class="marker">+</span>
+    <div>
+      <div class="id">${escapeHtml(item.id)}</div>
+      ${fieldsHtml ? `<div class="preview">${fieldsHtml}</div>` : ""}
+    </div>`;
+  return row;
+}
+
+function renderUpdateRow(item) {
+  const row = document.createElement("div");
+  row.className = "row update";
+  const fields = (item.changedFields || []).map(f => `
+    <div class="field">
+      <span class="fname">${escapeHtml(f.name)}</span>
+      <span class="before">${escapeHtml(String(f.before))}</span>
+      <span class="after">${escapeHtml(String(f.after))}</span>
+    </div>`).join("");
+  row.innerHTML = `
+    <span class="marker">~</span>
+    <div>
+      <div class="id">${escapeHtml(item.id)}</div>
+      ${fields ? `<div class="field-diff" role="group" aria-label="Field-level changes">
+        <div class="field" aria-hidden="true" style="color:var(--color-text-muted); font-size:10px; text-transform:uppercase; letter-spacing:0.08em;">
+          <span class="fname">field</span><span>before</span><span>after</span>
+        </div>
+        ${fields}
+      </div>` : ""}
+    </div>`;
+  return row;
+}
+
+function renderNoopRow(id) {
+  const row = document.createElement("div");
+  row.className = "row noop";
+  row.innerHTML = `
+    <span class="marker">·</span>
+    <div><div class="id">${escapeHtml(id)}</div></div>`;
+  return row;
+}
+
+function renderDeleteBanner(ids) {
+  const el = document.createElement("div");
+  el.className = "delete-banner";
+  el.innerHTML = `
+    <strong>${ids.length} live-only document${ids.length === 1 ? "" : "s"}</strong>
+    <span>not in manifest. Delete semantics are <em>out of scope</em>; layout reserves this space for the future delete pass (issue #57).</span>
+    <span class="right" title="${ids.map(escapeHtml).join(", ")}">${ids.slice(0, 3).map(escapeHtml).join(", ")}${ids.length > 3 ? `, +${ids.length - 3} more` : ""}</span>`;
+  return el;
+}
+
+function renderCollectionCard(spec, diff, openByDefault) {
+  const total = diff.create.length + diff.update.length + diff.unchanged.length + diff.live_only.length;
+  const hasMeaningful = diff.create.length + diff.update.length + diff.live_only.length > 0;
+  const wrap = document.createElement("article");
+  wrap.className = "collection" + (openByDefault ? " open" : "");
+
+  const head = document.createElement("header");
+  head.className = "collection-head";
+  head.tabIndex = 0;
+  head.setAttribute("role", "button");
+  head.setAttribute("aria-expanded", openByDefault ? "true" : "false");
+  head.innerHTML = `
+    <span class="chev" aria-hidden="true">▸</span>
+    <span class="name">${escapeHtml(spec.label)}</span>
+    <span class="order">apply_order = ${spec.applyOrder}</span>`;
+  head.appendChild(renderHeadPills(diff));
+  wrap.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "collection-body";
+
+  // body-controls (collapse-all / expand-all for no-ops)
+  if (total > 0) {
+    const ctrls = document.createElement("div");
+    ctrls.className = "body-controls";
+    ctrls.innerHTML = `<span style="font-size:11px;color:var(--color-text-muted);">${total} document${total === 1 ? "" : "s"}</span>`;
+    body.appendChild(ctrls);
+  }
+
+  if (diff.create.length) {
+    body.appendChild(renderGroup("Adds", "add", diff.create, renderCreateRow, false));
+  }
+  if (diff.update.length) {
+    body.appendChild(renderGroup("Updates", "update", diff.update, renderUpdateRow, false));
+  }
+  if (diff.unchanged.length) {
+    body.appendChild(renderGroup("No-ops", "noop", diff.unchanged, renderNoopRow, true));
+  }
+  if (diff.live_only.length) {
+    body.appendChild(renderDeleteBanner(diff.live_only));
+  }
+  if (total === 0) {
+    const stub = document.createElement("p");
+    stub.style.cssText = "margin:0; color: var(--color-text-muted); font-size:12px;";
+    stub.textContent = "No documents in this collection.";
+    body.appendChild(stub);
+  }
+  wrap.appendChild(body);
+
+  function toggle() {
+    const open = wrap.classList.toggle("open");
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggle();
+    }
+  });
+  return wrap;
+}
+
+function renderGroup(label, kind, items, renderRow, foldable) {
+  const g = document.createElement("section");
+  g.className = "group";
+  const h = document.createElement("h4");
+  h.textContent = label;
+  const cb = document.createElement("span");
+  cb.className = "count-badge";
+  cb.textContent = String(items.length);
+  h.appendChild(cb);
+  g.appendChild(h);
+
+  const showInitial = foldable && items.length > NOOP_FOLD_THRESHOLD ? NOOP_FOLD_THRESHOLD : items.length;
+  const initial = items.slice(0, showInitial);
+  const rest = items.slice(showInitial);
+
+  for (const item of initial) g.appendChild(renderRow(item));
+
+  if (rest.length) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.style.cssText = "margin-top:var(--space-3); border:0; background:transparent; color:var(--color-text-muted); font-size:11px; padding:0; cursor:pointer;";
+    more.textContent = `Show ${rest.length} more ${label.toLowerCase()} →`;
+    more.addEventListener("click", () => {
+      for (const item of rest) {
+        const row = renderRow(item);
+        g.insertBefore(row, more);
+      }
+      more.remove();
+    });
+    g.appendChild(more);
+  }
+  return g;
+}
+
+function renderAtomicity(d) {
+  clear(els.atomicityGrid);
+  const cells = [
+    { label: "Tx isolation", value: "single DefraDB transaction" },
+    { label: "Reader-visible state on abort", value: "= pre-apply live state" },
+    { label: "Partial writes", value: "none (commit-or-discard)" },
+    { label: "Commit ambiguity window", value: "≤ 30s (HTTP client timeout)" },
+  ];
+  for (const c of cells) {
+    const el = document.createElement("div");
+    el.className = "cell";
+    el.innerHTML = `<span class="label">${escapeHtml(c.label)}</span><span class="value">${escapeHtml(c.value)}</span>`;
+    els.atomicityGrid.appendChild(el);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function render(name) {
+  currentName = name;
+  const d = DATASETS[name];
+
+  renderManifestBar(d);
+
+  if (!d.selected) {
+    setHidden(els.summary, true);
+    setHidden(els.error, true);
+    setHidden(els.collections, true);
+    setHidden(els.atomicity, true);
+    setHidden(els.empty, false);
+    els.actionSummary.textContent = "No manifest loaded — pick one to preview.";
+    els.btnApply.disabled = true;
+    els.btnDryrun.disabled = true;
+    return;
+  }
+
+  setHidden(els.empty, true);
+
+  if (!d.validation.ok) {
+    setHidden(els.summary, true);
+    setHidden(els.collections, true);
+    setHidden(els.atomicity, true);
+    setHidden(els.error, false);
+    clear(els.errorList);
+    for (const err of d.validation.errors) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="mono">${escapeHtml(err.location)}</span> — ${escapeHtml(err.message)}`;
+      els.errorList.appendChild(li);
+    }
+    els.actionSummary.textContent = `${d.validation.errors.length} validation error${d.validation.errors.length === 1 ? "" : "s"} — apply blocked.`;
+    els.btnApply.disabled = true;
+    els.btnDryrun.disabled = false;
+    return;
+  }
+
+  setHidden(els.error, true);
+  setHidden(els.summary, false);
+  setHidden(els.collections, false);
+  setHidden(els.atomicity, false);
+
+  const t = totals(d.collections);
+  renderSummary(t);
+
+  clear(els.collections);
+  const totalMeaningful = t.adds + t.updates + t.liveOnly;
+  for (const c of COLLECTIONS) {
+    const diff = d.collections[c.key];
+    const hasAny = diff.create.length || diff.update.length || diff.unchanged.length || diff.live_only.length;
+    if (!hasAny) continue;
+    // Open by default if this collection has any meaningful change AND
+    // the total diff isn't huge. Large-diff datasets get collapsed-by-default
+    // for collections whose ONLY content is no-ops.
+    const meaningful = diff.create.length || diff.update.length || diff.live_only.length;
+    const openByDefault = meaningful > 0 || totalMeaningful === 0;
+    els.collections.appendChild(renderCollectionCard(c, diff, openByDefault));
+  }
+
+  renderAtomicity(d);
+
+  const muts = t.adds + t.updates;
+  if (muts === 0) {
+    els.actionSummary.textContent =
+      "Manifest matches live state — safe to apply, nothing to do.";
+    els.btnApply.disabled = false;
+    els.btnApply.textContent = "Apply (no-op)";
+  } else {
+    els.actionSummary.textContent = `Would write ${muts.toLocaleString()} mutation${muts === 1 ? "" : "s"} across ${countAffectedCollections(d.collections)} collection${countAffectedCollections(d.collections) === 1 ? "" : "s"}.`;
+    els.btnApply.disabled = false;
+    els.btnApply.textContent = "Apply";
+  }
+  els.btnDryrun.disabled = false;
+}
+
+function countAffectedCollections(c) {
+  let n = 0;
+  for (const col of COLLECTIONS) {
+    const d = c[col.key];
+    if (d.create.length || d.update.length) n++;
+  }
+  return n;
+}
+
+/* ─────────────  Action log  ──────────── */
+function log(kind, msg) {
+  const e = document.createElement("div");
+  e.className = `entry ${kind}`;
+  const ts = new Date().toLocaleTimeString(undefined, { hour12: false });
+  e.innerHTML = `<span class="ts">${ts}</span>${escapeHtml(msg)}`;
+  els.actionLog.appendChild(e);
+  els.actionLog.scrollTop = els.actionLog.scrollHeight;
+}
+
+function onDryRun() {
+  const d = DATASETS[currentName];
+  if (!d.selected) {
+    log("note", "[dry-run] no manifest selected");
+    return;
+  }
+  if (!d.validation.ok) {
+    log("dryrun", `[dry-run] validation FAILED · ${d.validation.errors.length} error(s) — apply would be blocked`);
+    return;
+  }
+  const t = totals(d.collections);
+  log(
+    "dryrun",
+    `[dry-run] ${d.manifestPath} → ${d.endpoint} · ${t.adds} adds, ${t.updates} updates, ${t.noops} no-ops, ${t.liveOnly} live-only · est ${fmtEtaMs((t.adds + t.updates) * MS_PER_MUTATION)}`,
+  );
+  render(currentName);
+}
+
+function onApply() {
+  const d = DATASETS[currentName];
+  if (!d.selected) {
+    log("note", "[apply] no manifest selected");
+    return;
+  }
+  if (!d.validation.ok) {
+    log("note", "[apply] blocked: validation failed (this is a mock — no real apply will run)");
+    return;
+  }
+  const t = totals(d.collections);
+  const muts = t.adds + t.updates;
+  if (muts === 0) {
+    log("apply", `[apply] noop · status="noop" ok=true (manifest matches state)`);
+  } else {
+    log(
+      "apply",
+      `[apply] (mock) would commit ${muts} mutation${muts === 1 ? "" : "s"} via single DefraDB transaction; status="applied" exact_match=true`,
+    );
+  }
+}
+
+/* ─────────────  Wire-up  ──────────── */
+els.variation.addEventListener("change", e => render(e.target.value));
+els.btnDryrun.addEventListener("click", onDryRun);
+els.btnApply.addEventListener("click", onApply);
+
+// Initial paint.
+render(els.variation.value);
+log("note", "Mock dataset loaded. No real Tauri command is bound; this is a UI prototype only.");
+</script>
+</body>
+</html>
