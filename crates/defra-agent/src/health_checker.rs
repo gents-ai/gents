@@ -127,13 +127,23 @@ impl HealthStateInternal {
     }
 
     /// String form persisted to the `ToolServiceHealthState` DefraDB
-    /// collection. Mirrors the `HealthState.toDefraDB` projection in
-    /// `Proofs/MCPHealth/State.lean` but uses `stale` for `Degraded` so the
-    /// public projection vocabulary matches `HealthStatus::Stale`.
+    /// collection. Mirrors `HealthState.toDefraDB` in
+    /// `Proofs/MCPHealth/State.lean` exactly — including `degraded` rather
+    /// than the public `HealthStatus::Stale` projection name. Operators read
+    /// the precise internal-state vocabulary so the panel can distinguish
+    /// the staleness flavor of degraded (heartbeat lag, `failure_count = 0`)
+    /// from the failure-count flavor (`1 <= failure_count < K`).
+    ///
+    /// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in
+    /// the Lean model; the production cycle does not emit that event today
+    /// (the loop skips while backoff is active, then probes directly), so
+    /// rows with `status: "reconnecting"` will only appear once the cycle
+    /// is extended to bridge the gap. The persisted vocabulary covers it
+    /// so future production emission needs no schema change.
     fn to_defradb(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
-            Self::Degraded => "stale",
+            Self::Degraded => "degraded",
             Self::Evicted => "evicted",
             Self::Reconnecting => "reconnecting",
         }
@@ -453,6 +463,15 @@ pub async fn run_health_check_cycle(
             .unwrap_or(heartbeat_seen_at);
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
 
+        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
+        // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
+        // `Evicted` cycle and the next probe. The production loop does not
+        // emit that event today — it skips while backoff is active, then
+        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
+        // So persisted rows never carry `status: "reconnecting"` until the
+        // cycle is extended to bridge that gap (a future task; tracked
+        // alongside the K≥2 design pass in #303). The persisted vocabulary
+        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
@@ -577,25 +596,33 @@ pub async fn run_health_check_cycle(
         }
     }
 
-    let removed_service_ids = match persistence {
-        Some(_) => {
-            let current_ids: HashSet<String> =
-                health_map.inner.read().await.keys().cloned().collect();
-            current_ids
-                .into_iter()
-                .filter(|id| !online_service_ids.contains(id))
-                .collect::<Vec<_>>()
-        }
-        None => Vec::new(),
-    };
-
     health_map.retain_services(&online_service_ids).await;
 
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
         persist_health_snapshot(&persistence, &snapshot, now).await;
-        for service_id in &removed_service_ids {
-            delete_persisted_health_state(&persistence, service_id).await;
+        // Source the stale-row set from DefraDB scoped to this agent rather
+        // than from the in-memory map: the in-memory entry is dropped by
+        // `retain_services` above, and the map is empty on a fresh start, so
+        // an in-memory diff misses rows persisted by a previous run (or by
+        // an earlier failed delete). Querying the persisted collection makes
+        // both restart-after-shutdown and delete-retry-on-error work.
+        match load_persisted_service_ids(&persistence).await {
+            Ok(persisted_ids) => {
+                for service_id in persisted_ids
+                    .difference(&online_service_ids)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                {
+                    delete_persisted_health_state(&persistence, &service_id).await;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "failed to load persisted ToolServiceHealthState rows for stale-row reconciliation",
+                );
+            }
         }
     }
 
@@ -778,12 +805,21 @@ async fn upsert_persisted_health_state(
         None => ("null".to_string(), "null".to_string()),
     };
 
+    // The persisted-row identity is the compound (service_id, agent_did) —
+    // see the schema comment in
+    // crates/defra-agent-protocol/schemas/services/tool_service_health_state.graphql.
+    // The upsert filter must match on both so two agents that register the
+    // same service_id don't overwrite each other's row.
+    //
     // Predictable cost: one upsert per service per health-check cycle.
     // Default `cycle_interval` = 30s + handful of services = far under 1 write/s.
     let mutation = format!(
         r#"mutation {{
             upsert_ToolServiceHealthState(
-                filter: {{ service_id: {{ _eq: "{service_id}" }} }},
+                filter: {{ _and: [
+                    {{ service_id: {{ _eq: "{service_id}" }} }},
+                    {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ] }},
                 add: {{
                     service_id: "{service_id}",
                     agent_did: "{agent_did}",
@@ -799,7 +835,6 @@ async fn upsert_persisted_health_state(
                     updated_at: "{updated_at}"
                 }},
                 update: {{
-                    agent_did: "{agent_did}",
                     endpoint: "{endpoint}",
                     status: "{status}",
                     failure_count: {failure_count},
@@ -831,11 +866,15 @@ async fn delete_persisted_health_state(
     persistence: &HealthPersistenceContext<'_>,
     service_id: &str,
 ) {
-    let escaped = escape_graphql_string(service_id);
+    let escaped_service = escape_graphql_string(service_id);
+    let escaped_agent = escape_graphql_string(persistence.agent_did);
     let mutation = format!(
         r#"mutation {{
             delete_ToolServiceHealthState(
-                filter: {{ service_id: {{ _eq: "{escaped}" }} }}
+                filter: {{ _and: [
+                    {{ service_id: {{ _eq: "{escaped_service}" }} }},
+                    {{ agent_did: {{ _eq: "{escaped_agent}" }} }}
+                ] }}
             ) {{ _docID }}
         }}"#
     );
@@ -847,6 +886,48 @@ async fn delete_persisted_health_state(
             "failed to delete stale ToolServiceHealthState row",
         );
     }
+}
+
+/// Source-of-truth read of every persisted `ToolServiceHealthState`
+/// service_id scoped to the writing agent — used by the cycle's stale-row
+/// reconciliation so restart-after-shutdown and one-off delete failures
+/// converge to the registry's current state.
+async fn load_persisted_service_ids(
+    persistence: &HealthPersistenceContext<'_>,
+) -> Result<HashSet<String>> {
+    let agent_did = escape_graphql_string(persistence.agent_did);
+    let query = format!(
+        r#"{{
+            ToolServiceHealthState(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+            ) {{
+                service_id
+            }}
+        }}"#
+    );
+    let resp = persistence.node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "load_persisted_service_ids failed: {:?}",
+            resp.errors
+        );
+    }
+    let raw = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceHealthState"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(raw
+        .into_iter()
+        .filter_map(|value| {
+            value
+                .get("service_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .collect())
 }
 
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
