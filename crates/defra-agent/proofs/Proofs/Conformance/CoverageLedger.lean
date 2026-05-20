@@ -169,11 +169,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         ]
     }
   , { feature := "mcp-health"
-    , required := [Surface.runtimeInternal]
-    , deferred :=
-        [ (Surface.operatorUi, "#278")
-        , (Surface.operatorCli, "#279")
-        ]
+    , required := [Surface.runtimeInternal, Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#278")]
     }
   , { feature := "identity-permission"
     , required := [Surface.runtimeInternal]
@@ -615,6 +612,11 @@ def caseCoverage : List CoverageEntry :=
       "health_checker::tests::generated_mcp_health_k1_cases_match_health_checker_transitions"
       "Issue #253 adds K>=2 MCPHealth backoff behavior in Rust and drops the lean_mcp_health_k1_cases() filter so the full emitted mcp_health_cases domain is consumed.")
       "mcp-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "mcp_health_cases"
+      "MCPHealthCases"
+      "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service")
+      "mcp-health" [Surface.operatorCli]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
