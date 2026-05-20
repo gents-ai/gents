@@ -345,6 +345,73 @@ pub(crate) async fn build_cascade_preview(
     })
 }
 
+/// Result returned by `latch_root_interrupt`.
+#[derive(Debug, Clone)]
+pub(crate) struct LatchResult {
+    /// The RFC-3339 timestamp stored (or already present) in
+    /// `interrupt_requested_at`.
+    pub interrupt_requested_at: String,
+    /// `true` if this call was the first to write the field; `false` if it
+    /// was already set (idempotent no-op path).
+    pub was_first: bool,
+}
+
+/// Latches `interrupt_requested_at` on the root `AgentRequest` identified by
+/// `request_id`.
+///
+/// - If the field is already present, returns `LatchResult { was_first: false,
+///   interrupt_requested_at: <existing> }` without issuing a mutation.
+/// - Otherwise writes `chrono::Utc::now().to_rfc3339()` and returns
+///   `LatchResult { was_first: true, interrupt_requested_at: <now> }`.
+///
+/// Mirrors `interrupt_request_graphql` in
+/// `crates/defra-agent-cli/src/commands/subagent.rs:167-200`.
+pub(crate) async fn latch_root_interrupt(
+    core: &Arc<ClientCore>,
+    request_id: &str,
+) -> Result<LatchResult, String> {
+    let node = core.node();
+
+    // 1. Read the current row.
+    let row = fetch_request(node, request_id)
+        .await
+        .map_err(|e| format!("latch_root_interrupt: {e}"))?;
+
+    // 2. If already interrupted, return idempotent result.
+    if let Some(existing) = string_field(&row, "interrupt_requested_at") {
+        return Ok(LatchResult {
+            interrupt_requested_at: existing,
+            was_first: false,
+        });
+    }
+
+    // 3. Compute timestamp and write.
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_id = escape_graphql_string(request_id);
+    let escaped_now = escape_graphql_string(&now);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_id}" }} }},
+                input: {{ interrupt_requested_at: "{escaped_now}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        return Err(format!(
+            "latch_root_interrupt: update_AgentRequest failed: {:?}",
+            response.errors
+        ));
+    }
+
+    Ok(LatchResult {
+        interrupt_requested_at: now,
+        was_first: true,
+    })
+}
+
 /// Extract a non-empty string field from a JSON object.
 fn string_field(row: &Value, field: &str) -> Option<String> {
     row.get(field)

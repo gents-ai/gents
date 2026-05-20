@@ -1,7 +1,14 @@
 use std::sync::Arc;
 
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::TempDir;
+
+/// Minimal projection of an `AgentRequest` row used in interrupt tests.
+pub(crate) struct AgentRequestRowLite {
+    pub request_id: String,
+    pub interrupt_requested_at: Option<String>,
+}
 
 pub(crate) async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -276,4 +283,58 @@ pub(crate) async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     );
 
     (core, tmp)
+}
+
+/// Fetches a single `AgentRequest` row by `request_id` and returns a
+/// `AgentRequestRowLite` for assertions in interrupt tests. Panics if the
+/// request is not found.
+pub(crate) async fn fetch_request_row(
+    core: &Arc<ClientCore>,
+    request_id: &str,
+) -> AgentRequestRowLite {
+    let escaped = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{
+                request_id
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+
+    let response = core.node().execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch_request_row query failed for {request_id}: {:?}",
+        response.errors
+    );
+
+    let data = response.data.unwrap_or(serde_json::Value::Null);
+    let row = data
+        .get("AgentRequest")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .cloned()
+        .unwrap_or_else(|| panic!("fetch_request_row: request {request_id} not found"));
+
+    let request_id_out = row
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let interrupt_requested_at = row
+        .get("interrupt_requested_at")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+
+    AgentRequestRowLite {
+        request_id: request_id_out,
+        interrupt_requested_at,
+    }
 }
