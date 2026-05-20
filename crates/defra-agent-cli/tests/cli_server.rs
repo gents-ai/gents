@@ -3,7 +3,7 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use defra_agent::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
@@ -17,6 +17,114 @@ fn generated_backend_id_for_agent(agent_did: &str) -> String {
 fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
     let default_behavior_id = default_behavior_id_for_agent(agent_did);
     default_tool_selection_id_for_behavior(&default_behavior_id)
+}
+
+fn find_snapshot_row<'a>(
+    snapshot: &'a Value,
+    collection: &str,
+    key: &str,
+    expected: &str,
+) -> Result<&'a Value> {
+    snapshot
+        .get(collection)
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get(key).and_then(Value::as_str) == Some(expected))
+        })
+        .ok_or_else(|| anyhow!("missing {collection} row with {key}={expected}: {snapshot}"))
+}
+
+async fn wait_for_inference_call_state(
+    graphql: &str,
+    request_id: &str,
+    expected_state: &str,
+) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = graphql_query(
+            graphql,
+            &format!(
+                r#"{{
+                    InferenceCall(
+                        filter: {{ request_id: {{ _eq: "{}" }} }},
+                        order: {{ call_seq: ASC }}
+                    ) {{
+                        request_id
+                        backend_id
+                        behavior_id
+                        call_state
+                    }}
+                }}"#,
+                escape_graphql_string(request_id),
+            ),
+        )
+        .await?;
+        let rows = response
+            .pointer("/data/InferenceCall")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.get("call_state").and_then(Value::as_str) == Some(expected_state))
+        {
+            return Ok(row.clone());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "timed out waiting for InferenceCall request_id={request_id} call_state={expected_state}; last rows={}",
+                Value::Array(rows)
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn active_inference_calls_for_backend(graphql: &str, backend_id: &str) -> Result<Vec<Value>> {
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{
+                InferenceCall(
+                    filter: {{ backend_id: {{ _eq: "{}" }} }},
+                    order: {{ call_seq: ASC }}
+                ) {{
+                    request_id
+                    backend_id
+                    behavior_id
+                    call_state
+                }}
+            }}"#,
+            escape_graphql_string(backend_id),
+        ),
+    )
+    .await?;
+    Ok(response
+        .pointer("/data/InferenceCall")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row.get("call_state").and_then(Value::as_str),
+                Some("running" | "queued")
+            )
+        })
+        .collect())
+}
+
+fn count_inference_calls(rows: &[Value], behavior_id: Option<&str>, call_state: &str) -> i64 {
+    rows.iter()
+        .filter(|row| {
+            row.get("call_state").and_then(Value::as_str) == Some(call_state)
+                && behavior_id.is_none_or(|expected| {
+                    row.get("behavior_id").and_then(Value::as_str) == Some(expected)
+                })
+        })
+        .count() as i64
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -207,6 +315,189 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     assert!(
         body.contains("defra_agent_backend_enabled"),
         "expected backend metrics in metrics body:\n{body}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-fleet-slots-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-fleet-slots-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let request_content = format!("fleet slots live request {}", Uuid::new_v4());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--max-concurrent",
+            "1",
+            "--max-queue-depth",
+            "2",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let default_behavior_id = init
+        .pointer("/init/default_behavior_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_behavior_id_for_agent(&agent_did));
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let submitted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--content",
+            &request_content,
+            "--no-wait",
+        ],
+    )?;
+    let request_id = submitted
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .to_string();
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &request_id,
+        &["processing"],
+        Duration::from_secs(30),
+    )
+    .await?;
+    wait_for_inference_call_state(&graphql, &request_id, "running").await?;
+    let active_calls = active_inference_calls_for_backend(&graphql, &backend_id).await?;
+    let expected_backend_running = count_inference_calls(&active_calls, None, "running");
+    let expected_backend_queued = count_inference_calls(&active_calls, None, "queued");
+    let expected_behavior_running =
+        count_inference_calls(&active_calls, Some(&default_behavior_id), "running");
+    let expected_behavior_queued =
+        count_inference_calls(&active_calls, Some(&default_behavior_id), "queued");
+    let expected_available = 1_i64.saturating_sub(expected_backend_running);
+    assert!(
+        expected_backend_running >= 1,
+        "test setup should hold at least one running call; active calls={}",
+        Value::Array(active_calls.clone())
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/fleet/slots"))
+        .send()
+        .await
+        .context("fetching /fleet/slots")?;
+    assert!(
+        response.status().is_success(),
+        "unexpected /fleet/slots response: {response:?}"
+    );
+    let snapshot: Value = response.json().await.context("reading /fleet/slots body")?;
+
+    assert_eq!(
+        snapshot.pointer("/source").and_then(Value::as_str),
+        Some("graphql.derived_inference_call_rows")
+    );
+    assert_eq!(
+        snapshot.pointer("/totals/assigned").and_then(Value::as_i64),
+        Some(expected_backend_running)
+    );
+    assert_eq!(
+        snapshot
+            .pointer("/totals/available")
+            .and_then(Value::as_i64),
+        Some(expected_available)
+    );
+    assert_eq!(
+        snapshot.pointer("/totals/max").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        snapshot.pointer("/totals/queued").and_then(Value::as_i64),
+        Some(expected_backend_queued)
+    );
+    assert_eq!(
+        snapshot
+            .pointer("/expired/processing_requests")
+            .and_then(Value::as_i64),
+        Some(0)
+    );
+
+    let backend = find_snapshot_row(&snapshot, "backends", "backend_id", &backend_id)?;
+    assert_eq!(
+        backend.get("running").and_then(Value::as_i64),
+        Some(expected_backend_running)
+    );
+    assert_eq!(
+        backend.get("queued").and_then(Value::as_i64),
+        Some(expected_backend_queued)
+    );
+    assert_eq!(
+        backend.get("available").and_then(Value::as_i64),
+        Some(expected_available)
+    );
+    assert_eq!(
+        backend.get("max_concurrent").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        backend.get("max_queue_depth").and_then(Value::as_i64),
+        Some(2)
+    );
+    assert_eq!(
+        backend.get("accepting_admission").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let behavior = find_snapshot_row(&snapshot, "behaviors", "behavior_id", &default_behavior_id)?;
+    assert_eq!(
+        behavior.get("backend_id").and_then(Value::as_str),
+        Some(backend_id.as_str())
+    );
+    assert_eq!(
+        behavior.get("assigned").and_then(Value::as_i64),
+        Some(expected_behavior_running)
+    );
+    assert_eq!(
+        behavior.get("available").and_then(Value::as_i64),
+        Some(expected_available)
+    );
+    assert_eq!(behavior.get("max").and_then(Value::as_i64), Some(1));
+    assert_eq!(
+        behavior.get("queued").and_then(Value::as_i64),
+        Some(expected_behavior_queued)
+    );
+
+    let cli_snapshot = run_cli_json(&home_dir, &["fleet", "slots", "--graphql", &graphql])?;
+    assert_eq!(
+        cli_snapshot.pointer("/totals/assigned"),
+        snapshot.pointer("/totals/assigned")
+    );
+    assert_eq!(
+        cli_snapshot.pointer("/backends/0/backend_id"),
+        snapshot.pointer("/backends/0/backend_id")
     );
 
     Ok(())
