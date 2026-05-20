@@ -57,7 +57,7 @@ pub use agent::{
     ProcessLifecycleObserver, ProcessLifecycleState,
 };
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
-pub use backend_registry::InferenceBackend;
+pub use backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
 pub use compaction::CompactionStrategy;
 pub use config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,

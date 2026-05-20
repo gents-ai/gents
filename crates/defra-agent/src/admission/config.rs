@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::backend_registry::InferenceBackend;
+use crate::backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BackendAdmissionConfig {
@@ -42,7 +42,7 @@ impl BackendAdmissionConfig {
     }
 
     pub(crate) fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == "healthy"
+        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
     }
 }
 

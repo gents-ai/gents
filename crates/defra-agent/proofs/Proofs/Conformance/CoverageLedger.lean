@@ -212,8 +212,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "fleet-slot-accounting"
-    , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.api, "#287")]
+    , required := [Surface.runtimeInternal, Surface.api]
+    , deferred := []
     }
   , { feature := "storage-observation"
     , required := [Surface.runtimeInternal]
@@ -451,6 +451,11 @@ def caseCoverage : List CoverageEntry :=
       boundaryFleetSlotAccountingDerivedViewId
       "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary")
       "fleet-slot-accounting" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "fleet_cases"
+      "FleetSlotAccounting"
+      "cli_server::server_exposes_fleet_slot_snapshot_endpoint")
+      "fleet-slot-accounting" [Surface.api]
   , tagged (boundaryCoverage
       "persistence_policy_cases"
       "PersistenceFailurePolicyCases"

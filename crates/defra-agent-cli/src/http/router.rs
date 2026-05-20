@@ -9,6 +9,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::prometheus::{
     load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
@@ -44,6 +45,7 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/fleet/slots", get(fleet_slots_handler))
         .with_state(state)
 }
 
@@ -133,4 +135,16 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match load_fleet_slot_snapshot(&state.graphql).await {
+        Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("fleet slot snapshot failed: {error:#}"),
+        )
+            .into_response(),
+    }
 }

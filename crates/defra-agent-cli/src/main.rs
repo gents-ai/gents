@@ -171,6 +171,13 @@ Examples:
   defra-agent mcp probe --all
   defra-agent mcp probe SERVICE_ID --timeout 10s
   defra-agent mcp probe --all --graphql http://127.0.0.1:9191/api/v0/graphql --output json";
+const FLEET_AFTER_HELP: &str = "\
+Shows the live fleet slot-accounting snapshot exposed by the local runtime HTTP API.
+
+Examples:
+  defra-agent fleet slots
+  defra-agent fleet slots --home /path/to/home
+  defra-agent fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
   defra-agent show runtime
@@ -318,6 +325,7 @@ async fn main() -> Result<()> {
         Command::Status(args) => commands::status::status(args).await,
         Command::Background { command } => commands::background::dispatch(command).await,
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
+        Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => commands::request::dispatch(command).await,

@@ -1,3 +1,4 @@
+pub(crate) mod fleet_slots;
 pub(crate) mod healthz;
 pub(crate) mod liveness;
 pub(crate) mod prometheus;
