@@ -7,6 +7,7 @@ import type {
   RenderedToolCallView,
   ToolDetailValueView,
 } from "../lib/types";
+import { CancelCauseBadge, CancelCauseDetails } from "./cancelUx";
 import { CommandDenialToolItem } from "./commandDenial";
 
 function MarkdownContent({ value }: { value: string }) {
@@ -103,10 +104,14 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
                   className={toolStatusClass(tool.statusKind)}
                 />
                 <span className="tool-item-name">{tool.toolName}</span>
+                {tool.cancelCause ? (
+                  <CancelCauseBadge cause={tool.cancelCause} className="tool-item-cause-badge" />
+                ) : null}
               </span>
               <span className="tool-item-action">View</span>
             </summary>
             <div className="tool-item-body">
+              {tool.cancelCause ? <CancelCauseDetails cause={tool.cancelCause} /> : null}
               <ToolDetailSection label="args" value={tool.args} />
               <ToolDetailSection label="result" value={tool.result} />
             </div>
@@ -144,6 +149,9 @@ export function MessageList({
 }: {
   timelineItems: RenderedTimelineItem[];
 }) {
+  // TODO(#277-followup): surface CancelCauseBadge on interrupted assistant turns
+  // when the response cancelCause is wired through to MessageList. For now,
+  // only tool-call cancellations carry the badge.
   return (
     <>
       {timelineItems.map((item) => {
