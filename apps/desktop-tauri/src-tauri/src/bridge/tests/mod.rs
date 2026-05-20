@@ -1,6 +1,7 @@
 use defra_agent_desktop_core::local_runtime::runtime_status_url;
 
 mod operations_cascade;
+pub(crate) mod support;
 
 #[test]
 fn peer_status_url_accepts_bare_host_and_graphql_endpoint() {

@@ -35,3 +35,76 @@ fn cascade_row_carries_lineage() {
     };
     assert_eq!(row.parent_request_id.as_deref(), Some("req_root"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn walk_returns_classified_descendants_for_five_child_fixture() {
+    let (core, _tmp) = super::support::seed_cascade_fixture().await;
+    let req = CascadeWalkRequest {
+        root_request_id: "req_root".into(),
+        agent_did: Some("did:test:operator".into()),
+        include_terminal: true,
+    };
+    let result = crate::bridge::cascade::walk(&core, &req)
+        .await
+        .expect("walk ok");
+    let kinds: Vec<_> = result.rows.iter().map(|r| r.classification).collect();
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|c| **c == CascadeClassification::WillInterrupt)
+            .count(),
+        3,
+        "expected 3 WillInterrupt, got: {:?}",
+        kinds
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|c| **c == CascadeClassification::WillDetach)
+            .count(),
+        1,
+        "expected 1 WillDetach, got: {:?}",
+        kinds
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|c| **c == CascadeClassification::UnknownPolicy)
+            .count(),
+        1,
+        "expected 1 UnknownPolicy, got: {:?}",
+        kinds
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|c| **c == CascadeClassification::AlreadyTerminal)
+            .count(),
+        1,
+        "expected 1 AlreadyTerminal, got: {:?}",
+        kinds
+    );
+    assert_eq!(
+        result.root_state.as_deref(),
+        Some("processing"),
+        "root_state mismatch"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn walk_returns_no_rows_for_standalone_root() {
+    let (core, _tmp) = super::support::seed_standalone_fixture().await;
+    let req = CascadeWalkRequest {
+        root_request_id: "req_solo".into(),
+        agent_did: Some("did:test:operator".into()),
+        include_terminal: false,
+    };
+    let result = crate::bridge::cascade::walk(&core, &req)
+        .await
+        .expect("walk ok");
+    assert!(
+        result.rows.is_empty(),
+        "expected empty rows for standalone root, got: {:?}",
+        result.rows
+    );
+}
