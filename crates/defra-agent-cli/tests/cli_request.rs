@@ -442,3 +442,191 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-show-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-show-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let session_id = format!("show-session-{}", Uuid::new_v4().simple());
+    let parent_request_id = format!("show-parent-{}", Uuid::new_v4().simple());
+    let child_request_id = format!("show-child-{}", Uuid::new_v4().simple());
+    let tool_call_id = format!("show-tool-{}", Uuid::new_v4().simple());
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{parent_request_id}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "parent-behavior",
+                    session_id: "{session_id}",
+                    content: "parent request with a backgrounded cascade child",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    backend_id: "studios-cluster",
+                    execution_origin: "operatorCli",
+                    created_at: "2026-05-20T10:00:00Z",
+                    claimed_at: "2026-05-20T10:00:01Z",
+                    deadline: "2026-05-20T10:05:00Z",
+                    retry_count: 0,
+                    subagent_depth: 0
+                }}) {{ _docID }}
+            }}"#
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{child_request_id}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "child-behavior",
+                    session_id: "{session_id}",
+                    content: "child request spawned by backgrounded tool",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    created_at: "2026-05-20T10:00:03Z",
+                    claimed_at: "2026-05-20T10:00:04Z",
+                    retry_count: 0,
+                    subagent_depth: 1,
+                    caused_by_parent_request_id: "{parent_request_id}",
+                    caused_by_parent_tool_call_id: "{tool_call_id}",
+                    caused_by_trigger_kind: "subagent"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "{parent_request_id}",
+                    session_id: "{session_id}",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{\"behavior_id\":\"child-behavior\"}}",
+                    result: "",
+                    status: "called",
+                    lifecycle_state: "running",
+                    started_at: "2026-05-20T10:00:02Z",
+                    deadline_at: "2026-05-20T10:05:00Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "{child_request_id}"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    )
+    .await?;
+
+    let json_output = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "show",
+            "--graphql",
+            &graphql,
+            "--output",
+            "json",
+            &parent_request_id,
+        ],
+    )?;
+    assert_eq!(
+        json_output
+            .pointer("/request/request_id")
+            .and_then(Value::as_str),
+        Some(parent_request_id.as_str())
+    );
+    assert_eq!(
+        json_output
+            .pointer("/tool_calls/0/await_mode")
+            .and_then(Value::as_str),
+        Some("background")
+    );
+    assert_eq!(
+        json_output
+            .pointer("/tool_calls/0/cancel_policy")
+            .and_then(Value::as_str),
+        Some("cascade")
+    );
+    assert_eq!(
+        json_output
+            .pointer("/tool_calls/0/child_terminal")
+            .and_then(Value::as_str),
+        Some("unknown"),
+        "request show must render child_terminal as unknown when the schema has not landed yet"
+    );
+    assert_eq!(
+        json_output
+            .pointer("/tool_calls/0/cancel_cause")
+            .and_then(Value::as_str),
+        Some("unknown"),
+        "request show must render cancel_cause as unknown when the schema has not landed yet"
+    );
+    assert_eq!(
+        json_output
+            .pointer("/tool_calls/0/active_tool_call")
+            .and_then(Value::as_bool),
+        Some(true),
+        "running tool call must be linked to liveness.active_tool_calls"
+    );
+    assert_eq!(
+        json_output
+            .pointer("/backgrounded_tools/0/tool_call_id")
+            .and_then(Value::as_str),
+        Some(tool_call_id.as_str())
+    );
+    assert_eq!(
+        json_output
+            .pointer("/child_requests/0/request_id")
+            .and_then(Value::as_str),
+        Some(child_request_id.as_str())
+    );
+    assert_eq!(
+        json_output
+            .pointer("/child_requests/0/behavior_id")
+            .and_then(Value::as_str),
+        Some("child-behavior")
+    );
+
+    let text_output = run_cli_text(
+        &home_dir,
+        &["request", "show", "--graphql", &graphql, &parent_request_id],
+    )?;
+    assert!(text_output.contains("Transition history:"));
+    assert!(text_output.contains("Backgrounded tools:"));
+    assert!(text_output.contains("await_mode=background"));
+    assert!(text_output.contains("cancel_policy=cascade"));
+    assert!(text_output.contains(&child_request_id));
+
+    Ok(())
+}
