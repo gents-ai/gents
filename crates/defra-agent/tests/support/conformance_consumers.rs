@@ -175,6 +175,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/subagent_lineage.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::snapshot::tests::subagent_lineage",
+            function: "subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/hook/tests.rs",
