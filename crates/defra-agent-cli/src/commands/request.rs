@@ -418,9 +418,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
     format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }}
             ) {{
                 {fields}
             }}
@@ -557,34 +555,28 @@ fn transition_history(
             note: Some("no dedicated begin timestamp is persisted".to_string()),
         });
     }
-    if state == "processing" {
-        transitions.push(RequestTransitionView {
-            action: "advance".to_string(),
-            from: Some("processing".to_string()),
-            to: "processing".to_string(),
-            at: None,
-            source: "AgentRequest.lifecycle_state".to_string(),
-            inferred: true,
-            note: Some("request is still processing at this snapshot".to_string()),
-        });
-    }
     if state != "interrupted" {
         if let Some(interrupt_at) = string_field(request, "interrupt_requested_at") {
+            let note = if terminal_action_for_state(&state).is_some() {
+                "interrupt was requested before this terminal snapshot"
+            } else {
+                "interrupt requested; terminal transition not yet observed"
+            };
             transitions.push(RequestTransitionView {
-                action: "interrupt".to_string(),
-                from: Some(state.clone()),
+                action: "interrupt_requested".to_string(),
+                from: None,
                 to: state.clone(),
                 at: Some(interrupt_at),
                 source: "AgentRequest.interrupt_requested_at".to_string(),
                 inferred: false,
-                note: Some("interrupt requested; terminal transition not yet observed".to_string()),
+                note: Some(note.to_string()),
             });
         }
     }
     if let Some(action) = terminal_action_for_state(&state) {
         transitions.push(RequestTransitionView {
             action: action.to_string(),
-            from: terminal_from_state(&state).map(ToOwned::to_owned),
+            from: None,
             to: state,
             at: terminal_timestamp(request, response, action),
             source: terminal_source(action).to_string(),
@@ -598,7 +590,7 @@ fn transition_history(
 fn lifecycle_has_begun_inference(state: &str) -> bool {
     matches!(
         state,
-        "processing" | "inputRequired" | "completed" | "failed" | "superseded" | "interrupted"
+        "processing" | "inputRequired" | "completed" | "superseded"
     )
 }
 
@@ -609,16 +601,6 @@ fn terminal_action_for_state(state: &str) -> Option<&'static str> {
         "dead" => Some("expire"),
         "interrupted" => Some("interrupt"),
         "superseded" => Some("supersede"),
-        _ => None,
-    }
-}
-
-fn terminal_from_state(state: &str) -> Option<&'static str> {
-    match state {
-        "dead" => Some("pending"),
-        "interrupted" => Some("claimed"),
-        "superseded" => Some("processing"),
-        "completed" | "failed" => Some("processing"),
         _ => None,
     }
 }
@@ -696,28 +678,37 @@ fn request_cancel_cause_view(
     let request_cause = string_field(request, "cancel_cause");
     let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
-    let first_tool_cause = tool_calls
-        .iter()
-        .find(|tool| tool.cancel_cause != "unknown")
-        .map(|tool| tool.cancel_cause.clone());
-    let first_tool_cancel_at = tool_calls
-        .iter()
-        .find_map(|tool| tool.cancel_initiated_at.clone());
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
+    let cascade_tool_cause = (lifecycle_state == "interrupted")
+        .then(|| {
+            tool_calls
+                .iter()
+                .find(|tool| tool.cancel_policy == "cascade" && tool.cancel_cause != "unknown")
+                .map(|tool| tool.cancel_cause.clone())
+        })
+        .flatten();
+    let cascade_tool_cancel_at = (lifecycle_state == "interrupted")
+        .then(|| {
+            tool_calls
+                .iter()
+                .find(|tool| tool.cancel_policy == "cascade")
+                .and_then(|tool| tool.cancel_initiated_at.clone())
+        })
+        .flatten();
     let was_cancelled = lifecycle_state == "interrupted"
         || request_cause.is_some()
         || request_cancel_at.is_some()
-        || interrupt_at.is_some()
-        || first_tool_cause.is_some()
-        || first_tool_cancel_at.is_some();
+        || interrupt_at.is_some();
     if !was_cancelled {
         return None;
     }
     Some(RequestCancelCauseView {
         cause: request_cause
-            .or(first_tool_cause)
+            .or(cascade_tool_cause)
             .unwrap_or_else(|| "unknown".to_string()),
-        cancel_initiated_at: request_cancel_at.or(interrupt_at).or(first_tool_cancel_at),
+        cancel_initiated_at: request_cancel_at
+            .or(interrupt_at)
+            .or(cascade_tool_cancel_at),
     })
 }
 
@@ -939,7 +930,11 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     } else {
         for transition in &request.transition_history {
             let at = transition.at.as_deref().unwrap_or("unknown");
-            let from = transition.from.as_deref().unwrap_or("unknown");
+            let state_change = transition
+                .from
+                .as_deref()
+                .map(|from| format!("{from} -> {}", transition.to))
+                .unwrap_or_else(|| transition.to.clone());
             let inferred = if transition.inferred { " inferred" } else { "" };
             let note = transition
                 .note
@@ -947,8 +942,8 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
                 .map(|note| format!("; {note}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "  - {}: {} -> {} at {} (source={}{}{})",
-                transition.action, from, transition.to, at, transition.source, inferred, note
+                "  - {}: {} at {} (source={}{}{})",
+                transition.action, state_change, at, transition.source, inferred, note
             ));
         }
     }
@@ -1354,4 +1349,188 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         write_json_output_file(path, &output)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_history_does_not_emit_processing_self_loop() {
+        let request = json!({
+            "lifecycle_state": "processing",
+            "claimed_at": "2026-05-20T10:00:01Z",
+        });
+
+        let transitions = transition_history(&request, None, None);
+
+        assert!(transitions
+            .iter()
+            .any(|transition| transition.action == "claim"));
+        assert!(transitions
+            .iter()
+            .any(|transition| transition.action == "begin_inference"));
+        assert!(!transitions
+            .iter()
+            .any(|transition| transition.action == "advance"));
+        assert!(!transitions.iter().any(|transition| transition
+            .from
+            .as_deref()
+            .is_some_and(|from| from == transition.to)));
+    }
+
+    #[test]
+    fn transition_history_keeps_interrupt_attempt_on_terminal_completion() {
+        let request = json!({
+            "lifecycle_state": "completed",
+            "claimed_at": "2026-05-20T10:00:01Z",
+            "interrupt_requested_at": "2026-05-20T10:00:02Z",
+        });
+        let response = json!({
+            "completed_at": "2026-05-20T10:00:03Z",
+        });
+
+        let transitions = transition_history(&request, Some(&response), Some("finish"));
+        let interrupt = transitions
+            .iter()
+            .find(|transition| transition.action == "interrupt_requested")
+            .expect("interrupt request transition should be present");
+        assert_eq!(interrupt.from, None);
+        assert_eq!(interrupt.to, "completed");
+        assert_eq!(interrupt.at.as_deref(), Some("2026-05-20T10:00:02Z"));
+        assert!(interrupt
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("terminal snapshot")));
+
+        let finish = transitions
+            .iter()
+            .find(|transition| transition.action == "finish")
+            .expect("finish transition should be present");
+        assert_eq!(finish.from, None);
+        assert_eq!(finish.at.as_deref(), Some("2026-05-20T10:00:03Z"));
+    }
+
+    #[test]
+    fn terminal_transitions_do_not_guess_prior_state() {
+        let cases = [
+            ("completed", "finish"),
+            ("failed", "fail"),
+            ("dead", "expire"),
+            ("interrupted", "interrupt"),
+            ("superseded", "supersede"),
+        ];
+
+        for (state, action) in cases {
+            let request = json!({
+                "lifecycle_state": state,
+                "claimed_at": "2026-05-20T10:00:01Z",
+                "interrupt_requested_at": "2026-05-20T10:00:02Z",
+                "valid_until": "2026-05-20T10:00:03Z",
+                "deadline": "2026-05-20T10:00:04Z",
+            });
+            let transitions = transition_history(&request, None, Some(action));
+            let terminal = transitions
+                .iter()
+                .find(|transition| transition.action == action)
+                .expect("terminal transition should be present");
+
+            assert_eq!(
+                terminal.from, None,
+                "{state} should not infer a prior state"
+            );
+        }
+    }
+
+    #[test]
+    fn request_cancel_cause_ignores_tool_causes_for_non_interrupted_requests() {
+        let request = json!({
+            "lifecycle_state": "processing",
+        });
+        let tool_calls = vec![request_tool_call(
+            "cascade",
+            "operator_interrupt",
+            Some("2026-05-20T10:00:02Z"),
+        )];
+
+        assert!(request_cancel_cause_view(&request, &tool_calls).is_none());
+    }
+
+    #[test]
+    fn request_cancel_cause_only_falls_back_to_cascade_tool_on_interrupted_requests() {
+        let request = json!({
+            "lifecycle_state": "interrupted",
+        });
+
+        let independent_only = vec![request_tool_call(
+            "independent",
+            "independent_tool_timeout",
+            Some("2026-05-20T10:00:02Z"),
+        )];
+        let cancel = request_cancel_cause_view(&request, &independent_only)
+            .expect("interrupted requests should render CancelCause");
+        assert_eq!(cancel.cause, "unknown");
+        assert_eq!(cancel.cancel_initiated_at, None);
+
+        let cascade_time_only = vec![request_tool_call(
+            "cascade",
+            "unknown",
+            Some("2026-05-20T10:00:03Z"),
+        )];
+        let cancel = request_cancel_cause_view(&request, &cascade_time_only)
+            .expect("interrupted requests should render CancelCause");
+        assert_eq!(cancel.cause, "unknown");
+        assert_eq!(
+            cancel.cancel_initiated_at.as_deref(),
+            Some("2026-05-20T10:00:03Z")
+        );
+
+        let cascade_tool = vec![
+            request_tool_call(
+                "independent",
+                "independent_tool_timeout",
+                Some("2026-05-20T10:00:02Z"),
+            ),
+            request_tool_call(
+                "cascade",
+                "operator_interrupt",
+                Some("2026-05-20T10:00:03Z"),
+            ),
+        ];
+        let cancel = request_cancel_cause_view(&request, &cascade_tool)
+            .expect("interrupted requests should render CancelCause");
+        assert_eq!(cancel.cause, "operator_interrupt");
+        assert_eq!(
+            cancel.cancel_initiated_at.as_deref(),
+            Some("2026-05-20T10:00:03Z")
+        );
+    }
+
+    fn request_tool_call(
+        cancel_policy: &str,
+        cancel_cause: &str,
+        cancel_initiated_at: Option<&str>,
+    ) -> RequestToolCallView {
+        RequestToolCallView {
+            tool_call_key: "session:tool".to_string(),
+            request_id: "request".to_string(),
+            session_id: "session".to_string(),
+            message_sequence: Some(1),
+            tool_name: "spawn_subagent".to_string(),
+            tool_call_id: "tool".to_string(),
+            status: "called".to_string(),
+            state: "running".to_string(),
+            await_mode: "background".to_string(),
+            cancel_policy: cancel_policy.to_string(),
+            child_terminal: "unknown".to_string(),
+            cancel_cause: cancel_cause.to_string(),
+            cancel_initiated_at: cancel_initiated_at.map(ToOwned::to_owned),
+            child_request_id: None,
+            started_at: Some("2026-05-20T10:00:01Z".to_string()),
+            completed_at: None,
+            deadline_at: None,
+            active_tool_call: false,
+            active_native_executor_count: 0,
+        }
+    }
 }
