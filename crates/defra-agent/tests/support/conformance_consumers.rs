@@ -140,6 +140,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_backend_health_admission_cases_match_registry_and_admission_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/backend_registry/tests.rs",
+            module_path: "backend_registry::tests",
+            function: "display_state_matches_every_lean_backend_health_admission_case",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_server::server_exposes_fleet_slot_snapshot_endpoint",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/tests/cli_server.rs",

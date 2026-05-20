@@ -231,8 +231,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "backend-health"
-    , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.operatorUi, "#288")]
+    , required := [Surface.runtimeInternal, Surface.operatorUi]
+    , deferred := []
     }
   ]
 
@@ -486,6 +486,11 @@ def caseCoverage : List CoverageEntry :=
       boundaryBackendHealthAdmissionFreshnessId
       "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy")
       "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "backend_health_cases"
+      "BackendHealthAdmissionCases"
+      "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case")
+      "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "native_filesystem_boundary_cases"
       "NativeFilesystemBoundaryCases"

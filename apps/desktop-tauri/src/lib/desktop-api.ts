@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { BackendHealth } from "../components/backendHealth/types";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
@@ -114,6 +115,7 @@ export type DesktopApiAdapter = {
   listSubagentTree: (
     request: DesktopListSubagentTreeRequest,
   ) => Promise<SubagentTreeView>;
+  listBackendsWithHealth: () => Promise<BackendHealth[]>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -210,6 +212,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
     return invokeDesktop<SubagentTreeView>("desktop_list_subagent_tree", {
       request,
     });
+  },
+  listBackendsWithHealth() {
+    return invokeDesktop<BackendHealth[]>("desktop_list_backends_with_health");
   },
 };
 
@@ -339,4 +344,8 @@ export async function runTask(request: TaskRunRequest) {
 
 export async function listSubagentTree(request: DesktopListSubagentTreeRequest) {
   return desktopApiAdapter().listSubagentTree(request);
+}
+
+export async function listBackendsWithHealth() {
+  return desktopApiAdapter().listBackendsWithHealth();
 }
