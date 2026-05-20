@@ -98,6 +98,9 @@ def snapshotJson : String :=
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
+    ++ "\"r5_cross_deployment_cases\":"
+      ++ jsonArray
+        (r5CrossDeploymentCases.map r5CrossDeploymentCaseJson) ++ ","
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","

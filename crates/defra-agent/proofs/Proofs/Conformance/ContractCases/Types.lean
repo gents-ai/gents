@@ -244,6 +244,29 @@ structure R6BackgroundingCase where
   queueKey : Option String
   deriving Repr
 
+structure R5CrossDeploymentCase where
+  name : String
+  route : String
+  action : String
+  parentDeployment : String
+  childDeployment : String
+  parentRequestId : String
+  parentToolCallId : String
+  childRequestId : String
+  targetBehaviorId : String
+  awaitMode : String
+  cancelPolicy : String
+  parentTriggerPersisted : Bool
+  childMaterialized : Bool
+  childOwnedByTargetDeployment : Bool
+  causedByParentRequestIdMatches : Bool
+  causedByParentToolCallIdMatches : Bool
+  causedByTriggerKind : String
+  crossDeploymentRoutingFired : Bool
+  singleDeploymentFallback : Bool
+  unclaimedDeadlineSet : Bool
+  deriving Repr
+
 /-- Runtime witness row for an operationally-driven Background Properties theorem. -/
 structure BackgroundTheoremWitness where
   theoremName : String

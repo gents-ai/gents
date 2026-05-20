@@ -98,6 +98,30 @@ pub(crate) struct LeanR6BackgroundingCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanR5CrossDeploymentCase {
+    pub(crate) name: String,
+    pub(crate) route: String,
+    pub(crate) action: String,
+    pub(crate) parent_deployment: String,
+    pub(crate) child_deployment: String,
+    pub(crate) parent_request_id: String,
+    pub(crate) parent_tool_call_id: String,
+    pub(crate) child_request_id: String,
+    pub(crate) target_behavior_id: String,
+    pub(crate) await_mode: String,
+    pub(crate) cancel_policy: String,
+    pub(crate) parent_trigger_persisted: bool,
+    pub(crate) child_materialized: bool,
+    pub(crate) child_owned_by_target_deployment: bool,
+    pub(crate) caused_by_parent_request_id_matches: bool,
+    pub(crate) caused_by_parent_tool_call_id_matches: bool,
+    pub(crate) caused_by_trigger_kind: String,
+    pub(crate) cross_deployment_routing_fired: bool,
+    pub(crate) single_deployment_fallback: bool,
+    pub(crate) unclaimed_deadline_set: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanBackgroundTheoremWitness {
     pub(crate) theorem_name: String,
     pub(crate) witness_kind: String,

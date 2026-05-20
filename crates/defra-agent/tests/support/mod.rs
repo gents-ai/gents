@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use defra_agent::defra_node::{EmbeddedNode, QueryResponse};
+use defra_agent::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{ensure_runtime_schemas, watcher::AgentRequest};
 use serde::Deserialize;
@@ -41,6 +41,39 @@ pub async fn test_db(name: &str) -> TestDb {
             .build()
             .await
             .expect("embedded node"),
+    );
+    ensure_runtime_schemas(&node)
+        .await
+        .expect("runtime schemas");
+    TestDb {
+        node,
+        _tempdir: tempdir,
+    }
+}
+
+pub async fn test_p2p_db(name: &str) -> TestDb {
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("defra-agent-{name}-"))
+        .tempdir()
+        .expect("tempdir");
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(tempdir.path())
+            .with_p2p(P2PConfig {
+                port: 0,
+                bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
+                discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
+                secret_key_path: None,
+                load_persisted_collections: false,
+                max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
+                max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
+                rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
+                rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+            })
+            .build()
+            .await
+            .expect("embedded p2p node"),
     );
     ensure_runtime_schemas(&node)
         .await
