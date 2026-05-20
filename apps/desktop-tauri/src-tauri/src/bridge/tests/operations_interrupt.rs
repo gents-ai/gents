@@ -1,6 +1,6 @@
-use crate::bridge::cascade::{interrupt_request, latch_root_interrupt};
-use crate::bridge::tests::support::{fetch_request_row, seed_standalone_fixture};
-use crate::bridge::types::DesktopInterruptRequest;
+use crate::bridge::cascade::{build_cascade_preview, interrupt_request, latch_root_interrupt};
+use crate::bridge::tests::support::{fetch_request_row, seed_cascade_fixture, seed_standalone_fixture};
+use crate::bridge::types::{DesktopInterruptRequest, DesktopPreviewInterruptCascadeRequest};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn latch_writes_interrupt_requested_at_when_absent() {
@@ -85,4 +85,65 @@ async fn interrupt_request_rejects_non_user_cancelled_cause() {
     .await
     .unwrap_err();
     assert!(err.contains("userCancelled"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_request_cascade_returns_accepted_when_signature_matches() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let preview = build_cascade_preview(&core, &DesktopPreviewInterruptCascadeRequest {
+        request_id: "req_root".into(),
+        agent_did: Some("did:test:operator".into()),
+        include_terminal: Some(true),
+    })
+    .await
+    .unwrap();
+
+    let result = interrupt_request(&core, &DesktopInterruptRequest {
+        request_id: "req_root".into(),
+        cause: "userCancelled".into(),
+        cascade: true,
+        expected_preview_signature: Some(preview.preview_signature.clone()),
+    })
+    .await
+    .expect("ok");
+
+    assert!(result.accepted);
+    assert!(!result.stale_preview);
+    assert!(result.preview.is_none());
+    assert!(result.interrupt_requested_at.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_request_cascade_returns_stale_preview_when_signature_drifts() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let result = interrupt_request(&core, &DesktopInterruptRequest {
+        request_id: "req_root".into(),
+        cause: "userCancelled".into(),
+        cascade: true,
+        expected_preview_signature: Some("00".repeat(32)), // wrong sig
+    })
+    .await
+    .expect("ok");
+
+    assert!(!result.accepted);
+    assert!(result.stale_preview);
+    assert!(result.interrupt_requested_at.is_none());
+    let fresh = result.preview.expect("fresh preview attached");
+    assert_eq!(fresh.root_request_id, "req_root");
+    assert_eq!(fresh.preview_signature.len(), 64);
+    assert_ne!(fresh.preview_signature, "00".repeat(32));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_request_cascade_rejects_when_expected_signature_missing() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let err = interrupt_request(&core, &DesktopInterruptRequest {
+        request_id: "req_root".into(),
+        cause: "userCancelled".into(),
+        cascade: true,
+        expected_preview_signature: None,
+    })
+    .await
+    .unwrap_err();
+    assert!(err.contains("expectedPreviewSignature") || err.contains("expected_preview_signature"));
 }

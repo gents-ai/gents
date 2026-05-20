@@ -449,8 +449,39 @@ pub(crate) async fn interrupt_request(
         });
     }
 
-    // Cascade branch lands in Task 6.
-    todo!("cascade branch — Task 6")
+    // Cascade path:
+    let expected_sig = req.expected_preview_signature.clone().ok_or_else(|| {
+        "cascade=true requires expectedPreviewSignature".to_string()
+    })?;
+    let preview = build_cascade_preview(core, &DesktopPreviewInterruptCascadeRequest {
+        request_id: req.request_id.clone(),
+        agent_did: None,
+        include_terminal: Some(true),
+    })
+    .await?;
+    if preview.preview_signature != expected_sig {
+        return Ok(InterruptRequestResult {
+            request_id: req.request_id.clone(),
+            accepted: false,
+            interrupt_requested_at: None,
+            already_interrupted: false,
+            stale_preview: true,
+            preview: Some(preview),
+        });
+    }
+
+    // Signature matches — latch the root. Cascade observers / runtime will
+    // complete child requests; the bridge does not eagerly cancel children
+    // (that's the runtime's contract).
+    let latched = latch_root_interrupt(core, &req.request_id).await?;
+    Ok(InterruptRequestResult {
+        request_id: req.request_id.clone(),
+        accepted: latched.was_first,
+        interrupt_requested_at: Some(latched.interrupt_requested_at),
+        already_interrupted: !latched.was_first,
+        stale_preview: false,
+        preview: None,
+    })
 }
 
 /// Extract a non-empty string field from a JSON object.
