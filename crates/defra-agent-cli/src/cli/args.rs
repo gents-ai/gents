@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
-    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
-    RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP,
+    FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
+    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP,
+    SHOW_AFTER_HELP,
     STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
@@ -82,6 +83,11 @@ pub(crate) enum Command {
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
+    },
+    #[command(about = "Inspect fleet admission slot accounting", after_help = FLEET_AFTER_HELP)]
+    Fleet {
+        #[command(subcommand)]
+        command: FleetCommand,
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
@@ -412,6 +418,16 @@ pub(crate) enum McpProbeOutput {
     Json,
 }
 
+#[derive(Subcommand)]
+pub(crate) enum FleetCommand {
+    #[command(
+        name = "slots",
+        about = "Show derived fleet slot usage from the live runtime HTTP API",
+        after_help = FLEET_AFTER_HELP
+    )]
+    Slots(FleetSlotsArgs),
+}
+
 #[derive(clap::Args)]
 pub(crate) struct BackgroundListArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
@@ -444,6 +460,14 @@ pub(crate) struct BackgroundListArgs {
 pub(crate) enum BackgroundOutputFormat {
     Table,
     Json,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct FleetSlotsArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the live runtime")]
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(clap::Args)]
