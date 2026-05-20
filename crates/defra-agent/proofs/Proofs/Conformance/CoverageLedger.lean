@@ -115,8 +115,8 @@ def FeatureSurfaceRequirement.toJson (req : FeatureSurfaceRequirement) : String 
 
 def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   [ { feature := "request-lifecycle"
-    , required := [Surface.agentFacing, Surface.runtimeInternal]
-    , deferred := [(Surface.operatorUi, "#275")]
+    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "process-lifecycle"
     , required := [Surface.runtimeInternal]
@@ -499,6 +499,11 @@ def caseCoverage : List CoverageEntry :=
       "LiveOverlayCases"
       "live_overlay_conformance::live_overlay_cases_match_lean_table")
       "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "request_lifecycle_operator_ui_cases"
+      "RequestLifecycleOperatorUiCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases")
+      "request-lifecycle" [Surface.operatorUi]
   , tagged (consumerCoverage
       "tool_cases"
       "ToolExecutionPreflight"

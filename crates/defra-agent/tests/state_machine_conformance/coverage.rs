@@ -576,6 +576,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "DesktopClientShellCases".to_string(),
         ));
     }
+    if !snapshot.request_lifecycle_operator_ui_cases.is_empty() {
+        emitted.insert((
+            "request_lifecycle_operator_ui_cases".to_string(),
+            "RequestLifecycleOperatorUiCases".to_string(),
+        ));
+    }
     if !snapshot.tool_preflight_cases.is_empty() {
         emitted.insert((
             "tool_cases".to_string(),
@@ -733,6 +739,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "managed_exec_cases",
         "frontend_client_shell_cases",
         "desktop_client_shell_cases",
+        "request_lifecycle_operator_ui_cases",
         "tool_cases",
         "command_policy_cases",
         "live_overlay_cases",
