@@ -292,10 +292,12 @@ fn validate_read_only_command_inner(
 
     match command_key.as_str() {
         "sed" => {
-            if args
-                .iter()
-                .any(|arg| arg == "-i" || arg == "--in-place" || arg.starts_with("-i"))
-            {
+            if args.iter().any(|arg| {
+                arg == "-i"
+                    || arg == "--in-place"
+                    || arg.starts_with("-i")
+                    || arg.starts_with("--in-place=")
+            }) {
                 bail!("sed in-place edits are not allowed");
             }
         }

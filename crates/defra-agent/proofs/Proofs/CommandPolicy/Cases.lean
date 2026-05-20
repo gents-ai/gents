@@ -297,6 +297,11 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "sed"
       ["--in-place", "s/a/b/g", "README.md"]
   , readOnlySafetyCase
+      "read_only_sed_in_place_suffix_denies"
+      "sed"
+      "sed"
+      ["--in-place=.bak", "s/a/b/g", "README.md"]
+  , readOnlySafetyCase
       "read_only_find_delete_denies"
       "find"
       "find"

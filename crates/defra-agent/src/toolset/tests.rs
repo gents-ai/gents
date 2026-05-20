@@ -866,6 +866,16 @@ fn read_only_bash_rejects_codex_style_unsafe_flags() {
         &allowlist,
     )
     .is_err());
+    assert!(validate_read_only_command(
+        "sed",
+        &[
+            String::from("--in-place=.bak"),
+            String::from("s/a/b/g"),
+            String::from("README.md"),
+        ],
+        &allowlist,
+    )
+    .is_err());
 }
 
 #[test]
@@ -947,6 +957,7 @@ fn generated_command_policy_cases_cover_read_only_safety_matrix() {
         "read_only_sed_print_allows",
         "read_only_sed_in_place_short_denies",
         "read_only_sed_in_place_long_denies",
+        "read_only_sed_in_place_suffix_denies",
         "read_only_find_type_file_allows",
         "read_only_find_delete_denies",
         "read_only_find_exec_denies",
@@ -1014,6 +1025,7 @@ fn generated_command_policy_cases_cover_read_only_safety_matrix() {
         ("read_only_git_branch_delete_denies", "-D"),
         ("read_only_sed_in_place_short_denies", "-i"),
         ("read_only_sed_in_place_long_denies", "--in-place"),
+        ("read_only_sed_in_place_suffix_denies", "--in-place=.bak"),
         ("read_only_find_delete_denies", "-delete"),
         ("read_only_find_exec_denies", "-exec"),
         ("read_only_find_fprint_denies", "-fprint0"),
