@@ -157,10 +157,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "interrupt-and-cancel"
-    , required := [Surface.agentFacing]
+    , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred :=
         [ (Surface.operatorCli, "#266")
-        , (Surface.operatorUi, "#277")
         ]
     }
   , { feature := "mcp-health"
