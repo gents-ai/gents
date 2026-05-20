@@ -17,7 +17,8 @@ use crate::bridge::snapshot::{
     compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
 };
 use crate::bridge::types::{
-    CascadeAffectedRequest, CascadeCancelPreview, DesktopPreviewInterruptCascadeRequest,
+    CascadeAffectedRequest, CascadeCancelPreview, DesktopInterruptRequest,
+    DesktopPreviewInterruptCascadeRequest, InterruptRequestResult,
 };
 
 /// Maximum descent depth to match the CLI walker's safety limit.
@@ -410,6 +411,46 @@ pub(crate) async fn latch_root_interrupt(
         interrupt_requested_at: now,
         was_first: true,
     })
+}
+
+/// Orchestrates a non-cascade or cascade interrupt request from the operator.
+///
+/// Only `"userCancelled"` is an operator-authentic cause. Any other value is
+/// rejected — the runtime owns deadline/interrupted derivation.
+///
+/// For the non-cascade path (`req.cascade == false`): latches
+/// `interrupt_requested_at` on the root request and returns an
+/// `InterruptRequestResult` reflecting whether this call was the first to set
+/// the field (`accepted`) or the field was already set (`already_interrupted`).
+///
+/// The cascade path is not yet implemented (Task 6).
+pub(crate) async fn interrupt_request(
+    core: &Arc<ClientCore>,
+    req: &DesktopInterruptRequest,
+) -> Result<InterruptRequestResult, String> {
+    // Only "userCancelled" is operator-authentic. Other causes must be rejected
+    // — the runtime owns deadline/interrupted derivation.
+    if req.cause != "userCancelled" {
+        return Err(format!(
+            "operator may only authentically produce cause=\"userCancelled\", got {:?}",
+            req.cause
+        ));
+    }
+
+    if !req.cascade {
+        let latched = latch_root_interrupt(core, &req.request_id).await?;
+        return Ok(InterruptRequestResult {
+            request_id: req.request_id.clone(),
+            accepted: latched.was_first,
+            interrupt_requested_at: Some(latched.interrupt_requested_at),
+            already_interrupted: !latched.was_first,
+            stale_preview: false,
+            preview: None,
+        });
+    }
+
+    // Cascade branch lands in Task 6.
+    todo!("cascade branch — Task 6")
 }
 
 /// Extract a non-empty string field from a JSON object.
