@@ -147,10 +147,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "background-tools"
-    , required := [Surface.agentFacing]
+    , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred :=
         [ (Surface.operatorCli, "#268")
-        , (Surface.operatorUi, "#276")
         ]
     }
   , { feature := "subagents-cross-deployment"
@@ -591,6 +590,11 @@ def caseCoverage : List CoverageEntry :=
       "R4cBackgroundWorkCases"
       "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "r4c_background_work_cases"
+      "R4cBackgroundWorkCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
+      "background-tools" [Surface.operatorUi]
   , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"

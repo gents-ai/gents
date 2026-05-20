@@ -11,6 +11,7 @@ import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
 import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
+import { BackgroundedToolsPanel } from "./backgroundedTools";
 import { SubagentLineageView } from "./subagentLineage";
 
 export type ChatWorkspaceProps = {
@@ -88,6 +89,11 @@ export function ActiveChatWorkspace({
     const rootRequestId = session?.latestRequestId ?? null;
     const lineageAgentDid = selectedDeployment.agentDid;
     return [
+      {
+        id: "background-tools",
+        label: "Background",
+        render: () => <BackgroundedToolsPanel />,
+      },
       {
         id: "lineage",
         label: "Lineage",

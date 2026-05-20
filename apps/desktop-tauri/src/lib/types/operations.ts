@@ -64,6 +64,8 @@ export type BackgroundedToolView = {
   awaitMode?: string | null;
   cancelPolicy?: string | null;
   childRequestId?: string | null;
+  stuckSince?: string | null;
+  cancelPendingRemoteAck: boolean;
   nativeExecutor?: NativeExecutorStatusView | null;
 };
 

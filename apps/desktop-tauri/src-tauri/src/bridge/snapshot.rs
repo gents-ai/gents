@@ -105,6 +105,9 @@ pub(crate) use runtime::build_runtime_snapshot;
 
 #[path = "snapshot/operations_signature.rs"]
 mod operations_signature;
+
+#[path = "snapshot/operations_snapshot.rs"]
+pub(crate) mod operations_snapshot;
 #[cfg(test)]
 pub(crate) use operations_signature::*;
 #[allow(unused_imports)]

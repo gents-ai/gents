@@ -81,6 +81,8 @@ pub(crate) struct BackgroundedToolView {
     pub await_mode: Option<String>,
     pub cancel_policy: Option<String>,
     pub child_request_id: Option<String>,
+    pub stuck_since: Option<String>,
+    pub cancel_pending_remote_ack: bool,
     pub native_executor: Option<NativeExecutorStatusView>,
 }
 
