@@ -116,6 +116,10 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let lifecycle_state_str = projected.as_str();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        // If an upstream cascade already cancelled this bridge with a more
+        // specific cause, this running-state compare fails and preserves that
+        // earlier write. A successful cancelled projection here only observes
+        // the child terminal .interrupted evidence.
         let cancel_cause_field = (projected == ToolCallState::Cancelled)
             .then(|| format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()))
             .unwrap_or_default();

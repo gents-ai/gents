@@ -294,6 +294,45 @@ async fn lifecycle_cancel_during_run_persists_cancel_cause() {
 }
 
 #[tokio::test]
+async fn lifecycle_load_with_null_cancel_cause_can_persist_cancel_cause() {
+    let db = test_db("tc-lc-cancel-cause-load").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "request-cancel-load".into(),
+        "test-session-cancel-load".into(),
+        "tool-call-cancel-load".into(),
+        0,
+        "test_tool".into(),
+        r#"{}"#.into(),
+        test_deadline(),
+    );
+
+    lc.start_running().await.unwrap();
+    let snapshots =
+        fetch_tool_call_snapshots_for_session(&db.node, "test-session-cancel-load").await;
+    assert_eq!(snapshots[0].cancel_cause, None);
+
+    let mut loaded = ToolCallLifecycle::load(
+        db.node.clone(),
+        "test-session-cancel-load",
+        "tool-call-cancel-load",
+    )
+    .await
+    .unwrap()
+    .expect("tool call lifecycle should load");
+    loaded
+        .cancel_during_run(CancelCause::Interrupted)
+        .await
+        .unwrap();
+
+    let snapshots =
+        fetch_tool_call_snapshots_for_session(&db.node, "test-session-cancel-load").await;
+    assert_eq!(snapshots[0].lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("interrupted"));
+}
+
+#[tokio::test]
 async fn lifecycle_cancel_before_dispatch_persists_cancel_cause() {
     let db = test_db("tc-lc-cancel-cause-pending").await;
 
