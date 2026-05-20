@@ -92,19 +92,21 @@ impl Default for ServiceHealthMap {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RegistryServiceEntry {
-    service_id: String,
+pub struct McpHealthCheckService {
+    pub service_id: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    hostname: String,
+    pub hostname: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    tailscale_ip: String,
+    pub tailscale_ip: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    lan_ip: String,
-    mcp_port: Option<u16>,
+    pub lan_ip: String,
+    pub mcp_port: Option<u16>,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    mcp_path: String,
-    updated_at: Option<String>,
+    pub mcp_path: String,
+    pub updated_at: Option<String>,
 }
+
+type RegistryServiceEntry = McpHealthCheckService;
 
 pub fn spawn_health_checker(
     node: Arc<EmbeddedNode>,
@@ -201,8 +203,8 @@ async fn run_health_check(
 }
 
 // Production transition step once the registry query has supplied online rows.
-async fn run_health_check_cycle(
-    services: Vec<RegistryServiceEntry>,
+pub async fn run_health_check_cycle(
+    services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
     mcp_pool: &McpPool,
     health_map: &ServiceHealthMap,

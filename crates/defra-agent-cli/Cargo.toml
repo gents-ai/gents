@@ -10,6 +10,10 @@ autobins = false
 name = "defra-agent"
 path = "src/main.rs"
 
+[[bin]]
+name = "defra-agent-cli"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum = "0.8"

@@ -4,6 +4,7 @@ pub(crate) mod chat;
 pub(crate) mod config;
 pub(crate) mod diagnose;
 pub(crate) mod init;
+pub(crate) mod mcp;
 pub(crate) mod p2p;
 pub(crate) mod provision;
 pub(crate) mod request;
