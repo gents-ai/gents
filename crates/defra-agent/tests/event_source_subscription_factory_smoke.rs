@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use defra_agent::{ActiveRuntimeSnapshot, EventSource, UpdateSubscriptionSource};
+use events::EventName;
 use tokio::sync::watch;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 mod support;
@@ -11,7 +14,7 @@ use support::mock_subscription::MockUpdateSubscriptionSource;
 use support::test_db;
 
 #[tokio::test]
-async fn integration_can_construct_event_source_with_mock_subscription_source() {
+async fn integration_can_construct_event_source_and_mock_delivers_updates() {
     let db = test_db("event-source-subscription-factory-smoke").await;
     let snapshot = Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
@@ -41,5 +44,18 @@ async fn integration_can_construct_event_source_with_mock_subscription_source() 
         CancellationToken::new(),
     );
 
+    let mut subscription = mock.subscribe_updates();
     mock.publish_update("collection-id", "doc-id");
+
+    let message = timeout(Duration::from_secs(1), subscription.recv())
+        .await
+        .expect("mock subscription should deliver the published update")
+        .expect("mock subscription should remain open");
+
+    assert_eq!(message.name, EventName::Update);
+    let update = message
+        .as_update()
+        .expect("message should contain update data");
+    assert_eq!(update.collection_id, "collection-id");
+    assert_eq!(update.doc_id, "doc-id");
 }
