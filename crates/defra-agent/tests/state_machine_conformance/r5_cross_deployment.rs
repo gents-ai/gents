@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
@@ -18,7 +18,7 @@ use crate::lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeployme
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, first_row, test_db, TestDb};
+use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
 const PARENT_AGENT_DID: &str = "did:defra-agent:r5-lean-parent";
 
@@ -39,18 +39,14 @@ impl CompletionModel for R5DispatchTestModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in R5 dispatch conformance".to_string(),
-        ))
+        panic!("R5 dispatch test reached completion path; spawn_subagent should short-circuit")
     }
 
     async fn stream(
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in R5 dispatch conformance".to_string(),
-        ))
+        panic!("R5 dispatch test reached streaming path; spawn_subagent should short-circuit")
     }
 }
 
@@ -63,17 +59,9 @@ struct RunningChildAgent {
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     request_id: String,
-    session_id: String,
-    tool_call_key: String,
-    message_sequence: Option<i64>,
     tool_name: String,
     tool_call_id: String,
-    args: String,
-    result: Option<String>,
-    status: Option<String>,
     lifecycle_state: Option<String>,
-    started_at: Option<String>,
-    deadline_at: Option<String>,
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
@@ -85,13 +73,6 @@ struct AgentRequestRow {
     request_id: String,
     agent_did: String,
     behavior_id: String,
-    session_id: String,
-    status: Option<String>,
-    lifecycle_state: Option<String>,
-    content: Option<String>,
-    created_at: Option<String>,
-    deadline: Option<String>,
-    subagent_depth: Option<i64>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_trigger_id: Option<String>,
@@ -130,8 +111,23 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     );
 
     let child_agent = boot_child_agent(case).await;
+    let parent_db = test_p2p_db(&format!("{}-parent", case.name)).await;
+    install_one_way_replicator(
+        parent_db.node.as_ref(),
+        child_agent.db.node.as_ref(),
+        &["AgentRequest", "AgentToolCall"],
+    )
+    .await;
     let (parent_db, hook, parent_session_id, _parent_behavior_id) =
-        setup_parent_hook(case, false).await;
+        setup_parent_hook_on_db(case, false, parent_db).await;
+
+    let replicated_parent =
+        wait_for_request(child_agent.db.node.as_ref(), &case.parent_request_id).await;
+    assert_eq!(
+        replicated_parent.agent_did, PARENT_AGENT_DID,
+        "{}: parent request should replicate to B before the bridge",
+        case.name
+    );
 
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
     assert!(
@@ -150,19 +146,32 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     .await;
     assert_bridge_matches_case(case, &bridge, &child_request_id);
 
-    replicate_parent_request(parent_db.node.as_ref(), child_agent.db.node.as_ref(), case).await;
-    replicate_tool_call_to_child_node(&bridge, child_agent.db.node.as_ref()).await;
+    let replicated_bridge = wait_for_tool_call(
+        child_agent.db.node.as_ref(),
+        &parent_session_id,
+        &case.parent_tool_call_id,
+    )
+    .await;
+    assert_bridge_matches_case(case, &replicated_bridge, &child_request_id);
 
     let child = wait_for_child_request(child_agent.db.node.as_ref(), &child_request_id).await;
     assert_child_matches_case(case, &child, &child_request_id);
+    let child_agent_did = child_agent.booted.agent_did.clone();
     assert_eq!(
-        child.agent_did, child_agent.booted.agent_did,
+        child.agent_did, child_agent_did,
         "{}: cross-deployment child must be locally owned by B",
         case.name
     );
     assert!(case.child_owned_by_target_deployment, "{}", case.name);
 
-    child_agent.booted.shutdown().await;
+    let RunningChildAgent {
+        db: child_db,
+        booted,
+        _endpoint,
+    } = child_agent;
+    booted.shutdown().await;
+    parent_db.node.shutdown().await;
+    child_db.node.shutdown().await;
 }
 
 async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
@@ -196,7 +205,7 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
 }
 
 async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent {
-    let db = test_db(&format!("{}-child", case.name)).await;
+    let db = test_p2p_db(&format!("{}-child", case.name)).await;
     write_pairing(db.node.as_ref(), "deployment-a", PARENT_AGENT_DID).await;
 
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&format!("{}-child", case.name)));
@@ -244,6 +253,14 @@ async fn setup_parent_hook(
     target_is_local: bool,
 ) -> (TestDb, DefraSessionHook, String, String) {
     let db = test_db(&format!("{}-parent", case.name)).await;
+    setup_parent_hook_on_db(case, target_is_local, db).await
+}
+
+async fn setup_parent_hook_on_db(
+    case: &LeanR5CrossDeploymentCase,
+    target_is_local: bool,
+    db: TestDb,
+) -> (TestDb, DefraSessionHook, String, String) {
     let parent_behavior_id = format!("{}-parent-behavior", case.name);
     let parent_session_id = format!("{}-session", case.parent_request_id);
     let selection_id = format!("{parent_behavior_id}-tools");
@@ -455,145 +472,101 @@ async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str)
     exec(node, &mutation, "write PeerPairingDesired").await;
 }
 
-async fn replicate_parent_request(
-    from: &EmbeddedNode,
-    to: &EmbeddedNode,
-    case: &LeanR5CrossDeploymentCase,
+async fn install_one_way_replicator(
+    sender: &EmbeddedNode,
+    receiver: &EmbeddedNode,
+    collections: &[&str],
 ) {
-    let parent = fetch_request(from, &case.parent_request_id).await;
-    let request_id = escape_graphql_string(&parent.request_id);
-    let agent_did = escape_graphql_string(&parent.agent_did);
-    let behavior_id = escape_graphql_string(&parent.behavior_id);
-    let session_id = escape_graphql_string(&parent.session_id);
-    let status = escape_graphql_string(parent.status.as_deref().unwrap_or("processing"));
-    let lifecycle_state =
-        escape_graphql_string(parent.lifecycle_state.as_deref().unwrap_or("processing"));
-    let content = escape_graphql_string(parent.content.as_deref().unwrap_or(""));
-    let created_at = escape_graphql_string(
-        parent
-            .created_at
-            .as_deref()
-            .unwrap_or("2026-05-20T00:00:00Z"),
-    );
-    let deadline =
-        escape_graphql_string(parent.deadline.as_deref().unwrap_or("2026-05-20T00:05:00Z"));
-    let subagent_depth = parent.subagent_depth.unwrap_or(0);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                add: {{
-                    request_id: "{request_id}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{behavior_id}",
-                    session_id: "{session_id}",
-                    retry_parent_request: "",
-                    retry_root_request: "{request_id}",
-                    superseded_by_request: "",
-                    content: "{content}",
-                    status: "{status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    backend_id: "",
-                    execution_origin: "interactive",
-                    metadata: "",
-                    failure_reason: "",
-                    created_at: "{created_at}",
-                    deadline: "{deadline}",
-                    retry_count: 0,
-                    max_retries: 3,
-                    subagent_depth: {subagent_depth}
-                }},
-                update: {{
-                    agent_did: "{agent_did}",
-                    behavior_id: "{behavior_id}",
-                    status: "{status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    subagent_depth: {subagent_depth}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    exec(to, &mutation, "replicate parent AgentRequest").await;
+    let sender_addr = wait_for_listen_addr(sender).await;
+    let receiver_addr = wait_for_listen_addr(receiver).await;
+    let sender_p2p = sender.p2p().expect("sender p2p");
+    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+
+    sender_p2p
+        .connect_peer(&receiver_addr)
+        .await
+        .expect("connect sender to receiver");
+    wait_for_connected_peer(sender).await;
+    wait_for_connected_peer(receiver).await;
+
+    let collection_names = collections
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    sender_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add sender p2p collections");
+    receiver_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add receiver p2p collections");
+    receiver_p2p
+        .add_replicator(
+            collection_names.clone(),
+            Some(&sender_addr),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("authorize sender as receiver-side replicator");
+    sender_p2p
+        .add_replicator(collection_names, Some(&receiver_addr), Vec::new(), None)
+        .await
+        .expect("install sender to receiver replicator");
 }
 
-async fn replicate_tool_call_to_child_node(bridge: &ToolCallRow, to: &EmbeddedNode) {
-    let tool_call_key = escape_graphql_string(&bridge.tool_call_key);
-    let request_id = escape_graphql_string(&bridge.request_id);
-    let session_id = escape_graphql_string(&bridge.session_id);
-    let tool_name = escape_graphql_string(&bridge.tool_name);
-    let tool_call_id = escape_graphql_string(&bridge.tool_call_id);
-    let args = escape_graphql_string(&bridge.args);
-    let result = escape_graphql_string(bridge.result.as_deref().unwrap_or(""));
-    let status = escape_graphql_string(bridge.status.as_deref().unwrap_or("called"));
-    let lifecycle_state =
-        escape_graphql_string(bridge.lifecycle_state.as_deref().unwrap_or("running"));
-    let started_at = escape_graphql_string(
-        bridge
-            .started_at
-            .as_deref()
-            .unwrap_or("2026-05-20T00:00:00Z"),
-    );
-    let deadline_at = escape_graphql_string(
-        bridge
-            .deadline_at
-            .as_deref()
-            .unwrap_or("2026-05-20T00:05:00Z"),
-    );
-    let await_mode = escape_graphql_string(bridge.await_mode.as_deref().unwrap_or("background"));
-    let cancel_policy = escape_graphql_string(bridge.cancel_policy.as_deref().unwrap_or("cascade"));
-    let child_request_id = escape_graphql_string(bridge.child_request_id.as_deref().unwrap_or(""));
-    let message_sequence = bridge.message_sequence.unwrap_or(1);
-    let unclaimed = bridge
-        .unclaimed_deadline_at
-        .as_deref()
-        .map(|value| {
-            format!(
-                r#", unclaimed_deadline_at: "{}""#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
+async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let addrs = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .listen_addresses()
+            .await
+            .expect("listen addresses");
+        if let Some(addr) = addrs.first() {
+            return addr.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "node never exposed a P2P listen address"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentToolCall(
-                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
-                add: {{
-                    tool_call_key: "{tool_call_key}",
-                    request_id: "{request_id}",
-                    session_id: "{session_id}",
-                    message_sequence: {message_sequence},
-                    tool_name: "{tool_name}",
-                    tool_call_id: "{tool_call_id}",
-                    args: "{args}",
-                    result: "{result}",
-                    status: "{status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    await_mode: "{await_mode}",
-                    cancel_policy: "{cancel_policy}",
-                    child_request_id: "{child_request_id}"
-                    {unclaimed}
-                }},
-                update: {{
-                    result: "{result}",
-                    status: "{status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    await_mode: "{await_mode}",
-                    cancel_policy: "{cancel_policy}",
-                    child_request_id: "{child_request_id}"
-                    {unclaimed}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    exec(to, &mutation, "replicate AgentToolCall").await;
+async fn wait_for_connected_peer(node: &EmbeddedNode) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let peers = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .connected_peers()
+            .await
+            .expect("connected peers");
+        if !peers.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "node never reported a connected peer"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
+    fetch_tool_call_optional(node, session_id, tool_call_id)
+        .await
+        .unwrap_or_else(|| panic!("AgentToolCall {session_id}/{tool_call_id} not found"))
+}
+
+async fn fetch_tool_call_optional(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Option<ToolCallRow> {
     let session_id = escape_graphql_string(session_id);
     let tool_call_id = escape_graphql_string(tool_call_id);
     let query = format!(
@@ -606,17 +579,9 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
                 limit: 1
             ) {{
                 request_id
-                session_id
-                tool_call_key
-                message_sequence
                 tool_name
                 tool_call_id
-                args
-                result
-                status
                 lifecycle_state
-                started_at
-                deadline_at
                 await_mode
                 cancel_policy
                 child_request_id
@@ -624,32 +589,7 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
             }}
         }}"#
     );
-    first_row(&node.execute(&query).await, "AgentToolCall")
-}
-
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow {
-    let request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                request_id
-                agent_did
-                behavior_id
-                session_id
-                status
-                lifecycle_state
-                content
-                created_at
-                deadline
-                subagent_depth
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-                caused_by_trigger_id
-                caused_by_trigger_kind
-            }}
-        }}"#
-    );
-    first_row(&node.execute(&query).await, "AgentRequest")
+    first_optional_row(&node.execute(&query).await, "AgentToolCall")
 }
 
 async fn fetch_child_request_optional(
@@ -663,13 +603,6 @@ async fn fetch_child_request_optional(
                 request_id
                 agent_did
                 behavior_id
-                session_id
-                status
-                lifecycle_state
-                content
-                created_at
-                deadline
-                subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
                 caused_by_trigger_id
@@ -678,6 +611,38 @@ async fn fetch_child_request_optional(
         }}"#
     );
     first_optional_row(&node.execute(&query).await, "AgentRequest")
+}
+
+async fn wait_for_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(request) = fetch_child_request_optional(node, request_id).await {
+            return request;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "request {request_id} was not replicated"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(tool_call) = fetch_tool_call_optional(node, session_id, tool_call_id).await {
+            return tool_call;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tool call {tool_call_id} was not replicated"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
