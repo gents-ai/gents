@@ -140,6 +140,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_backend_health_admission_cases_match_registry_and_admission_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "cli_server::server_exposes_fleet_slot_snapshot_endpoint",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/tests/cli_server.rs",
+            module_path: "cli_server",
+            function: "server_exposes_fleet_slot_snapshot_endpoint",
+        },
+        ConformanceConsumer::RustTest {
             id: "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases",
             package: "defra-agent-desktop-tauri",
             source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/session_state.rs",
