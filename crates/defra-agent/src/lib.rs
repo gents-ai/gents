@@ -124,6 +124,7 @@ pub use toolset::{
     DELEGATE_TOOL_NAME,
 };
 pub use trigger_engine::event_source::EventSource;
+pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
