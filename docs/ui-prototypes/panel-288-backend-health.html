@@ -200,11 +200,13 @@
       transition: border-color 120ms ease;
     }
 
-    .backend-row[data-state="available"] { border-left: 3px solid var(--color-success-strong); }
-    .backend-row[data-state="unhealthy"] { border-left: 3px solid var(--color-error-strong); }
-    .backend-row[data-state="stale"]     { border-left: 3px solid var(--color-warning); }
-    .backend-row[data-state="unknown"]   { border-left: 3px solid var(--color-neutral); }
-    .backend-row[data-state="disabled"]  { border-left: 3px solid var(--color-text-muted); opacity: 0.78; }
+    .backend-row[data-state="available"]     { border-left: 3px solid var(--color-success-strong); }
+    .backend-row[data-state="unhealthy"]     { border-left: 3px solid var(--color-error-strong); }
+    .backend-row[data-state="stale"]         { border-left: 3px solid var(--color-warning); }
+    .backend-row[data-state="rate-limited"]  { border-left: 3px solid var(--color-warning); }
+    .backend-row[data-state="circuit-open"]  { border-left: 3px solid var(--color-warning); }
+    .backend-row[data-state="unknown"]       { border-left: 3px solid var(--color-neutral); }
+    .backend-row[data-state="disabled"]      { border-left: 3px solid var(--color-text-muted); opacity: 0.78; }
 
     .backend-row[data-expanded="true"] { border-color: var(--border-strong); }
 
@@ -241,11 +243,13 @@
       line-height: 1;
     }
 
-    .status-glyph[data-state="available"] { color: var(--color-success); border-color: rgb(var(--source-green-rgb) / 0.4); }
-    .status-glyph[data-state="unhealthy"] { color: var(--color-error); border-color: rgb(255 111 95 / 0.4); }
-    .status-glyph[data-state="stale"]     { color: var(--color-warning); border-color: rgb(255 160 17 / 0.4); }
-    .status-glyph[data-state="unknown"]   { color: var(--color-text-muted); }
-    .status-glyph[data-state="disabled"]  { color: var(--color-text-muted); }
+    .status-glyph[data-state="available"]    { color: var(--color-success); border-color: rgb(var(--source-green-rgb) / 0.4); }
+    .status-glyph[data-state="unhealthy"]    { color: var(--color-error); border-color: rgb(255 111 95 / 0.4); }
+    .status-glyph[data-state="stale"]        { color: var(--color-warning); border-color: rgb(255 160 17 / 0.4); }
+    .status-glyph[data-state="rate-limited"] { color: var(--color-warning); border-color: rgb(255 160 17 / 0.4); }
+    .status-glyph[data-state="circuit-open"] { color: var(--color-warning); border-color: rgb(255 160 17 / 0.4); }
+    .status-glyph[data-state="unknown"]      { color: var(--color-text-muted); }
+    .status-glyph[data-state="disabled"]     { color: var(--color-text-muted); }
 
     .backend-identity {
       display: flex;
@@ -295,11 +299,13 @@
       letter-spacing: 0.06em;
     }
 
-    .state-label[data-state="available"] { color: var(--color-success); }
-    .state-label[data-state="unhealthy"] { color: var(--color-error); }
-    .state-label[data-state="stale"]     { color: var(--color-warning); }
-    .state-label[data-state="unknown"]   { color: var(--color-text-muted); }
-    .state-label[data-state="disabled"]  { color: var(--color-text-muted); }
+    .state-label[data-state="available"]    { color: var(--color-success); }
+    .state-label[data-state="unhealthy"]    { color: var(--color-error); }
+    .state-label[data-state="stale"]        { color: var(--color-warning); }
+    .state-label[data-state="rate-limited"] { color: var(--color-warning); }
+    .state-label[data-state="circuit-open"] { color: var(--color-warning); }
+    .state-label[data-state="unknown"]      { color: var(--color-text-muted); }
+    .state-label[data-state="disabled"]     { color: var(--color-text-muted); }
 
     .last-call-hint {
       font-size: 12px;
@@ -635,7 +641,9 @@
           <option value="empty">Empty (no backends registered)</option>
           <option value="all-healthy">All healthy</option>
           <option value="one-stale">One stale</option>
-          <option value="one-unhealthy">One unhealthy (recent QueueFull)</option>
+          <option value="one-unhealthy">One unhealthy (probe failed)</option>
+          <option value="one-rate-limited">One rate-limited</option>
+          <option value="one-circuit-open">One circuit-open</option>
           <option value="one-disabled">One disabled by operator</option>
         </select>
       </div>
@@ -678,7 +686,8 @@ type InferenceBackend {
   enabled: Boolean
   models: [String]
   last_probe: DateTime        // populated on probe; may be absent
-  probe_status: String        // "healthy" | "unhealthy" | "unknown" | "stale"
+  probe_status: String        // "healthy" | "unhealthy" | "unknown"
+                              // | "stale" | "rate_limited" | "circuit_open"
 }
 
 // crates/defra-agent-protocol/schemas/inference/inference_call.graphql
@@ -745,6 +754,22 @@ struct BackendHealthView {
           backend.
         </li>
         <li>
+          <strong style="color: var(--color-warning)">rate-limited</strong>
+          — <code>enabled && probe_status == "rate_limited"</code>; the
+          backend is reachable but the provider is throttling us.
+          Warning, not error: the condition typically resolves itself; the
+          admission gate just shouldn't route new work to this backend
+          right now.
+        </li>
+        <li>
+          <strong style="color: var(--color-warning)">circuit-open</strong>
+          — <code>enabled && probe_status == "circuit_open"</code>; recent
+          failures tripped a circuit breaker. The backend may be reachable
+          but we've decided not to call it until the circuit half-opens.
+          Warning rather than error because the state is a local decision,
+          not a verdict on the backend itself.
+        </li>
+        <li>
           <strong style="color: var(--color-text-muted)">unknown</strong> —
           <code>enabled && probe_status == "unknown"</code>; default for a
           newly-registered backend that has not yet been probed.
@@ -756,41 +781,49 @@ struct BackendHealthView {
         </li>
       </ul>
 
-      <h3>What this panel deliberately does <em>not</em> show</h3>
+      <h3>Gap status</h3>
       <p>
-        Several states named in the original prompt (rate-limited,
-        circuit-open) and several controls (probe button, reset-circuit
-        button) are absent because the runtime does not implement them
-        today. Surfacing them would create UI fiction that diverges from
-        the Lean witnesses. Each gap is a separate workstream:
+        <code>rate_limited</code> and <code>circuit_open</code> are now
+        first-class spec states (Lean witnesses + Rust availability check
+        + UI). The runtime accepts the strings via the existing
+        <code>probe_status: String</code> field, and
+        <code>is_available()</code> stays false for anything other than
+        <code>"healthy"</code>. What is <em>not</em> yet in place is the
+        runtime logic that <em>produces</em> these states; the panel
+        renders them when the document carries them. Each gap below is a
+        separate workstream:
       </p>
       <table class="gap-table">
         <thead>
           <tr>
-            <th>Surface (named in original prompt)</th>
+            <th>Capability</th>
             <th>Status</th>
-            <th>What would need to change</th>
+            <th>What still needs to land</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><code>rate-limited</code> state</td>
-            <td class="gap-bad">absent</td>
+            <td>Rate-limit detector</td>
+            <td class="gap">spec only</td>
             <td>
-              No rate-limit detection in
-              <code>BackendAdmissionController</code>. Would need a sliding
-              window over <code>failure_reason</code> on
-              <code>InferenceCall</code>, plus a new
-              <code>probe_status</code> enum variant (and Lean case).
+              The Lean enum has <code>.rateLimited</code> and the UI
+              renders <code>probe_status == "rate_limited"</code>. Missing:
+              a runtime that watches <code>InferenceCall.failure_reason</code>
+              over a sliding window (e.g. consecutive HTTP 429s) and
+              writes the state back into <code>InferenceBackend</code>.
             </td>
           </tr>
           <tr>
-            <td><code>circuit-open</code> state</td>
-            <td class="gap-bad">absent</td>
+            <td>Circuit breaker</td>
+            <td class="gap">spec only</td>
             <td>
-              No circuit breaker in <code>admission/</code>. Would need a
-              new controller state + persistent transition log + reset
-              command + Lean spec for trip / half-open / reset transitions.
+              The Lean enum has <code>.circuitOpen</code> and the UI
+              renders <code>probe_status == "circuit_open"</code>. Missing:
+              a controller state machine in <code>admission/</code> for
+              trip / half-open / reset transitions, plus the persistent
+              transition log and the reset command. The reset command is
+              deliberately out of this PR (no <code>probe_backend</code> /
+              <code>reset_backend_circuit</code> on the Tauri surface).
             </td>
           </tr>
           <tr>
@@ -806,20 +839,15 @@ struct BackendHealthView {
             </td>
           </tr>
           <tr>
-            <td>"Probe" button (re-run probe)</td>
+            <td>Live probe action</td>
             <td class="gap-bad">no mechanism</td>
             <td>
               <code>probe_status</code> is populated at config load (no
               background prober loop). A probe action needs a runtime
-              subsystem to schedule, execute, and record the probe — and a
-              decision about whether the probe runs against the operator's
-              process or via the inference backend itself.
+              subsystem to schedule, execute, and record the probe. This
+              panel is read-only — there is no "Probe" or "Reset circuit"
+              button.
             </td>
-          </tr>
-          <tr>
-            <td>"Reset circuit" button</td>
-            <td class="gap-bad">no circuit</td>
-            <td>Depends on circuit breaker landing first.</td>
           </tr>
           <tr>
             <td>Last probe latency</td>
@@ -847,11 +875,11 @@ struct BackendHealthView {
       <p>
         Witnesses for the panel's status derivation live in
         <code>backendHealthAdmissionCases</code>
-        (<code>BoundaryRuntime.lean:214</code>). Five cases cover
-        <code>enabled × probe_status ∈ {healthy, unhealthy, unknown, stale}
-        → admissionDecision</code>. The panel does not extend this surface;
-        any new state (rate-limited, circuit-open) requires a new Lean
-        case before the UI ships it.
+        (<code>BoundaryRuntime.lean:214</code>). Seven cases cover
+        <code>enabled × probe_status ∈ {healthy, unhealthy, unknown, stale,
+        rate_limited, circuit_open} → admissionDecision</code>. The
+        bridge-snapshot consumer test drives the Tauri command with a
+        fixture per witness and asserts the derived display state.
       </p>
 
       <h3>Accessibility</h3>
@@ -1043,6 +1071,63 @@ struct BackendHealthView {
         ],
       },
 
+      openrouterRateLimited: {
+        backend_id: "openrouter-shared",
+        name: "OpenRouter · shared",
+        provider_kind: "OpenRouter",
+        endpoint: "https://openrouter.ai/api/v1",
+        enabled: true,
+        probe_status: "rate_limited",
+        last_probe: isoMinusMinutes(0.5),
+        max_concurrent: 4,
+        max_queue_depth: 50,
+        models: [
+          "anthropic/claude-opus-4-7",
+          "anthropic/claude-sonnet-4-6",
+        ],
+        recent_calls: [
+          { call_seq: 1224, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(0.3), ended_at: isoMinusMinutes(0.3),
+            queue_depth_at_enqueue: 12, failure_reason: "upstream 429" },
+          { call_seq: 1223, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(0.6), ended_at: isoMinusMinutes(0.6),
+            queue_depth_at_enqueue: 11, failure_reason: "upstream 429" },
+          { call_seq: 1222, call_kind: "completion", call_state: "completed",
+            queued_at: isoMinusMinutes(2), ended_at: isoMinusMinutes(2),
+            queue_depth_at_enqueue: 8, prompt_tokens: 1100, completion_tokens: 320 },
+        ],
+      },
+
+      localCircuitOpen: {
+        backend_id: "local-llama",
+        name: "Local · llama.cpp on-host",
+        provider_kind: "OpenAiCompatible",
+        endpoint: "http://127.0.0.1:8080/v1",
+        enabled: true,
+        probe_status: "circuit_open",
+        last_probe: isoMinusMinutes(1),
+        max_concurrent: 1,
+        max_queue_depth: 8,
+        models: ["llama-3.1-8b-instruct-q4"],
+        recent_calls: [
+          { call_seq: 318, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(0.4), ended_at: isoMinusMinutes(0.4),
+            queue_depth_at_enqueue: 0, failure_reason: "BackendGone" },
+          { call_seq: 317, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(0.9), ended_at: isoMinusMinutes(0.9),
+            queue_depth_at_enqueue: 0, failure_reason: "connection refused" },
+          { call_seq: 316, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(1.4), ended_at: isoMinusMinutes(1.4),
+            queue_depth_at_enqueue: 0, failure_reason: "connection refused" },
+          { call_seq: 315, call_kind: "completion", call_state: "failed",
+            queued_at: isoMinusMinutes(2.1), ended_at: isoMinusMinutes(2.1),
+            queue_depth_at_enqueue: 0, failure_reason: "connection refused" },
+          { call_seq: 314, call_kind: "completion", call_state: "completed",
+            queued_at: isoMinusMinutes(6), ended_at: isoMinusMinutes(6),
+            queue_depth_at_enqueue: 0, prompt_tokens: 488, completion_tokens: 124 },
+        ],
+      },
+
       openaiDisabled: {
         backend_id: "openai-legacy",
         name: "OpenAI · legacy org key",
@@ -1081,8 +1166,13 @@ struct BackendHealthView {
       "all-healthy": ["openaiHealthy", "openrouterHealthy", "localHealthy"],
       "one-stale": ["openaiStale", "openrouterHealthy", "localHealthy"],
       "one-unhealthy": ["openaiHealthy", "openrouterUnhealthy", "localHealthy"],
+      "one-rate-limited": ["openaiHealthy", "openrouterRateLimited", "localHealthy"],
+      "one-circuit-open": ["openaiHealthy", "openrouterHealthy", "localCircuitOpen"],
       "one-disabled": ["openaiHealthy", "openrouterHealthy", "localHealthy", "openaiDisabled"],
-      "mixed": ["openaiHealthy", "openrouterUnhealthy", "localHealthy", "openaiDisabled", "newUnknown"],
+      "mixed": [
+        "openaiHealthy", "openrouterRateLimited", "localCircuitOpen",
+        "openaiDisabled", "newUnknown",
+      ],
     };
 
     // ── derived display state ────────────────────────────────
@@ -1090,11 +1180,13 @@ struct BackendHealthView {
     function displayState(backend) {
       if (!backend.enabled) return "disabled";
       switch (backend.probe_status) {
-        case "healthy":   return "available";
-        case "unhealthy": return "unhealthy";
-        case "stale":     return "stale";
+        case "healthy":      return "available";
+        case "unhealthy":    return "unhealthy";
+        case "stale":        return "stale";
+        case "rate_limited": return "rate-limited";
+        case "circuit_open": return "circuit-open";
         case "unknown":
-        default:          return "unknown";
+        default:             return "unknown";
       }
     }
 
@@ -1102,6 +1194,8 @@ struct BackendHealthView {
       available: "Available",
       unhealthy: "Unhealthy",
       stale: "Stale",
+      "rate-limited": "Rate-limited",
+      "circuit-open": "Circuit-open",
       unknown: "Unknown",
       disabled: "Disabled",
     };
@@ -1110,6 +1204,8 @@ struct BackendHealthView {
       available: "●",
       unhealthy: "×",
       stale: "!",
+      "rate-limited": "⏱",
+      "circuit-open": "⊘",
       unknown: "?",
       disabled: "—",
     };
@@ -1122,7 +1218,11 @@ struct BackendHealthView {
     const observedAt = document.getElementById("observed-at");
 
     function renderFleetSummary(backends) {
-      const counts = { available: 0, unhealthy: 0, stale: 0, unknown: 0, disabled: 0 };
+      const counts = {
+        available: 0, unhealthy: 0, stale: 0,
+        "rate-limited": 0, "circuit-open": 0,
+        unknown: 0, disabled: 0,
+      };
       for (const b of backends) counts[displayState(b)]++;
       const total = backends.length;
 
@@ -1131,11 +1231,13 @@ struct BackendHealthView {
         chips.push(chip("neutral", "0 backends"));
       } else {
         chips.push(chip("neutral", `${total} registered`));
-        if (counts.available) chips.push(chip("success", `${counts.available} available`));
-        if (counts.unhealthy) chips.push(chip("error",   `${counts.unhealthy} unhealthy`));
-        if (counts.stale)     chips.push(chip("warning", `${counts.stale} stale`));
-        if (counts.unknown)   chips.push(chip("neutral", `${counts.unknown} unknown`));
-        if (counts.disabled)  chips.push(chip("neutral", `${counts.disabled} disabled`));
+        if (counts.available)            chips.push(chip("success", `${counts.available} available`));
+        if (counts.unhealthy)            chips.push(chip("error",   `${counts.unhealthy} unhealthy`));
+        if (counts.stale)                chips.push(chip("warning", `${counts.stale} stale`));
+        if (counts["rate-limited"])      chips.push(chip("warning", `${counts["rate-limited"]} rate-limited`));
+        if (counts["circuit-open"])      chips.push(chip("warning", `${counts["circuit-open"]} circuit-open`));
+        if (counts.unknown)              chips.push(chip("neutral", `${counts.unknown} unknown`));
+        if (counts.disabled)             chips.push(chip("neutral", `${counts.disabled} disabled`));
       }
 
       summaryRoot.replaceChildren(...chips);
@@ -1285,10 +1387,12 @@ struct BackendHealthView {
 
     function probeTone(status) {
       switch (status) {
-        case "healthy":   return "success";
-        case "unhealthy": return "error";
-        case "stale":     return "warning";
-        default:          return null;
+        case "healthy":      return "success";
+        case "unhealthy":    return "error";
+        case "stale":        return "warning";
+        case "rate_limited": return "warning";
+        case "circuit_open": return "warning";
+        default:             return null;
       }
     }
 
