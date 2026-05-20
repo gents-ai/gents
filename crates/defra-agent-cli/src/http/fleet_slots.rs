@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use defra_agent::{HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
 
-const SNAPSHOT_SOURCE: &str = "graphql.derived_inference_call_rows";
+const SNAPSHOT_SOURCE: &str = "graphql.derived_admission_state";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FleetSlotSnapshot {
@@ -41,7 +42,9 @@ pub(crate) struct FleetBehaviorSlotUsage {
     pub(crate) enabled: bool,
     pub(crate) backend_available: bool,
     pub(crate) assigned: i64,
+    /// Shared spare capacity on this behavior's backend, not a per-behavior reservation.
     pub(crate) available: i64,
+    /// The backend max_concurrent value visible through this behavior.
     pub(crate) max: i64,
     pub(crate) queued: i64,
     pub(crate) expired_processing: i64,
@@ -95,6 +98,7 @@ impl BehaviorRow {
     }
 
     fn is_enabled(&self) -> bool {
+        // Older generated behavior rows are admission-enabled unless explicitly disabled.
         self.enabled.unwrap_or(true)
     }
 }
@@ -119,15 +123,21 @@ impl BackendRow {
     }
 
     fn is_enabled(&self) -> bool {
+        // A backend row missing the flag should not advertise admission capacity.
         self.enabled.unwrap_or(false)
     }
 
     fn normalized_probe_status(&self) -> String {
-        clean_optional_string(self.probe_status.as_deref()).if_empty_then(|| "unknown".to_string())
+        let probe_status = clean_optional_string(self.probe_status.as_deref());
+        if probe_status.is_empty() {
+            UNKNOWN_PROBE_STATUS.to_string()
+        } else {
+            probe_status
+        }
     }
 
     fn accepting_admission(&self) -> bool {
-        self.is_enabled() && self.normalized_probe_status() == "healthy"
+        self.is_enabled() && self.normalized_probe_status() == HEALTHY_PROBE_STATUS
     }
 
     fn max_concurrent(&self) -> i64 {
@@ -169,13 +179,19 @@ struct SlotCounts {
 pub(crate) async fn load_fleet_slot_snapshot(graphql: &str) -> Result<FleetSlotSnapshot> {
     let generated_at = Utc::now();
     let response = post_graphql(graphql, fleet_slot_snapshot_query()).await?;
+    let envelope = decode_fleet_slot_query_response(response)?;
+    Ok(build_fleet_slot_snapshot(generated_at, envelope))
+}
+
+fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnvelope> {
     let data = response
         .get("data")
+        .filter(|data| data.is_object())
         .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    let envelope: FleetSlotQueryEnvelope =
-        serde_json::from_value(data).context("decoding fleet slot snapshot query response")?;
-    Ok(build_fleet_slot_snapshot(generated_at, envelope))
+        .with_context(|| {
+            format!("fleet slot snapshot query response missing object data: {response}")
+        })?;
+    serde_json::from_value(data).context("decoding fleet slot snapshot query response")
 }
 
 fn fleet_slot_snapshot_query() -> &'static str {
@@ -287,7 +303,7 @@ fn build_fleet_slot_snapshot(
             enabled: configured.map(BackendRow::is_enabled).unwrap_or(false),
             probe_status: configured
                 .map(BackendRow::normalized_probe_status)
-                .unwrap_or_else(|| "unknown".to_string()),
+                .unwrap_or_else(|| UNKNOWN_PROBE_STATUS.to_string()),
             accepting_admission,
             running: counts.assigned,
             queued: counts.queued,
@@ -400,23 +416,32 @@ fn clean_string(value: &str) -> String {
     value.trim().to_string()
 }
 
-trait IfEmptyThen {
-    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String;
-}
-
-impl IfEmptyThen for String {
-    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
-        if self.is_empty() {
-            fallback()
-        } else {
-            self
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn find_backend<'a>(
+        snapshot: &'a FleetSlotSnapshot,
+        backend_id: &str,
+    ) -> &'a FleetBackendAdmissionCounters {
+        snapshot
+            .backends
+            .iter()
+            .find(|backend| backend.backend_id == backend_id)
+            .unwrap()
+    }
+
+    fn find_behavior<'a>(
+        snapshot: &'a FleetSlotSnapshot,
+        behavior_id: &str,
+    ) -> &'a FleetBehaviorSlotUsage {
+        snapshot
+            .behaviors
+            .iter()
+            .find(|behavior| behavior.behavior_id == behavior_id)
+            .unwrap()
+    }
 
     #[test]
     fn snapshot_reconstructs_slots_by_backend_and_behavior() {
@@ -468,6 +493,7 @@ mod tests {
             },
         );
 
+        assert_eq!(snapshot.source, SNAPSHOT_SOURCE);
         assert_eq!(
             snapshot.totals,
             FleetSlotTotals {
@@ -500,5 +526,130 @@ mod tests {
         assert_eq!(behavior_b.assigned, 0);
         assert_eq!(behavior_b.queued, 1);
         assert_eq!(behavior_b.available, 1);
+    }
+
+    #[test]
+    fn snapshot_preserves_unavailable_and_unconfigured_edges() {
+        let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot = build_fleet_slot_snapshot(
+            now,
+            FleetSlotQueryEnvelope {
+                behaviors: vec![BehaviorRow {
+                    behavior_id: "behavior-disabled".to_string(),
+                    agent_did: "did:defra-agent:test".to_string(),
+                    backend_id: Some("backend-unhealthy".to_string()),
+                    enabled: Some(false),
+                }],
+                backends: vec![
+                    BackendRow {
+                        backend_id: "backend-unhealthy".to_string(),
+                        enabled: Some(true),
+                        max_concurrent: Some(3),
+                        max_queue_depth: Some(4),
+                        probe_status: Some("unhealthy".to_string()),
+                    },
+                    BackendRow {
+                        backend_id: "backend-missing-flags".to_string(),
+                        enabled: None,
+                        max_concurrent: Some(2),
+                        max_queue_depth: Some(1),
+                        probe_status: None,
+                    },
+                ],
+                calls: vec![
+                    InferenceCallRow {
+                        backend_id: Some("backend-unhealthy".to_string()),
+                        behavior_id: Some("behavior-disabled".to_string()),
+                        agent_did: Some("did:defra-agent:test".to_string()),
+                        call_state: "running".to_string(),
+                    },
+                    InferenceCallRow {
+                        backend_id: Some("backend-stale".to_string()),
+                        behavior_id: Some("behavior-stale".to_string()),
+                        agent_did: Some("did:defra-agent:stale".to_string()),
+                        call_state: "running".to_string(),
+                    },
+                ],
+                requests: vec![
+                    RequestRow {
+                        behavior_id: Some("behavior-disabled".to_string()),
+                        deadline: Some("2026-05-20T11:59:00Z".to_string()),
+                    },
+                    RequestRow {
+                        behavior_id: Some("behavior-disabled".to_string()),
+                        deadline: Some("not-a-date".to_string()),
+                    },
+                    RequestRow {
+                        behavior_id: Some("behavior-disabled".to_string()),
+                        deadline: None,
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(
+            snapshot.totals,
+            FleetSlotTotals {
+                assigned: 2,
+                available: 0,
+                max: 5,
+                queued: 0,
+            }
+        );
+        assert_eq!(snapshot.expired.processing_requests, 1);
+
+        let unhealthy = find_backend(&snapshot, "backend-unhealthy");
+        assert!(unhealthy.configured);
+        assert!(unhealthy.enabled);
+        assert_eq!(unhealthy.probe_status, "unhealthy");
+        assert!(!unhealthy.accepting_admission);
+        assert_eq!(unhealthy.running, 1);
+        assert_eq!(unhealthy.available, 0);
+        assert_eq!(unhealthy.max_concurrent, 3);
+
+        let missing_flags = find_backend(&snapshot, "backend-missing-flags");
+        assert!(missing_flags.configured);
+        assert!(!missing_flags.enabled);
+        assert_eq!(missing_flags.probe_status, UNKNOWN_PROBE_STATUS);
+        assert!(!missing_flags.accepting_admission);
+        assert_eq!(missing_flags.available, 0);
+
+        let stale_backend = find_backend(&snapshot, "backend-stale");
+        assert!(!stale_backend.configured);
+        assert!(!stale_backend.enabled);
+        assert_eq!(stale_backend.probe_status, UNKNOWN_PROBE_STATUS);
+        assert_eq!(stale_backend.running, 1);
+        assert_eq!(stale_backend.max_concurrent, 0);
+
+        let disabled = find_behavior(&snapshot, "behavior-disabled");
+        assert!(disabled.configured);
+        assert!(!disabled.enabled);
+        assert!(!disabled.backend_available);
+        assert_eq!(disabled.assigned, 1);
+        assert_eq!(disabled.available, 0);
+        assert_eq!(disabled.max, 3);
+        assert_eq!(disabled.expired_processing, 1);
+
+        let stale_behavior = find_behavior(&snapshot, "behavior-stale");
+        assert!(!stale_behavior.configured);
+        assert!(!stale_behavior.enabled);
+        assert_eq!(stale_behavior.agent_did, "did:defra-agent:stale");
+        assert_eq!(stale_behavior.backend_id, "backend-stale");
+        assert_eq!(stale_behavior.assigned, 1);
+        assert_eq!(stale_behavior.available, 0);
+        assert_eq!(stale_behavior.max, 0);
+    }
+
+    #[test]
+    fn decode_rejects_missing_data_object() {
+        let error = decode_fleet_slot_query_response(json!({ "data": null })).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("fleet slot snapshot query response missing object data"),
+            "{error:#}"
+        );
     }
 }

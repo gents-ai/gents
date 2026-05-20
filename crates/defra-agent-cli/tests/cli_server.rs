@@ -418,7 +418,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
 
     assert_eq!(
         snapshot.pointer("/source").and_then(Value::as_str),
-        Some("graphql.derived_inference_call_rows")
+        Some("graphql.derived_admission_state")
     );
     assert_eq!(
         snapshot.pointer("/totals/assigned").and_then(Value::as_i64),

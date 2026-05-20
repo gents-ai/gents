@@ -9,6 +9,8 @@ use crate::backend_provider::BackendProviderKind;
 use crate::graphql::escape_graphql_string;
 
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
+pub const HEALTHY_PROBE_STATUS: &str = "healthy";
+pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
 #[derive(Debug, Clone)]
 pub struct InferenceBackend {
@@ -84,14 +86,14 @@ impl InferenceBackend {
             probe_status: v
                 .get("probe_status")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .unwrap_or(UNKNOWN_PROBE_STATUS)
                 .to_string(),
         })
     }
 
     /// Whether this backend is available for scheduling.
     pub fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == "healthy"
+        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
     }
 }
 

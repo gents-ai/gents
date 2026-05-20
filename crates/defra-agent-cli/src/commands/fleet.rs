@@ -24,6 +24,8 @@ async fn fleet_slots(args: FleetSlotsArgs) -> Result<()> {
 
 fn runtime_fleet_slots_url(graphql: &str) -> Result<String> {
     let mut url = reqwest::Url::parse(graphql).context("parsing GraphQL endpoint URL")?;
+    // Runtime HTTP introspection endpoints are served beside the DefraDB GraphQL endpoint
+    // on the same host and port.
     url.set_path("/fleet/slots");
     url.set_query(None);
     url.set_fragment(None);
