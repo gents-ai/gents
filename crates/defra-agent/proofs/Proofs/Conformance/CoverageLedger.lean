@@ -182,8 +182,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "triggers"
-    , required := [Surface.runtimeInternal, Surface.operatorCli]
-    , deferred := [(Surface.operatorUi, "#283")]
+    , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "compaction"
     , required := [Surface.agentFacing]
@@ -423,6 +423,11 @@ def caseCoverage : List CoverageEntry :=
       "TriggerDispatch"
       "cli_config_task_run::config_task_run_matches_lean_manual_dispatch_contract")
       "triggers" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "trigger_cases"
+      "TriggerDispatch"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::runtime::task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases")
+      "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
       "runtime_cases"
       "RuntimeReconcileCases"
