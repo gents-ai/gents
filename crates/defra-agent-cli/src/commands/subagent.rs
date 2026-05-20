@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    SubagentCancelArgs, SubagentCancelOutput, SubagentCommand, SubagentListArgs,
-    SubagentListOutput,
+    SubagentCancelArgs, SubagentCancelOutput, SubagentCommand, SubagentListArgs, SubagentListOutput,
 };
 use crate::config_writes::ConfigAccess;
 use crate::{
