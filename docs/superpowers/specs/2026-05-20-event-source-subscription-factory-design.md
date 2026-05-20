@@ -363,6 +363,7 @@ three test-relevant symbols at the crate root. After this change, the
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
+pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 ```
 
 Inside `trigger_engine`, the relevant items become `pub` (not `pub(crate)`):
@@ -380,9 +381,8 @@ Inside `trigger_engine`, the relevant items become `pub` (not `pub(crate)`):
   trait + impls all `pub`.
 
 Everything else inside `trigger_engine` stays `pub(crate)`. The
-`TriggerSource` trait, `FireIntent`, `FireResult`, `TriggerKind`, the
-materializer, manual handle, etc. are unchanged. The blast radius is the
-two structs and the new trait, period.
+materializer, manual handle, `TriggerEngine`, and schedule source internals
+are unchanged.
 
 `DefraWatcher` is already `pub` at `lib.rs:119`; no change there.
 
@@ -395,6 +395,16 @@ receiver over the snapshot type; if the type is not public, the constructor
 cannot be called from outside the crate. A test-helper constructor was
 considered but rejected as additional indirection without proportional API
 hygiene benefit — the snapshot type is already documented and stable.
+
+Post-#252 amendment: the visibility lift also extends to `TriggerSource`,
+`FireIntent`, and the transitive payload types forced by the
+`private_interfaces` lint (`FireResult` and `TriggerKind`). Constructors and
+trait methods take types that must be public to be callable from integration
+tests; lifting the test-helper alternative was considered but rejected as
+indirection without proportional API hygiene benefit. This is the same
+pragmatic rationale as the `ActiveRuntimeSnapshot` lift: the integration
+consumer polls `EventSource::next_fire` and `SubagentSource::next_fire`
+through the real production trait and matches the emitted intent shape.
 
 ### Why not `pub mod trigger_engine`
 

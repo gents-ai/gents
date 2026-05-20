@@ -594,30 +594,20 @@ def caseCoverage : List CoverageEntry :=
       "CompactionReducerCases"
       "state_machine_conformance::generated_compaction_reducer_cases_pin_contract")
       "compaction" [Surface.agentFacing]
-  -- See docs/superpowers/audits/2026-05-19-conformance-audit.md#15-eventdelivery
-  -- and follow-up issue #252: this consumer still drives the Lean rows
-  -- through InMemoryEventDeliverySource rather than the production
-  -- DefraWatcher/EventSource/SubagentSource loops.
-  , tagged (consumerWithFollowUpCoverage
+  , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
-      "state_machine_conformance::event_delivery_transition_cases_match_contract"
-      "Issue #252 replaces the InMemoryEventDeliverySource replay with a thin driver over the production DefraWatcher/EventSource/SubagentSource event-delivery loops.")
+      "state_machine_conformance::event_delivery_transition_cases_match_contract")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliverySourceInstances"
       "state_machine_conformance::event_delivery_source_instances_match_runtime")
       "event-delivery" [Surface.runtimeInternal]
-  -- See docs/superpowers/audits/2026-05-19-conformance-audit.md#15-eventdelivery
-  -- and follow-up issue #252: this consumer still drives the Lean traces
-  -- through InMemoryEventDeliverySource rather than the production
-  -- DefraWatcher/EventSource/SubagentSource loops.
-  , tagged (consumerWithFollowUpCoverage
+  , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryConvergenceTraces"
-      "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation"
-      "Issue #252 replaces the InMemoryEventDeliverySource replay with a thin driver over the production DefraWatcher/EventSource/SubagentSource event-delivery loops.")
+      "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation")
       "event-delivery" [Surface.runtimeInternal]
   -- 2026-05-19 conformance audit section 10 / section 6 item #2:
   -- Stage 1 drives the K=1 runtime health-check path; Stage 2 issue #253
