@@ -257,9 +257,9 @@ async fn generated_request_transition_cases_cover_lifecycle_policy() {
     request_lifecycle::generated_request_transition_cases_cover_lifecycle_policy().await;
 }
 
-#[test]
-fn event_delivery_transition_cases_match_contract() {
-    event_delivery::event_delivery_transition_cases_match_contract();
+#[tokio::test]
+async fn event_delivery_transition_cases_match_contract() {
+    event_delivery::event_delivery_transition_cases_match_contract().await;
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn event_delivery_source_instances_match_runtime() {
     event_delivery::event_delivery_source_instances_match_runtime();
 }
 
-#[test]
-fn event_delivery_convergence_traces_match_runtime_or_deviation() {
-    event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation();
+#[tokio::test]
+async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
+    event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
 }

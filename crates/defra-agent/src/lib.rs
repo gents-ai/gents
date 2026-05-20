@@ -126,6 +126,7 @@ pub use toolset::{
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
+pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 

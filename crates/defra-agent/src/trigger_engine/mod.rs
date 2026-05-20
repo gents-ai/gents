@@ -34,7 +34,7 @@ type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 /// documents. Manual is reserved for direct fire requests (e.g. CLI / API
 /// invocations) that do not have a persisted trigger document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum TriggerKind {
+pub enum TriggerKind {
     Schedule,
     #[allow(dead_code)]
     Event,
@@ -60,16 +60,16 @@ impl TriggerKind {
 /// request: the resolved task, the concurrency policy, the template variable
 /// bags, and a one-shot `on_result` callback so the source can react (e.g.
 /// write back `last_status` bookkeeping on the trigger document).
-pub(crate) struct FireIntent {
-    pub(crate) trigger_id: Option<String>,
-    pub(crate) trigger_kind: TriggerKind,
-    pub(crate) task: crate::runtime_snapshot::ResolvedTask,
-    pub(crate) concurrency: crate::runtime_snapshot::ConcurrencyMode,
-    pub(crate) event_vars: serde_json::Value,
-    pub(crate) doc_vars: Option<serde_json::Value>,
-    pub(crate) args_vars: Option<serde_json::Value>,
-    pub(crate) pre_materialized_request_id: Option<String>,
-    pub(crate) on_result: Box<dyn FnOnce(FireResult) + Send>,
+pub struct FireIntent {
+    pub trigger_id: Option<String>,
+    pub trigger_kind: TriggerKind,
+    pub task: crate::runtime_snapshot::ResolvedTask,
+    pub concurrency: crate::runtime_snapshot::ConcurrencyMode,
+    pub event_vars: serde_json::Value,
+    pub doc_vars: Option<serde_json::Value>,
+    pub args_vars: Option<serde_json::Value>,
+    pub pre_materialized_request_id: Option<String>,
+    pub on_result: Box<dyn FnOnce(FireResult) + Send>,
 }
 
 impl FireIntent {
@@ -91,7 +91,7 @@ impl FireIntent {
 /// unexpected failure that the source should record and, in most cases, retry
 /// on a later tick.
 #[derive(Debug, Clone)]
-pub(crate) enum FireResult {
+pub enum FireResult {
     #[allow(dead_code)]
     Fired {
         request_id: String,
@@ -110,7 +110,7 @@ pub(crate) enum FireResult {
 ///
 /// Sources are polled by the engine's main loop; returning `None` indicates
 /// the source is exhausted and should be dropped.
-pub(crate) trait TriggerSource: Send + Sync {
+pub trait TriggerSource: Send + Sync {
     fn next_fire(
         &mut self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;

@@ -4,20 +4,27 @@
 //! `publish_update(collection_id, doc_id)`; the source receives them through
 //! the real `events::Subscription` returned by `subscribe_updates()`.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use defra_agent::UpdateSubscriptionSource;
 use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct MockUpdateSubscriptionSource {
     bus: Arc<ChannelBus>,
+    subscriber_count: Arc<AtomicUsize>,
+    subscriber_notify: Arc<Notify>,
 }
 
 impl MockUpdateSubscriptionSource {
     pub fn new() -> Self {
         Self {
             bus: Arc::new(ChannelBus::new()),
+            subscriber_count: Arc::new(AtomicUsize::new(0)),
+            subscriber_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -36,6 +43,25 @@ impl MockUpdateSubscriptionSource {
         let update = Update::new(doc_id, cid, collection_id, block, false, true);
         self.bus.publish(Message::update(update));
     }
+
+    pub async fn wait_for_subscribers(&self, expected: usize, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.subscriber_count.load(Ordering::SeqCst) >= expected {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            if tokio::time::timeout_at(deadline, self.subscriber_notify.notified())
+                .await
+                .is_err()
+            {
+                return false;
+            }
+        }
+    }
 }
 
 impl Default for MockUpdateSubscriptionSource {
@@ -46,6 +72,9 @@ impl Default for MockUpdateSubscriptionSource {
 
 impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
     fn subscribe_updates(&self) -> Subscription {
-        self.bus.subscribe(&[EventName::Update])
+        let subscription = self.bus.subscribe(&[EventName::Update]);
+        self.subscriber_count.fetch_add(1, Ordering::SeqCst);
+        self.subscriber_notify.notify_waiters();
+        subscription
     }
 }
