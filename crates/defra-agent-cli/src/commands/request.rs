@@ -1,11 +1,17 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
-use serde_json::json;
+use serde_json::{json, Value};
+use tokio::time::Instant;
 
 use crate::cli::args::{
-    RequestCommand, RequestInterruptArgs, RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
+    RequestCommand, RequestInterruptArgs, RequestInterruptOutputFormat, RequestResendArgs,
+    RequestShowArgs, RequestSubmitArgs,
 };
-use crate::request_helpers::{fetch_request_view, parse_valid_until_flag};
+use crate::request_helpers::{
+    fetch_request_view, is_terminal_lifecycle_state, parse_duration_suffix, parse_valid_until_flag,
+};
 use crate::{
     create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
     resolve_request_content, resolve_request_id, wait_for_terminal_response,
@@ -129,61 +135,185 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    // Combined existence + latch-status check. We distinguish "no row" from
-    // "row with empty field" so that interrupting a bogus request id reports
-    // an error instead of silently succeeding with a no-op mutation.
-    // Idempotent: if the field is already set, leave the original latch in place
-    // so the runtime observes a single canonical interrupt timestamp.
-    let existing_query = format!(
+    let _cancel_cause: defra_agent::tool_call_lifecycle::CancelCause = args.cause.into();
+
+    let before = fetch_interrupt_request_row(&graphql, &request_id).await?;
+    let already_interrupted = request_row_string(&before, "interrupt_requested_at").is_some();
+
+    if !already_interrupted {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                    input: {{ interrupt_requested_at: "{now_escaped}" }}
+                ) {{ _docID }}
+            }}"#,
+            request_id = escape_graphql_string(&request_id),
+            now_escaped = escape_graphql_string(&now),
+        );
+        post_graphql(&graphql, &mutation).await?;
+    }
+
+    let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;
+    let interrupt_landed_at =
+        request_row_string(&row, "interrupt_requested_at").ok_or_else(|| {
+            anyhow::anyhow!("request {request_id} did not persist interrupt_requested_at")
+        })?;
+
+    if args.wait && !request_row_is_terminal(&row) {
+        let timeout = parse_duration_suffix(&args.timeout)?;
+        row = wait_for_terminal_request_state(&graphql, &request_id, timeout, row).await?;
+    }
+
+    let summary = request_interrupt_summary(
+        &row,
+        args.cause.as_str(),
+        &interrupt_landed_at,
+        already_interrupted,
+    );
+    match args.output {
+        RequestInterruptOutputFormat::Json => print_json(&summary)?,
+        RequestInterruptOutputFormat::Text => print_interrupt_text(&summary)?,
+    }
+    Ok(())
+}
+
+async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<Value> {
+    let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ created_at: DESC }},
                 limit: 1
             ) {{
                 request_id
+                agent_did
+                behavior_id
+                session_id
+                status
+                lifecycle_state
+                failure_reason
+                retry_count
+                max_retries
+                created_at
+                claimed_at
+                deadline
+                valid_until
                 interrupt_requested_at
             }}
         }}"#,
-        request_id = escape_graphql_string(&request_id),
+        request_id = escape_graphql_string(request_id),
     );
-    let existing = post_graphql(&graphql, &existing_query).await?;
-    let existing_row = existing.pointer("/data/AgentRequest/0");
-    let Some(existing_row) = existing_row else {
-        anyhow::bail!("request {request_id} not found");
-    };
-    let already = existing_row
-        .get("interrupt_requested_at")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned);
-    if let Some(existing_at) = already {
-        let summary = json!({
-            "request_id": request_id,
-            "interrupt_requested_at": existing_at,
-            "already_interrupted": true,
-        });
-        print_json(&summary)?;
-        return Ok(());
-    }
+    let response = post_graphql(graphql, &query).await?;
+    response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+}
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ interrupt_requested_at: "{now_escaped}" }}
-            ) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(&request_id),
-        now_escaped = escape_graphql_string(&now),
+async fn wait_for_terminal_request_state(
+    graphql: &str,
+    request_id: &str,
+    timeout: Duration,
+    mut last_row: Value,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if request_row_is_terminal(&last_row) {
+            return Ok(last_row);
+        }
+        if Instant::now() >= deadline {
+            let state = request_row_string(&last_row, "lifecycle_state")
+                .unwrap_or_else(|| "<missing>".to_string());
+            anyhow::bail!(
+                "timed out waiting for request {request_id} to reach a terminal state after {}s (last lifecycle_state={state})",
+                timeout.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        last_row = fetch_interrupt_request_row(graphql, request_id).await?;
+    }
+}
+
+fn request_row_is_terminal(row: &Value) -> bool {
+    row.get("lifecycle_state")
+        .and_then(Value::as_str)
+        .is_some_and(is_terminal_lifecycle_state)
+}
+
+fn request_row_string(row: &Value, key: &str) -> Option<String> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn request_interrupt_summary(
+    row: &Value,
+    cause: &str,
+    interrupt_landed_at: &str,
+    already_interrupted: bool,
+) -> Value {
+    let lifecycle_state = request_row_string(row, "lifecycle_state").unwrap_or_default();
+    json!({
+        "request_id": request_row_string(row, "request_id").unwrap_or_default(),
+        "agent_did": request_row_string(row, "agent_did"),
+        "behavior_id": request_row_string(row, "behavior_id"),
+        "session_id": request_row_string(row, "session_id"),
+        "status": request_row_string(row, "status"),
+        "lifecycle_state": lifecycle_state,
+        "failure_reason": request_row_string(row, "failure_reason"),
+        "interrupt_requested_at": request_row_string(row, "interrupt_requested_at"),
+        "interrupt_landed_at": interrupt_landed_at,
+        "cause": cause,
+        "already_interrupted": already_interrupted,
+        "terminal": is_terminal_lifecycle_state(&lifecycle_state),
+        "created_at": request_row_string(row, "created_at"),
+        "claimed_at": request_row_string(row, "claimed_at"),
+        "deadline": request_row_string(row, "deadline"),
+        "valid_until": request_row_string(row, "valid_until"),
+    })
+}
+
+fn print_interrupt_text(summary: &Value) -> Result<()> {
+    let text = |key: &str| {
+        summary
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("-")
+            .to_string()
+    };
+    println!("request_id: {}", text("request_id"));
+    println!("state: {}", text("lifecycle_state"));
+    println!("status: {}", text("status"));
+    println!("interrupt_landed_at: {}", text("interrupt_landed_at"));
+    println!("cause: {}", text("cause"));
+    println!(
+        "already_interrupted: {}",
+        summary
+            .get("already_interrupted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     );
-    post_graphql(&graphql, &mutation).await?;
-    let summary = json!({
-        "request_id": request_id,
-        "interrupt_requested_at": now,
-        "already_interrupted": false,
-    });
-    print_json(&summary)?;
+    println!(
+        "terminal: {}",
+        summary
+            .get("terminal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    );
+    if let Some(reason) = summary
+        .get("failure_reason")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        println!("failure_reason: {reason}");
+    }
     Ok(())
 }
 
