@@ -154,4 +154,104 @@
     word-break: break-word;
     overflow-wrap: anywhere;
   }
+
+  /* ---------------------------------------------------------------
+   * Command-policy denial — inline render per the panel-286 prototype.
+   * Amber/warning treatment; deliberately distinct from the red
+   * .tool-item-dot-error path. A denial is a guardrail, not a failure.
+   * ------------------------------------------------------------- */
+  .tool-item-dot-denied {
+    background: var(--color-warning);
+    box-shadow: 0 0 0 3px rgb(var(--source-orange-rgb) / 0.18);
+  }
+
+  .tool-item-denied .tool-item-summary {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--source-orange-rgb) / 0.08),
+      transparent 70%
+    );
+  }
+
+  .tool-item-denied .tool-item-summary:hover {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--source-orange-rgb) / 0.14),
+      rgb(var(--source-orange-rgb) / 0.02) 75%
+    );
+  }
+
+  .tool-item-denied .tool-item-name {
+    color: var(--color-warning-soft, #ffd089);
+  }
+
+  .denial-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .denial-summary-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .denial-category-label {
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-warning);
+    font-weight: 600;
+  }
+
+  .denial-rule-id {
+    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background: rgb(var(--source-orange-rgb) / 0.16);
+    border: 1px solid rgb(var(--source-orange-rgb) / 0.32);
+    color: var(--color-warning-soft, #ffd089);
+    white-space: nowrap;
+  }
+
+  .denial-reason {
+    font-size: 12.5px;
+    color: var(--color-warning-soft, #ffd089);
+  }
+
+  .denial-body {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .denial-detail {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .denial-attempt {
+    padding: var(--space-4) var(--space-5);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+    border-left: 3px solid rgb(var(--source-orange-rgb) / 0.55);
+    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--color-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .denial-attempt .denied-token {
+    background: rgb(var(--source-orange-rgb) / 0.22);
+    color: var(--color-warning-soft, #ffd089);
+    padding: 0 4px;
+    border-radius: 4px;
+  }
 }

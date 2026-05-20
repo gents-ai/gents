@@ -1,11 +1,13 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { parseCommandDenial } from "../lib/commandDenial";
 import type {
   RenderedTimelineItem,
   RenderedToolCallView,
   ToolDetailValueView,
 } from "../lib/types";
+import { CommandDenialToolItem } from "./commandDenial";
 
 function MarkdownContent({ value }: { value: string }) {
   return (
@@ -73,24 +75,44 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
           {tools.length} tool {tools.length === 1 ? "call" : "calls"}
         </span>
       </div>
-      {tools.map((tool) => (
-        <details className="tool-item" key={tool.itemKey}>
-          <summary className="tool-item-summary">
-            <span className="tool-item-summary-left">
-              <span
-                aria-hidden="true"
-                className={toolStatusClass(tool.statusKind)}
-              />
-              <span className="tool-item-name">{tool.toolName}</span>
-            </span>
-            <span className="tool-item-action">View</span>
-          </summary>
-          <div className="tool-item-body">
-            <ToolDetailSection label="args" value={tool.args} />
-            <ToolDetailSection label="result" value={tool.result} />
-          </div>
-        </details>
-      ))}
+      {tools.map((tool) => {
+        // Command-policy denials get the inline amber render when the
+        // error string matches a known sentinel (see lib/commandDenial.ts).
+        // When the runtime is enriched to persist structured DenialReason
+        // fields, this branch should read those fields directly instead
+        // of parsing the result string.
+        const denial =
+          (tool.statusKind ?? "").toLowerCase() === "error"
+            ? parseCommandDenial(tool.result?.rawText)
+            : null;
+        if (denial) {
+          return (
+            <CommandDenialToolItem
+              key={tool.itemKey}
+              tool={tool}
+              denial={denial}
+            />
+          );
+        }
+        return (
+          <details className="tool-item" key={tool.itemKey}>
+            <summary className="tool-item-summary">
+              <span className="tool-item-summary-left">
+                <span
+                  aria-hidden="true"
+                  className={toolStatusClass(tool.statusKind)}
+                />
+                <span className="tool-item-name">{tool.toolName}</span>
+              </span>
+              <span className="tool-item-action">View</span>
+            </summary>
+            <div className="tool-item-body">
+              <ToolDetailSection label="args" value={tool.args} />
+              <ToolDetailSection label="result" value={tool.result} />
+            </div>
+          </details>
+        );
+      })}
     </section>
   );
 }
