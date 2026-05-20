@@ -1217,10 +1217,18 @@ pub(crate) struct RequestShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = RequestShowOutputFormat::Text)]
+    pub(crate) output: RequestShowOutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RequestShowOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]
