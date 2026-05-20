@@ -47,6 +47,7 @@
     --color-success: #8df2b4;
     --color-success-strong: var(--source-green);
     --color-warning: var(--source-orange);
+    --color-warning-soft: #ffd089;
     --color-info: var(--source-blue);
     --color-error: #ffad9d;
     --color-error-strong: #ff6f5f;

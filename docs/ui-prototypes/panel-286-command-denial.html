@@ -1,0 +1,1600 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>panel-286 — command-policy denial surfacing</title>
+    <style>
+      /* ---------------------------------------------------------------
+       * Source Network tokens (mirrored from
+       * apps/desktop-tauri/src/styles/tokens.css). Kept inline so this
+       * file is fully self-contained per docs/ui-prototypes conventions.
+       * ------------------------------------------------------------- */
+      :root {
+        color-scheme: dark;
+        --font-body:
+          "Inter", "SF Pro Text", system-ui, sans-serif;
+        --font-heading:
+          "Funnel Display", "Inter", "SF Pro Display", system-ui, sans-serif;
+        --font-mono:
+          ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+        --source-black: #000000;
+        --source-green: #06b250;
+        --source-dark-green: #1c2724;
+        --source-white: #ffffff;
+        --source-blue: #10cbff;
+        --source-orange: #ffa011;
+        --source-green-rgb: 6 178 80;
+        --source-dark-green-rgb: 28 39 36;
+        --source-blue-rgb: 16 203 255;
+        --source-orange-rgb: 255 160 17;
+
+        --color-bg: var(--source-black);
+        --color-surface: rgb(var(--source-dark-green-rgb) / 0.86);
+        --color-surface-strong: #07110e;
+        --color-surface-deep: #020504;
+        --color-surface-muted: rgb(var(--source-dark-green-rgb) / 0.58);
+        --color-text: var(--source-white);
+        --color-text-muted: #95a49d;
+        --color-text-soft: #d6ddda;
+        --color-text-warm: #dff8e8;
+        --color-accent: var(--source-green);
+        --color-accent-strong: #39e27a;
+        --color-accent-muted: #58c779;
+        --color-success: #8df2b4;
+        --color-success-strong: var(--source-green);
+        --color-warning: var(--source-orange);
+        --color-warning-soft: #ffd089;
+        --color-info: var(--source-blue);
+        --color-error: #ffad9d;
+        --color-error-strong: #ff6f5f;
+        --border-default: rgb(var(--source-green-rgb) / 0.18);
+        --border-strong: rgb(var(--source-green-rgb) / 0.28);
+        --radius-sm: 8px;
+        --radius-md: 8px;
+        --radius-lg: 8px;
+        --radius-pill: 999px;
+        --space-1: 4px;
+        --space-2: 6px;
+        --space-3: 8px;
+        --space-4: 10px;
+        --space-5: 12px;
+        --space-6: 14px;
+        --space-7: 16px;
+        --space-8: 18px;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: var(--font-body);
+        color: var(--color-text);
+        background:
+          radial-gradient(
+            900px 600px at 10% -10%,
+            rgb(var(--source-green-rgb) / 0.07),
+            transparent 60%
+          ),
+          var(--color-bg);
+        line-height: 1.45;
+        min-height: 100vh;
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 28px 80px;
+        display: grid;
+        gap: 24px;
+      }
+
+      .page-header {
+        display: grid;
+        gap: 6px;
+      }
+
+      .page-header h1 {
+        font-family: var(--font-heading);
+        font-weight: 600;
+        font-size: 22px;
+        margin: 0;
+      }
+
+      .page-header .lede {
+        color: var(--color-text-soft);
+        font-size: 14px;
+        max-width: 78ch;
+      }
+
+      .page-header .crumbs {
+        color: var(--color-text-muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: var(--space-4) var(--space-5);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+        background: var(--color-surface-strong);
+      }
+
+      .controls label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+        margin-right: var(--space-3);
+      }
+
+      .controls button {
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 500;
+        padding: 6px 10px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border-default);
+        background: var(--color-surface-deep);
+        color: var(--color-text-soft);
+        cursor: pointer;
+        transition:
+          background 120ms ease,
+          color 120ms ease,
+          border-color 120ms ease;
+      }
+
+      .controls button:hover {
+        background: rgb(var(--source-green-rgb) / 0.08);
+        color: var(--color-text);
+      }
+
+      .controls button[aria-pressed="true"] {
+        background: rgb(var(--source-orange-rgb) / 0.16);
+        border-color: rgb(var(--source-orange-rgb) / 0.45);
+        color: var(--color-warning-soft);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+      }
+
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      .panel {
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+        background:
+          linear-gradient(
+            180deg,
+            rgb(var(--source-green-rgb) / 0.035),
+            transparent 42%
+          ),
+          var(--color-surface-strong);
+        padding: var(--space-6) var(--space-7);
+        display: grid;
+        gap: var(--space-6);
+        min-width: 0;
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: var(--space-4);
+      }
+
+      .panel-title h2 {
+        font-family: var(--font-heading);
+        font-weight: 600;
+        font-size: 14px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--color-text-warm);
+        margin: 0;
+      }
+
+      .panel-title .panel-sub {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+      }
+
+      /* ---------------------------------------------------------------
+       * Mirrored transcript shell — class names match
+       * apps/desktop-tauri/src/styles/transcript/*.css so the prototype
+       * looks like the real chat shell.
+       * ------------------------------------------------------------- */
+      .turn-block {
+        display: grid;
+        gap: var(--space-4);
+        min-width: 0;
+      }
+
+      .turn-block + .turn-block {
+        margin-top: var(--space-5);
+      }
+
+      .message-card {
+        padding: var(--space-5) var(--space-6);
+        border-radius: var(--radius-lg);
+        border: 1px solid rgb(var(--source-green-rgb) / 0.12);
+        background: var(--color-surface-deep);
+        box-shadow: inset 2px 0 0 rgb(var(--source-green-rgb) / 0.18);
+        min-width: 0;
+      }
+
+      .message-role {
+        color: var(--color-text-warm);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        margin-bottom: var(--space-3);
+      }
+
+      .message-content {
+        color: var(--color-text);
+        font-size: 14px;
+      }
+
+      .message-content code {
+        font-family: var(--font-mono);
+        padding: 1px 6px;
+        border-radius: var(--space-2);
+        background: rgb(var(--source-green-rgb) / 0.12);
+        font-size: 12.5px;
+      }
+
+      .tool-group {
+        display: grid;
+        gap: 0;
+        overflow: hidden;
+        border: 1px solid rgb(var(--source-green-rgb) / 0.12);
+        border-radius: var(--radius-lg);
+        background: var(--color-surface-deep);
+      }
+
+      .tool-group-meta {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        padding: var(--space-4) var(--space-5);
+        border-bottom: 1px solid rgb(var(--source-green-rgb) / 0.1);
+      }
+
+      .tool-group-label {
+        color: var(--color-text-muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .muted-small {
+        color: var(--color-text-muted);
+        font-size: 12px;
+      }
+
+      .tool-item {
+        background: transparent;
+        border-bottom: 1px solid rgb(var(--source-green-rgb) / 0.08);
+      }
+
+      .tool-item:last-child {
+        border-bottom: 0;
+      }
+
+      .tool-item-summary {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: var(--space-5);
+        padding: var(--space-4) var(--space-5);
+        cursor: pointer;
+      }
+
+      .tool-item-summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .tool-item-summary:hover {
+        background: rgb(var(--source-green-rgb) / 0.06);
+      }
+
+      .tool-item-summary-left {
+        display: flex;
+        align-items: center;
+        gap: var(--space-4);
+        min-width: 0;
+        flex: 1;
+      }
+
+      .tool-item-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: var(--radius-pill);
+        display: inline-block;
+        flex: none;
+      }
+
+      .tool-item-dot-success {
+        background: var(--color-success);
+      }
+
+      .tool-item-dot-error {
+        background: var(--color-error);
+      }
+
+      .tool-item-dot-denied {
+        background: var(--color-warning);
+        box-shadow: 0 0 0 3px rgb(var(--source-orange-rgb) / 0.18);
+      }
+
+      .tool-item-name {
+        font-weight: 500;
+        color: var(--color-text-soft);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+
+      .tool-item-action {
+        color: var(--color-text-muted);
+        font-size: 12px;
+      }
+
+      .tool-item-body {
+        display: grid;
+        gap: var(--space-4);
+        padding: 0 var(--space-5) var(--space-5) calc(var(--space-8) + var(--space-5));
+      }
+
+      .tool-detail-key {
+        color: var(--color-accent-muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .tool-detail-row {
+        display: grid;
+        gap: var(--space-1);
+        padding: var(--space-3) var(--space-4);
+        border-radius: var(--radius-sm);
+        background: var(--color-surface-strong);
+      }
+
+      .tool-detail-value {
+        color: var(--color-text);
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      /* ---------------------------------------------------------------
+       * Denial block — the new pattern this prototype proposes.
+       *
+       * Visual rules:
+       *   - amber/warning, never red. A denial is a guardrail, not a
+       *     failure. Distinct from .tool-item-dot-error (#ff6f5f).
+       *   - inline within the .tool-group, same affordances as a normal
+       *     tool-item (collapsible <details>, "View" action).
+       *   - badged with the policy rule's stable id (the Lean
+       *     DenialReason.toContract string), so operators can grep / cite.
+       * ------------------------------------------------------------- */
+      .tool-item-denied .tool-item-summary {
+        background: linear-gradient(
+          90deg,
+          rgb(var(--source-orange-rgb) / 0.08),
+          transparent 70%
+        );
+      }
+
+      .tool-item-denied .tool-item-summary:hover {
+        background: linear-gradient(
+          90deg,
+          rgb(var(--source-orange-rgb) / 0.14),
+          rgb(var(--source-orange-rgb) / 0.02) 75%
+        );
+      }
+
+      .tool-item-denied .tool-item-name {
+        color: var(--color-warning-soft);
+      }
+
+      .denial-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+        flex: 1;
+      }
+
+      .denial-summary-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-3);
+        min-width: 0;
+      }
+
+      .denial-summary-line .argv {
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--color-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+
+      .denial-reason {
+        font-size: 12.5px;
+        color: var(--color-warning-soft);
+      }
+
+      .denial-rule-id {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
+        background: rgb(var(--source-orange-rgb) / 0.16);
+        border: 1px solid rgb(var(--source-orange-rgb) / 0.32);
+        color: var(--color-warning-soft);
+        white-space: nowrap;
+      }
+
+      .denial-category-label {
+        font-size: 10.5px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--color-warning);
+        font-weight: 600;
+      }
+
+      .denial-body {
+        display: grid;
+        gap: var(--space-5);
+      }
+
+      .denial-detail {
+        display: grid;
+        gap: var(--space-3);
+      }
+
+      .denial-attempt {
+        padding: var(--space-4) var(--space-5);
+        border-radius: var(--radius-sm);
+        background: var(--color-surface-strong);
+        border-left: 3px solid rgb(var(--source-orange-rgb) / 0.55);
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--color-text);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .denial-attempt .denied-token {
+        background: rgb(var(--source-orange-rgb) / 0.22);
+        color: var(--color-warning-soft);
+        padding: 0 4px;
+        border-radius: 4px;
+      }
+
+      .denial-rule-card {
+        padding: var(--space-4) var(--space-5);
+        border-radius: var(--radius-sm);
+        background: var(--color-surface-strong);
+        border: 1px solid rgb(var(--source-orange-rgb) / 0.18);
+        display: grid;
+        gap: var(--space-2);
+      }
+
+      .denial-rule-card .rule-title {
+        color: var(--color-warning-soft);
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .denial-rule-card .rule-blurb {
+        color: var(--color-text-soft);
+        font-size: 13px;
+      }
+
+      .denial-rule-card .rule-cite {
+        font-family: var(--font-mono);
+        color: var(--color-text-muted);
+        font-size: 11px;
+      }
+
+      .denial-suggestion {
+        padding: var(--space-4) var(--space-5);
+        border-radius: var(--radius-sm);
+        background: rgb(var(--source-green-rgb) / 0.07);
+        border: 1px solid rgb(var(--source-green-rgb) / 0.22);
+        display: grid;
+        gap: var(--space-2);
+      }
+
+      .denial-suggestion .suggestion-label {
+        color: var(--color-accent-muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .denial-suggestion .suggestion-text {
+        color: var(--color-text);
+        font-size: 13px;
+      }
+
+      .denial-suggestion .suggestion-text code {
+        font-family: var(--font-mono);
+        padding: 1px 6px;
+        border-radius: var(--space-2);
+        background: rgb(var(--source-green-rgb) / 0.16);
+        font-size: 12px;
+      }
+
+      .denial-actions {
+        display: flex;
+        gap: var(--space-3);
+        flex-wrap: wrap;
+        margin-top: var(--space-2);
+      }
+
+      .denial-action {
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border-default);
+        background: var(--color-surface-deep);
+        color: var(--color-text-soft);
+        cursor: pointer;
+      }
+
+      .denial-action.primary {
+        border-color: rgb(var(--source-green-rgb) / 0.5);
+        background: rgb(var(--source-green-rgb) / 0.18);
+        color: var(--color-text);
+      }
+
+      .denial-action:hover {
+        background: rgb(var(--source-green-rgb) / 0.12);
+        color: var(--color-text);
+      }
+
+      /* Toast variant (out-of-flow, used for sandbox / disabled-network */
+      /* denials at apply time rather than runtime) */
+      .denial-toast {
+        position: relative;
+        padding: var(--space-5) var(--space-6);
+        border-radius: var(--radius-lg);
+        background: linear-gradient(
+          135deg,
+          rgb(var(--source-orange-rgb) / 0.1),
+          rgb(var(--source-orange-rgb) / 0.03) 70%
+        );
+        border: 1px solid rgb(var(--source-orange-rgb) / 0.32);
+        display: grid;
+        gap: var(--space-2);
+      }
+
+      .denial-toast .toast-line {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        flex-wrap: wrap;
+      }
+
+      .denial-toast .toast-headline {
+        color: var(--color-warning-soft);
+        font-weight: 600;
+        font-size: 13.5px;
+      }
+
+      /* Side-by-side compact vs expanded */
+      .compare-grid {
+        display: grid;
+        gap: var(--space-5);
+      }
+
+      .compare-cell {
+        display: grid;
+        gap: var(--space-3);
+        padding: var(--space-5);
+        border: 1px dashed rgb(var(--source-green-rgb) / 0.18);
+        border-radius: var(--radius-md);
+        background: var(--color-surface-deep);
+      }
+
+      .compare-cell h3 {
+        font-family: var(--font-heading);
+        font-weight: 600;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+        margin: 0;
+      }
+
+      /* Design notes */
+      .design-notes {
+        margin-top: 8px;
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+        background: var(--color-surface-strong);
+        padding: 0;
+      }
+
+      .design-notes > summary {
+        list-style: none;
+        padding: var(--space-5) var(--space-6);
+        cursor: pointer;
+        font-family: var(--font-heading);
+        font-weight: 600;
+        font-size: 14px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--color-text-warm);
+        display: flex;
+        gap: var(--space-3);
+        align-items: center;
+      }
+
+      .design-notes > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .design-notes > summary::before {
+        content: "▸";
+        color: var(--color-accent);
+      }
+
+      .design-notes[open] > summary::before {
+        content: "▾";
+      }
+
+      .design-notes-body {
+        padding: 0 var(--space-7) var(--space-7);
+        display: grid;
+        gap: var(--space-6);
+        color: var(--color-text-soft);
+        font-size: 13.5px;
+      }
+
+      .design-notes-body section {
+        display: grid;
+        gap: var(--space-3);
+      }
+
+      .design-notes-body h3 {
+        font-family: var(--font-heading);
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--color-text-warm);
+        margin: 0;
+      }
+
+      .design-notes-body pre {
+        margin: 0;
+        padding: var(--space-5) var(--space-6);
+        border-radius: var(--radius-md);
+        background: var(--color-surface-deep);
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--color-text-soft);
+        overflow-x: auto;
+      }
+
+      .design-notes-body ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .design-notes-body li + li {
+        margin-top: 4px;
+      }
+
+      .design-notes-body code {
+        font-family: var(--font-mono);
+        background: rgb(var(--source-green-rgb) / 0.12);
+        padding: 1px 5px;
+        border-radius: var(--space-2);
+        font-size: 12px;
+      }
+
+      /* Status legend */
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-5);
+        padding: var(--space-4) var(--space-5);
+        border: 1px dashed var(--border-default);
+        border-radius: var(--radius-md);
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: 12.5px;
+        color: var(--color-text-soft);
+      }
+
+      .legend-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: var(--radius-pill);
+      }
+
+      /* Accessibility-only live region */
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <span class="crumbs"
+          >defra-agent · ui-prototypes · panel-286 · command-policy denial</span
+        >
+        <h1>Command-policy denial surfacing in the chat transcript</h1>
+        <p class="lede">
+          The CommandPolicy validator denies certain tool invocations as a
+          deliberate guardrail (sed --in-place, sandbox-blocked writes,
+          network when disabled, env-var leaks). Today the denial reaches the
+          operator as an opaque red error inline with normal tool failures.
+          This prototype proposes a distinct amber inline block, anchored to
+          the Lean
+          <code style="font-family: var(--font-mono)">DenialReason</code>
+          taxonomy, so operators see policy rejections as guardrails — not as
+          something that broke.
+        </p>
+      </header>
+
+      <section
+        class="controls"
+        role="toolbar"
+        aria-label="Cycle denial categories"
+      >
+        <label id="cycle-label">Show denial:</label>
+        <div role="radiogroup" aria-labelledby="cycle-label" id="cycle-buttons">
+          <!-- Populated by JS so the list of categories has a single source -->
+        </div>
+        <span style="flex: 1"></span>
+        <span class="muted-small" id="case-counter" aria-hidden="true"></span>
+      </section>
+
+      <section class="legend" aria-label="Visual treatment legend">
+        <span class="legend-item">
+          <span
+            class="legend-swatch"
+            style="background: var(--color-success)"
+          ></span>
+          success — tool returned a result
+        </span>
+        <span class="legend-item">
+          <span
+            class="legend-swatch"
+            style="background: var(--color-error)"
+          ></span>
+          failure — tool ran and errored
+        </span>
+        <span class="legend-item">
+          <span
+            class="legend-swatch"
+            style="
+              background: var(--color-warning);
+              box-shadow: 0 0 0 3px rgb(var(--source-orange-rgb) / 0.18);
+            "
+          ></span>
+          denial — policy refused to run the tool
+        </span>
+      </section>
+
+      <div class="layout">
+        <!-- Left column: full chat-shell render -->
+        <section
+          class="panel"
+          aria-label="Inline transcript mock with denial block"
+        >
+          <div class="panel-title">
+            <h2>Transcript — inline denial</h2>
+            <span class="panel-sub">live mock</span>
+          </div>
+
+          <div class="turn-block">
+            <article class="message-card">
+              <div class="message-role">user</div>
+              <div class="message-content">
+                Apply the rename in <code>README.md</code> — change every
+                occurrence of <code>amy-general</code> to
+                <code>amy-code</code>.
+              </div>
+            </article>
+          </div>
+
+          <div class="turn-block">
+            <article class="message-card">
+              <div class="message-role">assistant</div>
+              <div class="message-content">
+                I'll use <code>sed</code> to rewrite the file in place.
+              </div>
+            </article>
+
+            <section class="tool-group" aria-label="Tool calls">
+              <div class="tool-group-meta">
+                <span class="tool-group-label">Tool Calls</span>
+                <span class="muted-small">2 tool calls</span>
+              </div>
+
+              <!-- A successful read-only tool call (context) -->
+              <details class="tool-item">
+                <summary class="tool-item-summary">
+                  <span class="tool-item-summary-left">
+                    <span
+                      aria-hidden="true"
+                      class="tool-item-dot tool-item-dot-success"
+                    ></span>
+                    <span class="tool-item-name">bash_read_only · grep</span>
+                  </span>
+                  <span class="tool-item-action">View</span>
+                </summary>
+                <div class="tool-item-body">
+                  <div class="tool-detail-row">
+                    <div class="tool-detail-key">argv</div>
+                    <div class="tool-detail-value">grep -n amy-general README.md</div>
+                  </div>
+                  <div class="tool-detail-row">
+                    <div class="tool-detail-key">result</div>
+                    <div class="tool-detail-value">3:amy-general
+17:amy-general
+42:amy-general</div>
+                  </div>
+                </div>
+              </details>
+
+              <!-- THE denial item — the prototype's centerpiece -->
+              <details
+                class="tool-item tool-item-denied"
+                id="primary-denial"
+                open
+              >
+                <summary class="tool-item-summary">
+                  <span class="tool-item-summary-left">
+                    <span
+                      aria-hidden="true"
+                      class="tool-item-dot tool-item-dot-denied"
+                    ></span>
+                    <span class="denial-summary">
+                      <span class="denial-summary-line">
+                        <span class="denial-category-label" id="denial-category-label"
+                          >Read-only guard</span
+                        >
+                        <code class="denial-rule-id" id="denial-rule-id"
+                          >readOnlyArgumentNotAllowed</code
+                        >
+                      </span>
+                      <span class="denial-summary-line">
+                        <span class="argv" id="denial-argv-line"></span>
+                      </span>
+                      <span class="denial-summary-line">
+                        <span class="denial-reason" id="denial-reason-line"></span>
+                      </span>
+                    </span>
+                  </span>
+                  <span class="tool-item-action" id="denial-toggle-label"
+                    >Hide</span
+                  >
+                </summary>
+                <div class="tool-item-body">
+                  <div class="denial-body">
+                    <div class="denial-detail">
+                      <span class="tool-detail-key">Attempted command</span>
+                      <div class="denial-attempt" id="denial-attempt"></div>
+                    </div>
+
+                    <div class="denial-detail">
+                      <span class="tool-detail-key">Policy rule</span>
+                      <div class="denial-rule-card">
+                        <div class="rule-title" id="denial-rule-title"></div>
+                        <div class="rule-blurb" id="denial-rule-blurb"></div>
+                        <div class="rule-cite" id="denial-rule-cite"></div>
+                      </div>
+                    </div>
+
+                    <div class="denial-detail" id="denial-suggestion-wrap">
+                      <span class="tool-detail-key">Suggested fix</span>
+                      <div class="denial-suggestion">
+                        <span class="suggestion-label">Try instead</span>
+                        <span
+                          class="suggestion-text"
+                          id="denial-suggestion-text"
+                        ></span>
+                      </div>
+                    </div>
+
+                    <div class="denial-actions">
+                      <button class="denial-action primary" type="button">
+                        Apply suggested fix
+                      </button>
+                      <button class="denial-action" type="button">
+                        Show full policy rule
+                      </button>
+                      <button class="denial-action" type="button">
+                        Copy diagnostic
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </section>
+          </div>
+        </section>
+
+        <!-- Right column: compact / expanded / toast comparison + design notes -->
+        <section class="panel" aria-label="Form variants and design notes">
+          <div class="panel-title">
+            <h2>Form variants</h2>
+            <span class="panel-sub">compact · expanded · toast</span>
+          </div>
+
+          <div class="compare-grid">
+            <div class="compare-cell">
+              <h3>Compact (collapsed in transcript)</h3>
+              <section class="tool-group">
+                <details class="tool-item tool-item-denied">
+                  <summary class="tool-item-summary">
+                    <span class="tool-item-summary-left">
+                      <span
+                        aria-hidden="true"
+                        class="tool-item-dot tool-item-dot-denied"
+                      ></span>
+                      <span class="denial-summary">
+                        <span class="denial-summary-line">
+                          <span class="denial-category-label"
+                            >Read-only guard</span
+                          >
+                          <code class="denial-rule-id"
+                            >readOnlyArgumentNotAllowed</code
+                          >
+                        </span>
+                        <span class="denial-summary-line">
+                          <span class="argv"
+                            >sed --in-place s/a/b/g README.md</span
+                          >
+                        </span>
+                      </span>
+                    </span>
+                    <span class="tool-item-action">View</span>
+                  </summary>
+                </details>
+              </section>
+              <p class="muted-small">
+                One-line summary suitable for dense transcripts. The argv is
+                truncated with ellipsis; the rule-id badge identifies the
+                blocking rule by its Lean
+                <code style="font-family: var(--font-mono)"
+                  >DenialReason.toContract</code
+                >
+                string so it stays diff-stable.
+              </p>
+            </div>
+
+            <div class="compare-cell">
+              <h3>Expanded (clicked open)</h3>
+              <section class="tool-group">
+                <details class="tool-item tool-item-denied" open>
+                  <summary class="tool-item-summary">
+                    <span class="tool-item-summary-left">
+                      <span
+                        aria-hidden="true"
+                        class="tool-item-dot tool-item-dot-denied"
+                      ></span>
+                      <span class="denial-summary">
+                        <span class="denial-summary-line">
+                          <span class="denial-category-label"
+                            >Read-only guard</span
+                          >
+                          <code class="denial-rule-id"
+                            >readOnlyArgumentNotAllowed</code
+                          >
+                        </span>
+                        <span class="denial-summary-line">
+                          <span class="argv"
+                            >sed --in-place s/a/b/g README.md</span
+                          >
+                        </span>
+                      </span>
+                    </span>
+                    <span class="tool-item-action">Hide</span>
+                  </summary>
+                  <div class="tool-item-body">
+                    <div class="denial-body">
+                      <div class="denial-detail">
+                        <span class="tool-detail-key">Policy rule</span>
+                        <div class="denial-rule-card">
+                          <div class="rule-title">
+                            sed in-place edits are not allowed under read-only
+                          </div>
+                          <div class="rule-blurb">
+                            The read-only tool refuses any sed invocation that
+                            includes <code>-i</code>, <code>--in-place</code>,
+                            or <code>--in-place=&lt;suffix&gt;</code>. Use a
+                            workspace-write tool for mutating edits.
+                          </div>
+                          <div class="rule-cite">
+                            CommandPolicy.Validation.validateSedArgs ·
+                            toolset/shared/command.rs:294
+                          </div>
+                        </div>
+                      </div>
+                      <div class="denial-detail">
+                        <span class="tool-detail-key">Suggested fix</span>
+                        <div class="denial-suggestion">
+                          <span class="suggestion-label">Try instead</span>
+                          <span class="suggestion-text">
+                            Re-route through
+                            <code>workspace_write</code> behavior, or run
+                            <code>sed</code> to stdout and write via the
+                            <code>file_write</code> tool.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+              </section>
+            </div>
+
+            <div class="compare-cell">
+              <h3>Apply-time toast (not transcript-anchored)</h3>
+              <div
+                class="denial-toast"
+                role="status"
+                aria-label="Apply-time policy rejection"
+              >
+                <div class="toast-line">
+                  <span
+                    aria-hidden="true"
+                    class="tool-item-dot tool-item-dot-denied"
+                  ></span>
+                  <span class="toast-headline"
+                    >Sandbox unavailable — workspace_write blocked</span
+                  >
+                  <code class="denial-rule-id"
+                    >workspaceWriteSandboxUnavailable</code
+                  >
+                </div>
+                <div class="muted-small">
+                  This behavior asked for the <code>workspace_write</code> mode,
+                  but the host kernel reports
+                  <code>workspaceWriteSandboxEnforced = false</code>. Falling
+                  through would allow unsandboxed writes; the apply refuses to
+                  promote the desired-state until the host is reconfigured or
+                  the behavior is downgraded.
+                </div>
+              </div>
+              <p class="muted-small">
+                Used when a denial happens during config apply rather than in
+                a chat turn. Same vocabulary, different anchor.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <details class="design-notes" id="design-notes">
+        <summary>Design notes</summary>
+        <div class="design-notes-body">
+          <section>
+            <h3>Where this anchors</h3>
+            <p>
+              The denial block lives inside the existing
+              <code>.tool-group</code> in
+              <code>apps/desktop-tauri/src/components/Transcript.tsx</code> —
+              same affordances as the success / failure
+              <code>&lt;details&gt;</code> already rendered by
+              <code>ToolGroups</code>. No new top-level panel, no notification
+              overlay. The rationale is that denials are causally tied to a
+              specific tool call the assistant attempted in this turn; pulling
+              them out of the transcript would lose that linkage.
+            </p>
+            <p>
+              The compact form is shown by default. Operators click into the
+              full rule card the same way they click into normal tool output.
+              For apply-time denials that have no enclosing turn (the toast
+              variant), the prototype mounts the same vocabulary onto a
+              top-level card in the config workspace; the rule id, category,
+              and Lean citation are identical.
+            </p>
+          </section>
+
+          <section>
+            <h3>Tauri / snapshot bridge data shape</h3>
+            <p>
+              The panel reads a denied <code>AgentToolCall</code> row as
+              <code>RenderedToolCallView</code> with an additional
+              <code>denial</code> field. Today the row only carries
+              <code>result: String</code>,
+              <code>status: String</code>, and
+              <code>tool_failure_class: String</code> (see
+              <code
+                >crates/defra-agent-protocol/schemas/agent/agent_tool_call.graphql</code
+              >). The
+              <code>result</code> string in a denial is whatever the Rust
+              <code>bail!</code> in
+              <code>validate_command_policy</code> produced — useful for
+              debugging, not stable enough for the rule-id badge or the
+              "Apply suggested fix" affordance. The Lean conformance
+              infrastructure already speaks the richer vocabulary (see
+              <code>case.denial_reason</code>,
+              <code>case.denied_command</code>,
+              <code>case.denied_argument</code>,
+              <code>case.denied_subcommand</code>,
+              <code>case.denied_argv</code> in
+              <code>crates/defra-agent/src/toolset/tests.rs</code>); the
+              persistence layer does not.
+            </p>
+            <p>
+              For this prototype to bind to real data, the runtime needs to
+              enrich what it persists on a denied tool call:
+            </p>
+            <pre><code>type AgentToolCall {
+    /* …existing fields… */
+
+    /* New fields (issue #286 follow-up). The Lean
+       DenialReason taxonomy is the contract surface;
+       toContract is the canonical string for the badge. */
+    denial_reason:     String  /* DenialReason.toContract:
+                                * "forbiddenPrefix"
+                                * | "allowedPrefixRequired"
+                                * | "readOnlyCommandNotAllowlisted"
+                                * | "readOnlyArgumentNotAllowed"
+                                * | "readOnlySubcommandRequired"
+                                * | "readOnlySubcommandNotAllowlisted"
+                                * | "readOnlyUrlRequired"
+                                * | "disabledNetworkUnenforceable"
+                                * | "disabledNetworkCommand"
+                                * | "workspaceWriteSandboxUnavailable" */
+    denied_argv:       [String]  /* full attempted argv */
+    denied_command:    String    /* lookup_command, when reason carries it */
+    denied_argument:   String    /* matched arg, e.g. "--in-place" */
+    denied_subcommand: String    /* matched subcommand, e.g. "commit" */
+    denied_prefix:     [String]  /* matched forbidden/required prefix */
+    policy_mode:       String    /* "read_only" | "workspace_write"
+                                  * | "unrestricted" */
+    policy_network:    String    /* "inherit" | "disabled" | "enabled" */
+}</code></pre>
+            <p>
+              The Rust validator already has the structured information
+              available at the
+              <code>bail!</code> site. The proposal is to thread it through
+              <code>ToolError</code> as a structured variant and persist on
+              the
+              <code>AgentToolCall</code> write that follows. The string
+              <code>result</code> stays — operators can still copy it as a
+              diagnostic — but it stops being the only thing UI has to work
+              with.
+            </p>
+            <p>
+              Lean is the source of truth for the closed set of denial
+              reasons (<code>Proofs/CommandPolicy/Types.lean:65-90</code>).
+              The frontend should treat any value outside that set as
+              forward-compatible: render the badge with whatever
+              <code>denial_reason</code> says, fall back to the category
+              label "Policy denial", but never block on unknown values.
+            </p>
+          </section>
+
+          <section>
+            <h3>Distinction from tool failure</h3>
+            <ul>
+              <li>
+                <strong>Color.</strong> Denial uses
+                <code>--color-warning</code> (#ffa011). Tool failure stays
+                <code>--color-error</code> (#ff6f5f). Operators learn the
+                color difference once.
+              </li>
+              <li>
+                <strong>Voice.</strong> Denials read as policy statements
+                ("read-only guard refused this argument"), failures as
+                outcomes ("tool exited with code 2"). The
+                <code>category-label</code> + rule-id badge make the policy
+                framing immediate; failure rows have no badge.
+              </li>
+              <li>
+                <strong>Suggestion affordance.</strong> Denials carry a
+                "suggested fix" track because the policy itself implies the
+                fix (downgrade the behavior, swap the argument, route through
+                a writable tool). Failures don't — runtime errors aren't
+                deterministically actionable in the same way.
+              </li>
+              <li>
+                <strong>Recovery contract.</strong> A failure may be retried
+                by the existing
+                <code>tool_retry_disposition</code> logic; a denial is
+                terminal for that attempt and only resolves via policy or
+                behavior reconfiguration.
+              </li>
+            </ul>
+          </section>
+
+          <section>
+            <h3>Accessibility</h3>
+            <ul>
+              <li>
+                The denial dot is decorative (<code>aria-hidden="true"</code>)
+                and the category, rule-id, and argv carry the meaning. A
+                screen reader hearing "Read-only guard,
+                readOnlyArgumentNotAllowed, sed --in-place s/a/b/g
+                README.md" gets the full picture without color.
+              </li>
+              <li>
+                Because denials are operator-visible decisions, the live
+                surface mounts an ARIA live region (out of this prototype's
+                static markup, but
+                <code>role="status"</code> on the apply-time toast
+                demonstrates the shape) so newly-emitted denials announce
+                themselves.
+              </li>
+              <li>
+                The compact form keeps focus order argv → action button so
+                keyboard operators can read and act without expanding.
+              </li>
+              <li>
+                Color contrast: <code>--color-warning-soft</code> (#ffd089)
+                on <code>--color-surface-deep</code> (#020504) is well above
+                WCAG AA for body text; the amber on transparent gradient is
+                accent only.
+              </li>
+            </ul>
+          </section>
+
+          <section>
+            <h3>Out of scope (matches PROMPT.md)</h3>
+            <ul>
+              <li>
+                No Tauri integration, no real bridge code, no GraphQL
+                resolver changes. This is a static HTML prototype.
+              </li>
+              <li>
+                No new denial categories. The four mock variants are drawn
+                directly from
+                <code>Proofs/CommandPolicy/Cases.lean</code> and
+                <code>Types.lean</code>.
+              </li>
+              <li>
+                No changes to the validator. The "STOP and report" gate from
+                PROMPT.md was checked: today's
+                <code>AgentToolCall</code> persists the denial as an opaque
+                <code>result</code> string. The prototype documents the
+                enrichment required to bind real data, and the matrix design
+                row (<code
+                  >docs/superpowers/specs/2026-05-20-feature-matrix-design.md §3
+                  command-policy</code
+                >) already lists <code>operatorUi</code> as the deferred
+                surface this prototype unblocks.
+              </li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
+      <!-- ARIA live region for cycle announcements -->
+      <div
+        class="visually-hidden"
+        role="status"
+        aria-live="polite"
+        id="cycle-live-region"
+      ></div>
+    </main>
+
+    <script>
+      // --------------------------------------------------------------
+      // Mock denial variants, modeled on
+      //   crates/defra-agent/proofs/Proofs/CommandPolicy/Types.lean
+      // (DenialReason inductive)
+      // and
+      //   crates/defra-agent/proofs/Proofs/CommandPolicy/Cases.lean
+      // The shape mirrors the AgentToolCall enrichment proposed in
+      // the design notes — denial_reason matches Lean
+      // DenialReason.toContract.
+      // --------------------------------------------------------------
+
+      const DENIALS = [
+        {
+          id: "read-only-sed-in-place",
+          category: "Read-only guard",
+          rule_id: "readOnlyArgumentNotAllowed",
+          tool_name: "bash_read_only · sed",
+          policy_mode: "read_only",
+          policy_network: "inherit",
+          denied_argv: ["sed", "--in-place", "s/amy-general/amy-code/g", "README.md"],
+          denied_command: "sed",
+          denied_argument: "--in-place",
+          denied_subcommand: null,
+          denied_prefix: null,
+          reason_line: "sed in-place edits aren't allowed under the read-only tool.",
+          rule_title: "sed in-place edits are not allowed under read-only",
+          rule_blurb:
+            "The read-only tool refuses any sed invocation that carries -i, --in-place, or --in-place=<suffix>. The fix is to route through a workspace_write tool, or capture stdout and write it via file_write.",
+          rule_cite:
+            "CommandPolicy.Validation.validateSedArgs · toolset/shared/command.rs:294",
+          suggestion_html:
+            "Re-issue the command without the in-place flag, or route through a behavior with mode <code>workspace_write</code>.",
+        },
+        {
+          id: "sandbox-workspace-write-unavailable",
+          category: "Sandbox violation",
+          rule_id: "workspaceWriteSandboxUnavailable",
+          tool_name: "bash_workspace_write · rg",
+          policy_mode: "workspace_write",
+          policy_network: "inherit",
+          denied_argv: ["rg", "--files", "--output", "/Users/operator/Desktop/index.txt"],
+          denied_command: "rg",
+          denied_argument: "/Users/operator/Desktop/index.txt",
+          denied_subcommand: null,
+          denied_prefix: null,
+          reason_line:
+            "Target path resolves outside the configured workspace sandbox root.",
+          rule_title: "workspace_write needs an enforced sandbox",
+          rule_blurb:
+            "The host advertised workspaceWriteSandboxEnforced = false, so the runtime cannot guarantee writes stay under the project root. The deny is preemptive — no command was spawned.",
+          rule_cite:
+            "CommandPolicy.Sandbox.selectSandbox · toolset/shared/command.rs (sandbox_for_policy)",
+          suggestion_html:
+            "Run on a host where sandbox-exec is available, or downgrade this behavior to <code>read_only</code> if writes aren't required.",
+        },
+        {
+          id: "env-secret-marker",
+          category: "Env-var leak guard",
+          rule_id: "envSecretMarkerDropped",
+          tool_name: "bash_read_only · printenv",
+          policy_mode: "read_only",
+          policy_network: "inherit",
+          denied_argv: ["printenv", "GIT_CONFIG_GLOBAL"],
+          denied_command: "printenv",
+          denied_argument: "GIT_CONFIG_GLOBAL",
+          denied_subcommand: null,
+          denied_prefix: null,
+          reason_line:
+            "Inheriting this env var would leak a value the env filter classifies as secret.",
+          rule_title:
+            "Env var matches the secret/token/key marker — dropped before exec",
+          rule_blurb:
+            "The shell env filter (CommandPolicy.Env.filteredEnv) strips any key whose name matches the secret/token/key markers, plus the GIT_CONFIG_* family. Inheriting them would risk exfiltration through tool output. printenv on a dropped name returns nothing; the runtime surfaces a denial instead of a silent empty.",
+          rule_cite:
+            "CommandPolicy.Env.filteredEnv · Proofs/CommandPolicy/Env.lean",
+          suggestion_html:
+            "Reference non-secret config through the behavior config rather than a shell var, or invoke with a literal value from desired-state.",
+        },
+        {
+          id: "disabled-network-curl",
+          category: "Network access denied",
+          rule_id: "disabledNetworkCommand",
+          tool_name: "bash_read_only · curl",
+          policy_mode: "read_only",
+          policy_network: "disabled",
+          denied_argv: ["curl", "-fsS", "https://example.com/metrics"],
+          denied_command: "curl",
+          denied_argument: null,
+          denied_subcommand: null,
+          denied_prefix: null,
+          reason_line:
+            "Network mode is disabled for this behavior — curl is denied before exec.",
+          rule_title: "curl is denied when network mode is disabled",
+          rule_blurb:
+            "validateNetworkMode fails closed for curl (and tailscale ping / netcheck) when the behavior carries networkMode = disabled. The check runs before the read-only argv filter, so the operator sees a network denial rather than an allowlist denial.",
+          rule_cite:
+            "CommandPolicy.Validation.validateNetworkMode · Proofs/CommandPolicy/Validation.lean",
+          suggestion_html:
+            "Flip the behavior's <code>network_mode</code> to <code>inherit</code> if the call is intended, or fetch the resource through the configured HTTP backend instead of bash.",
+        },
+        {
+          id: "forbidden-prefix-git-commit",
+          category: "Forbidden prefix",
+          rule_id: "forbiddenPrefix",
+          tool_name: "bash_read_only · git",
+          policy_mode: "read_only",
+          policy_network: "inherit",
+          denied_argv: ["git", "commit", "-m", "nope"],
+          denied_command: "git",
+          denied_argument: null,
+          denied_subcommand: "commit",
+          denied_prefix: ["git", "commit"],
+          reason_line:
+            "Argv matches a forbidden prefix configured on this behavior.",
+          rule_title:
+            "argv begins with a forbidden prefix configured on the policy",
+          rule_blurb:
+            "Policy lists git commit (and similar write-only subcommands) as a forbidden argv prefix. The match fires before the allowlist check, so it wins even if git is otherwise allowed.",
+          rule_cite:
+            "CommandPolicy.Validation.firstMatchingPrefix · Proofs/CommandPolicy/Validation.lean",
+          suggestion_html:
+            "Use a read-only git subcommand (<code>git status</code>, <code>git diff</code>) here, or route mutating commits through a workspace_write tool with the appropriate behavior selected.",
+        },
+        {
+          id: "allowed-prefix-required",
+          category: "Allowed prefix required",
+          rule_id: "allowedPrefixRequired",
+          tool_name: "bash_read_only · ls",
+          policy_mode: "read_only",
+          policy_network: "inherit",
+          denied_argv: ["ls", "/etc"],
+          denied_command: "ls",
+          denied_argument: null,
+          denied_subcommand: null,
+          denied_prefix: null,
+          reason_line:
+            "Policy requires argv to match an allowed prefix; this argv matches none.",
+          rule_title: "argv must match one of the configured allowed prefixes",
+          rule_blurb:
+            "When a behavior declares allowed argv prefixes (e.g. only git status, git diff), every other argv is denied even if the command itself is allowlisted. This is the explicit-allowlist mode.",
+          rule_cite:
+            "CommandPolicy.Validation.validatePolicy · Proofs/CommandPolicy/Validation.lean",
+          suggestion_html:
+            "Either re-issue using one of the configured allowed prefixes, or expand the behavior's <code>allowed_argv_prefixes</code> in desired-state.",
+        },
+      ];
+
+      // --------------------------------------------------------------
+      // Rendering
+      // --------------------------------------------------------------
+
+      const els = {
+        buttons: document.getElementById("cycle-buttons"),
+        category: document.getElementById("denial-category-label"),
+        ruleId: document.getElementById("denial-rule-id"),
+        argvLine: document.getElementById("denial-argv-line"),
+        reasonLine: document.getElementById("denial-reason-line"),
+        attempt: document.getElementById("denial-attempt"),
+        ruleTitle: document.getElementById("denial-rule-title"),
+        ruleBlurb: document.getElementById("denial-rule-blurb"),
+        ruleCite: document.getElementById("denial-rule-cite"),
+        suggestionWrap: document.getElementById("denial-suggestion-wrap"),
+        suggestionText: document.getElementById("denial-suggestion-text"),
+        primary: document.getElementById("primary-denial"),
+        toggleLabel: document.getElementById("denial-toggle-label"),
+        live: document.getElementById("cycle-live-region"),
+        counter: document.getElementById("case-counter"),
+      };
+
+      function shellQuote(token) {
+        if (token === "" ) return "''";
+        if (/^[A-Za-z0-9_@%+:,./=-]+$/.test(token)) {
+          return token;
+        }
+        return "'" + token.replace(/'/g, "'\\''") + "'";
+      }
+
+      function joinArgv(argv) {
+        return argv.map(shellQuote).join(" ");
+      }
+
+      function renderAttempt(denial) {
+        // Highlight the "denied token" within the argv. Mirrors how the
+        // bridge would surface denied_argument / denied_subcommand from
+        // the structured DenialReason.
+        const target =
+          denial.denied_argument ||
+          denial.denied_subcommand ||
+          (denial.denied_prefix
+            ? denial.denied_prefix[denial.denied_prefix.length - 1]
+            : null);
+
+        const tokens = denial.denied_argv.map(shellQuote);
+        if (!target) {
+          return tokens.join(" ");
+        }
+        // First exact match wins.
+        const idx = denial.denied_argv.findIndex((tok) => tok === target);
+        if (idx === -1) {
+          return tokens.join(" ");
+        }
+        return tokens
+          .map((tok, i) =>
+            i === idx ? `<span class="denied-token">${tok}</span>` : tok,
+          )
+          .join(" ");
+      }
+
+      function renderDenial(denial) {
+        els.category.textContent = denial.category;
+        els.ruleId.textContent = denial.rule_id;
+        els.argvLine.textContent = joinArgv(denial.denied_argv);
+        els.reasonLine.textContent = denial.reason_line;
+        els.attempt.innerHTML = renderAttempt(denial);
+        els.ruleTitle.textContent = denial.rule_title;
+        els.ruleBlurb.textContent = denial.rule_blurb;
+        els.ruleCite.textContent = denial.rule_cite;
+        if (denial.suggestion_html) {
+          els.suggestionWrap.style.display = "";
+          els.suggestionText.innerHTML = denial.suggestion_html;
+        } else {
+          els.suggestionWrap.style.display = "none";
+        }
+        // Live-region announcement (the real surface uses role=status on
+        // the parent; the page-level live region carries the cycle event
+        // for demo purposes only).
+        els.live.textContent = `Now showing: ${denial.category} (${denial.rule_id})`;
+      }
+
+      function setActiveButton(activeId) {
+        for (const btn of els.buttons.querySelectorAll("button")) {
+          btn.setAttribute(
+            "aria-pressed",
+            btn.dataset.denialId === activeId ? "true" : "false",
+          );
+        }
+      }
+
+      function buildButtons() {
+        DENIALS.forEach((denial, idx) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.dataset.denialId = denial.id;
+          btn.setAttribute("role", "radio");
+          btn.textContent = denial.category;
+          btn.addEventListener("click", () => {
+            renderDenial(denial);
+            setActiveButton(denial.id);
+            els.counter.textContent = `case ${idx + 1} of ${DENIALS.length}`;
+          });
+          els.buttons.appendChild(btn);
+        });
+      }
+
+      // Sync the <details> "Hide" / "View" label
+      els.primary.addEventListener("toggle", () => {
+        els.toggleLabel.textContent = els.primary.open ? "Hide" : "View";
+      });
+
+      buildButtons();
+      renderDenial(DENIALS[0]);
+      setActiveButton(DENIALS[0].id);
+      els.counter.textContent = `case 1 of ${DENIALS.length}`;
+    </script>
+  </body>
+</html>
