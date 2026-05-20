@@ -68,6 +68,59 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
         "expected positive age_ms in row: {row}"
     );
 
+    let unfiltered_state_output = run_cli_json(
+        tempdir.path(),
+        &[
+            "background",
+            "list",
+            "--home",
+            agent_home,
+            "--request",
+            "req-background",
+            "--age-gt",
+            "1d",
+            "--output",
+            "json",
+        ],
+    )?;
+    assert_eq!(
+        unfiltered_state_output.get("count").and_then(Value::as_u64),
+        Some(3),
+        "without --state the fixture should include all three background rows for req-background"
+    );
+
+    let status_fallback_output = run_cli_json(
+        tempdir.path(),
+        &[
+            "background",
+            "list",
+            "--home",
+            agent_home,
+            "--request",
+            "req-background",
+            "--state",
+            "called",
+            "--output",
+            "json",
+        ],
+    )?;
+    assert_eq!(
+        status_fallback_output.get("count").and_then(Value::as_u64),
+        Some(1),
+        "--state should match the displayed status fallback when lifecycle_state is empty"
+    );
+    let fallback_items = status_fallback_output
+        .get("items")
+        .and_then(Value::as_array)
+        .context("status fallback output must include items")?;
+    assert_eq!(
+        fallback_items
+            .first()
+            .and_then(|row| row.get("tool_call_id"))
+            .and_then(Value::as_str),
+        Some("call-background-status-only")
+    );
+
     let table = run_cli_text(
         tempdir.path(),
         &[
@@ -86,6 +139,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     assert!(
         table.contains("call-background-running")
             && table.contains("call-background-completed")
+            && table.contains("call-background-status-only")
             && !table.contains("call-foreground-running"),
         "table output should list only backgrounded calls for req-background:\n{table}"
     );
@@ -174,6 +228,19 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 lifecycle_state: "running",
                 started_at: "2024-01-01T11:00:15Z",
                 await_mode: "foreground"
+            }) { _docID }
+            create_AgentToolCall(input: {
+                tool_call_key: "session-background:call-background-status-only",
+                request_id: "req-background",
+                session_id: "session-background",
+                message_sequence: 4,
+                tool_name: "bash",
+                tool_call_id: "call-background-status-only",
+                args: "{}",
+                result: "",
+                status: "called",
+                started_at: "2024-01-01T11:00:20Z",
+                await_mode: "background"
             }) { _docID }
             create_AgentToolCall(input: {
                 tool_call_key: "session-other:call-background-other",

@@ -67,12 +67,6 @@ async fn load_background_tool_calls(
             escape_graphql_string(&request_id)
         ));
     }
-    if let Some(state) = normalize_optional_string(args.state.as_deref()) {
-        filters.push(format!(
-            r#"{{ lifecycle_state: {{ _eq: "{}" }} }}"#,
-            escape_graphql_string(&state)
-        ));
-    }
     if let Some(cutoff) = age_cutoff {
         let cutoff = cutoff.to_rfc3339_opts(SecondsFormat::Secs, true);
         filters.push(format!(
@@ -98,7 +92,11 @@ async fn load_background_tool_calls(
         }}"#,
         filters.join(", ")
     );
-    load_rows(access, "AgentToolCall", &query).await
+    let mut rows = load_rows::<BackgroundToolCallRow>(access, "AgentToolCall", &query).await?;
+    if let Some(state) = normalize_optional_string(args.state.as_deref()) {
+        rows.retain(|row| row_state(row).as_deref() == Some(state.as_str()));
+    }
+    Ok(rows)
 }
 
 fn build_output_rows(
@@ -112,6 +110,9 @@ fn build_output_rows(
         .map(|row| row.tool_call_id.as_str())
         .collect::<BTreeSet<_>>();
     let mut native_by_tool_name: BTreeMap<&str, Vec<NativeExecutorView>> = BTreeMap::new();
+    // Native executor liveness currently identifies the executable/tool, not
+    // the specific AgentToolCall that spawned it. Treat these as tool-name
+    // matches only.
     for executor in &liveness.active_native_executors {
         if let Some(tool_name) = executor.tool_name.as_deref() {
             native_by_tool_name
@@ -135,9 +136,7 @@ fn build_output_rows(
                 .and_then(|name| native_by_tool_name.get(name))
                 .cloned()
                 .unwrap_or_default();
-            let state = normalize_optional_string(row.lifecycle_state.as_deref())
-                .or_else(|| normalize_optional_string(row.status.as_deref()))
-                .unwrap_or_else(|| "-".to_string());
+            let state = row_state(&row).unwrap_or_else(|| "-".to_string());
             let tool_call_id = row.tool_call_id.unwrap_or_default();
 
             BackgroundToolCallOutput {
@@ -150,12 +149,18 @@ fn build_output_rows(
                 age_ms,
                 age: age_ms.map(format_age_ms),
                 tool_name,
-                active_tool_call: active_tool_call_ids.contains(tool_call_id.as_str()),
-                active_native_executor_count: native_executors.len(),
-                active_native_executors: native_executors,
+                active_tool_call: !tool_call_id.is_empty()
+                    && active_tool_call_ids.contains(tool_call_id.as_str()),
+                native_executor_tool_name_match_count: native_executors.len(),
+                native_executor_tool_name_matches: native_executors,
             }
         })
         .collect()
+}
+
+fn row_state(row: &BackgroundToolCallRow) -> Option<String> {
+    normalize_optional_string(row.lifecycle_state.as_deref())
+        .or_else(|| normalize_optional_string(row.status.as_deref()))
 }
 
 fn age_cutoff(raw: Option<&str>, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
@@ -201,7 +206,7 @@ fn print_background_table(rows: &[BackgroundToolCallOutput], native_liveness_ava
         "AWAIT_MODE",
         "STARTED_AT",
         "AGE",
-        "NATIVE",
+        "NATIVE_TOOL",
     ];
     let rendered_rows = rows
         .iter()
@@ -215,7 +220,7 @@ fn print_background_table(rows: &[BackgroundToolCallOutput], native_liveness_ava
                 row.age.clone().unwrap_or_else(|| "-".to_string()),
                 if !native_liveness_available {
                     "unknown".to_string()
-                } else if row.active_native_executor_count > 0 {
+                } else if row.native_executor_tool_name_match_count > 0 {
                     "yes".to_string()
                 } else {
                     "no".to_string()
@@ -312,8 +317,8 @@ struct BackgroundToolCallOutput {
     age: Option<String>,
     tool_name: Option<String>,
     active_tool_call: bool,
-    active_native_executor_count: usize,
-    active_native_executors: Vec<NativeExecutorView>,
+    native_executor_tool_name_match_count: usize,
+    native_executor_tool_name_matches: Vec<NativeExecutorView>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -355,11 +360,18 @@ fn parse_array<T>(value: &Value, field: &str) -> Vec<T>
 where
     T: DeserializeOwned,
 {
-    value
-        .get(field)
-        .and_then(Value::as_array)
-        .cloned()
-        .map(Value::Array)
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
+    let Some(array) = value.get(field).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    match serde_json::from_value(Value::Array(array.clone())) {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!(
+                field,
+                error = %err,
+                "failed to decode runtime liveness array"
+            );
+            Vec::new()
+        }
+    }
 }

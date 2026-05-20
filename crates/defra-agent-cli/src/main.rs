@@ -154,9 +154,13 @@ Examples:
   defra-agent status --graphql http://127.0.0.1:9191/api/v0/graphql";
 const BACKGROUND_AFTER_HELP: &str = "\
 Lists AgentToolCall rows persisted with await_mode=background and enriches them with live runtime liveness when available.
+Live native-process enrichment requires --graphql pointing at the running runtime; local --home reads print NATIVE_TOOL=unknown.
+Native-process matches are scoped by tool name because runtime liveness does not expose per-call native process IDs.
 
 Examples:
   defra-agent background list
+  defra-agent background list --home /path/to/home
+  defra-agent background list --graphql http://127.0.0.1:9191/api/v0/graphql
   defra-agent background list --request REQUEST_ID
   defra-agent background list --state running --age-gt 5m
   defra-agent background list --output json";

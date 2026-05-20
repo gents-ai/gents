@@ -356,7 +356,11 @@ pub(crate) enum ShowCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum BackgroundCommand {
-    #[command(name = "list", about = "List backgrounded AgentToolCall rows")]
+    #[command(
+        name = "list",
+        about = "List backgrounded AgentToolCall rows",
+        after_help = BACKGROUND_AFTER_HELP
+    )]
     List(BackgroundListArgs),
 }
 
@@ -375,7 +379,7 @@ pub(crate) struct BackgroundListArgs {
     #[arg(
         long,
         value_name = "STATE",
-        help = "Only show tool calls in this lifecycle state"
+        help = "Only show tool calls whose displayed state matches this value"
     )]
     pub(crate) state: Option<String>,
     #[arg(
