@@ -612,11 +612,14 @@ pub fn session_shape_query(session_id: &str) -> String {
                 tool_name
                 tool_call_id
                 status
+                lifecycle_state
                 args
                 result
+                deadline_at
                 selected_service_id
                 selected_tool_name
                 tool_failure_class
+                cancel_cause
                 latency_ms
             }}
             AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
@@ -808,6 +811,7 @@ mod tests {
         assert!(session_query.contains("selected_service_id"));
         assert!(session_query.contains("selected_tool_name"));
         assert!(session_query.contains("tool_failure_class"));
+        assert!(session_query.contains("cancel_cause"));
         assert!(session_query.contains("latency_ms"));
         assert!(session_query.contains("discarded_because_interrupted"));
     }
