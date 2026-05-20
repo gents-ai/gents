@@ -89,6 +89,27 @@ rows the matrix drift test should expect once the panels land.
 tree is a same-desktop operator view over existing parent/child request and
 bridge rows, not an R5 topology renderer.
 
+The ledger rows above are forward declarations: the named Lean cases
+(`DesktopBackgroundToolsPanelCases`, etc.) do not yet exist, and adding
+`surfaces := [Surface.operatorUi]` to existing features without backing
+modules would make the matrix drift test fail. To avoid that:
+
+- This PR does not add any new ledger row. The table above describes the
+  rows each impl PR should add when it lands its panel.
+- Each impl PR registers exactly the row for its panel, with the Lean module
+  landing in the same PR. The module may begin as a thin shell with the case
+  list stubbed and one `sorry` per pending case, but the module itself must
+  type-check so the drift test can find it.
+- The matrix drift test continues to compare declared features against
+  the registered ledger; no surface-expectation list, no allowlist, no
+  pre-stage required. The interim state is simply "panel and its ledger row
+  ship together."
+
+If implementation lands a panel without registering the ledger row in the
+same PR, the drift test stays green only because no expectation exists yet;
+reviewers should treat a panel landing without its row as the regression,
+not as a clean state.
+
 ## Panel 1: Backgrounded Tools Panel
 
 Feature: `background-tools`, `operatorUi`.
@@ -116,6 +137,22 @@ Operations
 The table is intentionally dense: tool name, age, parent request, lifecycle
 status, and process/child linkage are the fields the operator needs while a
 turn is still moving.
+
+The Process column is best-effort:
+
+- For native executors, the runtime reports PID/argv via
+  `liveness.active_native_executors[]`, but `NativeExecutorStatus` carries no
+  `request_id`. The bridge correlates by `(tool_name, started_at)` and may
+  show "native ###" using `NativeExecutorStatus.id`, or "pid <n>" when a
+  confident match exists. If correlation is ambiguous (two native executors
+  of the same tool started within ~1s), the bridge prefers showing the
+  executor id and a tooltip listing candidates rather than guessing a PID.
+- For tools that do not spawn a native executor (in-process MCP tools,
+  agent-side calls, subagent dispatch), the Process cell is empty and a
+  `child req_<id>` link is shown instead when `child_request_id` is set.
+- The bridge never claims a PID it did not see in the live liveness payload.
+  A stale `(tool_name, started_at)` from a prior native executor must not
+  back-fill this column.
 
 ### Data Source
 
@@ -190,7 +227,11 @@ New child component: `components/chat/InterruptButton.tsx`.
 ```
 
 When no turn is active, the button is hidden. When a turn is active but no
-request id is known, it is disabled with "Waiting for request observation".
+request id is known yet (the request document has not been observed locally),
+the button is disabled with the user-facing copy "Waiting for turn to register".
+The previous draft used "Waiting for request observation"; that phrase reads
+as runtime jargon and gives no actionable signal to an operator who does not
+know what a `request_id` is.
 
 ### Data Source
 
@@ -348,8 +389,15 @@ Feature: `interrupt-and-cancel`, `operatorUi`.
 Parent component: `apps/desktop-tauri/src/components/Transcript.tsx`.
 New child components:
 
-- `components/transcript/CancelCauseBadge.tsx`
-- `components/transcript/CancelCauseDetails.tsx`
+- `components/cancelCause/CancelCauseBadge.tsx`
+- `components/cancelCause/CancelCauseDetails.tsx`
+
+The new directory is `cancelCause/` rather than `transcript/` to avoid a
+case-only collision with the existing `Transcript.tsx` file on case-sensitive
+filesystems (Linux CI, case-sensitive macOS volumes). The default macOS
+filesystem is case-insensitive, so a `transcript/` directory next to
+`Transcript.tsx` would build locally for most developers but fail under CI or
+on contributors with case-sensitive setups.
 
 ```text
 Tool Calls
@@ -433,6 +481,17 @@ Cause derivation:
 The UI must label these as derived evidence. The current schema has no
 persisted `AgentToolCall.cancel_cause` field, and this design does not add one.
 
+`DerivedCancelCauseView.cause = "unknown"` and
+`CascadeCancelPreview.unknownPolicy` are different conditions and must render
+distinctly:
+
+| Condition | What it means | Where it shows | UI treatment |
+|---|---|---|---|
+| `cause = "unknown"` | A terminal cancelled row in history lacks evidence to attribute a cause. The work already stopped; we cannot explain *why*. | Transcript badge on a cancelled tool / interrupted response. | Neutral gray badge "cause unknown". Disclosure shows which evidence sources were checked and came up empty (no parent cascade, no deadline, no `interrupt_requested_at`). |
+| `unknownPolicy` | A live descendant is reachable via lineage but its bridge row lacks `cancel_policy`, so we cannot predict whether cascading the parent would interrupt it. The work is still running; we cannot predict *what will happen*. | Cascade preview dialog, in its own section. | Amber warning row "policy unknown - will be left running, please confirm". The confirmation copy must explicitly say these will not be interrupted. |
+
+The two share neither badge color nor copy. They are not interchangeable.
+
 ### Actions
 
 | Action | Backend effect |
@@ -510,10 +569,20 @@ Auto-clear rule:
 
 - The banner appears when `expired_processing_count > 0` or any projected
   stuck diagnostic has `stuck_since` / `cancel_pending_remote_ack`.
-- It auto-clears after two consecutive operations snapshots with
-  `expired_processing_count = 0` and no stuck diagnostics.
+- It auto-clears when the clean state (`expired_processing_count = 0` and no
+  stuck diagnostics) has been observed continuously for at least 5 seconds.
+  Concretely: the frontend records the first wall-clock timestamp at which it
+  saw a clean operations snapshot, and only hides the banner once 5 seconds
+  have elapsed without an intervening non-clean snapshot. Any non-clean
+  snapshot resets the dwell clock.
+- The 5s dwell exists because liveness signature changes are bridge-driven
+  and arrive at irregular cadence; a fixed "two snapshots" rule would either
+  flap (under bursty changes) or stick (when the bridge happens to be idle).
+  Time-bounded dwell is robust to both.
 - A dismissed banner reappears when the diagnostic signature changes
-  `(request ids, tool ids, deadline ages bucketed by minute)`.
+  `(request ids, tool ids, deadline ages bucketed by minute)`. Dismissal
+  is a UI-only suppression of the current signature; signature change
+  re-arms the banner immediately and resets the dwell clock as well.
 
 ### Options And Recommendation
 
@@ -619,7 +688,42 @@ The preview classifies descendants by the bridge row nearest their parent:
 
 `expectedPreviewSignature` protects against confirming a stale preview. The
 bridge recomputes the preview immediately before latching the interrupt; if the
-signature changed, it returns `stalePreview: true` and the UI redraws the dialog.
+signature changed, it returns `stalePreview: true` with the fresh `preview`
+attached, and the UI auto-redraws the dialog with a "preview updated" indicator
+rather than dismissing it. The user must click confirm a second time to commit
+to the new state; no second confirmation is auto-issued on the user's behalf.
+
+Signature encoding (normative for the impl PR so client and bridge agree):
+
+```text
+previewSignature = blake3_hex(
+  utf8(rootRequestId)
+  || 0x1F || utf8(rootState ?? "")
+  || 0x1F || utf8(root.interrupt_requested_at ?? "")
+  || 0x1E || join(
+      0x1F,
+      sort_by(requestId)(
+        for each affected in willInterrupt ++ willDetach ++ alreadyTerminal ++ unknownPolicy:
+          utf8(requestId)
+          || 0x1D || utf8(lifecycleState ?? "")
+          || 0x1D || utf8(awaitMode ?? "")
+          || 0x1D || utf8(cancelPolicy ?? "")
+          || 0x1D || utf8(parentToolCallId ?? "")
+      )
+    )
+)
+```
+
+- Sort by `requestId` before hashing so reorderings in the underlying queries
+  do not invalidate signatures.
+- `0x1F` separates fields within a row; `0x1E` separates the header from the
+  row list; `0x1D` separates fields within a single affected request. These
+  control bytes never appear in DefraDB document ids or RFC3339 timestamps.
+- Bucket strings used here are the same values returned in the
+  `CascadeCancelPreview` payload, so the client can recompute the signature
+  locally if it wants to detect drift without a roundtrip.
+- The hash is BLAKE3 lowercase hex. SHA-256 is acceptable if BLAKE3 is not
+  already a workspace dep at impl time; pick one in the impl PR and lock it.
 
 ### Options And Recommendation
 
@@ -658,6 +762,33 @@ and store/health coalescing. A second React timer for liveness would compete
 with that logic and would still need session refresh coordination after
 interrupts. Keeping the bridge as the observer preserves one refresh path.
 
+### Liveness Watcher Emit Floor
+
+The bridge-side liveness watcher must bound its emit rate. Without bounds, an
+actively streaming turn can change the liveness signature on every tool
+progress event and saturate the desktop event loop.
+
+Required behavior in the impl PR:
+
+- Compute a stable signature over the liveness snapshot (the same kind of
+  signature as `previewSignature`, but over `(requests[].requestId,
+  requests[].lifecycleState, requests[].deadlineExpired,
+  activeToolCalls[].toolCallId, activeToolCalls[].lifecycleState,
+  expiredProcessingCount, activeNativeExecutorsAvailable)`).
+- Emit `desktop://client-updated { reason: "operations" }` only when the
+  signature changes. Pure age/progress-ms drift without a structural change
+  must not emit.
+- Apply a minimum inter-emit interval of 250ms. If a structural change
+  arrives within 250ms of the previous emit, defer the emit until the
+  interval has elapsed, coalescing intermediate changes into one. Never
+  drop a structural change silently; the trailing emit must reflect the
+  latest observed state.
+- Apply a maximum coalescing window of 2 seconds. If structural changes
+  continue to arrive faster than 250ms, the bridge must still emit at
+  least every 2s so the UI does not appear frozen during a sustained burst.
+- These bounds are bridge-internal; the React side stays event-driven and
+  never polls.
+
 ### Why Not `bridge_runner`
 
 `bridge_runner` is a live-test fixture and HTTP facade around the bridge code.
@@ -685,7 +816,6 @@ type DesktopOperationsSnapshot = {
 };
 
 type RuntimeLivenessView = {
-  activeRequestIds: string[];
   expiredProcessingCount: number;
   requests: ActiveRequestView[];
   activeToolCalls: ActiveToolCallView[];
@@ -759,7 +889,10 @@ type StuckWorkDiagnosticView = {
 ```
 
 `RuntimeLivenessView` mirrors `RuntimeLivenessSnapshot` from
-`crates/defra-agent-cli/src/http/liveness.rs` with camelCase field names.
+`crates/defra-agent-cli/src/http/liveness.rs` 1:1 with camelCase field names.
+The frontend derives an "active request id set" from `requests[].requestId`
+when it needs one; the bridge does not synthesize an extra `activeRequestIds`
+field, because `requests[]` is already the authoritative list.
 
 ## New Tauri Commands
 
@@ -786,6 +919,27 @@ type InterruptRequestResult = {
 };
 ```
 
+Field semantics (normative for the impl PR):
+
+- `accepted = true` iff the bridge successfully wrote, or confirmed already
+  present, `AgentRequest.interrupt_requested_at` for `requestId`. It does
+  not mean the owning runtime has reacted; for remote peers, that lag is
+  expected.
+- `alreadyInterrupted = true` iff `interrupt_requested_at` was non-null
+  before this call. In that case `accepted` is still `true` (no-op success),
+  `interruptRequestedAt` echoes the existing timestamp, and the UI should
+  surface "already interrupted" rather than re-confirming a fresh interrupt.
+- `stalePreview = true` is mutually exclusive with `accepted = true`. When
+  the bridge detects a `previewSignature` mismatch, it does *not* latch the
+  field; it returns `accepted = false`, `stalePreview = true`, and the
+  fresh `preview` for the UI to re-render. The user must re-confirm; the
+  bridge never auto-issues a second latch on the user's behalf.
+- `interruptRequestedAt` is the canonical timestamp the bridge observed
+  on the document after the call. It is null only when the call failed
+  for a reason other than `alreadyInterrupted` (e.g., document not found
+  on a peer, transport failure); those error cases also set
+  `accepted = false`.
+
 Existing command extensions:
 
 | Command | Extension |
@@ -795,10 +949,22 @@ Existing command extensions:
 
 Remote behavior:
 
-- For a local runtime, `desktop_interrupt_request` can call
-  `defra_agent::interrupt_request(node, request_id)`.
-- For a remote GraphQL peer, the bridge performs the same existing data-plane
-  mutation against `AgentRequest.interrupt_requested_at`.
+- For a local runtime, `desktop_interrupt_request` calls
+  `defra_agent::interrupt_request(node, request_id)` (defined at
+  `crates/defra-agent/src/interrupt.rs`). That helper does the field write and
+  any in-process control-event work the daemon currently expects.
+- For a remote GraphQL peer, the bridge issues only the data-plane mutation
+  against `AgentRequest.interrupt_requested_at`. It does not invoke the local
+  `interrupt_request` helper, because that helper assumes an in-process
+  `EmbeddedNode`. The owning deployment observes the field update via
+  DefraDB replication and runs its own local interrupt path on receipt -
+  cascade and termination are completed by the owning runtime, not by the
+  operator's desktop.
+- This means remote interrupts have a propagation lag bounded by gossip /
+  pull replication latency to the owning deployment. The interrupt button
+  must not block on confirmation of remote-side effects; `accepted = true`
+  means the latch was written locally, not that the owning deployment has
+  acted.
 - If the selected deployment has no reachable liveness `/status` endpoint,
   operations snapshot still returns DefraDB-derived rows and sets
   `livenessUnavailableReason`; `active_native_executors_available` is false.
@@ -820,7 +986,7 @@ apps/desktop-tauri/src/components/operations/
 apps/desktop-tauri/src/components/chat/
   InterruptButton.tsx
 
-apps/desktop-tauri/src/components/transcript/
+apps/desktop-tauri/src/components/cancelCause/
   CancelCauseBadge.tsx
   CancelCauseDetails.tsx
 
@@ -844,14 +1010,25 @@ ActiveChatWorkspace
       ChatComposer
         InterruptButton
     OperationsRail
-      BackgroundToolsPanel
-      SubagentLineagePanel
-      StuckWorkPanel
+      OperationsRailTabs       (tab strip: Background | Lineage | Stuck)
+      OperationsRailTabPanel
+        BackgroundToolsPanel   (when Background is selected)
+        SubagentLineagePanel   (when Lineage is selected)
+        StuckWorkPanel         (when Stuck is selected)
   CascadeCancelDialog
 ```
 
-The rail should be collapsible. Collapsed state still allows the stuck banner
-and interrupt button to work.
+`OperationsRail` is a tabbed container, not a vertical stack. Only one of
+`BackgroundToolsPanel`, `SubagentLineagePanel`, or `StuckWorkPanel` is mounted
+at a time, and selecting "Open lineage" from `BackgroundToolsPanel` (or from a
+cancel-cause badge) sets the active tab to "Lineage" and seeds its initial
+`rootRequestId`. The Stuck tab badge mirrors the banner state -- the badge
+shows the diagnostic count even when the user is on another tab, so the banner
+is the high-signal entry point but the tab badge is the persistent indicator.
+
+The rail itself is collapsible at the workspace level. When collapsed, the
+tabs collapse with it; the stuck banner and interrupt button remain functional
+because they live outside the rail.
 
 ## Out Of Scope
 
@@ -865,6 +1042,9 @@ and interrupt button to work.
 - Reworking the top-level `fleet` / `chat` / `config` navigation.
 
 ## Implementation Phasing
+
+**No implementation in this PR.** This section orders the follow-up PRs; the
+current PR ships only the design document.
 
 1. Shared operations projection: `desktop_operations_snapshot`, liveness
    watcher, TypeScript operation types. This unblocks Backgrounded Tools and
@@ -884,3 +1064,7 @@ and interrupt button to work.
 The minimum useful sequence is: data projection, interrupt button, cascade
 preview. The most parallel sequence is: interrupt button and CancelCause first,
 operations projection next, then background/stuck/lineage/cascade panels.
+
+Each impl PR registers its `operatorUi` ledger row in the same PR as its panel,
+as described in [Feature Matrix Tags](#feature-matrix-tags). A panel landing
+without its row is the regression, not a green state.
