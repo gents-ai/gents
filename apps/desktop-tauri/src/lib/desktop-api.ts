@@ -26,6 +26,10 @@ import type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
 } from "./types";
+import type {
+  DesktopOperationsSnapshot,
+  DesktopOperationsSnapshotRequest,
+} from "./types/operations";
 
 type TauriInternalsWindow = Window & {
   __TAURI_INTERNALS__?: {
@@ -120,6 +124,9 @@ export type DesktopApiAdapter = {
   listBackendsWithHealth: () => Promise<BackendHealth[]>;
   listMcpServicesWithHealth: () => Promise<MCPServiceHealthView[]>;
   probeMcpService: (serviceId: string) => Promise<McpServiceProbeResult>;
+  fetchOperationsSnapshot: (
+    request: DesktopOperationsSnapshotRequest,
+  ) => Promise<DesktopOperationsSnapshot>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -229,6 +236,12 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
     return invokeDesktop<McpServiceProbeResult>("desktop_probe_mcp_service", {
       request: { serviceId },
     });
+  },
+  fetchOperationsSnapshot(request) {
+    return invokeDesktop<DesktopOperationsSnapshot>(
+      "desktop_operations_snapshot",
+      { request },
+    );
   },
 };
 
@@ -370,4 +383,10 @@ export async function listMcpServicesWithHealth() {
 
 export async function probeMcpService(serviceId: string) {
   return desktopApiAdapter().probeMcpService(serviceId);
+}
+
+export async function fetchOperationsSnapshot(
+  request: DesktopOperationsSnapshotRequest,
+) {
+  return desktopApiAdapter().fetchOperationsSnapshot(request);
 }
