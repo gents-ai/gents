@@ -46,19 +46,6 @@ def deviations : List Deviation :=
     , acceptedFollowUp :=
         some "Track at #187 PR description; deadline-audit followup #5."
     }
-  , { id := "defradb_rs_p2p_subscription_state_not_durable"
-    , domain := "reverse_pairing"
-    , subject := "DefraDB P2P subscription persistence"
-    , statement :=
-        "Reverse-pairing convergence assumes receiver-side P2P gossipsub " ++
-        "subscription state survives process restart. Go DefraDB persists that " ++
-        "state, but defradb.rs currently keeps iroh/libp2p subscription " ++
-        "registration in memory unless a higher-level path re-installs it."
-    , acceptedFailureMode :=
-        some "receiver_restart_drops_subscription_delivery_contract"
-    , acceptedFollowUp :=
-        some "Track upstream at sourcenetwork/defradb.rs#957; downstream at sourcenetwork/defra-agent#166."
-    }
   ]
 
 def Deviation.toJson (deviation : Deviation) : String :=
