@@ -1029,6 +1029,32 @@ pub(crate) enum RequestCommand {
     Resend(RequestResendArgs),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RequestInterruptCauseArg {
+    #[value(name = "interrupted")]
+    Interrupted,
+    #[value(name = "deadline")]
+    Deadline,
+    #[value(name = "userCancelled")]
+    UserCancelled,
+}
+
+impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::CancelCause {
+    fn from(value: RequestInterruptCauseArg) -> Self {
+        match value {
+            RequestInterruptCauseArg::Interrupted => Self::Interrupted,
+            RequestInterruptCauseArg::Deadline => Self::Deadline,
+            RequestInterruptCauseArg::UserCancelled => Self::UserCancelled,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RequestInterruptOutputFormat {
+    Text,
+    Json,
+}
+
 #[derive(clap::Args)]
 pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
@@ -1076,6 +1102,29 @@ pub(crate) struct RequestInterruptArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptCauseArg::UserCancelled,
+        help = "Reason for the interrupt: userCancelled for operator action, deadline for timeout-driven cancellation, interrupted for propagated runtime interruption"
+    )]
+    pub(crate) cause: RequestInterruptCauseArg,
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        default_value = "30s",
+        help = "Maximum time to wait for a terminal request state when --wait is set"
+    )]
+    pub(crate) timeout: String,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestInterruptOutputFormat::Text,
+        help = "Output format; use json for scripts"
+    )]
+    pub(crate) output: RequestInterruptOutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
