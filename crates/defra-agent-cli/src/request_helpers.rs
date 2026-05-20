@@ -495,7 +495,7 @@ pub(crate) fn print_json(value: &Value) -> Result<()> {
 
 /// Parse a short human duration (e.g. `30s`, `5m`, `2h`, `1d`). Bare numbers
 /// are treated as seconds for convenience.
-fn parse_duration_suffix(raw: &str) -> Result<Duration> {
+pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration> {
     let s = raw.trim();
     if s.is_empty() {
         anyhow::bail!("duration must not be empty");
