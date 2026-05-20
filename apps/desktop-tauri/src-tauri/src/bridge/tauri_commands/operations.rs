@@ -1,24 +1,30 @@
 //! Tauri commands for operator-surfaces panels. Stubs return an `Err`
 //! describing the panel issue that will replace them; real implementations
-//! land via their own panel PRs. The MCP-health commands (panel #278) are
-//! live.
+//! land via their own panel PRs. `desktop_operations_snapshot` (panel
+//! #276) and the MCP-health commands (panel #278) are live.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use defra_agent::backend_registry::{derive_display_state, list_all_backends};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent_desktop_core::client::ClientCore;
 use reqwest::Url;
 use tauri::State;
 
 use super::super::commands::{load_mcp_services_with_health, probe_mcp_service};
+use super::super::snapshot::operations_snapshot::{
+    project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
+};
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
     InferenceCallSummaryView, InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult,
-    SubagentTreeView,
+    NativeExecutorStatusView, RuntimeLivenessView, SubagentTreeView,
 };
 
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,14 +37,168 @@ const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 #[tauri::command]
 pub(crate) async fn desktop_operations_snapshot(
-    _state: State<'_, DesktopAppState>,
-    _request: DesktopOperationsSnapshotRequest,
+    state: State<'_, DesktopAppState>,
+    request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot, String> {
-    Err(
-        "desktop_operations_snapshot not implemented yet; landing via panel #277 \
-         (backgrounded tools / operations projection)"
-            .to_string(),
-    )
+    let core = current_core(&state).ok_or_else(|| "desktop bridge not initialized".to_string())?;
+    let agent_did = request.agent_did.clone();
+
+    // 1) In-process native executor snapshot. The runtime exposes this via
+    //    `defra_agent::active_native_executors()` (re-exported from
+    //    `defra_agent::native_executor_status`). Cast `pid: i32` -> `u32`
+    //    for the view shape (the DefraDB schema has no native exec rows;
+    //    this is purely in-process).
+    let native_executors: Vec<NativeExecutorStatusView> =
+        defra_agent::native_executor_status::active_native_executors()
+            .into_iter()
+            .map(|ne| NativeExecutorStatusView {
+                id: ne.id as i64,
+                pid: ne.pid as u32,
+                argv0: ne.argv0,
+                tool_name: ne.tool_name,
+                started_at: ne.started_at,
+                age_ms: ne.age_ms,
+            })
+            .collect();
+
+    // 2) GraphQL query for AgentToolCall rows with await_mode = "background".
+    //    AgentToolCall has no agent_did field — scope is implicit via local
+    //    DefraDB replication. The agent_did from the request is preserved
+    //    in the response envelope only.
+    let tool_call_rows = fetch_background_tool_calls(&core)
+        .await
+        .map_err(|e| format!("failed to query AgentToolCall: {e}"))?;
+
+    // 3) Build a minimal liveness view. The request / active_tool_call /
+    //    expired_processing_count fields are populated by other panels
+    //    (#283/#284); panel #277 only owns the native executor list and
+    //    the backgrounded-tools projection.
+    let liveness = RuntimeLivenessView {
+        expired_processing_count: 0,
+        requests: Vec::new(),
+        active_tool_calls: Vec::new(),
+        active_native_executors_available: true,
+        active_native_executors: native_executors,
+    };
+
+    let backgrounded_tools = project_backgrounded_tools(&tool_call_rows, &liveness);
+    let stuck_diagnostics = stuck_diagnostics_from_tool_calls(&tool_call_rows);
+
+    Ok(DesktopOperationsSnapshot {
+        fetched_at: Utc::now().to_rfc3339(),
+        agent_did,
+        liveness: Some(liveness),
+        liveness_unavailable_reason: None,
+        backgrounded_tools,
+        stuck_diagnostics,
+        lineage: None, // owned by panel #285 (subagent lineage view)
+    })
+}
+
+/// Query DefraDB for backgrounded `AgentToolCall` rows on the local node.
+///
+/// We deliberately use `ClientCore::node()` -> `EmbeddedNode::execute()`
+/// here rather than `graphql_for_agent`: `graphql_for_agent` returns a
+/// remote-peer endpoint URL (`Option<String>`) for cross-deployment HTTP
+/// queries, but operator-surfaces panels read the operator's own local
+/// DefraDB. Local replication handles per-deployment scoping.
+async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
+    let query = r#"
+        query {
+            AgentToolCall(
+                filter: { await_mode: { _eq: "background" } }
+            ) {
+                request_id
+                tool_call_id
+                tool_name
+                lifecycle_state
+                status
+                started_at
+                deadline_at
+                await_mode
+                cancel_policy
+                child_request_id
+                stuck_since
+                cancel_pending_remote_ack
+            }
+        }
+    "#;
+
+    let response = core.node().execute(query).await;
+    if response.has_errors() {
+        return Err(response
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+
+    let data = response
+        .data
+        .ok_or_else(|| "AgentToolCall query returned no data".to_string())?;
+    let rows = data
+        .get("AgentToolCall")
+        .and_then(|t| t.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ToolCallRow {
+            request_id: row
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            tool_call_id: row
+                .get("tool_call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            tool_name: row
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            lifecycle_state: row
+                .get("lifecycle_state")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            status: row
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            started_at: row
+                .get("started_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            deadline_at: row
+                .get("deadline_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            await_mode: row
+                .get("await_mode")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            cancel_policy: row
+                .get("cancel_policy")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            child_request_id: row
+                .get("child_request_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            stuck_since: row
+                .get("stuck_since")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            cancel_pending_remote_ack: row
+                .get("cancel_pending_remote_ack")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        })
+        .collect())
 }
 
 #[tauri::command]
