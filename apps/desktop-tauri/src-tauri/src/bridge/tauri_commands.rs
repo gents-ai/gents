@@ -1,8 +1,13 @@
 pub(crate) mod chat;
 pub(crate) mod config;
 pub(crate) mod lifecycle;
+pub(crate) mod operations;
 pub(crate) mod peers;
 pub(crate) mod tasks;
+
+#[cfg(test)]
+#[path = "tauri_commands/operations_tests.rs"]
+mod operations_tests;
 
 use std::sync::Arc;
 
