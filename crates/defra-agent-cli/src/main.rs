@@ -203,6 +203,11 @@ const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits principal; behavior can be swapped with \
 --behavior.";
+const SUBAGENT_AFTER_HELP: &str = "\
+Examples:
+  defra-agent subagent cancel REQUEST_ID
+  defra-agent subagent cancel REQUEST_ID --cascade=false
+  defra-agent subagent cancel REQUEST_ID --wait --timeout 30s --output json";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
   defra-agent diagnose
@@ -304,6 +309,7 @@ async fn main() -> Result<()> {
         Command::Request { command } => commands::request::dispatch(command).await,
         Command::Response { command } => commands::response::dispatch(command).await,
         Command::Session { command } => commands::session::dispatch(command).await,
+        Command::Subagent { command } => commands::subagent::dispatch(command).await,
     };
     telemetry.shutdown();
     result

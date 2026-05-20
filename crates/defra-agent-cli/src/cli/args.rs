@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ use crate::{
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
     INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
     RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
-    TRACE_AFTER_HELP,
+    SUBAGENT_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -99,6 +99,14 @@ pub(crate) enum Command {
     Session {
         #[command(subcommand)]
         command: SessionCommand,
+    },
+    #[command(
+        about = "Inspect and control background subagents",
+        after_help = SUBAGENT_AFTER_HELP
+    )]
+    Subagent {
+        #[command(subcommand)]
+        command: SubagentCommand,
     },
 }
 
@@ -1213,6 +1221,61 @@ pub(crate) struct RequestShowArgs {
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SubagentCommand {
+    #[command(about = "Cancel a subagent request and optionally cascade to linked children")]
+    Cancel(SubagentCancelArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SubagentCancelArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long = "request-id")]
+    pub(crate) request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    pub(crate) request_id: Option<String>,
+    #[arg(
+        long,
+        default_value_t = true,
+        default_missing_value = "true",
+        num_args = 0..=1,
+        action = ArgAction::Set,
+        help = "Cancel linked subagent bridge tool-calls and interrupt linked child requests when their cancel policy allows it"
+    )]
+    pub(crate) cascade: bool,
+    #[arg(
+        long,
+        default_value = "userCancelled",
+        help = "CancelCause vocabulary value included in output and persisted for local bridge lifecycle cancellations: interrupted, deadline, or userCancelled"
+    )]
+    pub(crate) cause: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Wait until affected requests are terminal"
+    )]
+    pub(crate) wait: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Wait timeout such as 30s, 5m, or 1h. Only valid with --wait"
+    )]
+    pub(crate) timeout: Option<String>,
+    #[arg(long, value_enum, default_value_t = SubagentCancelOutput::Text)]
+    pub(crate) output: SubagentCancelOutput,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SubagentCancelOutput {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]
