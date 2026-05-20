@@ -98,7 +98,11 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 .map(|r| RequestEvidence {
                     request_id: r.request_id.clone(),
                     interrupt_requested_at: r.interrupt_requested_at.clone(),
-                    caused_by_parent_request_id: r.retry_parent_request.clone(),
+                    // TODO(#277-followup): AgentRequestRow has no
+                    // caused_by_parent_request_id (subagent lineage) field.
+                    // retry_parent_request is a different semantic and would
+                    // misclassify retries as cascade-interrupted, so leave None.
+                    caused_by_parent_request_id: None,
                     deadline_breached: false,
                 })
                 .unwrap_or_default();
@@ -200,7 +204,11 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         .map(|r| RequestEvidence {
             request_id: r.request_id.clone(),
             interrupt_requested_at: r.interrupt_requested_at.clone(),
-            caused_by_parent_request_id: r.retry_parent_request.clone(),
+            // TODO(#277-followup): AgentRequestRow has no
+            // caused_by_parent_request_id (subagent lineage) field.
+            // retry_parent_request is a different semantic and would
+            // misclassify retries as cascade-interrupted, so leave None.
+            caused_by_parent_request_id: None,
             deadline_breached: false,
         })
         .unwrap_or_default();
