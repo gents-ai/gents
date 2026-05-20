@@ -154,11 +154,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         ]
     }
   , { feature := "subagents-cross-deployment"
-    , required := [Surface.agentFacing]
+    , required := [Surface.agentFacing, Surface.api]
     , deferred :=
-        [ (Surface.api, "#272")
-        , (Surface.operatorUi, "#274")
-        ]
+        [ (Surface.operatorUi, "#274") ]
     }
   , { feature := "interrupt-and-cancel"
     , required := [Surface.agentFacing]
@@ -549,6 +547,11 @@ def caseCoverage : List CoverageEntry :=
       "R5CrossDeploymentCases"
       "state_machine_conformance::generated_r5_cross_deployment_cases_drive_production_dispatch")
       "subagents-cross-deployment" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "r5_cross_deployment_cases"
+      "R5CrossDeploymentCases"
+      "http::r5_dispatch::tests::subagent_dispatch_endpoint_matches_agent_request_parent_walk")
+      "subagents-cross-deployment" [Surface.api]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"

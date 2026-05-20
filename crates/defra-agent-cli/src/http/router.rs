@@ -47,6 +47,10 @@ pub(crate) fn runtime_contract_router(
         .route("/status", get(status_handler))
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
+            "/subagents/dispatches",
+            get(crate::http::r5_dispatch::subagent_dispatches_handler),
+        )
+        .route(
             "/identity/decide",
             post(crate::http::identity_decide::identity_decide_handler),
         )
