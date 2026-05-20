@@ -1,4 +1,4 @@
-@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, utilities;
+@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, utilities;
 
 @import "./styles/tokens.css";
 @import "./styles/base.css";
@@ -23,4 +23,5 @@
 @import "./styles/config/forms.css";
 @import "./styles/transcript/messages.css";
 @import "./styles/transcript/tools.css";
+@import "./styles/subagent-lineage.css";
 @import "./styles/utilities.css";

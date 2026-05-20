@@ -94,3 +94,5 @@ mod session_stale_rows;
 mod session_state;
 #[path = "tests/session_timeline.rs"]
 mod session_timeline;
+#[path = "tests/subagent_lineage.rs"]
+mod subagent_lineage;

@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    run_health_check_cycle, HealthStatus, McpHealthCheckService, McpPool, ServiceHealthMap,
+    health_checker::HealthCheckerOptions, run_health_check_cycle, HealthStatus,
+    McpHealthCheckService, McpPool, ServiceHealthMap,
 };
 use serde::Serialize;
 
@@ -155,6 +156,7 @@ async fn probe_service(
             &health_map,
             local_hostname,
             local_subnet,
+            &HealthCheckerOptions::default(),
         ),
     )
     .await;
