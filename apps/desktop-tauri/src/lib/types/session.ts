@@ -1,3 +1,5 @@
+import type { DerivedCancelCauseView } from "./operations";
+
 export type MessageView = {
   messageKey: string;
   sequence?: number | null;
@@ -28,6 +30,7 @@ export type RenderedToolCallView = {
   statusKind: string;
   args?: ToolDetailValueView | null;
   result?: ToolDetailValueView | null;
+  cancelCause?: DerivedCancelCauseView | null;
 };
 
 export type ResponseView = {
@@ -40,6 +43,7 @@ export type ResponseView = {
   materializedAt?: string | null;
   interruptedAt?: string | null;
   completedAt?: string | null;
+  cancelCause?: DerivedCancelCauseView | null;
 };
 
 export type PendingTurnView = {

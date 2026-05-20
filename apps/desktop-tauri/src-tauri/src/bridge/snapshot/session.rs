@@ -107,6 +107,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
             materialized_at: normalize_optional(row.materialized_at.as_deref()),
             interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
             completed_at: normalize_optional(row.completed_at.as_deref()),
+            cancel_cause: None,
         });
     let active_response_overlay = latest_response.clone().filter(|response| {
         let response_status = response
