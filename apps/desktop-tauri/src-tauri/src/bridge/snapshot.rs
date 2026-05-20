@@ -102,6 +102,17 @@ use runtime_tasks::{request_matches_agent, source_matches_agent};
 mod runtime;
 pub(crate) use runtime::build_runtime_snapshot;
 
+#[path = "snapshot/operations_signature.rs"]
+mod operations_signature;
+#[cfg(test)]
+pub(crate) use operations_signature::*;
+#[allow(unused_imports)]
+pub(crate) use operations_signature::{
+    compute_liveness_signature, compute_preview_signature, EmitDecision, LivenessEmitFloor,
+    LivenessSignatureInput, LivenessSignatureRequest, LivenessSignatureToolCall,
+    PreviewSignatureInput, PreviewSignatureRow,
+};
+
 #[path = "snapshot/session.rs"]
 mod session;
 #[cfg(test)]

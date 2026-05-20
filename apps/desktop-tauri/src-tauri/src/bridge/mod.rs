@@ -56,7 +56,11 @@ pub fn run() {
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,
             tauri_commands::tasks::desktop_event_trigger_save,
-            tauri_commands::tasks::desktop_task_run
+            tauri_commands::tasks::desktop_task_run,
+            tauri_commands::operations::desktop_operations_snapshot,
+            tauri_commands::operations::desktop_list_subagent_tree,
+            tauri_commands::operations::desktop_preview_interrupt_cascade,
+            tauri_commands::operations::desktop_interrupt_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

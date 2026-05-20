@@ -3703,6 +3703,7 @@ name = "defra-agent-desktop-tauri"
 version = "0.1.5"
 dependencies = [
  "anyhow",
+ "blake3",
  "chrono",
  "clap",
  "defra-agent",

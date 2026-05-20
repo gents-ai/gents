@@ -58,3 +58,22 @@ export type {
   ToolDetailFieldView,
   ToolDetailValueView,
 } from "./types/session";
+export type {
+  ActiveRequestView,
+  ActiveToolCallView,
+  BackgroundedToolView,
+  CascadeAffectedRequest,
+  CascadeCancelPreview,
+  DesktopInterruptRequestRequest,
+  DesktopListSubagentTreeRequest,
+  DesktopOperationsSnapshot,
+  DesktopOperationsSnapshotRequest,
+  DesktopPreviewInterruptCascadeRequest,
+  InterruptRequestResult,
+  NativeExecutorStatusView,
+  RuntimeLivenessView,
+  StuckWorkDiagnosticView,
+  SubagentEdgeView,
+  SubagentNodeView,
+  SubagentTreeView,
+} from "./types/operations";

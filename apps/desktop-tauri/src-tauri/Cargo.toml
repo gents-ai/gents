@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
+blake3 = "1"
 defra-agent = { path = "../../../crates/defra-agent" }
 defra-agent-desktop-core.workspace = true
 defra-agent-protocol = { path = "../../../crates/defra-agent-protocol" }
