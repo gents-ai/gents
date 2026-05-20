@@ -154,10 +154,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         ]
     }
   , { feature := "subagents-cross-deployment"
-    , required := []
+    , required := [Surface.agentFacing]
     , deferred :=
         [ (Surface.api, "#272")
-        , (Surface.agentFacing, "#273")
         , (Surface.operatorUi, "#274")
         ]
     }
@@ -536,6 +535,11 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases"
       "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "r5_cross_deployment_cases"
+      "R5CrossDeploymentCases"
+      "state_machine_conformance::generated_r5_cross_deployment_cases_drive_production_dispatch")
+      "subagents-cross-deployment" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"

@@ -695,6 +695,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R6BackgroundingCases".to_string(),
         ));
     }
+    if !lean_r5_cross_deployment_cases().is_empty() {
+        emitted.insert((
+            "r5_cross_deployment_cases".to_string(),
+            "R5CrossDeploymentCases".to_string(),
+        ));
+    }
     if !lean_r6_background_theorem_witnesses().is_empty() {
         emitted.insert((
             "r6_background_theorem_witnesses".to_string(),
@@ -742,6 +748,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "identity_contracts",
         "r4c_background_work_cases",
         "r6_background_cases",
+        "r5_cross_deployment_cases",
         "r6_background_theorem_witnesses",
         "follow_up_hook",
     ];
