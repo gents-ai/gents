@@ -116,7 +116,7 @@ def FeatureSurfaceRequirement.toJson (req : FeatureSurfaceRequirement) : String 
 def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   [ { feature := "request-lifecycle"
     , required := [Surface.agentFacing, Surface.runtimeInternal]
-    , deferred := [(Surface.operatorUi, "#TBD-request-lifecycle-ui-dedicated-row")]
+    , deferred := [(Surface.operatorUi, "#275")]
     }
   , { feature := "process-lifecycle"
     , required := [Surface.runtimeInternal]
@@ -149,39 +149,39 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   , { feature := "background-tools"
     , required := [Surface.agentFacing]
     , deferred :=
-        [ (Surface.operatorCli, "#TBD-cli-bg-listing")
-        , (Surface.operatorUi, "#TBD-ui-bg-panel")
+        [ (Surface.operatorCli, "#268")
+        , (Surface.operatorUi, "#276")
         ]
     }
   , { feature := "subagents-cross-deployment"
     , required := []
     , deferred :=
-        [ (Surface.api, "#TBD-r5-api-row")
-        , (Surface.agentFacing, "#TBD-r5-lean-witness")
-        , (Surface.operatorUi, "#TBD-r5-ui-routing")
+        [ (Surface.api, "#272")
+        , (Surface.agentFacing, "#273")
+        , (Surface.operatorUi, "#274")
         ]
     }
   , { feature := "interrupt-and-cancel"
     , required := [Surface.agentFacing]
     , deferred :=
-        [ (Surface.operatorCli, "#TBD-cli-cancel")
-        , (Surface.operatorUi, "#TBD-ui-cancel-button")
+        [ (Surface.operatorCli, "#266")
+        , (Surface.operatorUi, "#277")
         ]
     }
   , { feature := "mcp-health"
     , required := [Surface.runtimeInternal]
     , deferred :=
-        [ (Surface.operatorUi, "#TBD-ui-mcp-status")
-        , (Surface.operatorCli, "#TBD-cli-mcp-probe")
+        [ (Surface.operatorUi, "#278")
+        , (Surface.operatorCli, "#279")
         ]
     }
   , { feature := "identity-permission"
     , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.api, "#TBD-identity-graphql-decide")]
+    , deferred := [(Surface.api, "#280")]
     }
   , { feature := "apply-reconcile"
     , required := [Surface.operatorCli]
-    , deferred := [(Surface.operatorUi, "#TBD-ui-apply-preview")]
+    , deferred := [(Surface.operatorUi, "#281")]
     }
   , { feature := "event-delivery"
     , required := [Surface.runtimeInternal]
@@ -190,8 +190,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   , { feature := "triggers"
     , required := [Surface.runtimeInternal]
     , deferred :=
-        [ (Surface.operatorCli, "#TBD-cli-task-run-lean")
-        , (Surface.operatorUi, "#TBD-ui-recent-runs-lean")
+        [ (Surface.operatorCli, "#282")
+        , (Surface.operatorUi, "#283")
         ]
     }
   , { feature := "compaction"
@@ -200,11 +200,11 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     }
   , { feature := "transcript"
     , required := [Surface.agentFacing]
-    , deferred := [(Surface.operatorUi, "#TBD-ui-transcript-lean")]
+    , deferred := [(Surface.operatorUi, "#284")]
     }
   , { feature := "streaming-response"
     , required := [Surface.agentFacing]
-    , deferred := [(Surface.operatorUi, "#TBD-ui-stream-render-lean")]
+    , deferred := [(Surface.operatorUi, "#285")]
     }
   , { feature := "client-shell"
     , required := [Surface.operatorUi]
@@ -212,7 +212,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     }
   , { feature := "command-policy"
     , required := [Surface.agentFacing]
-    , deferred := [(Surface.operatorUi, "#TBD-ui-command-denial")]
+    , deferred := [(Surface.operatorUi, "#286")]
     }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
@@ -220,7 +220,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     }
   , { feature := "fleet-slot-accounting"
     , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.api, "#TBD-fleet-graphql-introspect")]
+    , deferred := [(Surface.api, "#287")]
     }
   , { feature := "storage-observation"
     , required := [Surface.runtimeInternal]
@@ -232,7 +232,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     }
   , { feature := "backend-health"
     , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.operatorUi, "#TBD-ui-backend-status")]
+    , deferred := [(Surface.operatorUi, "#288")]
     }
   ]
 
