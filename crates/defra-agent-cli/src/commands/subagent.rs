@@ -40,6 +40,9 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
 
     let snapshots = match access {
         ConfigAccess::Graphql(graphql) => {
+            // Live GraphQL mode latches request interrupts and lets the daemon
+            // transition any in-flight bridge tool-calls it owns. Local mode
+            // has no daemon process, so it performs bridge transitions itself.
             let affected = cancel_subagent_graphql(&graphql, &request_id, args.cascade).await?;
             if let Some(timeout) = wait_timeout {
                 wait_for_terminal_graphql(&graphql, &affected, timeout).await?
@@ -153,6 +156,9 @@ async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()
         return Ok(());
     }
 
+    // TODO: Route this through a server-side interrupt endpoint once one
+    // exists, so idempotency and queue-drain behavior stay centralized with
+    // defra_agent::interrupt_request.
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -219,7 +225,7 @@ async fn cancel_parent_bridge_local(
         agent_did,
         parent_session_id,
         parent_tool_call_id,
-        "parent",
+        BridgeKind::Parent,
     )
     .await?;
     Ok(())
@@ -244,7 +250,7 @@ async fn cancel_descendant_bridges_local(
                 agent_did,
                 &session_id,
                 &bridge.tool_call_id,
-                "descendant",
+                BridgeKind::Descendant,
             )
             .await?;
             let Some(child_request_id) = dispatch else {
@@ -267,7 +273,7 @@ async fn cancel_bridge_local(
     agent_did: &str,
     session_id: &str,
     tool_call_id: &str,
-    bridge_kind: &str,
+    bridge_kind: BridgeKind,
 ) -> Result<Option<String>> {
     if tool_lifecycle_state_local(node.as_ref(), session_id, tool_call_id)
         .await?
@@ -286,7 +292,10 @@ async fn cancel_bridge_local(
         .cancel_during_run_with_cascade_dispatch(agent_did)
         .await
         .with_context(|| {
-            format!("cancelling {bridge_kind} subagent bridge {session_id}:{tool_call_id}")
+            format!(
+                "cancelling {} subagent bridge {session_id}:{tool_call_id}",
+                bridge_kind.as_str()
+            )
         })?;
     Ok(match dispatch {
         Some(CascadeDispatch::Local(intent)) => Some(intent.child_request_id),
@@ -602,6 +611,21 @@ impl RequestRow {
 struct BridgeRow {
     tool_call_id: String,
     child_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BridgeKind {
+    Parent,
+    Descendant,
+}
+
+impl BridgeKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Parent => "parent",
+            Self::Descendant => "descendant",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

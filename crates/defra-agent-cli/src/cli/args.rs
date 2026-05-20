@@ -1146,13 +1146,13 @@ pub(crate) struct SubagentCancelArgs {
         default_missing_value = "true",
         num_args = 0..=1,
         action = ArgAction::Set,
-        help = "Cascade through linked child subagents when their cancel policy allows it"
+        help = "Cancel linked subagent bridge tool-calls and interrupt linked child requests when their cancel policy allows it"
     )]
     pub(crate) cascade: bool,
     #[arg(
         long,
         default_value = "userCancelled",
-        help = "CancelCause vocabulary value: interrupted, deadline, or userCancelled"
+        help = "CancelCause vocabulary value echoed in output only until cause persistence lands (#249): interrupted, deadline, or userCancelled"
     )]
     pub(crate) cause: String,
     #[arg(
