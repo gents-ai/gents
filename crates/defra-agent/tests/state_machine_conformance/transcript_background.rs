@@ -32,6 +32,333 @@ impl CompletionModel for TranscriptConformanceModel {
     }
 }
 
+const BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID: &str = "r6-background-theorem-parent";
+const BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID: &str = "r6-background-theorem-child";
+
+struct PendingTool;
+
+impl ToolDyn for PendingTool {
+    fn name(&self) -> String {
+        "slow_tool".to_string()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "slow_tool".to_string(),
+                description: "test tool".to_string(),
+                parameters: json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BackgroundTheoremToolCallRow {
+    await_mode: Option<String>,
+    cancel_policy: Option<String>,
+    child_request_id: Option<String>,
+    cancel_cascade_intent_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BackgroundedRow {
+    lifecycle_state: Option<String>,
+}
+
+fn background_tool_registry(
+    tools: Vec<Box<dyn ToolDyn>>,
+    allowlist: &[&str],
+) -> BackgroundToolRegistry {
+    BackgroundToolRegistry::from_tools(
+        tools,
+        &allowlist
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn skip_reason_json(action: ToolCallHookAction) -> Value {
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("expected Skip action, got {action:?}");
+    };
+    serde_json::from_str(&reason).expect("skip reason should be JSON")
+}
+
+async fn setup_background_tool_hook(
+    test_name: &str,
+    registry: BackgroundToolRegistry,
+) -> (support::TestDb, DefraSessionHook, String, String) {
+    let db = test_db(test_name).await;
+    let session_id = format!("{test_name}-session");
+    let request_id = format!("{test_name}-request");
+    support::create_request(
+        db.node.as_ref(),
+        &request_id,
+        &session_id,
+        "processing",
+        "2026-05-19T00:00:00Z",
+    )
+    .await;
+
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        "r6-background-theorem",
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume background theorem hook")
+    .with_background_tool_registry(registry);
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    (db, hook, session_id, request_id)
+}
+
+async fn setup_background_spawn_fixture(
+    test_name: &str,
+    targets: Vec<&str>,
+    parent_subagent_depth: u32,
+    background_enabled: bool,
+) -> (
+    support::TestDb,
+    DefraSessionHook,
+    String,
+    String,
+    chrono::DateTime<chrono::Utc>,
+) {
+    let db = test_db(test_name).await;
+    let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    let selection_id = format!("{test_name}-tools");
+
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: AGENT_DID.to_string(),
+            subagent_targets: Some(targets.into_iter().map(str::to_string).collect()),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(background_enabled),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("upsert theorem tool selection");
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehaviorDocument {
+            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R6 theorem parent".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: Some(selection_id),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-19T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .expect("upsert theorem parent behavior");
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehaviorDocument {
+            behavior_id: BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R6 theorem child".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-19T00:00:01Z".to_string()),
+        },
+    )
+    .await
+    .expect("upsert theorem child behavior");
+
+    let session_id = format!("{test_name}-session");
+    let request_id = format!("{test_name}-parent");
+    create_background_theorem_parent_request(
+        db.node.as_ref(),
+        &request_id,
+        &session_id,
+        parent_subagent_depth,
+        parent_deadline,
+    )
+    .await;
+
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume background theorem parent hook");
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(parent_deadline)).await;
+
+    (db, hook, session_id, request_id, parent_deadline)
+}
+
+async fn create_background_theorem_parent_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    subagent_depth: u32,
+    deadline: chrono::DateTime<chrono::Utc>,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let behavior_id = escape_graphql_string(BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID);
+    let agent_did = escape_graphql_string(AGENT_DID);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let deadline = deadline.to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "parent prompt",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                metadata: "",
+                failure_reason: "",
+                created_at: "{created_at}",
+                deadline: "{deadline}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: {subagent_depth}
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create background theorem parent AgentRequest failed: {:?}",
+        response.errors
+    );
+}
+
+async fn fetch_background_theorem_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> BackgroundTheoremToolCallRow {
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    tool_call_id: {{ _eq: "{tool_call_id}" }}
+                }}
+                limit: 1
+            ) {{
+                await_mode
+                cancel_policy
+                child_request_id
+                cancel_cascade_intent_at
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn count_live_backgrounded_rows(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> anyhow::Result<usize> {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{request_id}" }},
+                    await_mode: {{ _eq: "background" }}
+                }}
+            ) {{
+                lifecycle_state
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query live backgrounded tool count for request failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<BackgroundedRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            !matches!(
+                row.lifecycle_state.as_deref(),
+                Some("completed" | "failed" | "timedOut" | "cancelled")
+            )
+        })
+        .count())
+}
+
+async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+    let session_id = escape_graphql_string(session_id);
+    let tool_name = escape_graphql_string(tool_name);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    tool_name: {{ _eq: "{tool_name}" }}
+                }}
+            ) {{
+                tool_call_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "count AgentToolCall by name failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
 fn transcript_user_message(text: &str) -> Message {
     Message::User {
         content: OneOrMany::one(UserContent::Text(Text {
@@ -429,6 +756,197 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
     assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+}
+
+pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
+    let witnesses = lean_r6_background_theorem_witnesses();
+    assert_eq!(witnesses.len(), 2);
+
+    let witness =
+        lean_r6_background_theorem_witness("Subagent.BridgedState.backgrounded_budget_bounded");
+    assert_eq!(witness.witness_kind.as_str(), "state_invariant");
+    assert_eq!(
+        witness.scenario.as_str(),
+        "background_tool_admission_respects_max_backgrounded_per_parent"
+    );
+
+    let max_backgrounded = witness.numeric_bound;
+    let await_mode_expected = witness.kind_field("await_mode");
+    let cancel_policy_expected = witness.kind_field("cancel_policy");
+    let error_code_expected = witness.kind_field("error_code_on_violation");
+
+    let (db, hook, session_id, request_id) = setup_background_tool_hook(
+        "r6-background-theorem-budget",
+        background_tool_registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+
+    for index in 0..max_backgrounded {
+        let internal_call_id = format!("meta-theorem-bg-{index}");
+        let receipt = skip_reason_json(
+            PromptHook::<TranscriptConformanceModel>::on_tool_call(
+                &hook,
+                "background_tool",
+                None,
+                &internal_call_id,
+                r#"{"tool_name":"slow_tool","args":{}}"#,
+            )
+            .await,
+        );
+        assert_eq!(receipt["status"].as_str(), Some("running"));
+        assert_eq!(receipt["await_mode"].as_str(), Some(await_mode_expected));
+        let background_tool_call_id = receipt["tool_call_id"]
+            .as_str()
+            .expect("background receipt tool_call_id");
+
+        let row = fetch_background_theorem_tool_call(
+            db.node.as_ref(),
+            &session_id,
+            background_tool_call_id,
+        )
+        .await;
+        assert_eq!(row.await_mode.as_deref(), Some(await_mode_expected));
+        assert_eq!(row.cancel_policy.as_deref(), Some(cancel_policy_expected));
+
+        let live = count_live_backgrounded_rows(db.node.as_ref(), &request_id)
+            .await
+            .expect("count live backgrounded rows");
+        assert!(
+            live <= max_backgrounded,
+            "live count {live} exceeded witness bound {max_backgrounded} after admit #{index}"
+        );
+        assert_eq!(live, index + 1);
+    }
+
+    let denied = skip_reason_json(
+        PromptHook::<TranscriptConformanceModel>::on_tool_call(
+            &hook,
+            "background_tool",
+            None,
+            "meta-theorem-bg-overflow",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    assert_eq!(denied["code"].as_str(), Some(error_code_expected));
+    assert_eq!(
+        denied["current_backgrounded"]
+            .as_u64()
+            .map(|value| value as usize),
+        Some(max_backgrounded)
+    );
+    assert_eq!(
+        denied["max_backgrounded"]
+            .as_u64()
+            .map(|value| value as usize),
+        Some(max_backgrounded)
+    );
+
+    let live_after = count_live_backgrounded_rows(db.node.as_ref(), &request_id)
+        .await
+        .expect("count live backgrounded rows after denial");
+    assert_eq!(live_after, max_backgrounded);
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "slow_tool").await,
+        max_backgrounded
+    );
+}
+
+/// Drives the local cascade-dispatch half of the Lean trace witness.
+///
+/// This asserts `interrupt_requested_at.is_some()`, the request-layer
+/// precondition for the Lean post-state `interrupted`; issue #261 tracks the
+/// follow-up that pumps the child row to lifecycle_state `interrupted`.
+pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
+    let witness = lean_r6_background_theorem_witness("Subagent.BridgedState.cascade_cancels_child");
+    assert_eq!(witness.witness_kind.as_str(), "reachability_trace");
+    assert_eq!(
+        witness.scenario.as_str(),
+        "parent_terminal_with_cascade_bridge_interrupts_processing_child"
+    );
+    assert_eq!(witness.numeric_bound, 2);
+
+    let cancel_policy_expected = witness.kind_field("cancel_policy");
+    let child_post_state_expected = witness.kind_field("child_post_state");
+    assert_eq!(witness.kind_field("child_pre_state"), "processing");
+    assert_eq!(witness.kind_field("child_pre_admission"), "executing");
+
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_background_spawn_fixture(
+        "r6-background-theorem-cascade",
+        vec![BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let args = json!({
+        "behavior_id": BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+        "prompt": "child for cascade theorem witness",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let action = PromptHook::<TranscriptConformanceModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-theorem-cascade".to_string()),
+        "internal-theorem-cascade",
+        &args,
+    )
+    .await;
+    let receipt = skip_reason_json(action);
+    let child_request_id = receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+
+    let tool = fetch_background_theorem_tool_call(
+        db.node.as_ref(),
+        &session_id,
+        "internal-theorem-cascade",
+    )
+    .await;
+    assert_eq!(tool.cancel_policy.as_deref(), Some(cancel_policy_expected));
+    assert_eq!(
+        tool.child_request_id.as_deref(),
+        Some(child_request_id.as_str())
+    );
+
+    let mut lifecycle =
+        ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-theorem-cascade")
+            .await
+            .expect("load bridge lifecycle")
+            .expect("bridge should be persisted");
+    let dispatch = lifecycle
+        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
+        .await
+        .expect("cancel bridge with cascade dispatch")
+        .expect("cascade dispatch");
+    let CascadeDispatch::Local(intent) = dispatch else {
+        panic!("local child must use local cascade dispatch");
+    };
+    assert_eq!(intent.child_request_id, child_request_id);
+
+    interrupt_request(db.node.as_ref(), &intent.child_request_id)
+        .await
+        .expect("interrupt child request");
+
+    let tool = fetch_background_theorem_tool_call(
+        db.node.as_ref(),
+        &session_id,
+        "internal-theorem-cascade",
+    )
+    .await;
+    assert!(
+        tool.cancel_cascade_intent_at.is_none(),
+        "local cascade dispatch must not leave a remote bridge intent"
+    );
+    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
+        .await
+        .expect("fetch child interrupt_requested_at");
+    assert!(
+        child_interrupt.is_some(),
+        "cascade trace must leave child interrupt_requested_at set ({child_post_state_expected})"
+    );
 }
 
 pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {

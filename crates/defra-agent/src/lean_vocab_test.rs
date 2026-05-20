@@ -60,6 +60,7 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
+    pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
@@ -369,6 +370,22 @@ pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6Backgroun
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {
+    &lean_contract_snapshot().r6_background_theorem_witnesses
+}
+
+pub(crate) fn lean_r6_background_theorem_witness(
+    theorem_name: &str,
+) -> &'static LeanBackgroundTheoremWitness {
+    lean_contract_snapshot()
+        .r6_background_theorem_witnesses
+        .iter()
+        .find(|witness| witness.theorem_name == theorem_name)
+        .unwrap_or_else(|| {
+            panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
+        })
 }
 
 pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {

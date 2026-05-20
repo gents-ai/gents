@@ -244,6 +244,15 @@ structure R6BackgroundingCase where
   queueKey : Option String
   deriving Repr
 
+/-- Runtime witness row for an operationally-driven Background Properties theorem. -/
+structure BackgroundTheoremWitness where
+  theoremName : String
+  witnessKind : String
+  scenario : String
+  numericBound : Nat
+  kindFields : List (String × String)
+  deriving Repr
+
 namespace R4cWitnesses
 
 structure ListSubagentsLineageRejects where
