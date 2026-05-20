@@ -18,8 +18,8 @@ use crate::support::{first_optional_row, test_db, TestDb};
 
 use super::scenario::{Action, NodeId, Scenario};
 
-const NODE_A_DID: &str = "did:agent:a-parent";
-const NODE_B_DID: &str = "did:agent:b-child";
+const NODE_A_DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+const NODE_B_DID: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
 
 pub struct HarnessNode {
     pub id: NodeId,

@@ -120,7 +120,7 @@ mod tests {
 
         let doc_id = write_manual_agent_request(
             node.as_ref(),
-            "did:agent:test",
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             "behavior-1",
             "task-1",
             "hello {{ args.name }}",
@@ -178,7 +178,7 @@ mod tests {
 
         let doc_id = write_manual_agent_request_with_conversation_title(
             node.as_ref(),
-            "did:agent:test",
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             "behavior-1",
             "task-1",
             "hello {{ args.name }}",
@@ -256,7 +256,7 @@ mod tests {
         let node = test_node().await;
         let err = write_manual_agent_request(
             node.as_ref(),
-            "did:agent:test",
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             "behavior-1",
             "task-err",
             "hello {{ args.missing }}",

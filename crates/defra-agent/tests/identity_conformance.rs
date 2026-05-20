@@ -4,6 +4,10 @@ use std::sync::Arc;
 #[path = "../src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
+use acp::{
+    AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
+    RelationTuple, READER_RELATION,
+};
 use lean_vocab_test::{
     lean_identity_contracts, lean_identity_permission_cases, lean_identity_structural_cases,
     LeanIdentityBehavior, LeanIdentityContract, LeanIdentityDeployment, LeanIdentityPermissionCase,
@@ -11,6 +15,7 @@ use lean_vocab_test::{
 };
 
 use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
+use identity::Did;
 
 #[path = "support/identity_stubs.rs"]
 mod identity_stubs;
@@ -93,6 +98,94 @@ fn build_agent_behavior_for_routing_test(
     }
 }
 
+const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
+const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
+
+async fn build_local_acp_from_lean_case(
+    case: &LeanIdentityPermissionCase,
+) -> anyhow::Result<LocalDocumentACP> {
+    assert!(
+        case.permission.ends_with(".read"),
+        "case {:?}: only .read permission fixtures are supported by this ACP witness, got {:?}",
+        case.name,
+        case.permission
+    );
+    assert!(
+        case.permission
+            .starts_with(format!("row:{}:", case.row_owner).as_str()),
+        "case {:?}: permission {:?} must be scoped to row owner {:?}",
+        case.name,
+        case.permission,
+        case.row_owner
+    );
+
+    let store = Arc::new(MemoryAcpStore::new());
+    let acp = LocalDocumentACP::new(store.clone());
+    let row_owner = did_from_lean_case(&case.row_owner, case, "row_owner");
+
+    acp.register_doc_object(
+        &row_owner,
+        IDENTITY_PERMISSION_POLICY_ID,
+        IDENTITY_PERMISSION_RESOURCE_NAME,
+        &case.row_owner,
+    )
+    .await?;
+
+    let namespaced_resource =
+        format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
+    for grant in &case.grants {
+        assert_eq!(
+            grant.permission, case.permission,
+            "case {:?}: grant {:?} targets a different permission than the row under test",
+            case.name, grant
+        );
+        let principal = did_from_lean_case(&grant.principal, case, "grant.principal");
+        let tuple = RelationTuple::try_new(
+            principal,
+            READER_RELATION,
+            namespaced_resource.as_str(),
+            case.row_owner.as_str(),
+        )?;
+        store.put_tuple(&tuple).await?;
+    }
+
+    Ok(acp)
+}
+
+fn acp_actor_for(behavior: &AgentBehavior) -> Identity {
+    Identity::Authenticated(
+        Did::new(behavior.principal.agent_did.as_str()).unwrap_or_else(|error| {
+            panic!(
+                "behavior {:?}: principal DID {:?} is not a valid Defra identity DID: {error}",
+                behavior.behavior_id, behavior.principal.agent_did
+            )
+        }),
+    )
+}
+
+fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &str) -> Did {
+    Did::new(value).unwrap_or_else(|error| {
+        panic!(
+            "case {:?}: {field} {:?} is not a valid Defra identity DID: {error}",
+            case.name, value
+        )
+    })
+}
+
+fn host_deployment_for_case<'a>(
+    case: &'a LeanIdentityPermissionCase,
+) -> &'a LeanIdentityDeployment {
+    case.deployments
+        .iter()
+        .find(|deployment| deployment.id == case.host_deployment)
+        .unwrap_or_else(|| {
+            panic!(
+                "case {:?}: host_deployment {:?} not declared",
+                case.name, case.host_deployment
+            )
+        })
+}
+
 /// Rust mirror of `Identity.World.WellFormed` from
 /// `Proofs/Identity/State.lean`. Returns true iff:
 ///   - principal DIDs are unique
@@ -173,8 +266,8 @@ fn identity_structural_cases_cover_named_scenarios() {
     }
 }
 
-#[test]
-fn identity_permission_cases_pin_runtime_permission_contract_shape() {
+#[tokio::test]
+async fn identity_permission_cases_pin_runtime_permission_contract_shape() -> anyhow::Result<()> {
     let cases = lean_identity_permission_cases();
     assert_eq!(
         cases.len(),
@@ -261,7 +354,54 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
             "case {:?}: same-principal witness drifted at runtime layer",
             case.name
         );
+
+        let acp = build_local_acp_from_lean_case(case).await?;
+        let actor_allowed = acp
+            .check_doc_access(
+                &acp_actor_for(actor),
+                DocumentPermission::Read,
+                IDENTITY_PERMISSION_POLICY_ID,
+                IDENTITY_PERMISSION_RESOURCE_NAME,
+                &case.row_owner,
+            )
+            .await?;
+        let peer_allowed = acp
+            .check_doc_access(
+                &acp_actor_for(peer),
+                DocumentPermission::Read,
+                IDENTITY_PERMISSION_POLICY_ID,
+                IDENTITY_PERMISSION_RESOURCE_NAME,
+                &case.row_owner,
+            )
+            .await?;
+
+        assert_eq!(
+            actor_allowed, case.expected_actor_allowed,
+            "case {:?}: ACP actor permission decision drifted from Lean witness",
+            case.name
+        );
+        assert_eq!(
+            peer_allowed, case.expected_peer_allowed,
+            "case {:?}: ACP peer permission decision drifted from Lean witness",
+            case.name
+        );
+
+        let host_deployment = host_deployment_for_case(case);
+        assert_eq!(
+            host_deployment.principal == actor.principal.agent_did,
+            case.expected_actor_hostable,
+            "case {:?}: actor hostability equality drifted from Lean witness",
+            case.name
+        );
+        assert_eq!(
+            host_deployment.principal == peer.principal.agent_did,
+            case.expected_peer_hostable,
+            "case {:?}: peer hostability equality drifted from Lean witness",
+            case.name
+        );
     }
+
+    Ok(())
 }
 
 #[test]
