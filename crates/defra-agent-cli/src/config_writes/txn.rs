@@ -11,11 +11,15 @@
 //!   underlying `db_txn` is dropped in any case.
 //! - **HTTP.** `DELETE /api/v0/tx/{id}` is a network call; it can fail for
 //!   reasons unrelated to the apply error. Even if the DELETE never reaches
-//!   the server, DefraDB's tx GC will reclaim the handle on its own.
+//!   the server, transaction **atomicity** guarantees the apply has no
+//!   committed effect: a transaction that never sees a `commit` yields no
+//!   externally-visible mutations. The orphaned handle is bounded by
+//!   DefraDB's per-request HTTP timeout (30s default), not an active idle-GC
+//!   sweep — see `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md`.
 //!
 //! Both return `Result<()>` so callers can log discrepancies, but neither
 //! changes operator-facing behavior on failure: the apply error is what
-//! surfaces, and the DB ends at the pre-apply snapshot.
+//! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
 
 use anyhow::{Context, Result};
 use defra_agent::defra_node::QueryRequest;
