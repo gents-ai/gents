@@ -510,14 +510,6 @@ pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
     &lean_contract_snapshot().mcp_health_cases
 }
 
-pub(crate) fn lean_mcp_health_k1_cases() -> Vec<&'static LeanMcpHealthCase> {
-    lean_contract_snapshot()
-        .mcp_health_cases
-        .iter()
-        .filter(|case| case.threshold_k == 1)
-        .collect()
-}
-
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
     &lean_contract_snapshot().command_policy_cases
 }

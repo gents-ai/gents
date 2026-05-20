@@ -22,6 +22,7 @@ use crate::config::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
+use crate::health_checker::HealthCheckerOptions;
 use crate::hook::FailurePolicy;
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
@@ -44,6 +45,7 @@ pub struct DefraAgentBuilder {
     local_subnet: Option<String>,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
+    health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     behaviors: Vec<PendingAgentBehavior>,
 }
@@ -95,6 +97,11 @@ impl DefraAgentBuilder {
 
     pub fn hook_failure_policy(mut self, hook_failure_policy: FailurePolicy) -> Self {
         self.hook_failure_policy = hook_failure_policy;
+        self
+    }
+
+    pub fn health_checker_options(mut self, options: HealthCheckerOptions) -> Self {
+        self.health_checker_options = options;
         self
     }
 
@@ -206,6 +213,7 @@ impl DefraAgentBuilder {
             local_subnet: self.local_subnet,
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
+            health_checker_options: self.health_checker_options,
             process_state_observer: self.process_state_observer,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
         })

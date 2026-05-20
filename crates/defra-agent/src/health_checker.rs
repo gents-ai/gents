@@ -20,9 +20,28 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
 
-const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
-const STALENESS_THRESHOLD_SECS: i64 = 120;
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+#[derive(Clone, Debug)]
+pub struct HealthCheckerOptions {
+    pub cycle_interval: Duration,
+    pub probe_timeout: Duration,
+    pub staleness_threshold: Duration,
+    pub failure_threshold_k: u32,
+    pub backoff_initial: Duration,
+    pub backoff_max: Duration,
+}
+
+impl Default for HealthCheckerOptions {
+    fn default() -> Self {
+        Self {
+            cycle_interval: Duration::from_secs(30),
+            probe_timeout: Duration::from_secs(5),
+            staleness_threshold: Duration::from_secs(120),
+            failure_threshold_k: 3,
+            backoff_initial: Duration::from_secs(30),
+            backoff_max: Duration::from_secs(600),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ServiceHealth {
@@ -48,9 +67,95 @@ impl std::fmt::Display for HealthStatus {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ServiceHealthEntry {
+    health: ServiceHealth,
+    model: ServiceModelInternal,
+}
+
+impl ServiceHealthEntry {
+    #[cfg(test)]
+    fn from_public(health: ServiceHealth) -> Self {
+        let model = ServiceModelInternal::from_status(health.status);
+        Self { health, model }
+    }
+
+    fn from_model(
+        model: ServiceModelInternal,
+        last_seen: DateTime<Utc>,
+        last_error: Option<String>,
+    ) -> Self {
+        Self {
+            health: ServiceHealth {
+                status: model.state.project(),
+                last_seen,
+                last_error,
+            },
+            model,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthStateInternal {
+    Healthy,
+    Degraded,
+    Evicted,
+    Reconnecting,
+}
+
+impl HealthStateInternal {
+    fn project(self) -> HealthStatus {
+        match self {
+            Self::Healthy => HealthStatus::Healthy,
+            Self::Degraded => HealthStatus::Stale,
+            Self::Evicted | Self::Reconnecting => HealthStatus::Unreachable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServiceModelInternal {
+    state: HealthStateInternal,
+    failure_count: u32,
+    backoff_until: Option<DateTime<Utc>>,
+}
+
+impl ServiceModelInternal {
+    fn initial() -> Self {
+        Self {
+            state: HealthStateInternal::Healthy,
+            failure_count: 0,
+            backoff_until: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_status(status: HealthStatus) -> Self {
+        Self {
+            state: match status {
+                HealthStatus::Healthy => HealthStateInternal::Healthy,
+                HealthStatus::Stale => HealthStateInternal::Degraded,
+                HealthStatus::Unreachable => HealthStateInternal::Evicted,
+            },
+            failure_count: 0,
+            backoff_until: None,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeEvent {
+    ProbeSuccess { stale: bool },
+    ProbeFail,
+    BackoffExpiry,
+    RegistryAbsent,
+}
+
 #[derive(Clone)]
 pub struct ServiceHealthMap {
-    inner: Arc<RwLock<HashMap<String, ServiceHealth>>>,
+    inner: Arc<RwLock<HashMap<String, ServiceHealthEntry>>>,
 }
 
 impl ServiceHealthMap {
@@ -61,15 +166,36 @@ impl ServiceHealthMap {
     }
 
     pub async fn get(&self, service_id: &str) -> Option<ServiceHealth> {
-        self.inner.read().await.get(service_id).cloned()
+        self.inner
+            .read()
+            .await
+            .get(service_id)
+            .map(|entry| entry.health.clone())
     }
 
     pub async fn snapshot(&self) -> HashMap<String, ServiceHealth> {
-        self.inner.read().await.clone()
+        self.inner
+            .read()
+            .await
+            .iter()
+            .map(|(service_id, entry)| (service_id.clone(), entry.health.clone()))
+            .collect()
     }
 
+    #[cfg(test)]
     async fn set(&self, service_id: String, health: ServiceHealth) {
-        self.inner.write().await.insert(service_id, health);
+        self.inner
+            .write()
+            .await
+            .insert(service_id, ServiceHealthEntry::from_public(health));
+    }
+
+    async fn get_entry(&self, service_id: &str) -> Option<ServiceHealthEntry> {
+        self.inner.read().await.get(service_id).cloned()
+    }
+
+    async fn set_entry(&self, service_id: String, entry: ServiceHealthEntry) {
+        self.inner.write().await.insert(service_id, entry);
     }
 
     #[cfg(test)]
@@ -113,6 +239,7 @@ pub fn spawn_health_checker(
     local_hostname: String,
     local_subnet: Option<String>,
     cancel: CancellationToken,
+    options: HealthCheckerOptions,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = run_health_check(
@@ -121,13 +248,14 @@ pub fn spawn_health_checker(
             &health_map,
             &local_hostname,
             local_subnet.as_deref(),
+            &options,
         )
         .await
         {
             tracing::warn!(error = %error, "initial health check cycle failed");
         }
 
-        let mut ticker = tokio::time::interval(HEALTH_CHECK_INTERVAL);
+        let mut ticker = tokio::time::interval(options.cycle_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await;
 
@@ -144,6 +272,7 @@ pub fn spawn_health_checker(
                         &health_map,
                         &local_hostname,
                         local_subnet.as_deref(),
+                        &options,
                     ).await {
                         tracing::warn!(error = %error, "health check cycle failed");
                     }
@@ -159,6 +288,7 @@ async fn run_health_check(
     health_map: &ServiceHealthMap,
     local_hostname: &str,
     local_subnet: Option<&str>,
+    options: &HealthCheckerOptions,
 ) -> Result<()> {
     let query = r#"{
   ToolServiceRegistry(
@@ -196,6 +326,7 @@ async fn run_health_check(
         health_map,
         local_hostname,
         local_subnet,
+        options,
     )
     .await
 }
@@ -208,6 +339,7 @@ pub async fn run_health_check_cycle(
     health_map: &ServiceHealthMap,
     local_hostname: &str,
     local_subnet: Option<&str>,
+    options: &HealthCheckerOptions,
 ) -> Result<()> {
     let mut online_service_ids = HashSet::new();
 
@@ -216,21 +348,32 @@ pub async fn run_health_check_cycle(
         online_service_ids.insert(service_id.clone());
 
         let heartbeat_seen_at = parse_updated_at(service.updated_at.as_deref()).unwrap_or(now);
-        let previous = health_map.get(&service_id).await;
+        let previous = health_map.get_entry(&service_id).await;
+        let previous_model = previous
+            .as_ref()
+            .map(|entry| entry.model.clone())
+            .unwrap_or_else(ServiceModelInternal::initial);
+        let previous_last_seen = previous
+            .as_ref()
+            .map(|entry| entry.health.last_seen)
+            .unwrap_or(heartbeat_seen_at);
+
+        if backoff_is_active(&previous_model, now, options) {
+            continue;
+        }
 
         let Some(mcp_port) = service.mcp_port.filter(|port| *port != 0) else {
-            health_map
-                .set(
-                    service_id.clone(),
-                    ServiceHealth {
-                        status: HealthStatus::Unreachable,
-                        last_seen: previous
-                            .map(|health| health.last_seen)
-                            .unwrap_or(heartbeat_seen_at),
-                        last_error: Some("registry entry missing mcp_port".to_string()),
-                    },
-                )
-                .await;
+            apply_probe_failure(
+                mcp_pool,
+                health_map,
+                &service_id,
+                previous_model,
+                previous_last_seen,
+                "registry entry missing mcp_port".to_string(),
+                now,
+                options,
+            )
+            .await;
             continue;
         };
 
@@ -238,18 +381,17 @@ pub async fn run_health_check_cycle(
             && service.tailscale_ip.is_empty()
             && service.lan_ip.is_empty()
         {
-            health_map
-                .set(
-                    service_id.clone(),
-                    ServiceHealth {
-                        status: HealthStatus::Unreachable,
-                        last_seen: previous
-                            .map(|health| health.last_seen)
-                            .unwrap_or(heartbeat_seen_at),
-                        last_error: Some("registry entry missing address fields".to_string()),
-                    },
-                )
-                .await;
+            apply_probe_failure(
+                mcp_pool,
+                health_map,
+                &service_id,
+                previous_model,
+                previous_last_seen,
+                "registry entry missing address fields".to_string(),
+                now,
+                options,
+            )
+            .await;
             continue;
         }
 
@@ -263,24 +405,30 @@ pub async fn run_health_check_cycle(
             local_subnet,
         );
 
-        let is_stale =
-            now.signed_duration_since(heartbeat_seen_at).num_seconds() > STALENESS_THRESHOLD_SECS;
+        let is_stale = now
+            .signed_duration_since(heartbeat_seen_at)
+            .to_std()
+            .map(|age| age > options.staleness_threshold)
+            .unwrap_or(false);
 
-        match tokio::time::timeout(PROBE_TIMEOUT, mcp_pool.list_tools(&service_id, &endpoint)).await
+        match tokio::time::timeout(
+            options.probe_timeout,
+            mcp_pool.list_tools(&service_id, &endpoint),
+        )
+        .await
         {
             Ok(Ok(_)) => {
+                let next_model = step_service(
+                    previous_model,
+                    ProbeEvent::ProbeSuccess { stale: is_stale },
+                    now,
+                    options,
+                )
+                .expect("probeSuccess must preserve the service model");
                 health_map
-                    .set(
+                    .set_entry(
                         service_id.clone(),
-                        ServiceHealth {
-                            status: if is_stale {
-                                HealthStatus::Stale
-                            } else {
-                                HealthStatus::Healthy
-                            },
-                            last_seen: now,
-                            last_error: None,
-                        },
+                        ServiceHealthEntry::from_model(next_model, now, None),
                     )
                     .await;
             }
@@ -291,19 +439,17 @@ pub async fn run_health_check_cycle(
                     error = %error,
                     "MCP health probe failed"
                 );
-                mcp_pool.remove(&service_id).await;
-                health_map
-                    .set(
-                        service_id.clone(),
-                        ServiceHealth {
-                            status: HealthStatus::Unreachable,
-                            last_seen: previous
-                                .map(|health| health.last_seen)
-                                .unwrap_or(heartbeat_seen_at),
-                            last_error: Some(error.to_string()),
-                        },
-                    )
-                    .await;
+                apply_probe_failure(
+                    mcp_pool,
+                    health_map,
+                    &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    error.to_string(),
+                    now,
+                    options,
+                )
+                .await;
             }
             Err(_) => {
                 tracing::warn!(
@@ -311,25 +457,123 @@ pub async fn run_health_check_cycle(
                     endpoint = %endpoint,
                     "MCP health probe timed out"
                 );
-                mcp_pool.remove(&service_id).await;
-                health_map
-                    .set(
-                        service_id,
-                        ServiceHealth {
-                            status: HealthStatus::Unreachable,
-                            last_seen: previous
-                                .map(|health| health.last_seen)
-                                .unwrap_or(heartbeat_seen_at),
-                            last_error: Some("probe timed out".to_string()),
-                        },
-                    )
-                    .await;
+                apply_probe_failure(
+                    mcp_pool,
+                    health_map,
+                    &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    "probe timed out".to_string(),
+                    now,
+                    options,
+                )
+                .await;
             }
         }
     }
 
     health_map.retain_services(&online_service_ids).await;
     Ok(())
+}
+
+async fn apply_probe_failure(
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    service_id: &str,
+    previous_model: ServiceModelInternal,
+    previous_last_seen: DateTime<Utc>,
+    error: String,
+    now: DateTime<Utc>,
+    options: &HealthCheckerOptions,
+) {
+    let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
+        .expect("probeFail must preserve the service model");
+    if next_model.state == HealthStateInternal::Evicted {
+        mcp_pool.remove(service_id).await;
+    }
+    health_map
+        .set_entry(
+            service_id.to_string(),
+            ServiceHealthEntry::from_model(next_model, previous_last_seen, Some(error)),
+        )
+        .await;
+}
+
+fn step_service(
+    prev: ServiceModelInternal,
+    event: ProbeEvent,
+    now: DateTime<Utc>,
+    options: &HealthCheckerOptions,
+) -> Option<ServiceModelInternal> {
+    match event {
+        ProbeEvent::RegistryAbsent => None,
+        ProbeEvent::BackoffExpiry => {
+            let mut next = prev;
+            if next.state == HealthStateInternal::Evicted {
+                next.state = HealthStateInternal::Reconnecting;
+                next.backoff_until = None;
+            }
+            Some(next)
+        }
+        ProbeEvent::ProbeSuccess { stale } => Some(ServiceModelInternal {
+            state: if stale {
+                HealthStateInternal::Degraded
+            } else {
+                HealthStateInternal::Healthy
+            },
+            failure_count: 0,
+            backoff_until: None,
+        }),
+        ProbeEvent::ProbeFail => {
+            let failure_count = prev.failure_count.saturating_add(1);
+            let threshold = failure_threshold_k(options);
+            let state = if failure_count >= threshold {
+                HealthStateInternal::Evicted
+            } else {
+                HealthStateInternal::Degraded
+            };
+            let backoff_until = (state == HealthStateInternal::Evicted).then(|| {
+                let attempts = failure_count.saturating_sub(threshold);
+                now_plus_duration(now, backoff_duration(attempts, options))
+            });
+            Some(ServiceModelInternal {
+                state,
+                failure_count,
+                backoff_until,
+            })
+        }
+    }
+}
+
+fn backoff_is_active(
+    model: &ServiceModelInternal,
+    now: DateTime<Utc>,
+    options: &HealthCheckerOptions,
+) -> bool {
+    model.failure_count >= failure_threshold_k(options)
+        && model
+            .backoff_until
+            .map(|backoff_until| now < backoff_until)
+            .unwrap_or(false)
+}
+
+fn backoff_duration(attempts: u32, options: &HealthCheckerOptions) -> Duration {
+    let multiplier = 1u32.checked_shl(attempts).unwrap_or(u32::MAX);
+    options
+        .backoff_initial
+        .saturating_mul(multiplier)
+        .min(options.backoff_max)
+}
+
+fn failure_threshold_k(options: &HealthCheckerOptions) -> u32 {
+    options.failure_threshold_k.max(1)
+}
+
+fn now_plus_duration(now: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
+    chrono::Duration::from_std(duration)
+        .ok()
+        .and_then(|duration| now.checked_add_signed(duration))
+        .unwrap_or(now)
 }
 
 fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -390,104 +634,54 @@ mod registry_parsing_tests {
 }
 
 #[cfg(test)]
-mod transitions_tests {
+mod tests {
     use chrono::Duration as ChronoDuration;
     use rmcp::model::ListToolsResult;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use super::{
-        run_health_check_cycle, HealthStatus, McpHealthCheckService, ServiceHealth,
-        ServiceHealthMap, STALENESS_THRESHOLD_SECS,
+        backoff_duration, run_health_check_cycle, step_service, HealthCheckerOptions,
+        HealthStateInternal, McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap,
+        ServiceModelInternal,
     };
-    use crate::lean_vocab_test::{lean_mcp_health_k1_cases, LeanMcpHealthCase};
+    use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
     use crate::mcp_pool::McpPool;
 
-    /// Project a Lean K=1 case's `rust_projection` to a `HealthStatus` for
-    /// today's Rust to assert against. `None` means the service was removed
-    /// via `registryAbsent`; tests skip those rows (Rust represents removal
-    /// by dropping the map entry, not by a `HealthStatus`).
-    fn projected_health_status(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
-        case.rust_projection.as_deref().map(|s| match s {
-            "healthy" => HealthStatus::Healthy,
-            "stale" => HealthStatus::Stale,
-            "unreachable" => HealthStatus::Unreachable,
+    fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
+        match state {
+            "healthy" => HealthStateInternal::Healthy,
+            "degraded" => HealthStateInternal::Degraded,
+            "evicted" => HealthStateInternal::Evicted,
+            "reconnecting" => HealthStateInternal::Reconnecting,
             other => panic!(
-                "Lean MCP health case {} produced unknown rust_projection {:?}",
-                case.name, other
-            ),
-        })
-    }
-
-    fn start_status(case: &LeanMcpHealthCase) -> HealthStatus {
-        match case.start_state.as_str() {
-            "healthy" => HealthStatus::Healthy,
-            // K=1 collapses: degraded can only be entered via probeSuccess(stale=true),
-            // which projects to Stale.
-            "degraded" => HealthStatus::Stale,
-            "evicted" | "reconnecting" => HealthStatus::Unreachable,
-            other => panic!(
-                "Lean MCP health case {} produced unknown start_state {:?}",
+                "Lean MCP health case {} produced unknown state {:?}",
                 case.name, other
             ),
         }
     }
 
-    async fn run_health_check_projection(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
-        const SERVICE_ID: &str = "lean-mcp-health-service";
+    fn health_state_name(state: HealthStateInternal) -> &'static str {
+        match state {
+            HealthStateInternal::Healthy => "healthy",
+            HealthStateInternal::Degraded => "degraded",
+            HealthStateInternal::Evicted => "evicted",
+            HealthStateInternal::Reconnecting => "reconnecting",
+        }
+    }
 
-        let now = chrono::Utc::now();
-        let health_map = ServiceHealthMap::new();
-        health_map
-            .set_for_test(
-                SERVICE_ID,
-                ServiceHealth {
-                    status: start_status(case),
-                    last_seen: now,
-                    last_error: None,
-                },
-            )
-            .await;
-
-        let services = match case.event.as_str() {
-            "registryAbsent" => Vec::new(),
-            "probeSuccessFresh" | "probeFail" => vec![registry_entry(SERVICE_ID, now)],
-            "probeSuccessStale" => vec![registry_entry(
-                SERVICE_ID,
-                now - ChronoDuration::seconds(STALENESS_THRESHOLD_SECS + 30),
-            )],
-            "backoffExpiry" => {
-                // At K=1 Rust does not arm a backoff timer, so there is no
-                // runtime health-check tick to drive for this Lean event. The
-                // observable production state is unchanged until Stage 2 adds
-                // K>=2 backoff behavior.
-                return Some(start_status(case));
-            }
+    fn probe_event_from_lean(case: &LeanMcpHealthCase) -> ProbeEvent {
+        match case.event.as_str() {
+            "probeSuccessFresh" => ProbeEvent::ProbeSuccess { stale: false },
+            "probeSuccessStale" => ProbeEvent::ProbeSuccess { stale: true },
+            "probeFail" => ProbeEvent::ProbeFail,
+            "backoffExpiry" => ProbeEvent::BackoffExpiry,
+            "registryAbsent" => ProbeEvent::RegistryAbsent,
             other => panic!(
                 "Lean MCP health case {} produced unknown event {:?}",
                 case.name, other
             ),
-        };
-
-        let pool = mcp_pool_for_event(&case.event);
-        run_health_check_cycle(services, now, &pool, &health_map, "local-host", None)
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "run_health_check_cycle failed for Lean MCP health case {}: {error}",
-                    case.name
-                )
-            });
-
-        health_map.get(SERVICE_ID).await.map(|health| health.status)
-    }
-
-    fn mcp_pool_for_event(event: &str) -> McpPool {
-        let probe_fails = event == "probeFail";
-        McpPool::new_with_list_tools_handler(move |_service_id, _endpoint| async move {
-            if probe_fails {
-                anyhow::bail!("Lean probeFail")
-            }
-            Ok(ListToolsResult::default())
-        })
+        }
     }
 
     fn registry_entry(
@@ -505,28 +699,217 @@ mod transitions_tests {
         }
     }
 
-    #[tokio::test]
-    async fn generated_mcp_health_k1_cases_match_health_checker_transitions() {
-        let cases = lean_mcp_health_k1_cases();
+    #[test]
+    fn generated_mcp_health_cases_match_health_checker_transitions() {
+        let cases = lean_mcp_health_cases();
         assert!(
             !cases.is_empty(),
-            "Lean must emit at least one K=1 MCP health case"
+            "Lean must emit at least one MCP health case"
         );
 
         for case in cases {
-            assert_eq!(case.threshold_k, 1, "test must only consume K=1 rows");
-            assert_eq!(
-                case.start_count, 0,
-                "K=1 Lean MCP health rows must start at failureCount=0"
-            );
+            let now = chrono::Utc::now();
+            let options = HealthCheckerOptions {
+                failure_threshold_k: case.threshold_k.try_into().unwrap(),
+                ..Default::default()
+            };
+            let start_model = ServiceModelInternal {
+                state: health_state_from_lean(case, &case.start_state),
+                failure_count: case.start_count.try_into().unwrap(),
+                backoff_until: None,
+            };
 
-            let expected = projected_health_status(case);
-            let actual = run_health_check_projection(case).await;
+            let actual = step_service(start_model, probe_event_from_lean(case), now, &options);
+            let actual_projection = actual
+                .as_ref()
+                .map(|model| model.state.project().to_string());
             assert_eq!(
-                actual, expected,
-                "Lean MCP health K=1 case {} must match Rust HealthStatus assignment",
+                actual_projection.as_deref(),
+                case.rust_projection.as_deref(),
+                "Lean MCP health case {} must match Rust HealthStatus projection",
                 case.name
             );
+
+            match (case.next_state.as_deref(), case.next_count, actual) {
+                (None, None, None) => {}
+                (Some(expected_state), Some(expected_count), Some(actual_model)) => {
+                    assert_eq!(
+                        health_state_name(actual_model.state),
+                        expected_state,
+                        "Lean MCP health case {} must match next_state",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual_model.failure_count as usize, expected_count,
+                        "Lean MCP health case {} must match next_count",
+                        case.name
+                    );
+                }
+                other => panic!(
+                    "Lean MCP health case {} produced mismatched removal/count shape: {:?}",
+                    case.name, other
+                ),
+            }
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_health_cycle_applies_k_threshold_and_backoff() {
+        const SERVICE_ID: &str = "lean-mcp-health-service";
+
+        let now = chrono::Utc::now();
+        let options = HealthCheckerOptions {
+            failure_threshold_k: 3,
+            probe_timeout: std::time::Duration::from_secs(1),
+            backoff_initial: std::time::Duration::from_secs(30),
+            backoff_max: std::time::Duration::from_secs(60),
+            ..Default::default()
+        };
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let probe_succeeds = Arc::new(AtomicBool::new(false));
+        let pool = {
+            let handler_calls = Arc::clone(&handler_calls);
+            let probe_succeeds = Arc::clone(&probe_succeeds);
+            McpPool::new_with_list_tools_handler(move |_service_id, _endpoint| {
+                let handler_calls = Arc::clone(&handler_calls);
+                let probe_succeeds = Arc::clone(&probe_succeeds);
+                async move {
+                    handler_calls.fetch_add(1, Ordering::SeqCst);
+                    if probe_succeeds.load(Ordering::SeqCst) {
+                        Ok(ListToolsResult::default())
+                    } else {
+                        anyhow::bail!("synthetic MCP health probe failure")
+                    }
+                }
+            })
+        };
+        let health_map = ServiceHealthMap::new();
+
+        for offset in 0..3 {
+            let cycle_now = now + ChronoDuration::seconds(offset);
+            run_health_check_cycle(
+                vec![registry_entry(SERVICE_ID, cycle_now)],
+                cycle_now,
+                &pool,
+                &health_map,
+                "local-host",
+                None,
+                &options,
+            )
+            .await
+            .unwrap();
+
+            let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
+            assert_eq!(entry.model.failure_count, offset as u32 + 1);
+            if offset < 2 {
+                assert_eq!(entry.health.status, super::HealthStatus::Stale);
+                assert_eq!(entry.model.backoff_until, None);
+            } else {
+                assert_eq!(entry.health.status, super::HealthStatus::Unreachable);
+                assert_eq!(
+                    entry.model.backoff_until,
+                    Some(cycle_now + ChronoDuration::seconds(30))
+                );
+            }
+        }
+
+        let calls_after_eviction = handler_calls.load(Ordering::SeqCst);
+        let during_backoff = now + ChronoDuration::seconds(12);
+        run_health_check_cycle(
+            vec![registry_entry(SERVICE_ID, during_backoff)],
+            during_backoff,
+            &pool,
+            &health_map,
+            "local-host",
+            None,
+            &options,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            handler_calls.load(Ordering::SeqCst),
+            calls_after_eviction,
+            "health checker must suppress probes while backoff is active"
+        );
+
+        let expired = now + ChronoDuration::seconds(32);
+        run_health_check_cycle(
+            vec![registry_entry(SERVICE_ID, expired)],
+            expired,
+            &pool,
+            &health_map,
+            "local-host",
+            None,
+            &options,
+        )
+        .await
+        .unwrap();
+        let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
+        assert_eq!(entry.health.status, super::HealthStatus::Unreachable);
+        assert_eq!(entry.model.failure_count, 4);
+        assert_eq!(
+            entry.model.backoff_until,
+            Some(expired + ChronoDuration::seconds(60))
+        );
+
+        probe_succeeds.store(true, Ordering::SeqCst);
+        let recovered = expired + ChronoDuration::seconds(60);
+        run_health_check_cycle(
+            vec![registry_entry(SERVICE_ID, recovered)],
+            recovered,
+            &pool,
+            &health_map,
+            "local-host",
+            None,
+            &options,
+        )
+        .await
+        .unwrap();
+        let entry = health_map.get_entry(SERVICE_ID).await.unwrap();
+        assert_eq!(entry.health.status, super::HealthStatus::Healthy);
+        assert_eq!(entry.model.failure_count, 0);
+        assert_eq!(entry.model.backoff_until, None);
+
+        assert_eq!(
+            backoff_duration(0, &options),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            backoff_duration(1, &options),
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            backoff_duration(9, &options),
+            std::time::Duration::from_secs(60)
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_health_cycle_drops_registry_absent_services() {
+        let now = chrono::Utc::now();
+        let health_map = ServiceHealthMap::new();
+        health_map
+            .set_for_test(
+                "removed-service",
+                ServiceHealth {
+                    status: super::HealthStatus::Healthy,
+                    last_seen: now,
+                    last_error: None,
+                },
+            )
+            .await;
+
+        run_health_check_cycle(
+            Vec::new(),
+            now,
+            &McpPool::new(),
+            &health_map,
+            "local-host",
+            None,
+            &HealthCheckerOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert!(health_map.get("removed-service").await.is_none());
     }
 }

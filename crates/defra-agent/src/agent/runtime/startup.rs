@@ -81,6 +81,7 @@ pub(in crate::agent) async fn run_agent(
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
         cancel.child_token(),
+        agent.health_checker_options.clone(),
     );
 
     log_recovery(

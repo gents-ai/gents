@@ -77,8 +77,8 @@ pub use document_config::{
     ToolSelectionDocument,
 };
 pub use health_checker::{
-    run_health_check_cycle, spawn_health_checker, HealthStatus, McpHealthCheckService,
-    ServiceHealth, ServiceHealthMap,
+    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthStatus,
+    McpHealthCheckService, ServiceHealth, ServiceHealthMap,
 };
 pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{
