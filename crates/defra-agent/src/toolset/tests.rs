@@ -866,6 +866,16 @@ fn read_only_bash_rejects_codex_style_unsafe_flags() {
         &allowlist,
     )
     .is_err());
+    assert!(validate_read_only_command(
+        "sed",
+        &[
+            String::from("--in-place=.bak"),
+            String::from("s/a/b/g"),
+            String::from("README.md"),
+        ],
+        &allowlist,
+    )
+    .is_err());
 }
 
 #[test]
