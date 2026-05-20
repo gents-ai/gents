@@ -84,6 +84,8 @@ fn schedule_view(schedule_id: &str, task_id: &str) -> ScheduleView {
     }
 }
 
+#[path = "tests/mcp_health.rs"]
+mod mcp_health;
 #[path = "tests/runtime.rs"]
 mod runtime;
 #[path = "tests/session_basic.rs"]

@@ -189,6 +189,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::snapshot::tests::mcp_health::mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/mcp_health.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::snapshot::tests::mcp_health",
+            function: "mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/hook/tests.rs",
