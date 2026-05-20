@@ -19,15 +19,36 @@ pub struct MockChatEndpoint {
     pub handle: Option<JoinHandle<()>>,
 }
 
+enum MockChatCompletion {
+    Complete(String),
+    Hang,
+}
+
 impl MockChatEndpoint {
     pub fn start(model_name: &str, final_text: &str) -> Result<Self> {
         Self::start_with_required_bearer(model_name, final_text, None)
+    }
+
+    pub fn start_hanging(model_name: &str) -> Result<Self> {
+        Self::start_with_completion(model_name, None, MockChatCompletion::Hang)
     }
 
     pub fn start_with_required_bearer(
         model_name: &str,
         final_text: &str,
         required_bearer: Option<&str>,
+    ) -> Result<Self> {
+        Self::start_with_completion(
+            model_name,
+            required_bearer,
+            MockChatCompletion::Complete(final_text.to_string()),
+        )
+    }
+
+    fn start_with_completion(
+        model_name: &str,
+        required_bearer: Option<&str>,
+        completion: MockChatCompletion,
     ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock chat port")?;
         listener
@@ -40,7 +61,6 @@ impl MockChatEndpoint {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
         let model_name = model_name.to_string();
-        let final_text = final_text.to_string();
         let required_bearer = required_bearer.map(ToOwned::to_owned);
         let captured_chat_requests = Arc::new(Mutex::new(Vec::new()));
         let captured_chat_requests_for_thread = captured_chat_requests.clone();
@@ -111,12 +131,21 @@ impl MockChatEndpoint {
                                     .expect("captured chat request mutex poisoned")
                                     .push(request_json);
 
-                                let _ = write_http_response(
-                                    &mut stream,
-                                    "200 OK",
-                                    "text/event-stream",
-                                    &completion_text_sse(&final_text),
-                                );
+                                match &completion {
+                                    MockChatCompletion::Complete(final_text) => {
+                                        let _ = write_http_response(
+                                            &mut stream,
+                                            "200 OK",
+                                            "text/event-stream",
+                                            &completion_text_sse(final_text),
+                                        );
+                                    }
+                                    MockChatCompletion::Hang => {
+                                        while !stop_for_thread.load(Ordering::Relaxed) {
+                                            thread::sleep(Duration::from_millis(25));
+                                        }
+                                    }
+                                }
                             }
                             _ => {
                                 let _ = write_http_response(

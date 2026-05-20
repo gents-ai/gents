@@ -203,6 +203,55 @@ pub async fn wait_for_request(
     }
 }
 
+pub async fn wait_for_request_lifecycle_state(
+    graphql: &str,
+    request_id: &str,
+    expected_states: &[&str],
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    let mut last_row = None::<Value>;
+    loop {
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{}" }} }},
+                    limit: 1
+                ) {{
+                    request_id
+                    status
+                    lifecycle_state
+                    interrupt_requested_at
+                    failure_reason
+                }}
+            }}"#,
+            escape_graphql_string(request_id),
+        );
+        let response = graphql_query(graphql, &query).await?;
+        if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
+            last_row = Some(row.clone());
+            let lifecycle_state = row
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if expected_states.contains(&lifecycle_state) {
+                return Ok(row.clone());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for request {request_id} lifecycle_state in {:?}; last row={}",
+                expected_states,
+                last_row
+                    .map(|row| row.to_string())
+                    .unwrap_or_else(|| "null".to_string())
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 pub async fn insert_terminal_response(
     graphql: &str,
     request_id: &str,
