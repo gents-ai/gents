@@ -87,7 +87,11 @@ export function ChatTranscriptPanel({
     >
       {selectedSessionId && session ? (
         <div className="message-list">
-          <MessageList timelineItems={session.timelineItems} />
+          <MessageList
+            timelineItems={session.timelineItems}
+            responseCancelCause={session.latestResponse?.cancelCause}
+            responseMaterializedSequence={session.latestResponse?.materializedMessageSequence}
+          />
           <div className="transcript-end-anchor" ref={transcriptEndRef} />
         </div>
       ) : (

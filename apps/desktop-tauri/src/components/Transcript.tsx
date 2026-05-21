@@ -7,6 +7,7 @@ import type {
   RenderedToolCallView,
   ToolDetailValueView,
 } from "../lib/types";
+import type { DerivedCancelCauseView } from "../lib/types/operations";
 import { CancelCauseBadge, CancelCauseDetails } from "./cancelUx";
 import { CommandDenialToolItem } from "./commandDenial";
 
@@ -146,12 +147,13 @@ function ReasoningDisclosure({
 
 export function MessageList({
   timelineItems,
+  responseCancelCause,
+  responseMaterializedSequence,
 }: {
   timelineItems: RenderedTimelineItem[];
+  responseCancelCause?: DerivedCancelCauseView | null;
+  responseMaterializedSequence?: number | null;
 }) {
-  // TODO(#277-followup): surface CancelCauseBadge on interrupted assistant turns
-  // when the response cancelCause is wired through to MessageList. For now,
-  // only tool-call cancellations carry the badge.
   return (
     <>
       {timelineItems.map((item) => {
@@ -175,10 +177,22 @@ export function MessageList({
             if (!normalizedContent && !normalizedReasoning) {
               return null;
             }
+            const showBadge =
+              responseCancelCause != null &&
+              item.sequence != null &&
+              item.sequence === responseMaterializedSequence;
             return (
               <div className="turn-block" key={item.itemKey}>
                 <article className="message-card">
-                  <div className="message-role">assistant</div>
+                  <div className="message-role">
+                    assistant
+                    {showBadge ? (
+                      <CancelCauseBadge
+                        cause={responseCancelCause}
+                        className="assistant-turn-cause-badge"
+                      />
+                    ) : null}
+                  </div>
                   {normalizedContent ? (
                     <div className="message-content">
                       <MarkdownContent value={normalizedContent} />
@@ -216,7 +230,15 @@ export function MessageList({
             }
             return (
               <article className="message-card" key={item.itemKey}>
-                <div className="message-role">assistant</div>
+                <div className="message-role">
+                  assistant
+                  {responseCancelCause != null ? (
+                    <CancelCauseBadge
+                      cause={responseCancelCause}
+                      className="assistant-turn-cause-badge"
+                    />
+                  ) : null}
+                </div>
                 {overlayContent ? (
                   <div className="message-content">
                     <MarkdownContent value={overlayContent} />
