@@ -98,11 +98,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 .map(|r| RequestEvidence {
                     request_id: r.request_id.clone(),
                     interrupt_requested_at: r.interrupt_requested_at.clone(),
-                    // TODO(#277-followup): AgentRequestRow has no
-                    // caused_by_parent_request_id (subagent lineage) field.
-                    // retry_parent_request is a different semantic and would
-                    // misclassify retries as cascade-interrupted, so leave None.
-                    caused_by_parent_request_id: None,
+                    caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
                     deadline_breached: false,
                 })
                 .unwrap_or_default();
@@ -204,11 +200,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         .map(|r| RequestEvidence {
             request_id: r.request_id.clone(),
             interrupt_requested_at: r.interrupt_requested_at.clone(),
-            // TODO(#277-followup): AgentRequestRow has no
-            // caused_by_parent_request_id (subagent lineage) field.
-            // retry_parent_request is a different semantic and would
-            // misclassify retries as cascade-interrupted, so leave None.
-            caused_by_parent_request_id: None,
+            caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
             deadline_breached: false,
         })
         .unwrap_or_default();
@@ -220,10 +212,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
                 lifecycle_state: row.lifecycle_state.clone(),
                 deadline_at: row.deadline_at.clone(),
-                // TODO(#277-followup): cancel_policy not on AgentToolCallRow yet — see follow-up
-                // for promoting that field through the protocol crate so tool-call
-                // interrupted-via-cascade can be derived from snapshot data.
-                cancel_policy: None,
+                cancel_policy: row.cancel_policy.clone(),
                 completed_at: row.completed_at.clone(),
                 timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
             };
