@@ -139,7 +139,8 @@ const RULES: Rule[] = [
   },
   {
     // command.rs:404 — tailscale ping/netcheck + disabled network
-    pattern: /^tailscale network probes are not allowed when command_network_mode=disabled$/,
+    pattern:
+      /^tailscale network probes are not allowed when command_network_mode=disabled$/,
     build: (_m, diagnostic) => ({
       category: "network-denied",
       categoryLabel: "Network access denied",
@@ -151,7 +152,8 @@ const RULES: Rule[] = [
   },
   {
     // command.rs:424 — workspace_write sandbox unavailable (macOS sandbox-exec missing)
-    pattern: /^macOS sandbox-exec is required for workspace_write bash but was not found$/,
+    pattern:
+      /^macOS sandbox-exec is required for workspace_write bash but was not found$/,
     build: (_m, diagnostic) => ({
       category: "sandbox-violation",
       categoryLabel: "Sandbox violation",
@@ -163,7 +165,8 @@ const RULES: Rule[] = [
   },
   {
     // command.rs:426 + :492 — workspace_write needs seatbelt enforcement
-    pattern: /^workspace_write bash requires macOS seatbelt sandbox enforcement on this build$/,
+    pattern:
+      /^workspace_write bash requires macOS seatbelt sandbox enforcement on this build$/,
     build: (_m, diagnostic) => ({
       category: "sandbox-violation",
       categoryLabel: "Sandbox violation",
@@ -217,7 +220,8 @@ const RULES: Rule[] = [
   },
   {
     // command.rs:591 — curl missing http(s) URL
-    pattern: /^curl requires an http:\/\/ or https:\/\/ URL in the read-only bash tool$/,
+    pattern:
+      /^curl requires an http:\/\/ or https:\/\/ URL in the read-only bash tool$/,
     build: (_m, diagnostic) => ({
       category: "read-only-guard",
       categoryLabel: "Read-only guard",
@@ -255,7 +259,8 @@ const RULES: Rule[] = [
   },
   {
     // command.rs:622 — git global options
-    pattern: /^git global options that redirect config or helper lookup are not allowed$/,
+    pattern:
+      /^git global options that redirect config or helper lookup are not allowed$/,
     build: (_m, diagnostic) => ({
       category: "read-only-guard",
       categoryLabel: "Read-only guard",
@@ -328,8 +333,7 @@ const RULES: Rule[] = [
       category: "forbidden-prefix",
       categoryLabel: "Forbidden prefix",
       ruleId: "forbiddenPrefix",
-      reasonLine:
-        "argv begins with a forbidden prefix configured on this behavior.",
+      reasonLine: "argv begins with a forbidden prefix configured on this behavior.",
       deniedCommand: m[1].trim().split(/\s+/)[0],
       diagnostic,
     }),
@@ -376,6 +380,4 @@ export function parseCommandDenial(
 }
 
 /** All rule patterns, for tests / drift detection. */
-export const COMMAND_DENIAL_RULES: ReadonlyArray<RegExp> = RULES.map(
-  (r) => r.pattern,
-);
+export const COMMAND_DENIAL_RULES: ReadonlyArray<RegExp> = RULES.map((r) => r.pattern);

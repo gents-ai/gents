@@ -32,10 +32,7 @@ const deployment: DeploymentView = {
   inferenceProfiles: [],
   toolSelections: [],
   toolServiceRegistries: [],
-  tasks: [
-    task("freshness", "Freshness check"),
-    task("drift", "Drift report"),
-  ],
+  tasks: [task("freshness", "Freshness check"), task("drift", "Drift report")],
   schedules: [],
   eventTriggers: [],
   conversations: [],

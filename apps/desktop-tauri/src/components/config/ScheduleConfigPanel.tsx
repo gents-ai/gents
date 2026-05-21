@@ -163,7 +163,9 @@ export function ScheduleConfigEditor({
               }
             }}
             readOnly={Boolean(schedule)}
-            title={schedule ? "Schedule IDs cannot be renamed after creation." : undefined}
+            title={
+              schedule ? "Schedule IDs cannot be renamed after creation." : undefined
+            }
             value={scheduleId}
           />
         </label>

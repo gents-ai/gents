@@ -19,9 +19,7 @@ export type ToolServiceConfigPanelProps = {
   onSelectToolService: (serviceId: string) => void;
   onCreateToolService: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveToolServiceConfig: (
-    request: ToolServiceSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -87,9 +85,7 @@ export type ToolServiceConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (serviceId: string) => void;
-  onSaveToolServiceConfig: (
-    request: ToolServiceSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -113,9 +109,7 @@ export function ToolServiceConfigEditor({
   const [mcpPath, setMcpPath] = useState("/mcp");
   const [status, setStatus] = useState("online");
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(
-    null,
-  );
+  const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -125,9 +119,7 @@ export function ToolServiceConfigEditor({
     setHostname(toolService?.hostname ?? "");
     setTailscaleIp(toolService?.tailscaleIp ?? "");
     setLanIp(toolService?.lanIp ?? "");
-    setMcpPort(
-      toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
-    );
+    setMcpPort(toolService?.mcpPort != null ? String(toolService.mcpPort) : "");
     setMcpPath(toolService?.mcpPath ?? "/mcp");
     setStatus(toolService?.status ?? "online");
     setTestResult(null);
@@ -339,7 +331,10 @@ export function ToolServiceConfigEditor({
         </div>
       ) : null}
       {testError ? (
-        <div className="config-result config-result-error" data-testid="tool-service-test-error">
+        <div
+          className="config-result config-result-error"
+          data-testid="tool-service-test-error"
+        >
           {testError}
         </div>
       ) : null}

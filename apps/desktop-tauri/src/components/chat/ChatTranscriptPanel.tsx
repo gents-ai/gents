@@ -27,10 +27,7 @@ export function ChatTranscriptPanel({
             switch (item.kind) {
               case "assistantMessage":
               case "liveAssistant":
-                return [
-                  item.content?.length ?? 0,
-                  item.reasoning?.length ?? 0,
-                ];
+                return [item.content?.length ?? 0, item.reasoning?.length ?? 0];
               case "userMessage":
               case "pendingUserTurn":
                 return item.content.length;
@@ -101,7 +98,9 @@ export function ChatTranscriptPanel({
           <MessageList
             timelineItems={session.timelineItems}
             responseCancelCause={session.latestResponse?.cancelCause}
-            responseMaterializedSequence={session.latestResponse?.materializedMessageSequence}
+            responseMaterializedSequence={
+              session.latestResponse?.materializedMessageSequence
+            }
           />
           {showResponseError ? (
             <div className="turn-block">

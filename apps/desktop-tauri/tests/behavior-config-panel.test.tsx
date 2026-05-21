@@ -58,7 +58,8 @@ const toolSelections: ToolSelectionView[] = [
 
 describe("BehaviorConfigEditor", () => {
   it("saves explicit compaction defaults onto the selected behavior", async () => {
-    const onSaveAgentConfig = vi.fn<[(request: AgentConfigSaveRequest) => Promise<unknown>]>();
+    const onSaveAgentConfig =
+      vi.fn<[(request: AgentConfigSaveRequest) => Promise<unknown>]>();
     const onSaveBehaviorConfig = vi.fn<
       [(request: BehaviorSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve());

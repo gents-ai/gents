@@ -44,15 +44,11 @@ type TauriInternalsWindow = Window & {
 function hasTauriInvokeBridge() {
   return (
     typeof window !== "undefined" &&
-    typeof (window as TauriInternalsWindow).__TAURI_INTERNALS__?.invoke ===
-      "function"
+    typeof (window as TauriInternalsWindow).__TAURI_INTERNALS__?.invoke === "function"
   );
 }
 
-function invokeDesktop<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasTauriInvokeBridge()) {
     return Promise.reject(
       new Error(
@@ -88,19 +84,10 @@ export type DesktopApiAdapter = {
     sessionId?: string | null;
     content: string;
   }) => Promise<ChatSendResult>;
-  renameConversation: (request: {
-    sessionId: string;
-    title: string;
-  }) => Promise<void>;
-  saveAgentConfig: (
-    request: AgentConfigSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  saveBehaviorConfig: (
-    request: BehaviorSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  saveBackendConfig: (
-    request: BackendSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
+  renameConversation: (request: { sessionId: string; title: string }) => Promise<void>;
+  saveAgentConfig: (request: AgentConfigSaveRequest) => Promise<DesktopClientSnapshot>;
+  saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
+  saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -110,13 +97,9 @@ export type DesktopApiAdapter = {
   saveToolServiceConfig: (
     request: ToolServiceSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
-  testToolService: (
-    request: ToolServiceTestRequest,
-  ) => Promise<ToolServiceTestResult>;
+  testToolService: (request: ToolServiceTestRequest) => Promise<ToolServiceTestResult>;
   saveTaskConfig: (request: TaskSaveRequest) => Promise<DesktopClientSnapshot>;
-  saveScheduleConfig: (
-    request: ScheduleSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
+  saveScheduleConfig: (request: ScheduleSaveRequest) => Promise<DesktopClientSnapshot>;
   runSchedule: (request: ScheduleRunRequest) => Promise<TaskRunResult>;
   saveEventTriggerConfig: (
     request: EventTriggerSaveRequest,
@@ -248,16 +231,19 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
     });
   },
   fetchOperationsSnapshot(request) {
-    return invokeDesktop<DesktopOperationsSnapshot>(
-      "desktop_operations_snapshot",
-      { request },
-    );
+    return invokeDesktop<DesktopOperationsSnapshot>("desktop_operations_snapshot", {
+      request,
+    });
   },
   previewInterruptCascade(request) {
-    return invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", { request });
+    return invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", {
+      request,
+    });
   },
   interruptRequest(request) {
-    return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", { request });
+    return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", {
+      request,
+    });
   },
 };
 
@@ -343,15 +329,11 @@ export async function saveBackendConfig(request: BackendSaveRequest) {
   return desktopApiAdapter().saveBackendConfig(request);
 }
 
-export async function saveInferenceProfileConfig(
-  request: InferenceProfileSaveRequest,
-) {
+export async function saveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
   return desktopApiAdapter().saveInferenceProfileConfig(request);
 }
 
-export async function saveToolSelectionConfig(
-  request: ToolSelectionSaveRequest,
-) {
+export async function saveToolSelectionConfig(request: ToolSelectionSaveRequest) {
   return desktopApiAdapter().saveToolSelectionConfig(request);
 }
 
@@ -375,9 +357,7 @@ export async function runSchedule(request: ScheduleRunRequest) {
   return desktopApiAdapter().runSchedule(request);
 }
 
-export async function saveEventTriggerConfig(
-  request: EventTriggerSaveRequest,
-) {
+export async function saveEventTriggerConfig(request: EventTriggerSaveRequest) {
   return desktopApiAdapter().saveEventTriggerConfig(request);
 }
 

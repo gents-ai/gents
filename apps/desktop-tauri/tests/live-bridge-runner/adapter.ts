@@ -37,14 +37,11 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
     repairP2P: async () =>
       runner.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
     fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>
-      runner.postJson<DesktopSessionSnapshot | null>(
-        "/desktop/session/snapshot",
-        {
-          sessionId,
-          agentDid: agentDid ?? null,
-          requestId: requestId ?? null,
-        },
-      ),
+      runner.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
+        sessionId,
+        agentDid: agentDid ?? null,
+        requestId: requestId ?? null,
+      }),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
         agentDid: request.agentDid,
@@ -75,15 +72,9 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
         request,
       ),
     saveToolSelectionConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>(
-        "/desktop/tool-selection/save",
-        request,
-      ),
+      runner.postJson<DesktopClientSnapshot>("/desktop/tool-selection/save", request),
     saveToolServiceConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>(
-        "/desktop/tool-service/save",
-        request,
-      ),
+      runner.postJson<DesktopClientSnapshot>("/desktop/tool-service/save", request),
     testToolService: async (request) =>
       runner.postJson("/desktop/tool-service/test", request),
     saveTaskConfig: async (request) =>
@@ -99,27 +90,15 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
       return result;
     },
     saveEventTriggerConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>(
-        "/desktop/event-trigger/save",
-        request,
-      ),
+      runner.postJson<DesktopClientSnapshot>("/desktop/event-trigger/save", request),
     runTask: async (request) => {
-      const result = await runner.postJson<TaskRunResult>(
-        "/desktop/task/run",
-        request,
-      );
+      const result = await runner.postJson<TaskRunResult>("/desktop/task/run", request);
       runner.taskRunResults.push(result);
       return result;
     },
     previewInterruptCascade: async (request) =>
-      runner.postJson<CascadeCancelPreview>(
-        "/desktop/interrupt/preview",
-        request,
-      ),
+      runner.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
-      runner.postJson<InterruptRequestResult>(
-        "/desktop/interrupt/request",
-        request,
-      ),
+      runner.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
   };
 }

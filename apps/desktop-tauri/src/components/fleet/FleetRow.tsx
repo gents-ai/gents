@@ -6,7 +6,13 @@ import {
   displayGraphqlEndpoint,
 } from "../../lib/types";
 import { ChatIcon, ConfigIcon, RepairIcon, ToolIconGlyph } from "./FleetIcons";
-import { deploymentStatus, formatRelativeTime, inferenceBackendTitle, toolCeilingIcons, type ToolIcon } from "./fleetMetrics";
+import {
+  deploymentStatus,
+  formatRelativeTime,
+  inferenceBackendTitle,
+  toolCeilingIcons,
+  type ToolIcon,
+} from "./fleetMetrics";
 
 export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
@@ -60,10 +66,7 @@ export function FleetRow({
     <tr data-testid={`fleet-row-${deployment.peerId}`}>
       <td>
         <div className="fleet-agent-cell">
-          <span
-            className={`fleet-status-dot ${status.tone}`}
-            title={status.title}
-          />
+          <span className={`fleet-status-dot ${status.tone}`} title={status.title} />
           <div className="fleet-agent-copy">
             <button
               className="fleet-agent-name"
@@ -112,9 +115,7 @@ export function FleetRow({
       <td>
         <Metric title="Processing conversations" value={openWorkCount} />
       </td>
-      <td title="Last desktop P2P health probe">
-        {formatRelativeTime(p2pLastUpdate)}
-      </td>
+      <td title="Last desktop P2P health probe">{formatRelativeTime(p2pLastUpdate)}</td>
       <td className="fleet-actions-cell">
         <div className="fleet-row-actions">
           <button

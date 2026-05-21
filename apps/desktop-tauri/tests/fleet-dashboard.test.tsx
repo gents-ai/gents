@@ -10,8 +10,7 @@ describe("FleetDashboard add connection flow", () => {
       agent_did: "did:key:z6MkWorkerA",
       desktop_graphql: "http://127.0.0.1:9181/api/v0/graphql",
       p2p: {
-        p2p_shareable_address:
-          "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
+        p2p_shareable_address: "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
       },
     }));
     const onAddPeer = vi.fn(async () => undefined);

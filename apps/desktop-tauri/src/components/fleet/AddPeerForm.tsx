@@ -98,10 +98,7 @@ export function AddPeerForm({
   }
 
   return (
-    <form
-      className="fleet-add-form"
-      onSubmit={(event) => void handleSubmit(event)}
-    >
+    <form className="fleet-add-form" onSubmit={(event) => void handleSubmit(event)}>
       <div className="fleet-discovery-row">
         <label className="field">
           <span>Server address</span>
@@ -212,9 +209,9 @@ export function AddPeerForm({
             ? "Fetching..."
             : addingPeer
               ? "Adding..."
-            : disabled
-              ? "Preparing..."
-              : "Add Agent Connection"}
+              : disabled
+                ? "Preparing..."
+                : "Add Agent Connection"}
         </button>
       </div>
     </form>

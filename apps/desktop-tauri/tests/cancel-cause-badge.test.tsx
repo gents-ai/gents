@@ -19,7 +19,7 @@ const deadline: DerivedCancelCauseView = {
   source: "toolLifecycle",
   confidence: "derived",
   at: "2026-05-20T10:35:02Z",
-  evidence: ["AgentToolCall.lifecycle_state = \"timedOut\""],
+  evidence: ['AgentToolCall.lifecycle_state = "timedOut"'],
 };
 
 const unknown: DerivedCancelCauseView = {
@@ -71,7 +71,9 @@ describe("CancelCauseDetails", () => {
 
   it("renders each evidence line as its own dd", () => {
     render(<CancelCauseDetails cause={userCancelled} />);
-    expect(screen.getByText(/interrupt_requested_at = 2026-05-20T10:32:14Z/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/interrupt_requested_at = 2026-05-20T10:32:14Z/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/no parent cascade/)).toBeInTheDocument();
   });
 

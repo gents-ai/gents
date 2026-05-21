@@ -69,9 +69,7 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function onRunSchedule(
-    request: ScheduleRunRequest,
-  ): Promise<TaskRunResult> {
+  async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
     setRunningTask(true);
     setError(null);
     try {

@@ -1,7 +1,7 @@
-use super::*;
 use super::super::super::types::{
     ActiveToolCallView, NativeExecutorStatusView, RuntimeLivenessView,
 };
+use super::*;
 
 fn liveness_with(
     tools: Vec<ActiveToolCallView>,
@@ -49,7 +49,8 @@ fn project_filters_to_background_await_mode_only() {
         },
     ];
 
-    let projected = project_backgrounded_tools(&toolcall_rows, &liveness_with(Vec::new(), Vec::new()));
+    let projected =
+        project_backgrounded_tools(&toolcall_rows, &liveness_with(Vec::new(), Vec::new()));
     assert_eq!(projected.len(), 1);
     assert_eq!(projected[0].tool_call_id, "tc_bg");
 }

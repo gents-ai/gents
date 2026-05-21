@@ -88,10 +88,7 @@ export function AgentConfigEditor({
   }
 
   return (
-    <form
-      className="panel config-editor agent-config-editor"
-      onSubmit={submitAgent}
-    >
+    <form className="panel config-editor agent-config-editor" onSubmit={submitAgent}>
       <div className="panel-header agent-config-header">
         <div>
           <p className="eyebrow">Agent</p>

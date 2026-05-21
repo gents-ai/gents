@@ -9,10 +9,7 @@ import type {
   DesktopSessionSnapshot,
   TaskRunResult,
 } from "../src/lib/types";
-import type {
-  TauriDriverBridge,
-  TauriDriverChatRequest,
-} from "./tauri-driver";
+import type { TauriDriverBridge, TauriDriverChatRequest } from "./tauri-driver";
 import {
   isTerminalTurnState,
   observeRemoteAheadDesktopLag,
@@ -85,10 +82,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
         lastVersion = await this.fetchVersion();
       } catch (error) {
         if (!this.exitStatus) {
-          this.pushLogChunk(
-            this.stderrChunks,
-            `[listener:init] ${String(error)}\n`,
-          );
+          this.pushLogChunk(this.stderrChunks, `[listener:init] ${String(error)}\n`);
         }
       }
       const timer = setInterval(async () => {
@@ -104,10 +98,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
           }
         } catch (error) {
           if (!disposed && !this.exitStatus) {
-            this.pushLogChunk(
-              this.stderrChunks,
-              `[listener] ${String(error)}\n`,
-            );
+            this.pushLogChunk(this.stderrChunks, `[listener] ${String(error)}\n`);
           }
         } finally {
           inFlight = false;
@@ -136,19 +127,15 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     appendRunnerArg(runnerArgs, "--provider", options.provider);
     appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
     appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
-    const child = spawn(
-      "cargo",
-      runnerArgs,
-      {
-        cwd: REPO_ROOT,
-        env: {
-          ...process.env,
-          CARGO_NET_GIT_FETCH_WITH_CLI:
-            process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
-        },
-        stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn("cargo", runnerArgs, {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        CARGO_NET_GIT_FETCH_WITH_CLI:
+          process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
       },
-    );
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 
     const { message, stdout, stderr } = await waitForReadyMessage(
       child,
@@ -198,9 +185,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
           desktop: diagnostics.desktop,
           remote: diagnostics.remote,
         });
-        const desktopProgressSignature = requestProgressSignature(
-          diagnostics.desktop,
-        );
+        const desktopProgressSignature = requestProgressSignature(diagnostics.desktop);
         const desktopProgressed =
           desktopProgressSignature !== lastDesktopProgressSignature;
         if (desktopProgressed) {
@@ -219,8 +204,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
           previousStartedAt: remoteTerminalDesktopStallStartedAt,
           now: Date.now(),
         });
-        remoteTerminalDesktopStallStartedAt =
-          remoteTerminalDesktopStall.startedAt;
+        remoteTerminalDesktopStallStartedAt = remoteTerminalDesktopStall.startedAt;
         if (remoteTerminalDesktopStall.exceededThreshold) {
           throw new Error(
             `desktop stalled after remote terminal response for request ${request.requestId}; stallMs=${remoteTerminalDesktopStall.stallMs ?? 0}; diagnostics=${JSON.stringify({ desktop: diagnostics.desktop, remote: diagnostics.remote })}; runnerStdoutTail=${JSON.stringify(this.logTail(this.stdoutChunks))}; runnerStderrTail=${JSON.stringify(this.logTail(this.stderrChunks))}`,
@@ -317,10 +301,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     return this.decodeJson<T>(response);
   }
 
-  async fetchRequestDiagnostics(
-    sessionId: string,
-    requestId: string,
-  ) {
+  async fetchRequestDiagnostics(sessionId: string, requestId: string) {
     return await this.postJson<RequestDiagnosticsBundle>(
       "/desktop/request/diagnostics",
       {

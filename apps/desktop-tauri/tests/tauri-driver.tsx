@@ -177,7 +177,9 @@ export function renderTauriAppDriverWithBridge(
     async confirmCascade() {
       const dialog = this.cascadeDialog();
       if (!dialog) throw new Error("cascade dialog not open");
-      const confirm = screen.getByRole("button", { name: /interrupt parent and cascade/i });
+      const confirm = screen.getByRole("button", {
+        name: /interrupt parent and cascade/i,
+      });
       await this.user.click(confirm);
     },
     async dispose() {

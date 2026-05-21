@@ -114,16 +114,12 @@ export function InferenceProfileConfigEditor({
       profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
     );
     setMaxTurns(profile?.maxTurns != null ? String(profile.maxTurns) : "");
-    setTemperature(
-      profile?.temperature != null ? String(profile.temperature) : "",
-    );
+    setTemperature(profile?.temperature != null ? String(profile.temperature) : "");
     setStreamBatchMs(
       profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
     );
     setDeadlineSecs(
-      profile?.deadlineDurationSecs != null
-        ? String(profile.deadlineDurationSecs)
-        : "",
+      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
     );
   }, [profile]);
 
@@ -168,7 +164,9 @@ export function InferenceProfileConfigEditor({
               }
             }}
             readOnly={Boolean(profile)}
-            title={profile ? "Profile IDs cannot be renamed after creation." : undefined}
+            title={
+              profile ? "Profile IDs cannot be renamed after creation." : undefined
+            }
             value={profileId}
           />
         </label>

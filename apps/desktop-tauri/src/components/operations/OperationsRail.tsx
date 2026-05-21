@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
 import {
   OperationsRailContext,
@@ -75,10 +69,7 @@ export function OperationsRail({
 
   if (!open) {
     return (
-      <aside
-        className="operations-rail is-collapsed"
-        aria-label="Operations"
-      >
+      <aside className="operations-rail is-collapsed" aria-label="Operations">
         <button
           type="button"
           className="operations-rail-collapsed-button"

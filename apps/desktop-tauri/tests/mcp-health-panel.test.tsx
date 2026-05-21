@@ -4,7 +4,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { McpHealthPanelView } from "../src/components/mcpHealth";
 import type { MCPServiceHealthView } from "../src/lib/types";
 
-function svc(overrides: Partial<MCPServiceHealthView> & { serviceId: string }): MCPServiceHealthView {
+function svc(
+  overrides: Partial<MCPServiceHealthView> & { serviceId: string },
+): MCPServiceHealthView {
   // Use "in" rather than `??` so an explicit `null` override survives — the
   // unknown-status case is tested by passing `status: null`.
   const pick = <K extends keyof MCPServiceHealthView>(
@@ -183,9 +185,7 @@ describe("McpHealthPanelView", () => {
         onRefresh={vi.fn()}
       />,
     );
-    expect(
-      screen.getByText(/No MCP services registered/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/No MCP services registered/i)).toBeInTheDocument();
   });
 
   it("expands a row to the detail panel on click and collapses on Escape", () => {

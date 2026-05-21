@@ -64,9 +64,10 @@ function shortenDid(did?: string | null): string {
   return `${did.slice(0, 20)}…${did.slice(-4)}`;
 }
 
-function buildTree(
-  view: SubagentTreeView,
-): { root: RequestNode | null; deployments: string[] } {
+function buildTree(view: SubagentTreeView): {
+  root: RequestNode | null;
+  deployments: string[];
+} {
   const nodeMap = new Map<string, SubagentNodeView>();
   for (const node of view.nodes) {
     nodeMap.set(node.requestId, node);
@@ -109,7 +110,11 @@ function subtreeHasSurvivor(
   state: FilterState,
 ): boolean {
   const passes = nodePasses(node, depth, state);
-  if (passes && (state.deployments.size === 0 || (node.node.agentDid && state.deployments.has(node.node.agentDid)))) {
+  if (
+    passes &&
+    (state.deployments.size === 0 ||
+      (node.node.agentDid && state.deployments.has(node.node.agentDid)))
+  ) {
     return true;
   }
   for (const tool of node.children) {
@@ -158,14 +163,16 @@ function flattenTreeOrder(root: RequestNode | null, expanded: Set<string>): AnyN
   return out;
 }
 
-export function SubagentLineageView({ rootRequestId, agentDid }: SubagentLineageViewProps) {
+export function SubagentLineageView({
+  rootRequestId,
+  agentDid,
+}: SubagentLineageViewProps) {
   const [tree, setTree] = useState<SubagentTreeView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [depthFilter, setDepthFilter] =
-    useState<FilterState["depth"]>("all");
+  const [depthFilter, setDepthFilter] = useState<FilterState["depth"]>("all");
   const [liveOnly, setLiveOnly] = useState(false);
   const [deploymentFilter, setDeploymentFilter] = useState<Set<string>>(new Set());
 
@@ -190,7 +197,9 @@ export function SubagentLineageView({ rootRequestId, agentDid }: SubagentLineage
         const next = new Set<string>();
         for (const node of value.nodes) next.add(`req:${node.requestId}`);
         for (const edge of value.edges) {
-          next.add(`tool:${edge.parentToolCallId ?? `${edge.parentRequestId}->${edge.childRequestId}`}`);
+          next.add(
+            `tool:${edge.parentToolCallId ?? `${edge.parentRequestId}->${edge.childRequestId}`}`,
+          );
         }
         setExpanded(next);
       })
@@ -352,7 +361,11 @@ export function SubagentLineageView({ rootRequestId, agentDid }: SubagentLineage
         </div>
       </header>
 
-      <div className="subagent-lineage-filters" role="toolbar" aria-label="Lineage filters">
+      <div
+        className="subagent-lineage-filters"
+        role="toolbar"
+        aria-label="Lineage filters"
+      >
         <span className="subagent-lineage-filter-label">Depth</span>
         {(["all", 0, 1, 2, 3] as const).map((value) => (
           <button
@@ -483,9 +496,7 @@ function SubagentTreeRow({
       className="subagent-lineage-tree-item"
     >
       <div
-        className={
-          "subagent-lineage-row" + (isSelected ? " is-selected" : "")
-        }
+        className={"subagent-lineage-row" + (isSelected ? " is-selected" : "")}
         data-node-id={id}
         tabIndex={isSelected ? 0 : -1}
         onClick={() => onSelect(node, false)}
@@ -537,43 +548,41 @@ function SubagentTreeRow({
             {node.kind === "req" ? "req" : "tool"}
           </span>
           <span className="subagent-lineage-id">
-            {node.kind === "req" ? node.node.requestId : node.edge.parentToolCallId ?? "—"}
+            {node.kind === "req"
+              ? node.node.requestId
+              : (node.edge.parentToolCallId ?? "—")}
           </span>
-          <span className="subagent-lineage-secondary">
-            {nodeSecondary(node)}
-          </span>
+          <span className="subagent-lineage-secondary">{nodeSecondary(node)}</span>
         </span>
         {nodeBadge(node)}
       </div>
       {hasChildren && isExpanded ? (
         <ul role="group" className="subagent-lineage-children">
-          {node.kind === "req"
-            ? node.children.map((child) => (
-                <SubagentTreeRow
-                  key={nodeId(child)}
-                  node={child}
-                  depth={childDepth}
-                  expanded={expanded}
-                  selectedId={selectedId}
-                  filter={filter}
-                  onToggle={onToggle}
-                  onSelect={onSelect}
-                />
-              ))
-            : node.child
-              ? (
-                  <SubagentTreeRow
-                    key={nodeId(node.child)}
-                    node={node.child}
-                    depth={childDepth}
-                    expanded={expanded}
-                    selectedId={selectedId}
-                    filter={filter}
-                    onToggle={onToggle}
-                    onSelect={onSelect}
-                  />
-                )
-              : null}
+          {node.kind === "req" ? (
+            node.children.map((child) => (
+              <SubagentTreeRow
+                key={nodeId(child)}
+                node={child}
+                depth={childDepth}
+                expanded={expanded}
+                selectedId={selectedId}
+                filter={filter}
+                onToggle={onToggle}
+                onSelect={onSelect}
+              />
+            ))
+          ) : node.child ? (
+            <SubagentTreeRow
+              key={nodeId(node.child)}
+              node={node.child}
+              depth={childDepth}
+              expanded={expanded}
+              selectedId={selectedId}
+              filter={filter}
+              onToggle={onToggle}
+              onSelect={onSelect}
+            />
+          ) : null}
         </ul>
       ) : null}
     </li>
@@ -598,8 +607,8 @@ function nodeSecondary(node: AnyNode): string {
 function nodeBadge(node: AnyNode) {
   const value =
     node.kind === "req"
-      ? node.node.lifecycleState ?? node.node.status ?? null
-      : node.edge.lifecycleState ?? null;
+      ? (node.node.lifecycleState ?? node.node.status ?? null)
+      : (node.edge.lifecycleState ?? null);
   if (!value) return null;
   const safe = value.toLowerCase();
   return (
@@ -634,14 +643,8 @@ function SubagentDetailPanel({ selected }: { selected: Selected }) {
           label="depth"
           value={node.subagentDepth != null ? String(node.subagentDepth) : null}
         />
-        <DetailRow
-          label="parent req"
-          value={node.causedByParentRequestId}
-        />
-        <DetailRow
-          label="parent tool"
-          value={node.causedByParentToolCallId}
-        />
+        <DetailRow label="parent req" value={node.causedByParentRequestId} />
+        <DetailRow label="parent tool" value={node.causedByParentToolCallId} />
       </dl>
     );
   }

@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  listMcpServicesWithHealth,
-  probeMcpService,
-} from "../../lib/desktop-api";
+import { listMcpServicesWithHealth, probeMcpService } from "../../lib/desktop-api";
 import type { MCPServiceHealthView } from "../../lib/types";
 import { McpHealthPanelView } from "./McpHealthPanelView";
 

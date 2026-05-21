@@ -29,8 +29,7 @@ const apiKeyEnvVar = takeFlag(argv, "--api-key-env-var");
 
 const env = {
   ...process.env,
-  CARGO_NET_GIT_FETCH_WITH_CLI:
-    process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
+  CARGO_NET_GIT_FETCH_WITH_CLI: process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
   DEFRA_AGENT_TAURI_LIVE: "1",
 };
 
@@ -58,14 +57,10 @@ const liveTestFiles = [
   "tests/tauri-driver.live.sad-path.test.tsx",
 ];
 
-const child = spawn(
-  "npx",
-  ["vitest", "run", ...liveTestFiles, ...argv],
-  {
-    stdio: "inherit",
-    env,
-  },
-);
+const child = spawn("npx", ["vitest", "run", ...liveTestFiles, ...argv], {
+  stdio: "inherit",
+  env,
+});
 
 child.on("exit", (code, signal) => {
   if (signal) {

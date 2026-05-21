@@ -86,8 +86,8 @@ function App() {
               selectedBehaviorId={shell.selectedBehaviorId}
               selectedConversationTitle={
                 shell.session
-                  ? shell.session.title ?? null
-                  : shell.selectedConversation?.title ?? null
+                  ? (shell.session.title ?? null)
+                  : (shell.selectedConversation?.title ?? null)
               }
               selectedDeployment={shell.selectedDeployment}
               selectedSessionId={shell.selectedSessionId}

@@ -801,7 +801,10 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             _ => None,
         })
         .expect("timeline should contain a ToolGroup");
-    let tool = tool_group.iter().find(|t| t.tool_name == "bash").expect("bash tool call");
+    let tool = tool_group
+        .iter()
+        .find(|t| t.tool_name == "bash")
+        .expect("bash tool call");
     let tool_cancel_cause = tool
         .cancel_cause
         .as_ref()

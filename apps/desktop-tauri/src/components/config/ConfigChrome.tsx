@@ -4,11 +4,7 @@ export type ConfigEditorHeaderProps = {
   title: string;
 };
 
-export function ConfigEditorHeader({
-  eyebrow,
-  saved,
-  title,
-}: ConfigEditorHeaderProps) {
+export function ConfigEditorHeader({ eyebrow, saved, title }: ConfigEditorHeaderProps) {
   return (
     <div className="panel-header">
       <div>

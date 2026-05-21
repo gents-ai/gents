@@ -99,8 +99,7 @@ export function BackendConfigEditor({
     setBackendId(backend?.backendId ?? "");
     setName(backend?.name ?? backend?.backendId ?? "");
     setProviderKind(
-      backend?.providerKind === "OpenRouter" ||
-        backend?.providerKind === "openrouter"
+      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
         ? "openrouter"
         : "openai",
     );
@@ -158,7 +157,9 @@ export function BackendConfigEditor({
               }
             }}
             readOnly={Boolean(backend)}
-            title={backend ? "Backend IDs cannot be renamed after creation." : undefined}
+            title={
+              backend ? "Backend IDs cannot be renamed after creation." : undefined
+            }
             value={backendId}
           />
         </label>

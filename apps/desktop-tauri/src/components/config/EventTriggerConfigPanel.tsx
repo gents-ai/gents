@@ -19,9 +19,7 @@ export type EventTriggerConfigPanelProps = {
   onSelectEventTrigger: (triggerId: string) => void;
   onCreateEventTrigger: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
-  ) => Promise<unknown>;
+  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
 };
 
 export function EventTriggerConfigPanel({
@@ -86,9 +84,7 @@ export type EventTriggerConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (triggerId: string) => void;
-  onSaveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
-  ) => Promise<unknown>;
+  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
 };
 
 export function EventTriggerConfigEditor({

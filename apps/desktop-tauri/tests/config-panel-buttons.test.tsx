@@ -129,9 +129,9 @@ describe("config panel action buttons", () => {
     );
     expect(screen.getByTestId("tool-service-id")).toHaveAttribute("readonly");
 
-    const onSaveTaskConfig = vi.fn<
-      [(request: TaskSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
+    const onSaveTaskConfig = vi.fn<[(request: TaskSaveRequest) => Promise<unknown>]>(
+      () => Promise.resolve(),
+    );
     render(
       <TaskConfigEditor
         behaviors={[
@@ -225,9 +225,9 @@ describe("config panel action buttons", () => {
   });
 
   it("keeps manual run buttons disabled for drafts and invalid args", async () => {
-    const onRunTask = vi.fn<[(request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>]>(
-      () => Promise.resolve(runResult),
-    );
+    const onRunTask = vi.fn<
+      [(request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>]
+    >(() => Promise.resolve(runResult));
     const draftTask = render(
       <TaskConfigEditor
         behaviors={[]}
@@ -285,9 +285,9 @@ describe("config panel action buttons", () => {
   });
 
   it("keeps timer run disabled for drafts and runs existing timers", async () => {
-    const onRunSchedule = vi.fn<[(request: { scheduleId: string }) => Promise<TaskRunResult>]>(
-      () => Promise.resolve(runResult),
-    );
+    const onRunSchedule = vi.fn<
+      [(request: { scheduleId: string }) => Promise<TaskRunResult>]
+    >(() => Promise.resolve(runResult));
     const draftSchedule = render(
       <ScheduleConfigEditor
         runningTask={false}

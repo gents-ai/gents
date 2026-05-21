@@ -13,8 +13,13 @@ export type CancelCauseBadgeProps = {
   className?: string;
 };
 
-export function CancelCauseBadge({ cause, className }: CancelCauseBadgeProps): JSX.Element {
+export function CancelCauseBadge({
+  cause,
+  className,
+}: CancelCauseBadgeProps): JSX.Element {
   const classes = ["cause-badge", `cause-${cause.cause}`];
   if (className) classes.push(className);
-  return <span className={classes.join(" ")}>{LABELS[cause.cause] ?? cause.cause}</span>;
+  return (
+    <span className={classes.join(" ")}>{LABELS[cause.cause] ?? cause.cause}</span>
+  );
 }

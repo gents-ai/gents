@@ -47,7 +47,10 @@
   font-family: var(--font-body);
   font-size: 12px;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .background-tools-panel .chip:hover {
@@ -176,7 +179,7 @@
 
 .background-tools-panel table.tools tbody tr:focus-within,
 .background-tools-panel table.tools tbody tr.is-selected {
-  background: rgb(6 178 80 / 0.10);
+  background: rgb(6 178 80 / 0.1);
   box-shadow: inset 3px 0 0 0 var(--color-accent-strong);
 }
 
@@ -187,7 +190,7 @@
 }
 
 .background-tools-panel table.tools tbody tr.row-stuck:focus-within {
-  background: rgb(255 160 17 / 0.10);
+  background: rgb(255 160 17 / 0.1);
 }
 
 .background-tools-panel table.tools td {
@@ -275,7 +278,7 @@
 
 .background-tools-panel .pill.pill-status[data-state="deadline+"] {
   color: var(--color-error);
-  border-color: rgb(255 111 95 / 0.50);
+  border-color: rgb(255 111 95 / 0.5);
   background: rgb(255 111 95 / 0.08);
 }
 

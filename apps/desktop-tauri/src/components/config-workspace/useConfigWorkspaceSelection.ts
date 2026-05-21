@@ -13,19 +13,17 @@ export function useConfigWorkspaceSelection(
   >(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [selectedToolSelectionId, setSelectedToolSelectionId] = useState<
-    string | null
-  >(null);
-  const [selectedToolServiceId, setSelectedToolServiceId] = useState<
-    string | null
-  >(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(
+  const [selectedToolSelectionId, setSelectedToolSelectionId] = useState<string | null>(
     null,
   );
-  const [selectedEventTriggerId, setSelectedEventTriggerId] = useState<
-    string | null
-  >(null);
+  const [selectedToolServiceId, setSelectedToolServiceId] = useState<string | null>(
+    null,
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(null);
+  const [selectedEventTriggerId, setSelectedEventTriggerId] = useState<string | null>(
+    null,
+  );
   const [savedStatus, setSavedStatus] = useState<string | null>(null);
 
   const selectedBehavior = useMemo(() => {
@@ -67,9 +65,7 @@ export function useConfigWorkspaceSelection(
         selectedDeployment.behaviors[0]?.behaviorId ??
         null,
       (id) =>
-        selectedDeployment.behaviors.some(
-          (behavior) => behavior.behaviorId === id,
-        ),
+        selectedDeployment.behaviors.some((behavior) => behavior.behaviorId === id),
       setSelectedConfigBehaviorId,
     );
     ensureSelection(
@@ -124,18 +120,14 @@ export function useConfigWorkspaceSelection(
       selectedScheduleId,
       selectedDeployment.schedules[0]?.scheduleId ?? null,
       (id) =>
-        selectedDeployment.schedules.some(
-          (schedule) => schedule.scheduleId === id,
-        ),
+        selectedDeployment.schedules.some((schedule) => schedule.scheduleId === id),
       setSelectedScheduleId,
     );
     ensureSelection(
       selectedEventTriggerId,
       selectedDeployment.eventTriggers[0]?.triggerId ?? null,
       (id) =>
-        selectedDeployment.eventTriggers.some(
-          (trigger) => trigger.triggerId === id,
-        ),
+        selectedDeployment.eventTriggers.some((trigger) => trigger.triggerId === id),
       setSelectedEventTriggerId,
     );
   }, [

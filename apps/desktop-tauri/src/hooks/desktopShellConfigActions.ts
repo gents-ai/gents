@@ -89,9 +89,7 @@ export function createDesktopShellConfigActions({
     }
   }
 
-  async function onSaveInferenceProfileConfig(
-    request: InferenceProfileSaveRequest,
-  ) {
+  async function onSaveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {

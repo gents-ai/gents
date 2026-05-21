@@ -56,8 +56,7 @@ function FleetSummary({ backends }: { backends: BackendHealth[] }) {
           className="backend-health__summary-chip"
           data-tone={c.tone}
         >
-          <span className="backend-health__summary-count">{c.count}</span>{" "}
-          {c.label}
+          <span className="backend-health__summary-count">{c.count}</span> {c.label}
         </span>
       ))}
     </div>
@@ -72,10 +71,10 @@ function EmptyFleet() {
       </div>
       <h2 className="backend-health__empty-heading">No backends registered</h2>
       <p className="backend-health__empty-body">
-        Add an <code>InferenceBackend</code> document to the control plane to
-        register a provider. The runtime reads from the
-        <code> InferenceBackend</code> collection at start-up and on every
-        control-doc update.
+        Add an <code>InferenceBackend</code> document to the control plane to register a
+        provider. The runtime reads from the
+        <code> InferenceBackend</code> collection at start-up and on every control-doc
+        update.
       </p>
     </div>
   );
@@ -103,18 +102,15 @@ export function BackendHealthPanel({
   const now = useMemo(() => providedNow ?? new Date(), [providedNow]);
 
   return (
-    <section
-      className="backend-health"
-      aria-labelledby="backend-health-title"
-    >
+    <section className="backend-health" aria-labelledby="backend-health-title">
       <header className="backend-health__header">
         <div>
           <h2 id="backend-health-title" className="backend-health__title">
             Backend health
           </h2>
           <p className="backend-health__subtitle">
-            Inference backends registered to this deployment, with admission
-            policy and recent call outcomes.
+            Inference backends registered to this deployment, with admission policy and
+            recent call outcomes.
           </p>
         </div>
         {backends ? <FleetSummary backends={backends} /> : null}

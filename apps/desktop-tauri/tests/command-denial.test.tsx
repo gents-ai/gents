@@ -2,15 +2,9 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { CommandDenialToolItem } from "../src/components/commandDenial";
-import {
-  parseCommandDenial,
-  type DenialRuleId,
-} from "../src/lib/commandDenial";
+import { parseCommandDenial, type DenialRuleId } from "../src/lib/commandDenial";
 import { MessageList } from "../src/components/Transcript";
-import type {
-  RenderedTimelineItem,
-  RenderedToolCallView,
-} from "../src/lib/types";
+import type { RenderedTimelineItem, RenderedToolCallView } from "../src/lib/types";
 
 // ---------------------------------------------------------------------
 // Sentinel matrix
@@ -52,10 +46,7 @@ const SENTINELS: Array<[string, DenialRuleId]> = [
     "disabledNetworkUnenforceable",
   ],
   // command.rs:401
-  [
-    "curl is not allowed when command_network_mode=disabled",
-    "disabledNetworkCommand",
-  ],
+  ["curl is not allowed when command_network_mode=disabled", "disabledNetworkCommand"],
   // command.rs:404
   [
     "tailscale network probes are not allowed when command_network_mode=disabled",
@@ -122,10 +113,7 @@ const SENTINELS: Array<[string, DenialRuleId]> = [
     "readOnlyArgumentNotAllowed",
   ],
   // command.rs:730
-  [
-    "git branch argument is not read-only: -D",
-    "readOnlyArgumentNotAllowed",
-  ],
+  ["git branch argument is not read-only: -D", "readOnlyArgumentNotAllowed"],
 ];
 
 describe("parseCommandDenial", () => {
@@ -146,9 +134,7 @@ describe("parseCommandDenial", () => {
     // Runtime errors (exit code, timeout, MCP transport) should NOT
     // route through the denial render — they are real failures, not
     // policy guardrails.
-    expect(
-      parseCommandDenial("tool exited with code 2: file not found"),
-    ).toBeNull();
+    expect(parseCommandDenial("tool exited with code 2: file not found")).toBeNull();
     expect(parseCommandDenial("mcp service unreachable: timeout")).toBeNull();
     expect(
       parseCommandDenial("Error: connection refused at localhost:8080"),
@@ -156,9 +142,7 @@ describe("parseCommandDenial", () => {
   });
 
   it("tolerates 'error:' prefix on the persisted string", () => {
-    const denial = parseCommandDenial(
-      "error: sed in-place edits are not allowed",
-    );
+    const denial = parseCommandDenial("error: sed in-place edits are not allowed");
     expect(denial?.ruleId).toBe("readOnlyArgumentNotAllowed");
   });
 
@@ -218,9 +202,7 @@ describe("CommandDenialToolItem (direct)", () => {
     // The wrapping <details> carries the denial class + rule-id data attr
     const details = container.querySelector("details.tool-item-denied");
     expect(details).not.toBeNull();
-    expect(details?.getAttribute("data-rule-id")).toBe(
-      "readOnlyArgumentNotAllowed",
-    );
+    expect(details?.getAttribute("data-rule-id")).toBe("readOnlyArgumentNotAllowed");
     // Visible badge text
     expect(getByText("readOnlyArgumentNotAllowed")).toBeTruthy();
     expect(getByText("Read-only guard")).toBeTruthy();
@@ -235,9 +217,7 @@ describe("Transcript ToolGroups integration", () => {
       {
         kind: "toolGroup",
         itemKey: "group-1",
-        tools: [
-          deniedToolView("sed in-place edits are not allowed"),
-        ],
+        tools: [deniedToolView("sed in-place edits are not allowed")],
       },
     ];
 
@@ -245,9 +225,9 @@ describe("Transcript ToolGroups integration", () => {
     // Denial render took the slot — not the default tool-item.
     expect(container.querySelector(".tool-item-denied")).not.toBeNull();
     // The denial rule-id badge is visible.
-    expect(container.querySelector("[data-rule-id]")?.getAttribute("data-rule-id")).toBe(
-      "readOnlyArgumentNotAllowed",
-    );
+    expect(
+      container.querySelector("[data-rule-id]")?.getAttribute("data-rule-id"),
+    ).toBe("readOnlyArgumentNotAllowed");
   });
 
   it("falls back to the default render when the result isn't a denial", () => {

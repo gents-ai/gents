@@ -139,8 +139,9 @@ export function BehaviorConfigEditor({
   const [backendId, setBackendId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [toolSelectionId, setToolSelectionId] = useState("");
-  const [compactionStrategy, setCompactionStrategy] =
-    useState(DEFAULT_COMPACTION_STRATEGY);
+  const [compactionStrategy, setCompactionStrategy] = useState(
+    DEFAULT_COMPACTION_STRATEGY,
+  );
   const [compactionThreshold, setCompactionThreshold] = useState(
     DEFAULT_COMPACTION_THRESHOLD,
   );
@@ -182,16 +183,12 @@ export function BehaviorConfigEditor({
       : "Select a backend";
   const promptRows = Math.min(
     28,
-    Math.max(
-      14,
-      systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90),
-    ),
+    Math.max(14, systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90)),
   );
-  const compactionThresholdValid =
-    isOptionalFloat(compactionThreshold, {
-      min: 0,
-      max: 1,
-    });
+  const compactionThresholdValid = isOptionalFloat(compactionThreshold, {
+    min: 0,
+    max: 1,
+  });
 
   async function submitBehavior(event: FormEvent) {
     event.preventDefault();
@@ -220,7 +217,10 @@ export function BehaviorConfigEditor({
   }
 
   return (
-    <form className="panel config-editor behavior-config-editor" onSubmit={submitBehavior}>
+    <form
+      className="panel config-editor behavior-config-editor"
+      onSubmit={submitBehavior}
+    >
       <div className="panel-header behavior-config-header">
         <div>
           <p className="eyebrow">Behavior</p>
@@ -370,9 +370,7 @@ export function BehaviorConfigEditor({
               data-testid="behavior-compaction-threshold"
               max="1"
               min="0"
-              onChange={(event) =>
-                setCompactionThreshold(event.currentTarget.value)
-              }
+              onChange={(event) => setCompactionThreshold(event.currentTarget.value)}
               step="0.01"
               type="number"
               value={compactionThreshold}

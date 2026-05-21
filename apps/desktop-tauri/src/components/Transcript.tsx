@@ -89,30 +89,28 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
             : null;
         if (denial) {
           return (
-            <CommandDenialToolItem
-              key={tool.itemKey}
-              tool={tool}
-              denial={denial}
-            />
+            <CommandDenialToolItem key={tool.itemKey} tool={tool} denial={denial} />
           );
         }
         return (
           <details className="tool-item" key={tool.itemKey}>
             <summary className="tool-item-summary">
               <span className="tool-item-summary-left">
-                <span
-                  aria-hidden="true"
-                  className={toolStatusClass(tool.statusKind)}
-                />
+                <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
                 <span className="tool-item-name">{tool.toolName}</span>
                 {tool.cancelCause ? (
-                  <CancelCauseBadge cause={tool.cancelCause} className="tool-item-cause-badge" />
+                  <CancelCauseBadge
+                    cause={tool.cancelCause}
+                    className="tool-item-cause-badge"
+                  />
                 ) : null}
               </span>
               <span className="tool-item-action">View</span>
             </summary>
             <div className="tool-item-body">
-              {tool.cancelCause ? <CancelCauseDetails cause={tool.cancelCause} /> : null}
+              {tool.cancelCause ? (
+                <CancelCauseDetails cause={tool.cancelCause} />
+              ) : null}
               <ToolDetailSection label="args" value={tool.args} />
               <ToolDetailSection label="result" value={tool.result} />
             </div>
@@ -164,9 +162,7 @@ export function MessageList({
                 <article className="message-card">
                   <div className="message-role">user</div>
                   <div className="message-content">
-                    <MarkdownContent
-                      value={normalizeTranscriptText(item.content)}
-                    />
+                    <MarkdownContent value={normalizeTranscriptText(item.content)} />
                   </div>
                 </article>
               </div>
@@ -215,9 +211,7 @@ export function MessageList({
                 <article className="message-card pending-card">
                   <div className="message-role">user</div>
                   <div className="message-content">
-                    <MarkdownContent
-                      value={normalizeTranscriptText(item.content)}
-                    />
+                    <MarkdownContent value={normalizeTranscriptText(item.content)} />
                   </div>
                 </article>
               </div>

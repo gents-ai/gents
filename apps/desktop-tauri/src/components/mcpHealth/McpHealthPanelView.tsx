@@ -59,7 +59,9 @@ function isLastSeenOlderThan(service: MCPServiceHealthView, ms: number): boolean
   return Date.now() - ts > ms;
 }
 
-function projectStatus(visual: VisualState): "healthy" | "stale" | "unreachable" | "unknown" {
+function projectStatus(
+  visual: VisualState,
+): "healthy" | "stale" | "unreachable" | "unknown" {
   if (visual === "healthy") return "healthy";
   if (visual === "degraded") return "stale";
   if (visual === "evicted" || visual === "reconnecting" || visual === "stuck") {
@@ -197,8 +199,8 @@ export function McpHealthPanelView({
         <div>
           <h2 id="mcp-health-title">MCP services / health</h2>
           <p className="mcp-health-subtitle">
-            Registered <code>ToolServiceRegistry</code> entries with their
-            most recently persisted health state.
+            Registered <code>ToolServiceRegistry</code> entries with their most recently
+            persisted health state.
           </p>
         </div>
         <button
@@ -257,9 +259,7 @@ export function McpHealthPanelView({
             ∅
           </div>
           <div className="mcp-health-empty-title">
-            {loading
-              ? "Loading MCP service health…"
-              : "No MCP services registered."}
+            {loading ? "Loading MCP service health…" : "No MCP services registered."}
           </div>
           {!loading && (
             <div>
@@ -372,10 +372,14 @@ function ServiceRows({
   onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => void;
   onProbe: () => void;
 }) {
-  const dotClass = visual === "degraded" ? "yellow"
-    : visual === "healthy" ? "green"
-    : visual === "reconnecting" ? "blue"
-    : "red";
+  const dotClass =
+    visual === "degraded"
+      ? "yellow"
+      : visual === "healthy"
+        ? "green"
+        : visual === "reconnecting"
+          ? "blue"
+          : "red";
   const k = service.kMax ?? 0;
   const fc = service.failureCount ?? 0;
   return (
@@ -386,9 +390,7 @@ function ServiceRows({
         aria-expanded={expanded}
         aria-controls={`mcp-health-detail-${service.serviceId}`}
         className={
-          expanded
-            ? "mcp-health-row mcp-health-row-expanded"
-            : "mcp-health-row"
+          expanded ? "mcp-health-row mcp-health-row-expanded" : "mcp-health-row"
         }
         onClick={onToggle}
         onKeyDown={onKeyDown}
@@ -401,9 +403,7 @@ function ServiceRows({
           <div>
             <div className="mcp-health-service-name">{service.serviceId}</div>
             {service.endpoint ? (
-              <div className="mcp-health-service-endpoint">
-                {service.endpoint}
-              </div>
+              <div className="mcp-health-service-endpoint">{service.endpoint}</div>
             ) : null}
           </div>
         </td>
@@ -426,7 +426,10 @@ function ServiceRows({
           <div className="mcp-health-last-probe">
             <span>{formatRelative(service.lastProbeAt ?? service.lastSeen)}</span>
             {backoff ? (
-              <span className="mcp-health-backoff" data-testid={`mcp-health-backoff-${service.serviceId}`}>
+              <span
+                className="mcp-health-backoff"
+                data-testid={`mcp-health-backoff-${service.serviceId}`}
+              >
                 {backoff.text}
               </span>
             ) : null}
@@ -434,10 +437,7 @@ function ServiceRows({
         </td>
         <td>
           {service.lastErrorMessage ? (
-            <span
-              className="mcp-health-last-error"
-              title={service.lastErrorMessage}
-            >
+            <span className="mcp-health-last-error" title={service.lastErrorMessage}>
               {service.lastErrorClass ?? "error"}: {service.lastErrorMessage}
             </span>
           ) : (
@@ -504,14 +504,17 @@ function KModelCell({ k, fc }: { k: number; fc: number }) {
     : warn
       ? "mcp-health-k-badge mcp-health-k-badge-warn"
       : "mcp-health-k-badge";
-  const explainer = fc === 0
-    ? "no failures"
-    : fc < k
-      ? `${k - fc} more fail${k - fc === 1 ? "" : "s"} until evict`
-      : "evicted (back-off)";
+  const explainer =
+    fc === 0
+      ? "no failures"
+      : fc < k
+        ? `${k - fc} more fail${k - fc === 1 ? "" : "s"} until evict`
+        : "evicted (back-off)";
   return (
     <div className="mcp-health-k-cell">
-      <span className={badgeClass}>K={k} · {fc}/{k}</span>
+      <span className={badgeClass}>
+        K={k} · {fc}/{k}
+      </span>
       <span className="mcp-health-k-explainer">{explainer}</span>
     </div>
   );

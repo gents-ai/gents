@@ -18,9 +18,7 @@ export type ToolSelectionConfigPanelProps = {
   onSelectToolSelection: (selectionId: string) => void;
   onCreateToolSelection: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
   toolCeiling?: string | null;
   toolRoot?: string | null;
 };
@@ -95,9 +93,7 @@ export type ToolSelectionConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (selectionId: string) => void;
-  onSaveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
 };
 
 export function ToolSelectionConfigEditor({
@@ -144,13 +140,11 @@ export function ToolSelectionConfigEditor({
     setBashMode(
       toolSelection?.bashMode === "ReadWrite"
         ? "Unrestricted"
-        : toolSelection?.bashMode ?? "ReadOnly",
+        : (toolSelection?.bashMode ?? "ReadOnly"),
     );
     setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
     setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
-    const knownServiceIds = new Set(
-      toolServiceIdKey.split("\n").filter(Boolean),
-    );
+    const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
     const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
     const existingDelegateTo = toolSelection?.delegateTo ?? [];
     const legacyServiceDelegates =
@@ -164,9 +158,7 @@ export function ToolSelectionConfigEditor({
       ).join("\n"),
     );
     setDelegateTo(
-      existingDelegateTo
-        .filter((value) => !knownServiceIds.has(value))
-        .join("\n"),
+      existingDelegateTo.filter((value) => !knownServiceIds.has(value)).join("\n"),
     );
   }, [toolSelection, toolServiceIdKey]);
 
@@ -183,8 +175,7 @@ export function ToolSelectionConfigEditor({
   async function submitToolSelection(event: FormEvent) {
     event.preventDefault();
     const nextId = selectionId.trim();
-    const effectiveEnableFileTools =
-      !fileToolsDisabledByCeiling && enableFileTools;
+    const effectiveEnableFileTools = !fileToolsDisabledByCeiling && enableFileTools;
     const effectiveEnableBash = !fileToolsDisabledByCeiling && enableBash;
     const effectiveFileToolsMode =
       writeToolsDisabledByCeiling && fileToolsMode === "ReadWrite"
@@ -353,10 +344,7 @@ export function ToolSelectionConfigEditor({
                     data-testid={`tool-allowed-mcp-service-${serviceId}`}
                     disabled={!enableMetaTools}
                     onChange={(event) =>
-                      toggleAllowedMcpService(
-                        serviceId,
-                        event.currentTarget.checked,
-                      )
+                      toggleAllowedMcpService(serviceId, event.currentTarget.checked)
                     }
                     type="checkbox"
                   />

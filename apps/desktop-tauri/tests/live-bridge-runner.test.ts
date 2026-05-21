@@ -34,8 +34,7 @@ function requestDiagnosticsBundle({
       errorMessage: null,
       progressSeq: turnState === "completed" ? 15 : 14,
       materializedMessageSequence: turnState === "completed" ? 62 : 61,
-      materializedAt:
-        turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
+      materializedAt: turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
       completedAt: turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
       contentLen: turnState === "completed" ? 8546 : 128,
       reasoningLen: 0,
@@ -46,8 +45,7 @@ function requestDiagnosticsBundle({
       pending: turnState === "completed" ? 0 : 1,
       latestToolName: "read_file",
       latestStatus: turnState === "completed" ? "completed" : "running",
-      latestCompletedAt:
-        turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
+      latestCompletedAt: turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
     },
     toolResultCount: turnState === "completed" ? 22 : 21,
     messageCount: turnState === "completed" ? 62 : 61,

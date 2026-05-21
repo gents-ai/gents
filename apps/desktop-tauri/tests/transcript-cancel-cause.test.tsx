@@ -82,7 +82,7 @@ describe("Transcript cancel cause surfacing", () => {
               source: "toolLifecycle",
               confidence: "derived",
               at: "2026-05-20T10:35:02Z",
-              evidence: ["AgentToolCall.lifecycle_state = \"timedOut\""],
+              evidence: ['AgentToolCall.lifecycle_state = "timedOut"'],
             },
           },
         ],
@@ -168,10 +168,7 @@ describe("Transcript assistant-turn cancel cause", () => {
       },
     ];
     render(
-      <MessageList
-        timelineItems={items}
-        responseCancelCause={interruptedCause}
-      />,
+      <MessageList timelineItems={items} responseCancelCause={interruptedCause} />,
     );
     expect(screen.getByText(/interrupted/i)).toBeInTheDocument();
   });

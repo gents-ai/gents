@@ -22,10 +22,7 @@ export function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sessionDiagnosticMessage(
-  label: string,
-  session: DesktopSessionSnapshot,
-) {
+function sessionDiagnosticMessage(label: string, session: DesktopSessionSnapshot) {
   return `${label} did not complete: ${JSON.stringify({
     turnState: session.turnState ?? null,
     latestRequestId: session.latestRequestId ?? null,
@@ -36,13 +33,8 @@ function sessionDiagnosticMessage(
   })}`;
 }
 
-export function expectCompletedSession(
-  label: string,
-  session: DesktopSessionSnapshot,
-) {
-  expect(session.turnState, sessionDiagnosticMessage(label, session)).toBe(
-    "completed",
-  );
+export function expectCompletedSession(label: string, session: DesktopSessionSnapshot) {
+  expect(session.turnState, sessionDiagnosticMessage(label, session)).toBe("completed");
 }
 
 export async function waitForBehaviorConfig(
@@ -81,18 +73,26 @@ export async function waitForConfigFlowDocuments(
     async () => {
       const snapshot = await runner.fetchSnapshot();
       const deployment = snapshot.client?.deployments[0];
-      expect(deployment?.inferenceBackends.some(
-        (backend) => backend.backendId === expected.backendId,
-      )).toBe(true);
-      expect(deployment?.inferenceProfiles.some(
-        (profile) => profile.profileId === expected.profileId,
-      )).toBe(true);
-      expect(deployment?.toolSelections.some(
-        (selection) => selection.selectionId === expected.toolSelectionId,
-      )).toBe(true);
-      expect(deployment?.toolServiceRegistries.some(
-        (service) => service.serviceId === expected.toolServiceId,
-      )).toBe(true);
+      expect(
+        deployment?.inferenceBackends.some(
+          (backend) => backend.backendId === expected.backendId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.inferenceProfiles.some(
+          (profile) => profile.profileId === expected.profileId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.toolSelections.some(
+          (selection) => selection.selectionId === expected.toolSelectionId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.toolServiceRegistries.some(
+          (service) => service.serviceId === expected.toolServiceId,
+        ),
+      ).toBe(true);
       const behavior = deployment?.behaviors.find(
         (candidate) => candidate.behaviorId === expected.behaviorId,
       );

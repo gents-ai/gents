@@ -12,9 +12,7 @@ import {
 function HarnessOpenLineageButton() {
   const rail = useOperationsRail();
   return (
-    <button onClick={() => rail.setActiveTab("lineage")}>
-      open-lineage-button
-    </button>
+    <button onClick={() => rail.setActiveTab("lineage")}>open-lineage-button</button>
   );
 }
 

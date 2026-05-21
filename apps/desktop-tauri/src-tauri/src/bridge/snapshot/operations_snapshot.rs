@@ -44,7 +44,8 @@ pub(crate) fn project_backgrounded_tools(
                 .is_some_and(|s| TERMINAL_LIFECYCLE_STATES.contains(&s))
         })
         .map(|r| {
-            let age_ms = age_from_live_snapshot(r.tool_call_id.as_str(), &liveness.active_tool_calls);
+            let age_ms =
+                age_from_live_snapshot(r.tool_call_id.as_str(), &liveness.active_tool_calls);
             let deadline_expired = liveness
                 .active_tool_calls
                 .iter()

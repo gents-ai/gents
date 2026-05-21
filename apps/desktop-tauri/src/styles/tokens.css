@@ -1,11 +1,7 @@
 @layer tokens {
   :root {
     color-scheme: dark;
-    font-family:
-      "Inter",
-      "SF Pro Text",
-      system-ui,
-      sans-serif;
+    font-family: "Inter", "SF Pro Text", system-ui, sans-serif;
     line-height: 1.45;
     font-weight: 400;
     color: var(--color-text);
@@ -15,12 +11,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 
-    --font-heading:
-      "Funnel Display",
-      "Inter",
-      "SF Pro Display",
-      system-ui,
-      sans-serif;
+    --font-heading: "Funnel Display", "Inter", "SF Pro Display", system-ui, sans-serif;
     --source-black: #000000;
     --source-green: #06b250;
     --source-dark-green: #1c2724;
