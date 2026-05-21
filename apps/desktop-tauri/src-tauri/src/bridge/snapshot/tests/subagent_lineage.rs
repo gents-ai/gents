@@ -1,5 +1,3 @@
-use super::*;
-
 #[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 

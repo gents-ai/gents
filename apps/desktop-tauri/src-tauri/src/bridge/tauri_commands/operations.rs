@@ -14,7 +14,7 @@ use defra_agent_desktop_core::client::ClientCore;
 use reqwest::Url;
 use tauri::State;
 
-use super::super::commands::{load_mcp_services_with_health, probe_mcp_service};
+use super::super::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
 use super::super::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
