@@ -26,6 +26,12 @@ mod bridge {
             "/src/bridge/snapshot.rs"
         ));
     }
+    pub mod cascade {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bridge/cascade.rs"
+        ));
+    }
 }
 
 #[path = "bridge_runner/diagnostics.rs"]

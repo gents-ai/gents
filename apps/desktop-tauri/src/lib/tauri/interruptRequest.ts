@@ -1,5 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-
+import {
+  interruptRequest as _interruptRequest,
+  previewInterruptCascade as _previewInterruptCascade,
+} from "../desktop-api";
 import type {
   CascadeCancelPreview,
   InterruptRequestResult,
@@ -26,11 +28,11 @@ export type DesktopInterruptRequestArgs = {
 export async function previewInterruptCascade(
   request: DesktopPreviewInterruptCascadeArgs,
 ): Promise<CascadeCancelPreview> {
-  return invoke<CascadeCancelPreview>("desktop_preview_interrupt_cascade", { request });
+  return _previewInterruptCascade(request);
 }
 
 export async function interruptRequest(
   request: DesktopInterruptRequestArgs,
 ): Promise<InterruptRequestResult> {
-  return invoke<InterruptRequestResult>("desktop_interrupt_request", { request });
+  return _interruptRequest(request);
 }

@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::bridge::cascade::{build_cascade_preview, interrupt_request};
 use crate::bridge::commands::{
     add_peer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
     save_agent_config, save_backend_config, save_behavior_config, save_event_trigger_config,
@@ -19,9 +20,10 @@ use crate::bridge::commands::{
 };
 use crate::bridge::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
-    ConversationRenameRequest, EventTriggerSaveRequest, InferenceProfileSaveRequest,
-    PeerAddRequest, ScheduleRunRequest, ScheduleSaveRequest, TaskRunRequest, TaskSaveRequest,
-    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    ConversationRenameRequest, DesktopInterruptRequest, DesktopPreviewInterruptCascadeRequest,
+    EventTriggerSaveRequest, InferenceProfileSaveRequest, PeerAddRequest, ScheduleRunRequest,
+    ScheduleSaveRequest, TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest,
 };
 use crate::diagnostics::{
     build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
@@ -354,6 +356,23 @@ fn handle_request(
                 .context("decoding task run request")?;
             let result =
                 runtime.block_on(run_task_config(fixture.desktop_core().as_ref(), request))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/interrupt/preview") => {
+            let request =
+                serde_json::from_str::<DesktopPreviewInterruptCascadeRequest>(&request.body)
+                    .context("decoding interrupt preview request")?;
+            let result = runtime
+                .block_on(build_cascade_preview(fixture.desktop_core(), &request))
+                .map_err(|e| anyhow!("{e}"))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/interrupt/request") => {
+            let request = serde_json::from_str::<DesktopInterruptRequest>(&request.body)
+                .context("decoding interrupt request")?;
+            let result = runtime
+                .block_on(interrupt_request(fixture.desktop_core(), &request))
+                .map_err(|e| anyhow!("{e}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         _ => Ok(HttpResponse::json_error("404 Not Found", "not found")),

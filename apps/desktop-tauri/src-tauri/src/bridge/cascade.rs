@@ -1,9 +1,9 @@
-//! Descendant tree walk for cascade preview and cascade interrupt.
-//!
-//! Mirrors `interrupt_request_local` in
-//! `crates/defra-agent-cli/src/commands/subagent.rs:327`, but stays in the
-//! bridge so both `desktop_preview_interrupt_cascade` and
-//! `desktop_interrupt_request` can share the walk.
+// Descendant tree walk for cascade preview and cascade interrupt.
+//
+// Mirrors `interrupt_request_local` in
+// `crates/defra-agent-cli/src/commands/subagent.rs:327`, but stays in the
+// bridge so both `desktop_preview_interrupt_cascade` and
+// `desktop_interrupt_request` can share the walk.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

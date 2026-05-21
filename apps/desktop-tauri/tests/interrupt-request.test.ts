@@ -9,6 +9,16 @@ import { interruptRequest, previewInterruptCascade } from "../src/lib/tauri/inte
 
 const mockedInvoke = vi.mocked(invoke);
 
+// Simulate the Tauri desktop bridge being available so that invokeDesktop()
+// passes its hasTauriInvokeBridge() guard and reaches the mocked invoke.
+beforeEach(() => {
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    value: { invoke: mockedInvoke },
+    configurable: true,
+    writable: true,
+  });
+});
+
 describe("previewInterruptCascade", () => {
   beforeEach(() => { mockedInvoke.mockReset(); });
   it("calls desktop_preview_interrupt_cascade with the request wrapped under {request}", async () => {

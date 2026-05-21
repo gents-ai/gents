@@ -5,13 +5,17 @@ import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
   BehaviorSaveRequest,
+  CascadeCancelPreview,
   ChatSendResult,
   DesktopClientSnapshot,
+  DesktopInterruptRequestRequest,
   DesktopListSubagentTreeRequest,
+  DesktopPreviewInterruptCascadeRequest,
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
   InitSummary,
+  InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
   PeerAddRequest,
@@ -127,6 +131,12 @@ export type DesktopApiAdapter = {
   fetchOperationsSnapshot: (
     request: DesktopOperationsSnapshotRequest,
   ) => Promise<DesktopOperationsSnapshot>;
+  previewInterruptCascade: (
+    request: DesktopPreviewInterruptCascadeRequest,
+  ) => Promise<CascadeCancelPreview>;
+  interruptRequest: (
+    request: DesktopInterruptRequestRequest,
+  ) => Promise<InterruptRequestResult>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -242,6 +252,12 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
       "desktop_operations_snapshot",
       { request },
     );
+  },
+  previewInterruptCascade(request) {
+    return invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", { request });
+  },
+  interruptRequest(request) {
+    return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", { request });
   },
 };
 
@@ -389,4 +405,14 @@ export async function fetchOperationsSnapshot(
   request: DesktopOperationsSnapshotRequest,
 ) {
   return desktopApiAdapter().fetchOperationsSnapshot(request);
+}
+
+export async function previewInterruptCascade(
+  request: DesktopPreviewInterruptCascadeRequest,
+) {
+  return desktopApiAdapter().previewInterruptCascade(request);
+}
+
+export async function interruptRequest(request: DesktopInterruptRequestRequest) {
+  return desktopApiAdapter().interruptRequest(request);
 }
