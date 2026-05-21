@@ -1,9 +1,17 @@
-import { waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { LiveBridgeRunner } from "./live-bridge-runner";
 import { renderTauriAppDriverWithBridge } from "./tauri-driver";
-import { describeLive, FIRST_PROMPT, logTurn } from "./tauri-driver-live/helpers";
+import {
+  describeLive,
+  expectCompletedSession,
+  FIRST_PROMPT,
+  logTurn,
+} from "./tauri-driver-live/helpers";
+
+const FOLLOW_UP_PROMPT =
+  "After the interrupt flow, answer with exactly one short sentence: ready-after-interrupt.";
 
 describeLive("Tauri app live interrupt flow", () => {
   it("latches an interrupt and surfaces the cause badge in the transcript", async () => {
@@ -53,42 +61,11 @@ describeLive("Tauri app live interrupt flow", () => {
       await driver.clickCancel();
       logTurn("interrupt clicked");
 
-      // Either the request completed before we clicked (interrupt is a noop
-      // but should still latch interrupt_requested_at on AgentRequest), or
-      // the turn was interrupted mid-flight. In either case, eventually the
-      // cancel button disappears (turn no longer in flight) or the latest
-      // response has a cancelCause / interruptedAt field set.
-      //
-      // This test is intentionally race-tolerant: fast models may finish
-      // before the interrupt lands. Both outcomes are valid — the key
-      // assertion is that the bridge call succeeded without an error.
-      await waitFor(
-        async () => {
-          const session = await runner.adapter.fetchSessionSnapshot(
-            submitted!.sessionId,
-            runner.agentDid,
-            null,
-          );
-          const responseCancelled =
-            session?.latestResponse?.cancelCause != null ||
-            session?.latestResponse?.interruptedAt != null;
-          const turnEnded =
-            session?.turnState !== "streaming" &&
-            session?.turnState !== "waitingForClaim";
-          expect(responseCancelled || turnEnded).toBe(true);
-        },
-        { timeout: 60_000 },
-      );
-
       // If the response was interrupted before completion, verify the badge
       // appears in the rendered transcript. If the turn finished naturally
       // before our click, log that and move on — we still verified the
       // bridge call did not throw.
-      const finalSession = await runner.adapter.fetchSessionSnapshot(
-        submitted!.sessionId,
-        runner.agentDid,
-        null,
-      );
+      const finalSession = await runner.waitForRequestCompletion(submitted!);
       if (finalSession?.latestResponse?.cancelCause) {
         logTurn(
           `interrupt latched: cause=${finalSession.latestResponse.cancelCause.cause}`,
@@ -107,6 +84,41 @@ describeLive("Tauri app live interrupt flow", () => {
             "bridge call succeeded without error (race outcome: turn completed first)",
         );
       }
+
+      await driver.typeComposer(FOLLOW_UP_PROMPT);
+      await waitFor(() => {
+        expect(driver.sendButton()).toBeEnabled();
+      });
+      await driver.pressEnter();
+      await waitFor(() => {
+        expect(runner.sendResults).toHaveLength(2);
+      });
+      const followUp = runner.sendResults.at(-1);
+      expect(followUp).toBeDefined();
+      expect(followUp!.sessionId).toBe(submitted!.sessionId);
+      expect(followUp!.requestId).not.toBe(submitted!.requestId);
+      logTurn(
+        `follow-up submitted sessionId=${followUp!.sessionId} requestId=${followUp!.requestId}`,
+      );
+
+      const followUpSession = await runner.waitForRequestCompletion(followUp!);
+      expectCompletedSession("interrupt follow-up", followUpSession);
+      expect(followUpSession.latestRequestId).toBe(followUp!.requestId);
+      expect(followUpSession.pendingTurn).toBeNull();
+      expect(followUpSession.activeResponseOverlay).toBeNull();
+
+      await waitFor(
+        () => {
+          expect(screen.getAllByText(FOLLOW_UP_PROMPT)).toHaveLength(1);
+          expect(driver.cancelButton()).toBeNull();
+        },
+        { timeout: 30_000 },
+      );
+
+      await driver.typeComposer("Composer should be ready after follow-up.");
+      await waitFor(() => {
+        expect(driver.sendButton()).toBeEnabled();
+      });
     } finally {
       await driver.dispose();
     }
