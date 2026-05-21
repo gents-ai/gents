@@ -53,6 +53,47 @@ fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
 }
 
 #[test]
+fn openai_compatible_404_is_permanent_backend_configuration() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "InvalidStatusCodeWithMessage(404, \"\")".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "missing /chat/completions route should fail fast instead of retrying"
+    );
+}
+
+#[test]
+fn openai_compatible_http_400_is_permanent_bad_request() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "400".parse().expect("valid status"),
+                "duplicate field `max_tokens`".into(),
+            ),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "bad OpenAI-compatible request bodies should fail fast instead of retrying"
+    );
+}
+
+#[test]
 fn daemon_error_from_variants() {
     let config_err: DaemonError = ConfigError::Missing {
         key: "backend_endpoint".into(),

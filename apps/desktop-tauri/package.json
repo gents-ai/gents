@@ -12,6 +12,7 @@
     "test:live:config": "node ./tests/run-live-test.mjs -t \"configures backend profile tools behavior task\"",
     "test:live:chat": "node ./tests/run-live-test.mjs -t \"drives three real UI turns\"",
     "test:live:interrupt": "node ./tests/run-live-test.mjs -t \"latches an interrupt\"",
+    "test:live:sad-path": "node ./tests/run-live-test.mjs -t \"surfaces a missing-model inference failure\"",
     "smoke:remote-fleet": "node ./scripts/remote-fleet-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

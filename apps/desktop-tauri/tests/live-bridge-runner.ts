@@ -39,7 +39,7 @@ export type {
   RequestDiagnosticsBundle,
 } from "./live-bridge-runner/types";
 
-const RUNNER_START_TIMEOUT_MS = 120_000;
+const RUNNER_START_TIMEOUT_MS = 300_000;
 const REQUEST_TIMEOUT_MS = 600_000;
 const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const VERSION_POLL_MS = 250;
@@ -100,7 +100,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
           const nextVersion = await this.fetchVersion();
           if (nextVersion !== lastVersion) {
             lastVersion = nextVersion;
-            await handler();
+            await handler({ reason: "store" });
           }
         } catch (error) {
           if (!disposed && !this.exitStatus) {

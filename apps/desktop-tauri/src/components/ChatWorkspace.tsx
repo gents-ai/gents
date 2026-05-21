@@ -121,6 +121,7 @@ export function ActiveChatWorkspace({
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
   const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(null);
+  const [operationsOpen, setOperationsOpen] = useState(false);
 
   useEffect(() => {
     if (!interruptResultBanner) return;
@@ -195,7 +196,10 @@ export function ActiveChatWorkspace({
             onSend={onSend}
           />
         </div>
-        <OperationsRail />
+        <OperationsRail
+          open={operationsOpen}
+          onOpenChange={setOperationsOpen}
+        />
       </section>
 
       {cascade ? (

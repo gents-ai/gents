@@ -50,9 +50,17 @@ if (apiKeyEnvVar) {
   env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
 }
 
+const liveTestFiles = [
+  "tests/tauri-driver.live.behavior.test.tsx",
+  "tests/tauri-driver.live.chat.test.tsx",
+  "tests/tauri-driver.live.config.test.tsx",
+  "tests/tauri-driver.live.interrupt.test.tsx",
+  "tests/tauri-driver.live.sad-path.test.tsx",
+];
+
 const child = spawn(
   "npx",
-  ["vitest", "run", "tests/tauri-driver.live.test.tsx", ...argv],
+  ["vitest", "run", ...liveTestFiles, ...argv],
   {
     stdio: "inherit",
     env,

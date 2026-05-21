@@ -43,8 +43,16 @@ export function ChatTranscriptPanel({
             }
           }) ?? [],
         turnState: session?.turnState ?? "",
+        latestResponseStatus: session?.latestResponse?.status ?? "",
+        latestResponseError: session?.latestResponse?.errorMessage ?? "",
       }),
-    [selectedSessionId, session?.timelineItems, session?.turnState],
+    [
+      selectedSessionId,
+      session?.timelineItems,
+      session?.turnState,
+      session?.latestResponse?.status,
+      session?.latestResponse?.errorMessage,
+    ],
   );
 
   useEffect(() => {
@@ -78,6 +86,9 @@ export function ChatTranscriptPanel({
     setAutoFollowTranscript(remaining < 64);
   }
 
+  const responseError = session?.latestResponse?.errorMessage?.trim() ?? "";
+  const showResponseError = Boolean(responseError);
+
   return (
     <section
       className="panel transcript-panel"
@@ -92,6 +103,20 @@ export function ChatTranscriptPanel({
             responseCancelCause={session.latestResponse?.cancelCause}
             responseMaterializedSequence={session.latestResponse?.materializedMessageSequence}
           />
+          {showResponseError ? (
+            <div className="turn-block">
+              <article
+                className="message-card response-error-card"
+                data-testid="response-error-card"
+                role="alert"
+              >
+                <div className="message-role">assistant error</div>
+                <div className="message-content response-error-content">
+                  {responseError}
+                </div>
+              </article>
+            </div>
+          ) : null}
           <div className="transcript-end-anchor" ref={transcriptEndRef} />
         </div>
       ) : (

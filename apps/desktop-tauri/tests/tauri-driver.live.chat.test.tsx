@@ -42,10 +42,16 @@ describeLive("Tauri app live bridge runner chat", () => {
         logTurn(
           `turn 1 submitted sessionId=${firstResult!.sessionId} requestId=${firstResult!.requestId}`,
         );
-        await waitFor(() => {
-          expect(driver.conversation(firstResult!.sessionId)).toBeInTheDocument();
-        });
         const firstSession = await runner.waitForRequestCompletion(firstResult!);
+        if (firstSession.turnState !== "completed") {
+          const diagnostics = await runner.fetchRequestDiagnostics(
+            firstResult!.sessionId,
+            firstResult!.requestId,
+          );
+          throw new Error(
+            `turn 1 failed diagnostics=${JSON.stringify(diagnostics)}`,
+          );
+        }
         expectCompletedSession("turn 1", firstSession);
         logTurn(`turn 1 completed requestId=${firstResult!.requestId}`);
 
@@ -61,6 +67,15 @@ describeLive("Tauri app live bridge runner chat", () => {
           `turn 2 submitted sessionId=${secondResult!.sessionId} requestId=${secondResult!.requestId}`,
         );
         const secondSession = await runner.waitForRequestCompletion(secondResult!);
+        if (secondSession.turnState !== "completed") {
+          const diagnostics = await runner.fetchRequestDiagnostics(
+            secondResult!.sessionId,
+            secondResult!.requestId,
+          );
+          throw new Error(
+            `turn 2 failed diagnostics=${JSON.stringify(diagnostics)}`,
+          );
+        }
         expectCompletedSession("turn 2", secondSession);
         logTurn(`turn 2 completed requestId=${secondResult!.requestId}`);
 
@@ -76,6 +91,15 @@ describeLive("Tauri app live bridge runner chat", () => {
           `turn 3 submitted sessionId=${thirdResult!.sessionId} requestId=${thirdResult!.requestId}`,
         );
         const finalSession = await runner.waitForRequestCompletion(thirdResult!);
+        if (finalSession.turnState !== "completed") {
+          const diagnostics = await runner.fetchRequestDiagnostics(
+            thirdResult!.sessionId,
+            thirdResult!.requestId,
+          );
+          throw new Error(
+            `turn 3 failed diagnostics=${JSON.stringify(diagnostics)}`,
+          );
+        }
         logTurn(`turn 3 completed requestId=${thirdResult!.requestId}`);
 
         expect(runner.sentRequests).toHaveLength(3);

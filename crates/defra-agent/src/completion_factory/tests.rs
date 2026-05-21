@@ -55,8 +55,20 @@ fn sampling_additional_params_merge_with_provider_params() {
     assert_eq!(value["provider"]["require_parameters"], true);
     assert_eq!(value["top_p"], 0.95);
     assert_eq!(value["top_k"], 40);
-    assert_eq!(value["max_tokens"], 1024);
+    assert!(value.get("max_tokens").is_none());
     assert!(value.get("temperature").is_none());
+}
+
+#[test]
+fn sampling_additional_params_omit_dedicated_completion_fields() {
+    let sampling = SamplingConfig {
+        temperature: Some(0.1),
+        top_p: None,
+        top_k: None,
+        max_tokens: Some(1024),
+    };
+
+    assert!(sampling.additional_params().is_none());
 }
 
 #[test]

@@ -48,6 +48,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         await driver.openConfig();
 
         await driver.openConfigSection("backends");
+        await driver.user.click(screen.getByTestId("backend-new"));
         await driver.replaceInput("backend-id", backendId);
         await driver.replaceInput("backend-name", "MiniMax Live Backend");
         await driver.selectOption("backend-provider-kind", "openai");
@@ -63,6 +64,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("profiles");
+        await driver.user.click(screen.getByTestId("profile-new"));
         await driver.replaceInput("profile-id", profileId);
         await driver.replaceInput("profile-display-name", "MiniMax Live Profile");
         await driver.replaceInput("profile-context-window", "131072");
@@ -79,6 +81,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("metaTools");
+        await driver.user.click(screen.getByTestId("tool-service-new"));
         await driver.replaceInput("tool-service-id", toolServiceId);
         await driver.replaceInput("tool-service-display-name", "HTTP MCP Service");
         await driver.replaceTextarea(
@@ -98,6 +101,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("toolSelections");
+        await driver.user.click(screen.getByTestId("tool-selection-new"));
         await driver.replaceInput("tool-selection-id", toolSelectionId);
         await driver.replaceInput(
           "tool-selection-display-name",
@@ -150,6 +154,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("tasks");
+        await driver.user.click(screen.getByTestId("task-new"));
         await driver.replaceInput("task-id", taskId);
         await driver.replaceInput("task-name", "Config Flow Smoke Task");
         await driver.selectOption("task-behavior-id", behaviorId);
@@ -168,6 +173,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("timerTriggers");
+        await driver.user.click(screen.getByTestId("schedule-new"));
         await driver.replaceInput("schedule-id", scheduleId);
         await driver.selectOption("schedule-task-id", taskId);
         await driver.replaceInput("schedule-interval-secs", "3600");
@@ -181,6 +187,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         });
 
         await driver.openConfigSection("eventTriggers");
+        await driver.user.click(screen.getByTestId("event-trigger-new"));
         await driver.replaceInput("event-trigger-id", eventTriggerId);
         await driver.selectOption("event-trigger-task-id", taskId);
         await driver.replaceInput("event-trigger-source-collection", "AgentRequest");

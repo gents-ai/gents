@@ -8,11 +8,11 @@ export const describeLive =
   process.env.DEFRA_AGENT_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
 
 export const FIRST_PROMPT =
-  "Hey amy can you tell me about the p2p communcation between the agent and the desktop in this app and the docuemnt based request model?";
+  "Read workspace/PROMPT.md, then summarize the desktop smoke-test purpose in two short bullets.";
 export const SECOND_PROMPT =
-  "awesome breakdown, can you please tell me what you like about the architecture? use details and point to files";
+  "Read workspace/CLAUDE.md, then summarize the document-driven request model in two short bullets.";
 export const THIRD_PROMPT =
-  "can you please tell me what you don't like about the architecture? use details and point to files";
+  "Without calling more tools, give one concise desktop integration-test risk and one coverage idea.";
 
 export function logTurn(message: string) {
   console.info(`[live-tauri] ${message}`);

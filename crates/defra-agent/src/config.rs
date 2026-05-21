@@ -13,7 +13,7 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 50;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
-pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 900;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
@@ -70,9 +70,6 @@ impl SamplingConfig {
         }
         if let Some(top_k) = self.top_k {
             params.insert("top_k".to_string(), serde_json::json!(top_k));
-        }
-        if let Some(max_tokens) = self.max_tokens {
-            params.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
         }
 
         (!params.is_empty()).then_some(serde_json::Value::Object(params))

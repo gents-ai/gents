@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "../src/components/chat/ChatTranscriptPanel";
@@ -57,5 +57,40 @@ describe("ChatTranscriptPanel", () => {
       expect(scrollIntoView).toHaveBeenCalled();
     });
     scrollIntoView.mockRestore();
+  });
+
+  it("surfaces terminal response errors in the transcript", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="session-1"
+        session={{
+          sessionId: "session-1",
+          agentDid: "did:defra:amy",
+          behaviorId: "default",
+          title: "failed turn",
+          previewText: "preview",
+          status: "active",
+          turnState: "failed",
+          latestRequestId: "req-1",
+          latestResponse: {
+            status: "error",
+            errorMessage: "agent stream failed: model not found",
+          },
+          activeResponseOverlay: null,
+          pendingTurn: null,
+          timelineItems: [
+            {
+              kind: "userMessage",
+              itemKey: "user:1",
+              content: "hello",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("response-error-card")).toHaveTextContent(
+      "model not found",
+    );
   });
 });

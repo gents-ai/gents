@@ -140,8 +140,6 @@ pub(crate) struct DesktopSessionSnapshot {
     pub status: Option<String>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
     pub pending_turn: Option<PendingTurnView>,

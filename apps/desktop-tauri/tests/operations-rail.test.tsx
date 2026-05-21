@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { useState } from "react";
 
 import {
   OperationsRail,
@@ -22,6 +23,15 @@ function HarnessWithTabs({ tabs }: { tabs: OperationsRailTabDescriptor[] }) {
     <OperationsRailProvider tabs={tabs}>
       <HarnessOpenLineageButton />
       <OperationsRail />
+    </OperationsRailProvider>
+  );
+}
+
+function CollapsibleHarness({ tabs }: { tabs: OperationsRailTabDescriptor[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <OperationsRailProvider tabs={tabs}>
+      <OperationsRail open={open} onOpenChange={setOpen} />
     </OperationsRailProvider>
   );
 }
@@ -79,5 +89,24 @@ describe("OperationsRail", () => {
     render(<HarnessWithTabs tabs={tabs} />);
     fireEvent.click(screen.getByRole("tab", { name: "Lineage" }));
     expect(screen.getByTestId("lineage-panel")).toBeInTheDocument();
+  });
+
+  it("collapses into a drawer handle without mounting the active panel", () => {
+    const tabs: OperationsRailTabDescriptor[] = [
+      {
+        id: "background",
+        label: "Background",
+        render: () => <div data-testid="background-panel">bg</div>,
+      },
+    ];
+    render(<CollapsibleHarness tabs={tabs} />);
+
+    expect(screen.queryByTestId("background-panel")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /open operations drawer/i }));
+    expect(screen.getByTestId("background-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /close operations drawer/i }));
+    expect(screen.queryByTestId("background-panel")).not.toBeInTheDocument();
   });
 });
