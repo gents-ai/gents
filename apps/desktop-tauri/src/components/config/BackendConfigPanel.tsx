@@ -7,7 +7,12 @@ import type {
   InferenceBackendView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  linesToArray,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type BackendConfigPanelProps = {
   deployment: DeploymentView;
@@ -123,20 +128,24 @@ export function BackendConfigEditor({
   async function submitBackend(event: FormEvent) {
     event.preventDefault();
     const nextId = backendId.trim();
-    await onSaveBackendConfig({
-      backendId: nextId,
-      name,
-      providerKind,
-      endpoint,
-      apiKey: apiKey.trim() ? apiKey : undefined,
-      apiKeyEnvVar,
-      clearApiKey,
-      models: linesToArray(models),
-      maxConcurrent: parseOptionalInt(maxConcurrent),
-      maxQueueDepth: parseOptionalInt(maxQueueDepth),
-      enabled,
-    });
-    onSaved(nextId);
+    try {
+      await onSaveBackendConfig({
+        backendId: nextId,
+        name,
+        providerKind,
+        endpoint,
+        apiKey: apiKey.trim() ? apiKey : undefined,
+        apiKeyEnvVar,
+        clearApiKey,
+        models: linesToArray(models),
+        maxConcurrent: parseOptionalInt(maxConcurrent),
+        maxQueueDepth: parseOptionalInt(maxQueueDepth),
+        enabled,
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (

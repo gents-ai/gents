@@ -9,7 +9,12 @@ import type {
   ToolServiceTestResult,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { isOptionalInt, optionalString, parseOptionalInt } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  optionalString,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type ToolServiceConfigPanelProps = {
   deployment: DeploymentView;
@@ -145,18 +150,22 @@ export function ToolServiceConfigEditor({
   async function submitToolService(event: FormEvent) {
     event.preventDefault();
     const nextId = serviceId.trim();
-    await onSaveToolServiceConfig({
-      serviceId: nextId,
-      displayName,
-      description: optionalString(description),
-      hostname: optionalString(hostname),
-      tailscaleIp: optionalString(tailscaleIp),
-      lanIp: optionalString(lanIp),
-      mcpPort: parseOptionalInt(mcpPort),
-      mcpPath: optionalString(mcpPath) || "/mcp",
-      status: optionalString(status) || "online",
-    });
-    onSaved(nextId);
+    try {
+      await onSaveToolServiceConfig({
+        serviceId: nextId,
+        displayName,
+        description: optionalString(description),
+        hostname: optionalString(hostname),
+        tailscaleIp: optionalString(tailscaleIp),
+        lanIp: optionalString(lanIp),
+        mcpPort: parseOptionalInt(mcpPort),
+        mcpPath: optionalString(mcpPath) || "/mcp",
+        status: optionalString(status) || "online",
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   async function testToolService() {

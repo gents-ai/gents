@@ -13,6 +13,7 @@ import type {
 import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
+  ignoreHandledActionError,
   isOptionalFloat,
   optionalString,
   parseOptionalFloat,
@@ -193,27 +194,31 @@ export function BehaviorConfigEditor({
   async function submitBehavior(event: FormEvent) {
     event.preventDefault();
     const nextId = behaviorId.trim();
-    await onSaveBehaviorConfig({
-      agentDid,
-      behaviorId: nextId,
-      displayName: nextId,
-      systemPrompt,
-      backendId: optionalString(backendId),
-      inferenceProfileId: profileId.trim(),
-      toolSelectionId: optionalString(toolSelectionId),
-      compactionStrategy: optionalString(compactionStrategy),
-      compactionThreshold: parseOptionalFloat(compactionThreshold),
-      enabled,
-    });
-    if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
-      await onSaveAgentConfig({
+    try {
+      await onSaveBehaviorConfig({
         agentDid,
-        displayName: agentDisplayName,
-        defaultBehaviorId: nextId,
-        enabled: agentEnabled,
+        behaviorId: nextId,
+        displayName: nextId,
+        systemPrompt,
+        backendId: optionalString(backendId),
+        inferenceProfileId: profileId.trim(),
+        toolSelectionId: optionalString(toolSelectionId),
+        compactionStrategy: optionalString(compactionStrategy),
+        compactionThreshold: parseOptionalFloat(compactionThreshold),
+        enabled,
       });
+      if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
+        await onSaveAgentConfig({
+          agentDid,
+          displayName: agentDisplayName,
+          defaultBehaviorId: nextId,
+          enabled: agentEnabled,
+        });
+      }
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
     }
-    onSaved(nextId);
   }
 
   return (

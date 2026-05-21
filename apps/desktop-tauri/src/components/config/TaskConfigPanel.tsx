@@ -9,7 +9,7 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { optionalString } from "./formUtils";
+import { ignoreHandledActionError, optionalString } from "./formUtils";
 
 export type TaskConfigPanelProps = {
   deployment: DeploymentView;
@@ -129,24 +129,32 @@ export function TaskConfigEditor({
   async function submitTask(event: FormEvent) {
     event.preventDefault();
     const nextId = taskId.trim();
-    await onSaveTaskConfig({
-      taskId: nextId,
-      name,
-      description: optionalString(description),
-      behaviorId,
-      promptTemplate,
-      enabled,
-      outputSchemaRef: optionalString(outputSchemaRef),
-    });
-    onSaved(nextId);
+    try {
+      await onSaveTaskConfig({
+        taskId: nextId,
+        name,
+        description: optionalString(description),
+        behaviorId,
+        promptTemplate,
+        enabled,
+        outputSchemaRef: optionalString(outputSchemaRef),
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   async function runSelectedTask() {
-    const result = await onRunTask({
-      taskId: taskId.trim(),
-      args: JSON.parse(runArgs || "{}") as unknown,
-    });
-    setRunStatus(result);
+    try {
+      const result = await onRunTask({
+        taskId: taskId.trim(),
+        args: JSON.parse(runArgs || "{}") as unknown,
+      });
+      setRunStatus(result);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (

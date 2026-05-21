@@ -8,7 +8,7 @@ import type {
   ToolServiceRegistryView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { linesToArray } from "./formUtils";
+import { ignoreHandledActionError, linesToArray } from "./formUtils";
 
 export type ToolSelectionConfigPanelProps = {
   deployment: DeploymentView;
@@ -185,21 +185,25 @@ export function ToolSelectionConfigEditor({
       writeToolsDisabledByCeiling && bashMode === "Unrestricted"
         ? "ReadOnly"
         : bashMode;
-    await onSaveToolSelectionConfig({
-      agentDid,
-      selectionId: nextId,
-      displayName,
-      enableFileTools: effectiveEnableFileTools,
-      fileToolsMode: effectiveFileToolsMode,
-      fileToolRoot,
-      enableBash: effectiveEnableBash,
-      bashMode: effectiveBashMode,
-      cliToolNames: linesToArray(cliToolNames),
-      enableMetaTools,
-      allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
-      delegateTo: linesToArray(delegateTo),
-    });
-    onSaved(nextId);
+    try {
+      await onSaveToolSelectionConfig({
+        agentDid,
+        selectionId: nextId,
+        displayName,
+        enableFileTools: effectiveEnableFileTools,
+        fileToolsMode: effectiveFileToolsMode,
+        fileToolRoot,
+        enableBash: effectiveEnableBash,
+        bashMode: effectiveBashMode,
+        cliToolNames: linesToArray(cliToolNames),
+        enableMetaTools,
+        allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
+        delegateTo: linesToArray(delegateTo),
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (
