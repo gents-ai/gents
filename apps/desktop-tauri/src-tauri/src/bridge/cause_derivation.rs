@@ -55,7 +55,7 @@ pub(crate) struct ResponseEvidence {
 fn is_cancelled_terminal(state: &Option<String>) -> bool {
     matches!(
         state.as_deref(),
-        Some("cancelled") | Some("interrupted") | Some("timedOut") | Some("failed")
+        Some("cancelled") | Some("interrupted") | Some("timedOut")
     )
 }
 

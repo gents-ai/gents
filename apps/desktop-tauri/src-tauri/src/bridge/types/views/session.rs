@@ -21,6 +21,7 @@ pub(crate) struct MessageView {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolCallView {
     pub tool_call_key: String,
+    pub request_id: Option<String>,
     pub message_sequence: Option<i64>,
     pub tool_name: Option<String>,
     pub tool_call_id: Option<String>,

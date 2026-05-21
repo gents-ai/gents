@@ -178,6 +178,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             message_sequence: None,
             tool_name: Some("glob".to_string()),
             tool_call_id: Some("call-1".to_string()),
@@ -476,6 +477,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             message_sequence: Some(2),
             tool_name: Some("glob".to_string()),
             tool_call_id: Some("call-1".to_string()),

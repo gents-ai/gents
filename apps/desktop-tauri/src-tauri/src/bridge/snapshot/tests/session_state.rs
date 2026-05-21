@@ -752,6 +752,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             message_sequence: Some(2),
             tool_name: Some("bash".to_string()),
             tool_call_id: Some("call-1".to_string()),
@@ -889,6 +890,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
             tool_call_key: "tool-cascade-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             message_sequence: Some(2),
             tool_name: Some("read_file".to_string()),
             tool_call_id: Some("call-cascade-1".to_string()),

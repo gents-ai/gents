@@ -132,3 +132,40 @@ async fn walk_returns_no_rows_for_standalone_root() {
         result.rows
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn walk_excludes_rows_owned_by_different_agent_did() {
+    // Seed the cascade fixture (owned by did:test:operator) plus one
+    // AgentRequest owned by did:test:other. Walk with agent_did filter.
+    // Assert: the other-agent request is NOT in the result.
+    let (core, _tmp) = super::support::seed_cascade_fixture_with_foreign_request().await;
+    let req = CascadeWalkRequest {
+        root_request_id: "req_root".into(),
+        agent_did: Some("did:test:operator".into()),
+        include_terminal: true,
+    };
+    let result = crate::bridge::cascade::walk(&core, &req)
+        .await
+        .expect("walk ok");
+
+    // The foreign request must not appear in any walked row.
+    let has_foreign = result
+        .rows
+        .iter()
+        .any(|r| r.request_id == "req_foreign");
+    assert!(
+        !has_foreign,
+        "walk with agent_did=did:test:operator should NOT include req_foreign (owned by did:test:other)"
+    );
+
+    // The operator's own rows must still be present.
+    let operator_count = result
+        .rows
+        .iter()
+        .filter(|r| r.request_id != "req_foreign")
+        .count();
+    assert!(
+        operator_count > 0,
+        "expected operator-owned rows to be present"
+    );
+}

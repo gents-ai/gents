@@ -75,14 +75,19 @@ pub(crate) struct CascadeWalkResult {
 /// classifying each descendant by the nearest bridge row's `cancel_policy`.
 /// Filters terminal rows when `include_terminal == false`, except as
 /// AlreadyTerminal evidence.
+///
+/// When `req.agent_did` is `Some(did)`, both the root AgentRequest query and
+/// every AgentToolCall / child AgentRequest query include an `agent_did` filter
+/// so the walk is scoped to that operator's documents only.
 pub(crate) async fn walk(
     core: &Arc<ClientCore>,
     req: &CascadeWalkRequest,
 ) -> Result<CascadeWalkResult, String> {
     let node = core.node();
+    let agent_did = req.agent_did.as_deref();
 
     // Load root request.
-    let root = fetch_request(node, &req.root_request_id)
+    let root = fetch_request(node, &req.root_request_id, agent_did)
         .await
         .map_err(|e| format!("cascade::walk: root request not found: {e}"))?;
 
@@ -100,6 +105,7 @@ pub(crate) async fn walk(
 
     bfs(
         node,
+        agent_did,
         &req.root_request_id,
         req.include_terminal,
         0,
@@ -113,8 +119,11 @@ pub(crate) async fn walk(
 
 /// BFS descent over AgentToolCall edges. `parent_request_id` is the node whose
 /// children we're expanding at this call level. `depth` starts at 0.
+///
+/// When `agent_did` is `Some(did)`, queries filter to rows owned by that DID.
 async fn bfs(
     node: &EmbeddedNode,
+    agent_did: Option<&str>,
     parent_request_id: &str,
     include_terminal: bool,
     depth: usize,
@@ -128,6 +137,8 @@ async fn bfs(
     }
 
     // Query all AgentToolCall rows where request_id == parent AND child_request_id is set.
+    // AgentToolCall does not carry agent_did; operator scoping is enforced via
+    // fetch_request (which does filter by agent_did) for the root and each child.
     let escaped_parent = escape_graphql_string(parent_request_id);
     let query = format!(
         r#"{{
@@ -178,10 +189,18 @@ async fn bfs(
         let await_mode = string_field(tc, "await_mode");
         let cancel_policy = string_field(tc, "cancel_policy");
 
-        // Fetch child request to determine lifecycle state.
-        let child_row = fetch_request(node, &child_id).await.map_err(|e| {
-            format!("cascade::walk: child request {child_id} not found: {e}")
-        })?;
+        // Fetch child request to determine lifecycle state. Scope by agent_did if provided.
+        // If the child is owned by a different agent (not found under the filter), skip it.
+        let child_row = match fetch_request(node, &child_id, agent_did).await {
+            Ok(row) => row,
+            Err(_) if agent_did.is_some() => {
+                // Child is not visible under the agent_did scope — skip it.
+                continue;
+            }
+            Err(e) => {
+                return Err(format!("cascade::walk: child request {child_id} not found: {e}"));
+            }
+        };
 
         let child_lifecycle_state = string_field(&child_row, "lifecycle_state");
         let child_session_id = string_field(&child_row, "session_id");
@@ -227,6 +246,7 @@ async fn bfs(
         if should_recurse {
             Box::pin(bfs(
                 node,
+                agent_did,
                 &child_id,
                 include_terminal,
                 depth + 1,
@@ -241,15 +261,25 @@ async fn bfs(
 }
 
 /// Fetch a single AgentRequest row by `request_id`. Returns Err if not found.
+///
+/// When `agent_did` is `Some(did)`, an additional `agent_did` filter is applied
+/// so only rows owned by that operator are visible.
 async fn fetch_request(
     node: &EmbeddedNode,
     request_id: &str,
+    agent_did: Option<&str>,
 ) -> Result<Value, String> {
     let escaped = escape_graphql_string(request_id);
+    let agent_did_clause = agent_did
+        .map(|did| {
+            let escaped_did = escape_graphql_string(did);
+            format!(r#", agent_did: {{ _eq: "{escaped_did}" }}"#)
+        })
+        .unwrap_or_default();
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                filter: {{ request_id: {{ _eq: "{escaped}" }}{agent_did_clause} }},
                 limit: 1
             ) {{
                 request_id
@@ -373,8 +403,9 @@ pub(crate) async fn latch_root_interrupt(
 ) -> Result<LatchResult, String> {
     let node = core.node();
 
-    // 1. Read the current row.
-    let row = fetch_request(node, request_id)
+    // 1. Read the current row. No agent_did filter: latch operates on a specific
+    //    request_id and doesn't need operator scoping here.
+    let row = fetch_request(node, request_id, None)
         .await
         .map_err(|e| format!("latch_root_interrupt: {e}"))?;
 
@@ -441,7 +472,7 @@ pub(crate) async fn interrupt_request(
         let latched = latch_root_interrupt(core, &req.request_id).await?;
         return Ok(InterruptRequestResult {
             request_id: req.request_id.clone(),
-            accepted: latched.was_first,
+            accepted: true, // idempotent success — always accepted when latched or already latched
             interrupt_requested_at: Some(latched.interrupt_requested_at),
             already_interrupted: !latched.was_first,
             stale_preview: false,
@@ -476,7 +507,7 @@ pub(crate) async fn interrupt_request(
     let latched = latch_root_interrupt(core, &req.request_id).await?;
     Ok(InterruptRequestResult {
         request_id: req.request_id.clone(),
-        accepted: latched.was_first,
+        accepted: true, // idempotent success — always accepted when latched or already latched
         interrupt_requested_at: Some(latched.interrupt_requested_at),
         already_interrupted: !latched.was_first,
         stale_preview: false,

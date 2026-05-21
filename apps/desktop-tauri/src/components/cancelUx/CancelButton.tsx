@@ -22,7 +22,7 @@ export function CancelButton({
   onInterruptClick,
   forceVisible = false,
 }: CancelButtonProps): JSX.Element | null {
-  const isInFlight = forceVisible || IN_FLIGHT_STATES.has((turnState ?? "").toLowerCase());
+  const isInFlight = forceVisible || IN_FLIGHT_STATES.has(turnState ?? "");
   if (!isInFlight) return null;
   const disabled = activeRequestId == null;
   return (

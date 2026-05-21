@@ -69,7 +69,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
     })
     .await
     .expect("second");
-    assert!(!second.accepted);
+    assert!(second.accepted); // idempotent re-interrupt is still accepted
     assert!(second.already_interrupted);
 }
 

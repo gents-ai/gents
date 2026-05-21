@@ -56,4 +56,11 @@ describe("CancelButton", () => {
     );
     expect(screen.getByRole("button", { name: /interrupt/i })).toBeInTheDocument();
   });
+
+  it("renders enabled when turnState is waitingForClaim", () => {
+    render(
+      <CancelButton activeRequestId="req_a17" turnState="waitingForClaim" onInterruptClick={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: /interrupt/i })).toBeEnabled();
+  });
 });

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use defra_agent_protocol::row::AgentRequestRow;
 use defra_agent_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
 use super::super::cause_derivation::{
@@ -5,8 +8,8 @@ use super::super::cause_derivation::{
     ToolCallEvidence,
 };
 use super::super::types::{
-    normalize_optional, turn_state_label, DesktopSessionSnapshot, MessageView, PendingTurnView,
-    ResponseView, ToolCallView, ToolResultView,
+    normalize_optional, turn_state_label, DesktopSessionSnapshot, DerivedCancelCauseView,
+    MessageView, PendingTurnView, ResponseView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
 use super::{request_matches_agent, source_matches_agent};
@@ -196,29 +199,55 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         })
         .collect::<Vec<_>>();
 
-    let tool_call_req_evidence = latest_request
-        .map(|r| RequestEvidence {
-            request_id: r.request_id.clone(),
-            interrupt_requested_at: r.interrupt_requested_at.clone(),
-            caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
-            deadline_breached: false,
-        })
-        .unwrap_or_default();
+    // Index requests by id for O(1) per-tool-call lookup.
+    let requests_by_id: HashMap<&str, &AgentRequestRow> =
+        requests.iter().map(|r| (r.request_id.as_str(), *r)).collect();
+
     let tool_calls = transcript
         .tool_calls
         .into_iter()
         .map(|row| {
-            let tool_evidence = ToolCallEvidence {
-                tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
-                lifecycle_state: row.lifecycle_state.clone(),
-                deadline_at: row.deadline_at.clone(),
-                cancel_policy: row.cancel_policy.clone(),
-                completed_at: row.completed_at.clone(),
-                timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+            // Prefer persisted cancel_cause when present; only derive when absent.
+            let cancel_cause = if let Some(persisted) =
+                row.cancel_cause.as_deref().filter(|s| !s.is_empty())
+            {
+                Some(DerivedCancelCauseView {
+                    cause: persisted.to_string(),
+                    source: "toolLifecycle".into(),
+                    confidence: "direct".into(),
+                    at: normalize_optional(row.completed_at.as_deref()),
+                    evidence: vec![format!(
+                        "AgentToolCall.cancel_cause = {persisted:?} (persisted)"
+                    )],
+                })
+            } else {
+                // Derive from this tool's OWN parent request, not latest_request.
+                let req_for_tool = row
+                    .request_id
+                    .as_deref()
+                    .and_then(|rid| requests_by_id.get(rid).copied())
+                    .or(latest_request);
+                let req_evidence = req_for_tool
+                    .map(|r| RequestEvidence {
+                        request_id: r.request_id.clone(),
+                        interrupt_requested_at: r.interrupt_requested_at.clone(),
+                        caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
+                        deadline_breached: false,
+                    })
+                    .unwrap_or_default();
+                let tool_evidence = ToolCallEvidence {
+                    tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
+                    lifecycle_state: row.lifecycle_state.clone(),
+                    deadline_at: row.deadline_at.clone(),
+                    cancel_policy: row.cancel_policy.clone(),
+                    completed_at: row.completed_at.clone(),
+                    timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+                };
+                derive_tool_call_cause(&req_evidence, &tool_evidence)
             };
-            let cancel_cause = derive_tool_call_cause(&tool_call_req_evidence, &tool_evidence);
             ToolCallView {
                 tool_call_key: row.tool_call_key.clone(),
+                request_id: normalize_optional(row.request_id.as_deref()),
                 message_sequence: row.message_sequence,
                 tool_name: normalize_optional(row.tool_name.as_deref()),
                 tool_call_id: normalize_optional(row.tool_call_id.as_deref()),

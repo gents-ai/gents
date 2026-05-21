@@ -135,6 +135,20 @@ fn none_for_non_cancelled_tool_calls() {
 }
 
 #[test]
+fn none_for_failed_tool_calls() {
+    // "failed" is an error terminal — not a cancellation. Must return None.
+    let tool = ToolCallEvidence {
+        tool_call_id: "tc_8".into(),
+        lifecycle_state: Some("failed".into()),
+        ..tool_default()
+    };
+    assert!(
+        derive_tool_call_cause(&req_default(), &tool).is_none(),
+        "expected None for lifecycle_state=failed, but got Some(_)"
+    );
+}
+
+#[test]
 fn response_cause_uses_response_interrupted_at_when_present() {
     let resp = ResponseEvidence {
         interrupted_at: Some("2026-05-20T10:36:11Z".into()),

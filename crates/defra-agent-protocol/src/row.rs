@@ -294,6 +294,8 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
     pub message_sequence: Option<i64>,
     #[serde(default)]
     pub tool_name: Option<String>,

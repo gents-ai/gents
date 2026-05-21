@@ -285,6 +285,40 @@ pub(crate) async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
+/// Seeds the cascade fixture PLUS one `AgentRequest` owned by `did:test:other`
+/// to verify that agent_did-scoped walks exclude foreign-agent rows.
+pub(crate) async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, TempDir) {
+    let (core, tmp) = seed_cascade_fixture().await;
+
+    // Seed one extra request owned by a different agent DID.
+    // It references req_root's session just to be realistic, but its agent_did
+    // is different so a did:test:operator-scoped walk must not see it.
+    let mutation = r#"mutation {
+        create_AgentRequest(input: {
+            request_id: "req_foreign",
+            agent_did: "did:test:other",
+            behavior_id: "other-behavior",
+            session_id: "sess_foreign",
+            content: "foreign agent request",
+            status: "processing",
+            lifecycle_state: "processing",
+            backend_id: "",
+            created_at: "2026-05-20T00:07:00Z",
+            retry_count: 0,
+            caused_by_parent_request_id: "req_root",
+            caused_by_parent_tool_call_id: "tc_1"
+        }) { _docID }
+    }"#;
+    let response = core.node().execute(mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed foreign AgentRequest failed: {:?}",
+        response.errors
+    );
+
+    (core, tmp)
+}
+
 /// Fetches a single `AgentRequest` row by `request_id` and returns a
 /// `AgentRequestRowLite` for assertions in interrupt tests. Panics if the
 /// request is not found.
