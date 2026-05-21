@@ -163,6 +163,23 @@ export function renderTauriAppDriverWithBridge(
     async pressShiftEnter() {
       await user.type(this.composer(), "{shift>}{enter}{/shift}");
     },
+    cancelButton() {
+      return screen.queryByTestId("cancel-button");
+    },
+    async clickCancel() {
+      const btn = this.cancelButton();
+      if (!btn) throw new Error("cancel button not visible");
+      await this.user.click(btn);
+    },
+    cascadeDialog() {
+      return screen.queryByRole("dialog", { name: /interrupt parent request/i });
+    },
+    async confirmCascade() {
+      const dialog = this.cascadeDialog();
+      if (!dialog) throw new Error("cascade dialog not open");
+      const confirm = screen.getByRole("button", { name: /interrupt parent and cascade/i });
+      await this.user.click(confirm);
+    },
     async dispose() {
       try {
         rendered.unmount();

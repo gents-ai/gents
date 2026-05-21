@@ -1,9 +1,11 @@
 import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
 import type {
+  CascadeCancelPreview,
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   InitSummary,
+  InterruptRequestResult,
   TaskRunResult,
 } from "../../src/lib/types";
 import type { TauriDriverChatRequest } from "../tauri-driver";
@@ -109,5 +111,15 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
       runner.taskRunResults.push(result);
       return result;
     },
+    previewInterruptCascade: async (request) =>
+      runner.postJson<CascadeCancelPreview>(
+        "/desktop/interrupt/preview",
+        request,
+      ),
+    interruptRequest: async (request) =>
+      runner.postJson<InterruptRequestResult>(
+        "/desktop/interrupt/request",
+        request,
+      ),
   };
 }

@@ -27,4 +27,5 @@
 @import "./styles/subagent-lineage.css";
 @import "./styles/backend-health/backend-health.css";
 @import "./styles/backgrounded-tools.css";
+@import "./styles/cancel-ux.css";
 @import "./styles/utilities.css";

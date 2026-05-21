@@ -30,11 +30,11 @@ const AGENT_PRINCIPAL_FIELDS: &str =
 const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
-const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
+const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
 const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
@@ -588,7 +588,7 @@ fn remote_request_lookup_query(request_id: &str) -> String {
     format!(
         r#"
 query DesktopRemoteRequestLookup {{
-  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
+  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
   AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
 }}
 "#
@@ -601,7 +601,7 @@ fn remote_chat_patch_query(session_id: &str) -> String {
         r#"
 query DesktopRemoteChatPatch {{
   AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }}
-  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
+  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
   AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
@@ -619,11 +619,11 @@ query DesktopRemoteSnapshot {
   AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at }
   AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
   AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }
-  AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
+  AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
-  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms }
+  AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }

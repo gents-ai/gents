@@ -145,6 +145,16 @@ export type InterruptRequestResult = {
   preview?: CascadeCancelPreview | null;
 };
 
+export type DerivedCancelCauseView = {
+  cause: "userCancelled" | "interrupted" | "deadline" | "unknown";
+  source:
+    | "requestInterrupt" | "parentCascade" | "deadline"
+    | "toolLifecycle"   | "responseInterruptedAt" | "unresolved";
+  confidence: "direct" | "derived";
+  at?: string | null;
+  evidence: string[];
+};
+
 // Command request shapes (mirror bridge/types/requests/operations.rs).
 
 export type DesktopOperationsSnapshotRequest = {

@@ -204,6 +204,8 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub caused_by_trigger_kind: Option<String>,
     #[serde(default)]
+    pub caused_by_parent_request_id: Option<String>,
+    #[serde(default)]
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
@@ -292,6 +294,8 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
     pub message_sequence: Option<i64>,
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -305,6 +309,8 @@ pub struct AgentToolCallRow {
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub cancel_policy: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
     #[serde(default)]

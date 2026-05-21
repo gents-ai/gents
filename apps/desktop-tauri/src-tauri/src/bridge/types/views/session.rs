@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use super::operations::DerivedCancelCauseView;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MessageView {
@@ -19,6 +21,7 @@ pub(crate) struct MessageView {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolCallView {
     pub tool_call_key: String,
+    pub request_id: Option<String>,
     pub message_sequence: Option<i64>,
     pub tool_name: Option<String>,
     pub tool_call_id: Option<String>,
@@ -27,6 +30,8 @@ pub(crate) struct ToolCallView {
     pub status: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +57,8 @@ pub(crate) struct RenderedToolCallView {
     pub status_kind: String,
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,6 +83,8 @@ pub(crate) struct ResponseView {
     pub materialized_at: Option<String>,
     pub interrupted_at: Option<String>,
     pub completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
 #[derive(Debug, Clone, Serialize)]

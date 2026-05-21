@@ -1,4 +1,4 @@
-import { useMemo, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
   DeploymentView,
@@ -6,7 +6,9 @@ import type {
   P2PHealth,
 } from "../lib/types";
 import { displayBehaviorLabel } from "../lib/types";
+import { previewInterruptCascade, interruptRequest } from "../lib/tauri/interruptRequest";
 import { BackendHealthPanel } from "./backendHealth";
+import { CascadeCancelDialog } from "./cancelUx";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
 import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
@@ -117,6 +119,42 @@ export function ActiveChatWorkspace({
     ];
   }, [session?.latestRequestId, selectedDeployment.agentDid]);
 
+  const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
+  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!interruptResultBanner) return;
+    const t = setTimeout(() => setInterruptResultBanner(null), 5000);
+    return () => clearTimeout(t);
+  }, [interruptResultBanner]);
+
+  async function onInterruptClick() {
+    const requestId = session?.latestRequestId;
+    if (!requestId) return;
+    try {
+      const preview = await previewInterruptCascade({
+        requestId,
+        agentDid: selectedDeployment.agentDid,
+        includeTerminal: false,
+      });
+      const childCount =
+        preview.willInterrupt.length + preview.willDetach.length + preview.unknownPolicy.length;
+      if (childCount === 0) {
+        const result = await interruptRequest({
+          requestId,
+          cause: "userCancelled",
+          cascade: false,
+        });
+        if (result.accepted) setInterruptResultBanner("Interrupt accepted");
+        else if (result.alreadyInterrupted) setInterruptResultBanner("Already interrupted by another caller");
+        return;
+      }
+      setCascade({ rootRequestId: requestId });
+    } catch (e) {
+      setInterruptResultBanner(`Interrupt preview failed: ${String(e)}`);
+    }
+  }
+
   return (
     <OperationsRailProvider tabs={operationsRailTabs}>
       <ChatHeader
@@ -134,7 +172,14 @@ export function ActiveChatWorkspace({
             session={session}
           />
 
+          {interruptResultBanner ? (
+            <div className="muted small" role="status" aria-live="polite" style={{ padding: "4px 12px" }}>
+              {interruptResultBanner}
+            </div>
+          ) : null}
+
           <ChatComposer
+            activeRequestId={session?.latestRequestId ?? null}
             approxSerializedBytes={approxSerializedBytes}
             behaviorLabel={behaviorLabel}
             canSend={canSend}
@@ -146,11 +191,33 @@ export function ActiveChatWorkspace({
             sending={sending}
             turnState={session?.turnState ?? null}
             onDraftChange={onDraftChange}
+            onInterruptClick={onInterruptClick}
             onSend={onSend}
           />
         </div>
         <OperationsRail />
       </section>
+
+      {cascade ? (
+        <CascadeCancelDialog
+          open
+          rootRequestId={cascade.rootRequestId}
+          agentDid={selectedDeployment.agentDid}
+          onClose={() => setCascade(null)}
+          onAccepted={(at) => {
+            setCascade(null);
+            setInterruptResultBanner(`Interrupt accepted at ${at ?? "(unknown)"}`);
+          }}
+          onAlreadyInterrupted={() => {
+            setCascade(null);
+            setInterruptResultBanner("Already interrupted by another caller");
+          }}
+          onError={(msg) => {
+            setCascade(null);
+            setInterruptResultBanner(`Interrupt failed: ${msg}`);
+          }}
+        />
+      ) : null}
     </OperationsRailProvider>
   );
 }

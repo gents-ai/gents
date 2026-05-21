@@ -40,6 +40,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],
@@ -112,6 +113,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_retries: Some(3),
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
                 valid_until: None,
             },
@@ -136,6 +138,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_retries: Some(3),
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
                 valid_until: None,
             },
@@ -227,6 +230,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],
@@ -494,6 +498,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],
@@ -553,6 +558,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],
@@ -623,6 +629,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],
@@ -673,6 +680,266 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
     assert_eq!(completed_snapshot.turn_state.as_deref(), Some("completed"));
     assert!(completed_snapshot.active_response_overlay.is_none());
     assert!(completed_snapshot.pending_turn.is_none());
+}
+
+#[test]
+fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("cancel cause test".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("user question".to_string()),
+            status: Some("interrupted".to_string()),
+            created_at: Some("2026-05-20T10:30:00Z".to_string()),
+            updated_at: Some("2026-05-20T10:32:20Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("user question".to_string()),
+            status: Some("interrupted".to_string()),
+            lifecycle_state: Some("interrupted".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-05-20T10:30:00Z".to_string()),
+            claimed_at: Some("2026-05-20T10:30:01Z".to_string()),
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
+            interrupt_requested_at: Some("2026-05-20T10:32:14Z".to_string()),
+            valid_until: None,
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("partial response before interrupt".to_string()),
+            reasoning: None,
+            status: Some("interrupted".to_string()),
+            error_message: None,
+            token_count: Some(8),
+            progress_seq: Some(1),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-05-20T10:30:02Z".to_string()),
+            completed_at: None,
+            interrupted_at: Some("2026-05-20T10:32:15Z".to_string()),
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("user question")),
+            timestamp: Some("2026-05-20T10:30:00Z".to_string()),
+        }],
+        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+            tool_call_key: "tool-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            request_id: None,
+            message_sequence: Some(2),
+            tool_name: Some("bash".to_string()),
+            tool_call_id: Some("call-1".to_string()),
+            args: Some("{\"command\":\"ls\"}".to_string()),
+            result: None,
+            status: Some("cancelled".to_string()),
+            lifecycle_state: Some("cancelled".to_string()),
+            cancel_policy: None,
+            started_at: Some("2026-05-20T10:31:00Z".to_string()),
+            deadline_at: None,
+            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            cancel_cause: None,
+            latency_ms: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
+
+    // Response-side: interrupted_at present → cause == "interrupted", source == "responseInterruptedAt"
+    let response_cancel_cause = snapshot
+        .latest_response
+        .as_ref()
+        .and_then(|r| r.cancel_cause.as_ref())
+        .expect("interrupted response should have a derived cancel_cause");
+    assert_eq!(
+        response_cancel_cause.cause, "interrupted",
+        "interrupted response cause should be 'interrupted'"
+    );
+    assert_eq!(
+        response_cancel_cause.source, "responseInterruptedAt",
+        "interrupted response source should be 'responseInterruptedAt'"
+    );
+
+    // Tool-call side: lifecycle_state == "cancelled" + interrupt_requested_at on root request (no parent)
+    // → cause == "userCancelled", source == "requestInterrupt"
+    let tool_group = snapshot
+        .timeline_items
+        .iter()
+        .find_map(|item| match item {
+            RenderedTimelineItem::ToolGroup { tools, .. } => Some(tools),
+            _ => None,
+        })
+        .expect("timeline should contain a ToolGroup");
+    let tool = tool_group.iter().find(|t| t.tool_name == "bash").expect("bash tool call");
+    let tool_cancel_cause = tool
+        .cancel_cause
+        .as_ref()
+        .expect("cancelled tool call should have a derived cancel_cause");
+    assert_eq!(
+        tool_cancel_cause.cause, "userCancelled",
+        "cancelled tool call cause should be 'userCancelled'"
+    );
+    assert_eq!(
+        tool_cancel_cause.source, "requestInterrupt",
+        "cancelled tool call source should be 'requestInterrupt'"
+    );
+}
+
+#[test]
+fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_policy() {
+    // Seed: a child AgentRequest with caused_by_parent_request_id set,
+    // and a cancelled AgentToolCall with cancel_policy="cascade".
+    // Assert: the timeline tool group's tool.cancelCause has
+    // cause="interrupted" and source="parentCascade".
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("cascade cancel test".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("subagent request".to_string()),
+            status: Some("interrupted".to_string()),
+            created_at: Some("2026-05-20T10:30:00Z".to_string()),
+            updated_at: Some("2026-05-20T10:32:20Z".to_string()),
+            latest_request_id: Some("req-child".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-child".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("subagent task".to_string()),
+            status: Some("interrupted".to_string()),
+            lifecycle_state: Some("interrupted".to_string()),
+            backend_id: None,
+            execution_origin: Some("subagent".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-05-20T10:30:00Z".to_string()),
+            claimed_at: Some("2026-05-20T10:30:01Z".to_string()),
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_parent_request_id: Some("req-parent".to_string()),
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-child".to_string(),
+            request_id: Some("req-child".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("partial subagent response".to_string()),
+            reasoning: None,
+            status: Some("interrupted".to_string()),
+            error_message: None,
+            token_count: Some(5),
+            progress_seq: Some(1),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-05-20T10:30:02Z".to_string()),
+            completed_at: None,
+            interrupted_at: Some("2026-05-20T10:32:15Z".to_string()),
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("subagent task")),
+            timestamp: Some("2026-05-20T10:30:00Z".to_string()),
+        }],
+        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+            tool_call_key: "tool-cascade-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            request_id: None,
+            message_sequence: Some(2),
+            tool_name: Some("read_file".to_string()),
+            tool_call_id: Some("call-cascade-1".to_string()),
+            args: Some("{\"path\":\"/tmp/foo\"}".to_string()),
+            result: None,
+            status: Some("cancelled".to_string()),
+            lifecycle_state: Some("cancelled".to_string()),
+            cancel_policy: Some("cascade".to_string()),
+            started_at: Some("2026-05-20T10:31:00Z".to_string()),
+            deadline_at: None,
+            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            cancel_cause: None,
+            latency_ms: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
+
+    // Tool-call side: lifecycle_state == "cancelled" + cancel_policy == "cascade"
+    // + caused_by_parent_request_id set → cause == "interrupted", source == "parentCascade"
+    let tool_group = snapshot
+        .timeline_items
+        .iter()
+        .find_map(|item| match item {
+            RenderedTimelineItem::ToolGroup { tools, .. } => Some(tools),
+            _ => None,
+        })
+        .expect("timeline should contain a ToolGroup");
+    let tool = tool_group
+        .iter()
+        .find(|t| t.tool_name == "read_file")
+        .expect("read_file tool call");
+    let tool_cancel_cause = tool
+        .cancel_cause
+        .as_ref()
+        .expect("cascade-cancelled tool call should have a derived cancel_cause");
+    assert_eq!(
+        tool_cancel_cause.cause, "interrupted",
+        "cascade-cancelled tool call cause should be 'interrupted'"
+    );
+    assert_eq!(
+        tool_cancel_cause.source, "parentCascade",
+        "cascade-cancelled tool call source should be 'parentCascade'"
+    );
 }
 
 fn contract_session_id(id: usize) -> String {
@@ -749,6 +1016,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         });
@@ -840,6 +1108,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
             max_retries: Some(3),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
             interrupt_requested_at: None,
             valid_until: None,
         }],

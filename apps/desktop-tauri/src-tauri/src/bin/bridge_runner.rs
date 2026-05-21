@@ -13,10 +13,23 @@ mod bridge {
         ));
     }
     #[allow(dead_code)]
+    pub mod cause_derivation {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bridge/cause_derivation.rs"
+        ));
+    }
+    #[allow(dead_code)]
     pub mod snapshot {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/bridge/snapshot.rs"
+        ));
+    }
+    pub mod cascade {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bridge/cascade.rs"
         ));
     }
 }

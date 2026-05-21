@@ -157,10 +157,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "interrupt-and-cancel"
-    , required := [Surface.agentFacing]
+    , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred :=
         [ (Surface.operatorCli, "#266")
-        , (Surface.operatorUi, "#277")
         ]
     }
   , { feature := "mcp-health"
@@ -668,6 +667,21 @@ def caseCoverage : List CoverageEntry :=
       "MCPHealthCases"
       "defra_agent_desktop_tauri::bridge::snapshot::tests::mcp_health::mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition")
       "mcp-health" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "CancelCause"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call")
+      "interrupt-and-cancel" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "state_machine"
+      "ToolCall"
+      "defra_agent_desktop_tauri::bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature")
+      "interrupt-and-cancel" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "state_machine"
+      "Request"
+      "defra_agent_desktop_tauri::bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches")
+      "interrupt-and-cancel" [Surface.operatorUi]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

@@ -1,8 +1,10 @@
 import type { FormEvent, KeyboardEvent } from "react";
 
+import { CancelButton } from "../cancelUx";
 import { formatBytes } from "../../lib/types";
 
 export type ChatComposerProps = {
+  activeRequestId: string | null;
   approxSerializedBytes: number;
   behaviorLabel: string | null;
   canSend: boolean;
@@ -14,10 +16,12 @@ export type ChatComposerProps = {
   sending: boolean;
   turnState: string | null;
   onDraftChange: (value: string) => void;
+  onInterruptClick: () => void;
   onSend: (event: FormEvent) => void;
 };
 
 export function ChatComposer({
+  activeRequestId,
   approxSerializedBytes,
   behaviorLabel,
   canSend,
@@ -29,6 +33,7 @@ export function ChatComposer({
   sending,
   turnState,
   onDraftChange,
+  onInterruptClick,
   onSend,
 }: ChatComposerProps) {
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -77,14 +82,21 @@ export function ChatComposer({
           {sendHint ?? turnState ?? "idle"} · peers {dialedPeerCount}/
           {configuredPeerCount}
         </div>
-        <button
-          className="primary-button"
-          data-testid="composer-send"
-          disabled={!canSend}
-          type="submit"
-        >
-          {sending ? "Sending…" : "Send"}
-        </button>
+        <div className="composer-actions" style={{ display: "flex", gap: 8 }}>
+          <CancelButton
+            activeRequestId={activeRequestId}
+            turnState={turnState}
+            onInterruptClick={onInterruptClick}
+          />
+          <button
+            className="primary-button"
+            data-testid="composer-send"
+            disabled={!canSend}
+            type="submit"
+          >
+            {sending ? "Sending…" : "Send"}
+          </button>
+        </div>
       </div>
     </form>
   );

@@ -559,6 +559,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             module_path: "health_checker::tests",
             function: "generated_mcp_health_cases_match_health_checker_transitions",
         },
+        ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/tests/operations_cascade.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::tests::operations_cascade",
+            function: "preview_returns_four_classified_groups_and_a_signature",
+        },
+        ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/tests/operations_interrupt.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::tests::operations_interrupt",
+            function: "interrupt_request_cascade_returns_accepted_when_signature_matches",
+        },
+        ConformanceConsumer::RustTest {
+            id: "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call",
+            package: "defra-agent-desktop-tauri",
+            source_path: "apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/session_state.rs",
+            module_path: "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state",
+            function: "session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call",
+        },
     ]
 }
 

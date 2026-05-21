@@ -278,3 +278,13 @@ pub(crate) struct McpServiceProbeResult {
     pub latency_ms: u64,
     pub last_error: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DerivedCancelCauseView {
+    pub cause: String,        // "userCancelled" | "interrupted" | "deadline" | "unknown"
+    pub source: String,       // "requestInterrupt" | "parentCascade" | "deadline" | "toolLifecycle" | "responseInterruptedAt" | "unresolved"
+    pub confidence: String,   // "direct" | "derived"
+    pub at: Option<String>,
+    pub evidence: Vec<String>,
+}
