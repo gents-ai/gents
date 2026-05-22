@@ -44,6 +44,7 @@ export type ResponseView = {
   interruptedAt?: string | null;
   completedAt?: string | null;
   cancelCause?: DerivedCancelCauseView | null;
+  backendId?: string | null;
 };
 
 export type PendingTurnView = {

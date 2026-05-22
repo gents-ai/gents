@@ -85,6 +85,8 @@ pub(crate) struct ResponseView {
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub backend_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

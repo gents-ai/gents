@@ -110,6 +110,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 completed_at: normalize_optional(row.completed_at.as_deref()),
             };
             let cancel_cause = derive_response_cause(&req_evidence, &resp_evidence);
+            let backend_id = latest_request
+                .and_then(|r| normalize_optional(r.backend_id.as_deref()));
             ResponseView {
                 status: normalize_optional(row.status.as_deref()),
                 content: row
@@ -129,6 +131,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
                 cancel_cause,
+                backend_id,
             }
         });
     let active_response_overlay = latest_response.clone().filter(|response| {

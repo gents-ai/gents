@@ -66,7 +66,20 @@ describeLive("Tauri app live subagent backgrounding", () => {
       const toolNames = session.timelineItems.flatMap((item) =>
         item.kind === "toolGroup" ? item.tools.map((tool) => tool.toolName) : [],
       );
-      expect(toolNames.some((name) => /spawn_subagent/i.test(name))).toBe(true);
+      expect(
+        toolNames.some((name) => /spawn_subagent/i.test(name)),
+        `expected spawn_subagent in tool names: ${JSON.stringify(toolNames)}`,
+      ).toBe(true);
+      expect(
+        toolNames.some((name) => /wait_subagent/i.test(name)),
+        `expected wait_subagent in tool names (prompt asked the parent to await the child): ${JSON.stringify(toolNames)}`,
+      ).toBe(true);
+
+      const parentReply = collectAssistantText(session.timelineItems);
+      expect(
+        /live-subagent-smoke/i.test(parentReply),
+        `parent reply did not echo the sentinel "live-subagent-smoke"; reply=${parentReply.slice(0, 400)}`,
+      ).toBe(true);
 
       await waitFor(
         async () => {
@@ -80,6 +93,27 @@ describeLive("Tauri app live subagent backgrounding", () => {
           expect(tree.nodes.some((node) => node.behaviorId === subagentTarget)).toBe(
             true,
           );
+          const childNodes = tree.nodes.filter(
+            (node) => node.behaviorId === subagentTarget,
+          );
+          expect(
+            childNodes.some(
+              (node) =>
+                node.lifecycleState === "completed" || node.status === "completed",
+            ),
+            `expected at least one subagent child to reach a completed terminal state; nodes=${JSON.stringify(childNodes)}`,
+          ).toBe(true);
+
+          // When subagent inference is configured separately, parent and child
+          // nodes must resolve to distinct backend ids. When it falls back to the
+          // primary, the assertion still validates that backend_id is populated.
+          const parentNode = tree.nodes.find((node) => node.requestId === submitted.requestId);
+          const childNode = tree.nodes.find((node) => node.behaviorId === subagentTarget);
+          expect(parentNode?.backendId, "parent backendId should be populated").toBeTruthy();
+          expect(childNode?.backendId, "child backendId should be populated").toBeTruthy();
+          if (process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
+            expect(childNode?.backendId).not.toBe(parentNode?.backendId);
+          }
         },
         { timeout: 60_000 },
       );
@@ -122,9 +156,47 @@ describeLive("Tauri app live subagent backgrounding", () => {
       ).toBe(true);
       expect(followUpSession.pendingTurn).toBeNull();
       expect(followUpSession.activeResponseOverlay).toBeNull();
+
+      // The follow-up prompt forbids tools and asks for the sentinel phrase.
+      // Verify the model honored both constraints.
+      const followUpToolGroupsAfterParent = followUpSession.timelineItems.filter(
+        (item) => item.kind === "toolGroup",
+      ).length;
+      const parentToolGroups = session.timelineItems.filter(
+        (item) => item.kind === "toolGroup",
+      ).length;
+      expect(
+        followUpToolGroupsAfterParent,
+        `follow-up was instructed to use no tools but added ${followUpToolGroupsAfterParent - parentToolGroups} tool group(s)`,
+      ).toBe(parentToolGroups);
+
+      const followUpReply = collectAssistantText(followUpSession.timelineItems);
+      expect(
+        /live-subagent-followup/i.test(followUpReply),
+        `follow-up reply did not echo the sentinel "live-subagent-followup"; reply=${followUpReply.slice(0, 400)}`,
+      ).toBe(true);
     });
   }, 600_000);
 });
+
+function collectAssistantText(
+  timelineItems: Array<{
+    kind: string;
+    content?: unknown;
+    reasoning?: unknown;
+  }>,
+) {
+  return timelineItems
+    .filter(
+      (item) => item.kind === "assistantMessage" || item.kind === "liveAssistant",
+    )
+    .map((item) =>
+      [normalizeTimelineText(item.content), normalizeTimelineText(item.reasoning)]
+        .filter((text) => text.length > 0)
+        .join(" "),
+    )
+    .join("\n");
+}
 
 function hasAssistantResponse(
   timelineItems: Array<{ kind: string; content?: unknown; reasoning?: unknown }>,

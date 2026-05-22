@@ -54,6 +54,8 @@ struct RequestRow {
     caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    backend_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,6 +195,7 @@ fn request_row_into_node(row: RequestRow) -> SubagentNodeView {
         caused_by_parent_tool_call_id: clean_optional_string(
             row.caused_by_parent_tool_call_id.as_deref(),
         ),
+        backend_id: clean_optional_string(row.backend_id.as_deref()),
     }
 }
 
@@ -216,6 +219,7 @@ async fn fetch_root_request(
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
+                backend_id
             }}
         }}"#
     );
@@ -248,6 +252,7 @@ async fn fetch_level(
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
+                backend_id
             }}
             AgentToolCall(
                 filter: {{

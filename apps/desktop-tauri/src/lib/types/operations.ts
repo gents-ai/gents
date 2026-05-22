@@ -98,6 +98,7 @@ export type SubagentNodeView = {
   subagentDepth?: number | null;
   causedByParentRequestId?: string | null;
   causedByParentToolCallId?: string | null;
+  backendId?: string | null;
 };
 
 export type SubagentEdgeView = {
