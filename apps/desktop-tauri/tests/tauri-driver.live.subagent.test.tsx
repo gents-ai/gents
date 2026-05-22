@@ -14,7 +14,7 @@ import {
 } from "./tauri-driver-live/helpers";
 
 const SUBAGENT_PROMPT =
-  'Use the configured local subagent target. Call spawn_subagent with await_mode "background" and ask the child to read workspace/PROMPT.md and return the phrase live-subagent-smoke with one short finding. Then call wait_subagent for that child request and reply with one sentence containing live-subagent-smoke.';
+  'Use the configured local subagent target. Call spawn_subagent with await_mode "background" and ask the child to read workspace/CLAUDE.md and return the phrase live-subagent-smoke with one short finding. Then call wait_subagent for that child request and reply with one sentence containing live-subagent-smoke.';
 const FOLLOW_UP_PROMPT =
   "Without calling tools, reply with one short sentence containing live-subagent-followup.";
 
