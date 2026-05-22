@@ -123,6 +123,12 @@ pub(crate) struct ToolSelectionSaveRequest {
     pub delegate_to: Vec<String>,
     #[serde(default)]
     pub backgroundable_tool_names: Vec<String>,
+    #[serde(default)]
+    pub subagent_targets: Vec<String>,
+    pub subagent_spawn_enabled: Option<bool>,
+    pub subagent_steering_enabled: Option<bool>,
+    pub subagent_background_enabled: Option<bool>,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

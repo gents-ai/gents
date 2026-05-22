@@ -170,6 +170,12 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
                     delegate_to: row.delegate_to.clone(),
                     backgroundable_tool_names: row.backgroundable_tool_names.clone(),
+                    subagent_targets: row.subagent_targets.clone(),
+                    subagent_spawn_enabled: row.subagent_spawn_enabled,
+                    subagent_steering_enabled: row.subagent_steering_enabled,
+                    subagent_background_enabled: row.subagent_background_enabled,
+                    cross_deployment_spawn_timeout_seconds: row
+                        .cross_deployment_spawn_timeout_seconds,
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));

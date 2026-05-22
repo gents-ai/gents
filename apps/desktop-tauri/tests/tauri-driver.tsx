@@ -63,13 +63,28 @@ export function renderTauriAppDriverWithBridge(
         if (fleetConfig) {
           return fleetConfig;
         }
-        return screen.getByTestId(`deployment-config-${firstPeerId}`);
+        const savedPeerConfig = screen.queryByTestId(
+          `deployment-config-${firstPeerId}`,
+        );
+        if (savedPeerConfig) {
+          return savedPeerConfig;
+        }
       }
-      return screen.getAllByLabelText(/^Configure /)[0];
+      return (
+        screen.queryByRole("button", { name: "Configure" }) ??
+        screen.getAllByLabelText(/^Configure /)[0]
+      );
     },
     chatButton() {
+      const configBack = screen.queryByTestId("config-back-tab");
+      if (configBack) {
+        return configBack;
+      }
       if (firstPeerId) {
-        return screen.getByTestId(`fleet-chat-${firstPeerId}`);
+        const fleetChat = screen.queryByTestId(`fleet-chat-${firstPeerId}`);
+        if (fleetChat) {
+          return fleetChat;
+        }
       }
       return screen.getAllByLabelText(/^Open .* chat/)[0];
     },

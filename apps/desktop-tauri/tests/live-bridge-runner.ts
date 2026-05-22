@@ -6,18 +6,21 @@ import type { DesktopClientUpdatedListenerFactory } from "../src/lib/desktop-eve
 import type {
   ChatSendResult,
   DesktopClientSnapshot,
-  DesktopSessionSnapshot,
   TaskRunResult,
 } from "../src/lib/types";
 import type { TauriDriverBridge, TauriDriverChatRequest } from "./tauri-driver";
-import {
-  isTerminalTurnState,
-  observeRemoteAheadDesktopLag,
-  observeRemoteTerminalDesktopStall,
-  requestProgressSignature,
-} from "./live-bridge-runner/observations";
 import { createRunnerAdapter } from "./live-bridge-runner/adapter";
+import { JsonHttpClient } from "./live-bridge-runner/http";
+import {
+  createVersionPollingListenerFactory,
+  VERSION_POLL_MS,
+} from "./live-bridge-runner/listener";
+import { RunnerLogs, type RunnerExitStatus } from "./live-bridge-runner/logs";
 import { appendRunnerArg, waitForReadyMessage } from "./live-bridge-runner/process";
+import {
+  waitForRequestCompletion,
+  type RequestCompletionTarget,
+} from "./live-bridge-runner/request-completion";
 import type {
   LiveBridgeRunnerOptions,
   RequestDiagnosticsBundle,
@@ -38,8 +41,6 @@ export type {
 
 const RUNNER_START_TIMEOUT_MS = 300_000;
 const REQUEST_TIMEOUT_MS = 600_000;
-const HTTP_REQUEST_TIMEOUT_MS = 15_000;
-const VERSION_POLL_MS = 250;
 const REPO_ROOT = resolve(process.cwd(), "../..");
 
 export class LiveBridgeRunner implements TauriDriverBridge {
@@ -48,10 +49,9 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   readonly taskRunResults: TaskRunResult[] = [];
   readonly adapter: DesktopApiAdapter;
   readonly listenerFactory: DesktopClientUpdatedListenerFactory;
-  private readonly stderrChunks: string[] = [];
-  private readonly stdoutChunks: string[] = [];
-  private exitStatus: { code: number | null; signal: NodeJS.Signals | null } | null =
-    null;
+  private readonly http: JsonHttpClient;
+  private readonly logs = new RunnerLogs();
+  private exitStatus: RunnerExitStatus | null = null;
 
   private constructor(
     private readonly process: ChildProcessWithoutNullStreams,
@@ -62,54 +62,25 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     startupStdout = "",
     startupStderr = "",
   ) {
-    this.pushLogChunk(this.stdoutChunks, startupStdout);
-    this.pushLogChunk(this.stderrChunks, startupStderr);
+    this.http = new JsonHttpClient(baseUrl);
+    this.logs.pushStdout(startupStdout);
+    this.logs.pushStderr(startupStderr);
     this.process.stderr.on("data", (chunk: Buffer) => {
-      this.pushLogChunk(this.stderrChunks, chunk.toString());
+      this.logs.pushStderr(chunk.toString());
     });
     this.process.stdout.on("data", (chunk: Buffer) => {
-      this.pushLogChunk(this.stdoutChunks, chunk.toString());
+      this.logs.pushStdout(chunk.toString());
     });
     this.process.once("exit", (code, signal) => {
       this.exitStatus = { code, signal };
     });
     this.adapter = createRunnerAdapter(this);
-    this.listenerFactory = async (handler) => {
-      let disposed = false;
-      let inFlight = false;
-      let lastVersion = 0;
-      try {
-        lastVersion = await this.fetchVersion();
-      } catch (error) {
-        if (!this.exitStatus) {
-          this.pushLogChunk(this.stderrChunks, `[listener:init] ${String(error)}\n`);
-        }
-      }
-      const timer = setInterval(async () => {
-        if (disposed || inFlight) {
-          return;
-        }
-        inFlight = true;
-        try {
-          const nextVersion = await this.fetchVersion();
-          if (nextVersion !== lastVersion) {
-            lastVersion = nextVersion;
-            await handler({ reason: "store" });
-          }
-        } catch (error) {
-          if (!disposed && !this.exitStatus) {
-            this.pushLogChunk(this.stderrChunks, `[listener] ${String(error)}\n`);
-          }
-        } finally {
-          inFlight = false;
-        }
-      }, VERSION_POLL_MS);
-
-      return () => {
-        disposed = true;
-        clearInterval(timer);
-      };
-    };
+    this.listenerFactory = createVersionPollingListenerFactory({
+      fetchVersion: () => this.fetchVersion(),
+      getExitStatus: () => this.exitStatus,
+      logError: (message) => this.logs.pushStderr(message),
+      pollMs: VERSION_POLL_MS,
+    });
   }
 
   static async start(options: LiveBridgeRunnerOptions = {}) {
@@ -157,95 +128,19 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   }
 
   async waitForRequestCompletion(
-    request: ChatSendResult,
+    request: RequestCompletionTarget,
     timeoutMs = REQUEST_TIMEOUT_MS,
   ) {
-    const deadline = Date.now() + timeoutMs;
-    let lastObservedState = "no diagnostics observed yet";
-    let lastError: string | null = null;
-    const progressHistory: string[] = [];
-    let lastProgressSignature = "";
-    let lastDesktopProgressSignature = "";
-    let remoteTerminalDesktopStallStartedAt: number | null = null;
-    let remoteAheadDesktopLagStartedAt: number | null = null;
-    while (Date.now() < deadline) {
-      this.throwIfExited(
-        `waiting for request ${request.requestId} to complete`,
-        lastObservedState,
-        lastError,
-        progressHistory,
-      );
-      try {
-        const diagnostics = await this.fetchRequestDiagnostics(
-          request.sessionId,
-          request.requestId,
-        );
-        lastError = null;
-        const progressSignature = JSON.stringify({
-          desktop: diagnostics.desktop,
-          remote: diagnostics.remote,
-        });
-        const desktopProgressSignature = requestProgressSignature(diagnostics.desktop);
-        const desktopProgressed =
-          desktopProgressSignature !== lastDesktopProgressSignature;
-        if (desktopProgressed) {
-          lastDesktopProgressSignature = desktopProgressSignature;
-        }
-        if (progressSignature !== lastProgressSignature) {
-          lastProgressSignature = progressSignature;
-          lastObservedState = progressSignature;
-          progressHistory.push(progressSignature);
-          if (progressHistory.length > 8) {
-            progressHistory.shift();
-          }
-        }
-        const remoteTerminalDesktopStall = observeRemoteTerminalDesktopStall({
-          diagnostics,
-          previousStartedAt: remoteTerminalDesktopStallStartedAt,
-          now: Date.now(),
-        });
-        remoteTerminalDesktopStallStartedAt = remoteTerminalDesktopStall.startedAt;
-        if (remoteTerminalDesktopStall.exceededThreshold) {
-          throw new Error(
-            `desktop stalled after remote terminal response for request ${request.requestId}; stallMs=${remoteTerminalDesktopStall.stallMs ?? 0}; diagnostics=${JSON.stringify({ desktop: diagnostics.desktop, remote: diagnostics.remote })}; runnerStdoutTail=${JSON.stringify(this.logTail(this.stdoutChunks))}; runnerStderrTail=${JSON.stringify(this.logTail(this.stderrChunks))}`,
-          );
-        }
-        const remoteAheadDesktopLag = observeRemoteAheadDesktopLag({
-          diagnostics,
-          desktopProgressed,
-          previousStartedAt: remoteAheadDesktopLagStartedAt,
-          now: Date.now(),
-        });
-        remoteAheadDesktopLagStartedAt = remoteAheadDesktopLag.startedAt;
-        if (remoteAheadDesktopLag.exceededThreshold) {
-          throw new Error(
-            `desktop stopped materializing progress while remote advanced for request ${request.requestId}; lagMs=${remoteAheadDesktopLag.lagMs ?? 0}; diagnostics=${JSON.stringify({ desktop: diagnostics.desktop, remote: diagnostics.remote })}; runnerStdoutTail=${JSON.stringify(this.logTail(this.stdoutChunks))}; runnerStderrTail=${JSON.stringify(this.logTail(this.stderrChunks))}`,
-          );
-        }
-        if (isTerminalTurnState(diagnostics.desktop.turnState)) {
-          const snapshot = await this.adapter.fetchSessionSnapshot(
-            request.sessionId,
-            request.agentDid,
-            request.requestId,
-          );
-          if (snapshot) {
-            return snapshot;
-          }
-        }
-      } catch (error) {
-        lastError = String(error);
-        this.throwIfExited(
-          `waiting for request ${request.requestId} to complete`,
-          lastObservedState,
-          lastError,
-          progressHistory,
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    throw new Error(
-      `timed out waiting for request ${request.requestId} to complete; lastObservedState=${lastObservedState}; lastError=${lastError ?? "none"}; progressHistory=${JSON.stringify(progressHistory)}; runnerStderrTail=${JSON.stringify(this.logTail(this.stderrChunks))}`,
-    );
+    return waitForRequestCompletion({
+      request,
+      adapter: this.adapter,
+      fetchRequestDiagnostics: (sessionId, requestId) =>
+        this.fetchRequestDiagnostics(sessionId, requestId),
+      getExitStatus: () => this.exitStatus,
+      stdoutTail: () => this.logs.stdoutTail(),
+      stderrTail: () => this.logs.stderrTail(),
+      timeoutMs,
+    });
   }
 
   async dispose() {
@@ -265,40 +160,20 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     }
   }
 
-  private async fetchVersion() {
-    const response = await this.getJson<VersionResponse>("/desktop/version");
-    return response.version;
-  }
-
-  private throwIfExited(
-    context: string,
-    lastObservedState: string,
-    lastError: string | null,
-    progressHistory: string[],
-  ) {
-    if (!this.exitStatus) {
-      return;
-    }
-
-    throw new Error(
-      `bridge runner exited while ${context}; code=${this.exitStatus.code ?? "null"}; signal=${this.exitStatus.signal ?? "null"}; lastObservedState=${lastObservedState}; lastError=${lastError ?? "none"}; progressHistory=${JSON.stringify(progressHistory)}; runnerStdoutTail=${JSON.stringify(this.logTail(this.stdoutChunks))}; runnerStderrTail=${JSON.stringify(this.logTail(this.stderrChunks))}`,
-    );
-  }
-
   async getJson<T>(path: string) {
-    const response = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {});
-    return this.decodeJson<T>(response);
+    return this.http.getJson<T>(path);
   }
 
   async postJson<T = unknown>(path: string, body: unknown) {
-    const response = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    return this.decodeJson<T>(response);
+    return this.http.postJson<T>(path, body);
+  }
+
+  async fetchWithTimeout(input: string, init: RequestInit) {
+    return this.http.fetchWithTimeout(input, init);
+  }
+
+  async decodeJson<T>(response: Response) {
+    return this.http.decodeJson<T>(response);
   }
 
   async fetchRequestDiagnostics(sessionId: string, requestId: string) {
@@ -311,43 +186,8 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
   }
 
-  async fetchWithTimeout(input: string, init: RequestInit) {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    try {
-      return await Promise.race([
-        fetch(input, init),
-        new Promise<Response>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(
-              new Error(
-                `timed out after ${HTTP_REQUEST_TIMEOUT_MS}ms waiting for ${input}`,
-              ),
-            );
-          }, HTTP_REQUEST_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  }
-
-  async decodeJson<T>(response: Response) {
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    return (await response.json()) as T;
-  }
-
-  private pushLogChunk(chunks: string[], chunk: string) {
-    chunks.push(chunk);
-    while (chunks.join("").length > 8000) {
-      chunks.shift();
-    }
-  }
-
-  private logTail(chunks: string[]) {
-    return chunks.join("").slice(-4000);
+  private async fetchVersion() {
+    const response = await this.getJson<VersionResponse>("/desktop/version");
+    return response.version;
   }
 }

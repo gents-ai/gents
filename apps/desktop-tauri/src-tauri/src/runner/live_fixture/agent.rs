@@ -24,8 +24,10 @@ use super::DEFAULT_DEPLOYMENT_LABEL;
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
     pub(crate) behavior_id: String,
+    pub(crate) subagent_behavior_id: String,
     pub(crate) backend_id: String,
     pub(crate) tool_selection_id: String,
+    pub(crate) subagent_tool_selection_id: String,
     pub(crate) inference_profile_id: String,
 }
 
@@ -100,8 +102,10 @@ async fn seed_live_behavior_documents(
     backend: &AgentBackendConfig,
 ) -> Result<LiveAgentDocs> {
     let behavior_id = default_behavior_id_for_agent(agent_did);
+    let subagent_behavior_id = format!("{agent_did}:live-repo-audit-subagent");
     let backend_id = format!("{agent_name}-backend");
     let tool_selection_id = default_tool_selection_id_for_behavior(&behavior_id);
+    let subagent_tool_selection_id = default_tool_selection_id_for_behavior(&subagent_behavior_id);
     let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
 
     bind_default_behavior_backend(core.node(), agent_did, &backend_id, backend).await?;
@@ -124,6 +128,36 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
+        subagent_targets: vec![subagent_behavior_id.clone()],
+        subagent_spawn_enabled: Some(true),
+        subagent_steering_enabled: Some(true),
+        subagent_background_enabled: Some(true),
+        cross_deployment_spawn_timeout_seconds: Some(60),
+    })
+    .await?;
+    core.save_tool_selection(&ToolSelectionRow {
+        selection_id: subagent_tool_selection_id.clone(),
+        agent_did: Some(agent_did.to_string()),
+        display_name: Some("Live Repo Audit Subagent Tools".to_string()),
+        enable_file_tools: Some(true),
+        file_tools_mode: Some("ReadOnly".to_string()),
+        file_tool_root: None,
+        enable_bash: Some(false),
+        bash_mode: Some("ReadOnly".to_string()),
+        command_execution_policy: None,
+        command_allowed_argv_prefixes: Vec::new(),
+        command_forbidden_argv_prefixes: Vec::new(),
+        command_network_mode: None,
+        cli_tool_names: Vec::new(),
+        enable_meta_tools: Some(false),
+        allowed_mcp_service_ids: Vec::new(),
+        delegate_to: vec![],
+        backgroundable_tool_names: Vec::new(),
+        subagent_targets: Vec::new(),
+        subagent_spawn_enabled: Some(false),
+        subagent_steering_enabled: Some(false),
+        subagent_background_enabled: Some(false),
+        cross_deployment_spawn_timeout_seconds: None,
     })
     .await?;
     core.save_inference_profile(&InferenceProfileRow {
@@ -141,13 +175,30 @@ async fn seed_live_behavior_documents(
         behavior_id: behavior_id.clone(),
         agent_did: Some(agent_did.to_string()),
         display_name: Some("Live Repo Audit Default".to_string()),
+        system_prompt: Some(format!(
+            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with behavior_id {subagent_behavior_id:?} and await_mode \"background\"."
+        )),
+        backend_id: Some(backend_id.clone()),
+        model_name: Some(backend.model_name.clone()),
+        tool_selection_id: Some(tool_selection_id.clone()),
+        inference_profile_id: Some(inference_profile_id.clone()),
+        compaction_strategy: Some("StripThenSummarize".to_string()),
+        compaction_threshold: Some(0.95),
+        enabled: Some(true),
+        created_at: Some(Utc::now().to_rfc3339()),
+    })
+    .await?;
+    core.save_behavior(&AgentBehaviorRow {
+        behavior_id: subagent_behavior_id.clone(),
+        agent_did: Some(agent_did.to_string()),
+        display_name: Some("Live Repo Audit Subagent".to_string()),
         system_prompt: Some(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked."
+            "You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings."
                 .to_string(),
         ),
         backend_id: Some(backend_id.clone()),
         model_name: Some(backend.model_name.clone()),
-        tool_selection_id: Some(tool_selection_id.clone()),
+        tool_selection_id: Some(subagent_tool_selection_id.clone()),
         inference_profile_id: Some(inference_profile_id.clone()),
         compaction_strategy: Some("StripThenSummarize".to_string()),
         compaction_threshold: Some(0.95),
@@ -159,8 +210,10 @@ async fn seed_live_behavior_documents(
 
     Ok(LiveAgentDocs {
         behavior_id,
+        subagent_behavior_id,
         backend_id,
         tool_selection_id,
+        subagent_tool_selection_id,
         inference_profile_id,
     })
 }

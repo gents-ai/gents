@@ -1,8 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
-import { LiveBridgeRunner } from "./live-bridge-runner";
-import { renderTauriAppDriverWithBridge } from "./tauri-driver";
+import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
 import {
   describeLive,
   expectCompletedSession,
@@ -15,18 +14,7 @@ const FOLLOW_UP_PROMPT =
 
 describeLive("Tauri app live interrupt flow", () => {
   it("latches an interrupt and surfaces the cause badge in the transcript", async () => {
-    const runner = await LiveBridgeRunner.start({
-      inferenceUrl: process.env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL,
-      modelName: process.env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME,
-      provider: process.env.DEFRA_AGENT_TAURI_LIVE_PROVIDER,
-      apiKey: process.env.DEFRA_AGENT_TAURI_LIVE_API_KEY,
-      apiKeyEnvVar: process.env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR,
-    });
-    const initialSnapshot = await runner.fetchSnapshot();
-    const firstPeerId = initialSnapshot.client?.deployments[0]?.peerId ?? null;
-    const driver = renderTauriAppDriverWithBridge(runner, firstPeerId);
-
-    try {
+    await withLiveDesktop(async ({ runner, driver }) => {
       await driver.ready();
       await driver.openChat();
       logTurn(`driver ready agentDid=${runner.agentDid}`);
@@ -37,10 +25,9 @@ describeLive("Tauri app live interrupt flow", () => {
       await waitFor(() => {
         expect(runner.sendResults).toHaveLength(1);
       });
-      const submitted = runner.sendResults.at(-1);
-      expect(submitted).toBeDefined();
+      const submitted = expectLatestSendResult(runner, "interrupt turn");
       logTurn(
-        `turn submitted sessionId=${submitted!.sessionId} requestId=${submitted!.requestId}`,
+        `turn submitted sessionId=${submitted.sessionId} requestId=${submitted.requestId}`,
       );
 
       // Wait briefly for the turn to register so the cancel button becomes
@@ -65,7 +52,7 @@ describeLive("Tauri app live interrupt flow", () => {
       // appears in the rendered transcript. If the turn finished naturally
       // before our click, log that and move on — we still verified the
       // bridge call did not throw.
-      const finalSession = await runner.waitForRequestCompletion(submitted!);
+      const finalSession = await runner.waitForRequestCompletion(submitted);
       if (finalSession?.latestResponse?.cancelCause) {
         const cause = finalSession.latestResponse.cancelCause;
         logTurn(`interrupt latched: cause=${cause.cause}`);
@@ -99,17 +86,16 @@ describeLive("Tauri app live interrupt flow", () => {
       await waitFor(() => {
         expect(runner.sendResults).toHaveLength(2);
       });
-      const followUp = runner.sendResults.at(-1);
-      expect(followUp).toBeDefined();
-      expect(followUp!.sessionId).toBe(submitted!.sessionId);
-      expect(followUp!.requestId).not.toBe(submitted!.requestId);
+      const followUp = expectLatestSendResult(runner, "interrupt follow-up");
+      expect(followUp.sessionId).toBe(submitted.sessionId);
+      expect(followUp.requestId).not.toBe(submitted.requestId);
       logTurn(
-        `follow-up submitted sessionId=${followUp!.sessionId} requestId=${followUp!.requestId}`,
+        `follow-up submitted sessionId=${followUp.sessionId} requestId=${followUp.requestId}`,
       );
 
-      const followUpSession = await runner.waitForRequestCompletion(followUp!);
+      const followUpSession = await runner.waitForRequestCompletion(followUp);
       expectCompletedSession("interrupt follow-up", followUpSession);
-      expect(followUpSession.latestRequestId).toBe(followUp!.requestId);
+      expect(followUpSession.latestRequestId).toBe(followUp.requestId);
       expect(followUpSession.pendingTurn).toBeNull();
       expect(followUpSession.activeResponseOverlay).toBeNull();
 
@@ -125,9 +111,7 @@ describeLive("Tauri app live interrupt flow", () => {
       await waitFor(() => {
         expect(driver.sendButton()).toBeEnabled();
       });
-    } finally {
-      await driver.dispose();
-    }
+    });
   }, 600_000);
 });
 

@@ -20,12 +20,16 @@ function takeFlag(argv, name) {
   return null;
 }
 
+const DEFAULT_LIVE_INFERENCE_URL = "http://100.69.4.79:8000/v1";
+const DEFAULT_LIVE_MODEL_NAME = "baa-ai/GLM-5.1-RAM-420GB-MLX";
+
 const argv = [...process.argv.slice(2)];
 const inferenceUrl = takeFlag(argv, "--inference-url");
 const modelName = takeFlag(argv, "--model-name");
 const provider = takeFlag(argv, "--provider");
 const apiKey = takeFlag(argv, "--api-key");
 const apiKeyEnvVar = takeFlag(argv, "--api-key-env-var");
+const suite = takeFlag(argv, "--suite");
 
 const env = {
   ...process.env,
@@ -33,12 +37,22 @@ const env = {
   DEFRA_AGENT_TAURI_LIVE: "1",
 };
 
-if (inferenceUrl) {
-  env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL = inferenceUrl;
-}
-if (modelName) {
-  env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME = modelName;
-}
+const resolvedInferenceUrl =
+  inferenceUrl ??
+  env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL ??
+  env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT ??
+  DEFAULT_LIVE_INFERENCE_URL;
+const resolvedModelName =
+  modelName ??
+  env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ??
+  env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL ??
+  DEFAULT_LIVE_MODEL_NAME;
+
+env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL = resolvedInferenceUrl;
+env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME = resolvedModelName;
+env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT ??= resolvedInferenceUrl;
+env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL ??= resolvedModelName;
+
 if (provider) {
   env.DEFRA_AGENT_TAURI_LIVE_PROVIDER = provider;
 }
@@ -49,15 +63,35 @@ if (apiKeyEnvVar) {
   env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
 }
 
-const liveTestFiles = [
-  "tests/tauri-driver.live.behavior.test.tsx",
-  "tests/tauri-driver.live.chat.test.tsx",
-  "tests/tauri-driver.live.config.test.tsx",
-  "tests/tauri-driver.live.fleet.test.tsx",
-  "tests/tauri-driver.live.interrupt.test.tsx",
-  "tests/tauri-driver.live.operations.test.tsx",
-  "tests/tauri-driver.live.sad-path.test.tsx",
-];
+const liveTestSuites = {
+  fleet: "tests/tauri-driver.live.fleet.test.tsx",
+  behavior: "tests/tauri-driver.live.behavior.test.tsx",
+  config: "tests/tauri-driver.live.config.test.tsx",
+  chat: "tests/tauri-driver.live.chat.test.tsx",
+  interrupt: "tests/tauri-driver.live.interrupt.test.tsx",
+  operations: "tests/tauri-driver.live.operations.test.tsx",
+  subagent: "tests/tauri-driver.live.subagent.test.tsx",
+  "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
+};
+
+if (suite && !(suite in liveTestSuites)) {
+  throw new Error(
+    `unknown live test suite "${suite}"; expected one of ${Object.keys(liveTestSuites).join(", ")}`,
+  );
+}
+
+const liveTestFiles = suite
+  ? [liveTestSuites[suite]]
+  : [
+      liveTestSuites.fleet,
+      liveTestSuites.behavior,
+      liveTestSuites.config,
+      liveTestSuites.chat,
+      liveTestSuites.interrupt,
+      liveTestSuites.operations,
+      liveTestSuites.subagent,
+      liveTestSuites["sad-path"],
+    ];
 
 const child = spawn("npx", ["vitest", "run", ...liveTestFiles, ...argv], {
   stdio: "inherit",

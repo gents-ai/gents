@@ -7,6 +7,7 @@ use defra_agent::backend_registry::{derive_display_state, list_all_backends};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
@@ -18,6 +19,12 @@ use crate::bridge::commands::{
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_selection_config, save_tool_service_config, send_chat_message,
     test_tool_service_config,
+};
+use crate::bridge::snapshot::operations_snapshot::{
+    project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
+};
+use crate::bridge::snapshot::subagent_tree::{
+    build_local_subagent_tree, effective_subagent_tree_max_depth,
 };
 use crate::bridge::types::{
     AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
@@ -57,6 +64,7 @@ struct VersionResponse {
 }
 
 const RECENT_CALLS_PER_BACKEND: usize = 10;
+const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) fn handle_request(
     runtime: &tokio::runtime::Handle,
@@ -168,23 +176,20 @@ pub(super) fn handle_request(
                 &request.body,
                 "decoding operations snapshot request",
             )?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(
-                &operations_snapshot_response(request),
-            )?))
+            let snapshot = runtime.block_on(operations_snapshot_response(
+                Arc::clone(fixture.desktop_core()),
+                request,
+            ))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/subagent-tree") => {
             let request = decode::<DesktopListSubagentTreeRequest>(
                 &request.body,
                 "decoding subagent tree request",
             )?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(
-                &SubagentTreeView {
-                    root_request_id: request.root_request_id,
-                    nodes: Vec::new(),
-                    edges: Vec::new(),
-                    truncated: false,
-                },
-            )?))
+            let tree =
+                runtime.block_on(list_subagent_tree_response(fixture.desktop_core(), request))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&tree)?))
         }
         ("GET", "/desktop/backend-health") => {
             let rows = runtime.block_on(list_backends_with_health(Arc::clone(
@@ -355,9 +360,10 @@ pub(super) fn handle_request(
     }
 }
 
-fn operations_snapshot_response(
+async fn operations_snapshot_response(
+    core: Arc<ClientCore>,
     request: DesktopOperationsSnapshotRequest,
-) -> DesktopOperationsSnapshot {
+) -> Result<DesktopOperationsSnapshot> {
     let native_executors = defra_agent::native_executor_status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
@@ -369,21 +375,210 @@ fn operations_snapshot_response(
             age_ms: executor.age_ms,
         })
         .collect();
-    DesktopOperationsSnapshot {
+    let tool_call_rows = fetch_background_tool_calls(&core)
+        .await
+        .map_err(|error| anyhow!("failed to query AgentToolCall: {error}"))?;
+    let liveness = RuntimeLivenessView {
+        expired_processing_count: 0,
+        requests: Vec::new(),
+        active_tool_calls: Vec::new(),
+        active_native_executors_available: true,
+        active_native_executors: native_executors,
+    };
+    let backgrounded_tools = project_backgrounded_tools(&tool_call_rows, &liveness);
+    let stuck_diagnostics = stuck_diagnostics_from_tool_calls(&tool_call_rows);
+
+    Ok(DesktopOperationsSnapshot {
         fetched_at: Utc::now().to_rfc3339(),
         agent_did: request.agent_did,
-        liveness: Some(RuntimeLivenessView {
-            expired_processing_count: 0,
-            requests: Vec::new(),
-            active_tool_calls: Vec::new(),
-            active_native_executors_available: true,
-            active_native_executors: native_executors,
-        }),
+        liveness: Some(liveness),
         liveness_unavailable_reason: None,
-        backgrounded_tools: Vec::new(),
-        stuck_diagnostics: Vec::new(),
+        backgrounded_tools,
+        stuck_diagnostics,
         lineage: None,
+    })
+}
+
+async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
+    let query = r#"
+        query {
+            AgentToolCall(
+                filter: { await_mode: { _eq: "background" } }
+            ) {
+                request_id
+                tool_call_id
+                tool_name
+                lifecycle_state
+                status
+                started_at
+                deadline_at
+                await_mode
+                cancel_policy
+                child_request_id
+                stuck_since
+                cancel_pending_remote_ack
+            }
+        }
+    "#;
+
+    let response = core.node().execute(query).await;
+    if response.has_errors() {
+        return Err(response
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; "));
     }
+
+    let data = response
+        .data
+        .ok_or_else(|| "AgentToolCall query returned no data".to_string())?;
+    let rows = data
+        .get("AgentToolCall")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ToolCallRow {
+            request_id: row
+                .get("request_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            tool_call_id: row
+                .get("tool_call_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            tool_name: row
+                .get("tool_name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            lifecycle_state: row
+                .get("lifecycle_state")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            status: row
+                .get("status")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            started_at: row
+                .get("started_at")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            deadline_at: row
+                .get("deadline_at")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            await_mode: row
+                .get("await_mode")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            cancel_policy: row
+                .get("cancel_policy")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            child_request_id: row
+                .get("child_request_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            stuck_since: row
+                .get("stuck_since")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            cancel_pending_remote_ack: row
+                .get("cancel_pending_remote_ack")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        })
+        .collect())
+}
+
+async fn list_subagent_tree_response(
+    core: &Arc<ClientCore>,
+    request: DesktopListSubagentTreeRequest,
+) -> Result<SubagentTreeView> {
+    let root_request_id = request.root_request_id.trim();
+    if root_request_id.is_empty() {
+        anyhow::bail!("rootRequestId is required");
+    }
+    let agent_did = match request.agent_did.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => core
+            .selected_agent_did()
+            .ok_or_else(|| anyhow!("no agent selected; pass agentDid explicitly"))?,
+    };
+    let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
+        return build_local_subagent_tree(
+            core.node(),
+            root_request_id,
+            request.include_terminal.unwrap_or(false),
+            effective_subagent_tree_max_depth(request.max_depth),
+        )
+        .await
+        .context("local subagent tree query failed");
+    };
+    let url = subagent_tree_url(&graphql, root_request_id, &request)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(SUBAGENT_TREE_TIMEOUT)
+        .build()
+        .context("build subagent tree http client")?;
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .with_context(|| format!("subagent tree fetch failed for {url}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("subagent tree fetch returned {status}: {}", body.trim());
+    }
+    response
+        .json::<SubagentTreeView>()
+        .await
+        .context("decode subagent tree response")
+}
+
+fn subagent_tree_url(
+    graphql: &str,
+    root_request_id: &str,
+    request: &DesktopListSubagentTreeRequest,
+) -> Result<Url> {
+    let trimmed = graphql.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("agent graphql URL is empty");
+    }
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    };
+    let mut url = Url::parse(&with_scheme)
+        .map_err(|error| anyhow!("agent graphql URL is not a valid URL: {error}"))?;
+    let path = url.path().trim_end_matches('/').to_string();
+    if path.is_empty() || path == "/api/v0" || path == "/api/v0/graphql" {
+        url.set_path("/subagents/tree");
+    } else if !path.ends_with("/subagents/tree") {
+        url.set_path(&format!("{path}/subagents/tree"));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+
+    let mut pairs = url.query_pairs_mut();
+    pairs.append_pair("root_request_id", root_request_id);
+    if let Some(include_terminal) = request.include_terminal {
+        pairs.append_pair("include_terminal", &include_terminal.to_string());
+    }
+    if let Some(max_depth) = request.max_depth {
+        pairs.append_pair("max_depth", &max_depth.to_string());
+    }
+    drop(pairs);
+    Ok(url)
 }
 
 async fn list_backends_with_health(core: Arc<ClientCore>) -> Result<Vec<BackendHealthView>> {

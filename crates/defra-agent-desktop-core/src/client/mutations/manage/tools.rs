@@ -88,6 +88,26 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "backgroundable_tool_names",
             &row.backgroundable_tool_names,
         )),
+        Some(graphql_string_list_field(
+            "subagent_targets",
+            &row.subagent_targets,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_spawn_enabled",
+            row.subagent_spawn_enabled,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_steering_enabled",
+            row.subagent_steering_enabled,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_background_enabled",
+            row.subagent_background_enabled,
+        )),
+        Some(graphql_optional_int_field(
+            "cross_deployment_spawn_timeout_seconds",
+            row.cross_deployment_spawn_timeout_seconds,
+        )),
     ];
     let update_fields = [
         Some(format!(
@@ -144,6 +164,26 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_string_list_field(
             "backgroundable_tool_names",
             &row.backgroundable_tool_names,
+        )),
+        Some(graphql_string_list_field(
+            "subagent_targets",
+            &row.subagent_targets,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_spawn_enabled",
+            row.subagent_spawn_enabled,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_steering_enabled",
+            row.subagent_steering_enabled,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_background_enabled",
+            row.subagent_background_enabled,
+        )),
+        Some(graphql_optional_int_field(
+            "cross_deployment_spawn_timeout_seconds",
+            row.cross_deployment_spawn_timeout_seconds,
         )),
     ];
 

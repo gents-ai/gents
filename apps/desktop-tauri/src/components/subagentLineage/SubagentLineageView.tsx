@@ -51,7 +51,11 @@ export function SubagentLineageView({
     }
     setLoading(true);
     setError(null);
-    listSubagentTree({ rootRequestId, agentDid: agentDid ?? null })
+    listSubagentTree({
+      rootRequestId,
+      agentDid: agentDid ?? null,
+      includeTerminal: true,
+    })
       .then((value) => {
         if (cancelled) return;
         setTree(value);

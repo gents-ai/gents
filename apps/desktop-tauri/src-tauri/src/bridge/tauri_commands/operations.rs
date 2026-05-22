@@ -18,6 +18,9 @@ use super::super::commands::mcp_health::{load_mcp_services_with_health, probe_mc
 use super::super::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
+use super::super::snapshot::subagent_tree::{
+    build_local_subagent_tree, effective_subagent_tree_max_depth,
+};
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
@@ -220,10 +223,16 @@ pub(crate) async fn desktop_list_subagent_tree(
             .ok_or_else(|| "no agent selected; pass agentDid explicitly".to_string())?,
     };
 
-    let graphql = core
-        .graphql_for_agent(&agent_did)
+    let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
+        return build_local_subagent_tree(
+            core.node(),
+            root_request_id,
+            request.include_terminal.unwrap_or(false),
+            effective_subagent_tree_max_depth(request.max_depth),
+        )
         .await
-        .ok_or_else(|| format!("no graphql URL configured for agent {agent_did}"))?;
+        .map_err(|error| format!("local subagent tree query failed: {error:#}"));
+    };
     let url = subagent_tree_url(&graphql, root_request_id, &request)?;
 
     let client = reqwest::Client::builder()

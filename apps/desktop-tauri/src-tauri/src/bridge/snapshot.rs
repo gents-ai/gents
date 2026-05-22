@@ -112,6 +112,9 @@ pub(crate) use operations_signature::{
     compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
 };
 
+#[path = "snapshot/subagent_tree.rs"]
+pub(crate) mod subagent_tree;
+
 #[path = "snapshot/session.rs"]
 mod session;
 #[cfg(test)]
