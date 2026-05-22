@@ -40,6 +40,21 @@ export function liveRunnerOptionsFromEnv(
     apiKeyEnvVar:
       process.env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR ??
       process.env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_API_KEY_ENV_VAR,
+    subagentInferenceUrl:
+      process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL ??
+      process.env.DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND_ENDPOINT,
+    subagentModelName:
+      process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_MODEL_NAME ??
+      process.env.DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND_MODEL,
+    subagentProvider:
+      process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_PROVIDER ??
+      process.env.DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND_PROVIDER,
+    subagentApiKey:
+      process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY ??
+      process.env.DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND_API_KEY,
+    subagentApiKeyEnvVar:
+      process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR ??
+      process.env.DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND_API_KEY_ENV_VAR,
     ...overrides,
   };
 }

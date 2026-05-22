@@ -26,6 +26,7 @@ pub(crate) struct LiveAgentDocs {
     pub(crate) behavior_id: String,
     pub(crate) subagent_behavior_id: String,
     pub(crate) backend_id: String,
+    pub(crate) subagent_backend_id: String,
     pub(crate) tool_selection_id: String,
     pub(crate) subagent_tool_selection_id: String,
     pub(crate) inference_profile_id: String,
@@ -50,6 +51,7 @@ pub(super) async fn spawn_live_agent(
     key_path: PathBuf,
     name: &str,
     backend: &AgentBackendConfig,
+    subagent_backend: Option<&AgentBackendConfig>,
 ) -> Result<(RunningAgent, LiveAgentDocs, PathBuf)> {
     let tool_root = key_path
         .parent()
@@ -61,7 +63,9 @@ pub(super) async fn spawn_live_agent(
 
     let identity = Arc::new(KeyIdentity::load_or_create(key_path, None)?);
     let did = identity.did().to_string();
-    let docs = seed_live_behavior_documents(node_owner.as_ref(), &did, name, backend).await?;
+    let docs =
+        seed_live_behavior_documents(node_owner.as_ref(), &did, name, backend, subagent_backend)
+            .await?;
     let agent = DefraAgent::from_default_behavior_documents(
         node_owner.node_arc(),
         identity,
@@ -100,15 +104,24 @@ async fn seed_live_behavior_documents(
     agent_did: &str,
     agent_name: &str,
     backend: &AgentBackendConfig,
+    subagent_backend: Option<&AgentBackendConfig>,
 ) -> Result<LiveAgentDocs> {
     let behavior_id = default_behavior_id_for_agent(agent_did);
     let subagent_behavior_id = format!("{agent_did}:live-repo-audit-subagent");
     let backend_id = format!("{agent_name}-backend");
+    let subagent_backend_id = if subagent_backend.is_some() {
+        format!("{agent_name}-subagent-backend")
+    } else {
+        backend_id.clone()
+    };
     let tool_selection_id = default_tool_selection_id_for_behavior(&behavior_id);
     let subagent_tool_selection_id = default_tool_selection_id_for_behavior(&subagent_behavior_id);
     let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
 
     bind_default_behavior_backend(core.node(), agent_did, &backend_id, backend).await?;
+    if let Some(sub) = subagent_backend {
+        upsert_inference_backend(core.node(), &subagent_backend_id, sub).await?;
+    }
 
     core.save_tool_selection(&ToolSelectionRow {
         selection_id: tool_selection_id.clone(),
@@ -176,7 +189,7 @@ async fn seed_live_behavior_documents(
         agent_did: Some(agent_did.to_string()),
         display_name: Some("Live Repo Audit Default".to_string()),
         system_prompt: Some(format!(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with behavior_id {subagent_behavior_id:?} and await_mode \"background\"."
+            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with behavior_id {subagent_behavior_id:?} and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
         )),
         backend_id: Some(backend_id.clone()),
         model_name: Some(backend.model_name.clone()),
@@ -188,6 +201,9 @@ async fn seed_live_behavior_documents(
         created_at: Some(Utc::now().to_rfc3339()),
     })
     .await?;
+    let subagent_model_name = subagent_backend
+        .map(|s| s.model_name.clone())
+        .unwrap_or_else(|| backend.model_name.clone());
     core.save_behavior(&AgentBehaviorRow {
         behavior_id: subagent_behavior_id.clone(),
         agent_did: Some(agent_did.to_string()),
@@ -196,8 +212,8 @@ async fn seed_live_behavior_documents(
             "You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings."
                 .to_string(),
         ),
-        backend_id: Some(backend_id.clone()),
-        model_name: Some(backend.model_name.clone()),
+        backend_id: Some(subagent_backend_id.clone()),
+        model_name: Some(subagent_model_name),
         tool_selection_id: Some(subagent_tool_selection_id.clone()),
         inference_profile_id: Some(inference_profile_id.clone()),
         compaction_strategy: Some("StripThenSummarize".to_string()),
@@ -212,19 +228,18 @@ async fn seed_live_behavior_documents(
         behavior_id,
         subagent_behavior_id,
         backend_id,
+        subagent_backend_id,
         tool_selection_id,
         subagent_tool_selection_id,
         inference_profile_id,
     })
 }
 
-async fn bind_default_behavior_backend(
+async fn upsert_inference_backend(
     node: &defra_agent::defra_node::EmbeddedNode,
-    agent_did: &str,
     backend_id: &str,
     backend: &AgentBackendConfig,
 ) -> Result<()> {
-    let bootstrap = ensure_agent_principal(node, agent_did).await?;
     let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_endpoint = escape_graphql_string(&backend.endpoint);
     let escaped_provider_kind = escape_graphql_string(backend.provider_kind.as_str());
@@ -268,7 +283,17 @@ async fn bind_default_behavior_backend(
     if response.has_errors() {
         anyhow::bail!("upsert inference backend failed: {:?}", response.errors);
     }
+    Ok(())
+}
 
+async fn bind_default_behavior_backend(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+    backend: &AgentBackendConfig,
+) -> Result<()> {
+    let bootstrap = ensure_agent_principal(node, agent_did).await?;
+    upsert_inference_backend(node, backend_id, backend).await?;
     let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
         .await?
         .expect("default behavior document");

@@ -47,7 +47,7 @@ use clap::Parser;
 use serde::Serialize;
 
 use http::BridgeRunnerServer;
-use live_fixture::{LiveBackendOverride, LiveBridgeFixture};
+use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveSubagentBackendOverride};
 
 #[derive(Debug, Parser)]
 struct RunnerArgs {
@@ -63,6 +63,16 @@ struct RunnerArgs {
     api_key: Option<String>,
     #[arg(long)]
     api_key_env_var: Option<String>,
+    #[arg(long)]
+    subagent_inference_url: Option<String>,
+    #[arg(long)]
+    subagent_model_name: Option<String>,
+    #[arg(long)]
+    subagent_provider: Option<String>,
+    #[arg(long)]
+    subagent_api_key: Option<String>,
+    #[arg(long)]
+    subagent_api_key_env_var: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,8 +98,17 @@ fn main() -> Result<()> {
             api_key: args.api_key,
             api_key_env_var: args.api_key_env_var,
         };
-        std::panic::catch_unwind(|| LiveBridgeFixture::start(Some(backend_override)))
-            .map_err(|_| anyhow!("bridge runner panicked during startup"))??
+        let subagent_override = LiveSubagentBackendOverride {
+            inference_url: args.subagent_inference_url,
+            model_name: args.subagent_model_name,
+            provider: args.subagent_provider,
+            api_key: args.subagent_api_key,
+            api_key_env_var: args.subagent_api_key_env_var,
+        };
+        std::panic::catch_unwind(|| {
+            LiveBridgeFixture::start(Some(backend_override), Some(subagent_override))
+        })
+        .map_err(|_| anyhow!("bridge runner panicked during startup"))??
     };
     let server = BridgeRunnerServer::start(Arc::clone(&fixture))?;
     let ready = ReadyMessage {

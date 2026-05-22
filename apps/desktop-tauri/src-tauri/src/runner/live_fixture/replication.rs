@@ -188,6 +188,10 @@ pub(super) async fn wait_for_live_documents(
             .inference_backends
             .iter()
             .any(|row| row.backend_id == docs.backend_id);
+        let has_subagent_backend = snapshot
+            .inference_backends
+            .iter()
+            .any(|row| row.backend_id == docs.subagent_backend_id);
         let has_tools = snapshot
             .tool_selections
             .iter()
@@ -205,6 +209,7 @@ pub(super) async fn wait_for_live_documents(
             && has_behavior
             && has_subagent_behavior
             && has_backend
+            && has_subagent_backend
             && has_tools
             && has_subagent_tools
             && has_profile
