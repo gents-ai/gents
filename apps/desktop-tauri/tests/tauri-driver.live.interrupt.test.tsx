@@ -67,14 +67,20 @@ describeLive("Tauri app live interrupt flow", () => {
       // bridge call did not throw.
       const finalSession = await runner.waitForRequestCompletion(submitted!);
       if (finalSession?.latestResponse?.cancelCause) {
-        logTurn(
-          `interrupt latched: cause=${finalSession.latestResponse.cancelCause.cause}`,
-        );
+        const cause = finalSession.latestResponse.cancelCause;
+        logTurn(`interrupt latched: cause=${cause.cause}`);
         // The response has a cancel cause — the interrupt landed mid-flight.
-        // The badge should be present in the rendered transcript. We do a
-        // light smoke-check here rather than asserting specific text, since
-        // badge wording can vary by cause variant.
-        expect(finalSession.latestResponse.cancelCause.cause).toBeDefined();
+        // The transcript should render the same badge text users see in the
+        // cancelled turn.
+        await waitFor(
+          () => {
+            const labels = [...document.querySelectorAll(".cause-badge")].map(
+              (node) => node.textContent,
+            );
+            expect(labels).toContain(cancelCauseLabel(cause.cause));
+          },
+          { timeout: 30_000 },
+        );
       } else {
         // Turn finished before our click could take effect. This is a valid
         // race outcome — the bridge HTTP call still succeeded (no throw above),
@@ -124,3 +130,18 @@ describeLive("Tauri app live interrupt flow", () => {
     }
   }, 600_000);
 });
+
+function cancelCauseLabel(cause: string) {
+  switch (cause) {
+    case "userCancelled":
+      return "user cancelled";
+    case "interrupted":
+      return "interrupted";
+    case "deadline":
+      return "deadline expired";
+    case "unknown":
+      return "cause unknown";
+    default:
+      return cause;
+  }
+}

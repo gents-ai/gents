@@ -143,6 +143,44 @@ function ReasoningDisclosure({
   );
 }
 
+function hasVisibleResponseCancelBadgeTarget(
+  item: RenderedTimelineItem,
+  responseMaterializedSequence?: number | null,
+) {
+  switch (item.kind) {
+    case "assistantMessage":
+      return (
+        Boolean(
+          normalizeTranscriptText(item.content) ||
+          normalizeTranscriptText(item.reasoning),
+        ) &&
+        item.sequence != null &&
+        item.sequence === responseMaterializedSequence
+      );
+    case "liveAssistant":
+      return Boolean(
+        normalizeTranscriptText(item.content) ||
+        normalizeTranscriptText(item.reasoning),
+      );
+    default:
+      return false;
+  }
+}
+
+function AssistantCancelCauseTurn({ cause }: { cause: DerivedCancelCauseView }) {
+  return (
+    <div className="turn-block">
+      <article className="message-card">
+        <div className="message-role">
+          assistant
+          <CancelCauseBadge cause={cause} className="assistant-turn-cause-badge" />
+        </div>
+        <CancelCauseDetails cause={cause} />
+      </article>
+    </div>
+  );
+}
+
 export function MessageList({
   timelineItems,
   responseCancelCause,
@@ -152,6 +190,12 @@ export function MessageList({
   responseCancelCause?: DerivedCancelCauseView | null;
   responseMaterializedSequence?: number | null;
 }) {
+  const shouldRenderStandaloneCancelCause =
+    responseCancelCause != null &&
+    !timelineItems.some((item) =>
+      hasVisibleResponseCancelBadgeTarget(item, responseMaterializedSequence),
+    );
+
   return (
     <>
       {timelineItems.map((item) => {
@@ -246,6 +290,9 @@ export function MessageList({
             return null;
         }
       })}
+      {shouldRenderStandaloneCancelCause ? (
+        <AssistantCancelCauseTurn cause={responseCancelCause} />
+      ) : null}
     </>
   );
 }

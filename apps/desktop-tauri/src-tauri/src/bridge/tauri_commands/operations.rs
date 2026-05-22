@@ -380,7 +380,12 @@ pub(crate) async fn desktop_list_backends_with_health(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    list_backends_with_health_for_core(core).await
+}
 
+pub(crate) async fn list_backends_with_health_for_core(
+    core: Arc<ClientCore>,
+) -> Result<Vec<BackendHealthView>, String> {
     let node = core.node();
     let backends = list_all_backends(node)
         .await
@@ -510,6 +515,12 @@ pub(crate) async fn desktop_list_mcp_services_with_health(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    list_mcp_services_with_health_for_core(core).await
+}
+
+pub(crate) async fn list_mcp_services_with_health_for_core(
+    core: Arc<ClientCore>,
+) -> Result<Vec<MCPServiceHealthView>, String> {
     load_mcp_services_with_health(core.as_ref())
         .await
         .map_err(|error| error.to_string())
@@ -527,6 +538,13 @@ pub(crate) async fn desktop_probe_mcp_service(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    probe_mcp_service_for_core(core, request).await
+}
+
+pub(crate) async fn probe_mcp_service_for_core(
+    core: Arc<ClientCore>,
+    request: DesktopProbeMcpServiceRequest,
+) -> Result<McpServiceProbeResult, String> {
     probe_mcp_service(core.as_ref(), &request.service_id)
         .await
         .map_err(|error| error.to_string())

@@ -53,7 +53,9 @@ const liveTestFiles = [
   "tests/tauri-driver.live.behavior.test.tsx",
   "tests/tauri-driver.live.chat.test.tsx",
   "tests/tauri-driver.live.config.test.tsx",
+  "tests/tauri-driver.live.fleet.test.tsx",
   "tests/tauri-driver.live.interrupt.test.tsx",
+  "tests/tauri-driver.live.operations.test.tsx",
   "tests/tauri-driver.live.sad-path.test.tsx",
 ];
 

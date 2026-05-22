@@ -127,7 +127,9 @@ describe("Transcript assistant-turn cancel cause", () => {
       />,
     );
     // Badge appears once, attached to the assistant turn
-    expect(screen.getByText(/interrupted/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
+    ).toBeInTheDocument();
   });
 
   it("does NOT render the badge on older assistant messages whose sequence does not match", () => {
@@ -170,7 +172,9 @@ describe("Transcript assistant-turn cancel cause", () => {
     render(
       <MessageList timelineItems={items} responseCancelCause={interruptedCause} />,
     );
-    expect(screen.getByText(/interrupted/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
+    ).toBeInTheDocument();
   });
 
   it("does NOT render badge when responseCancelCause is null", () => {
@@ -193,7 +197,7 @@ describe("Transcript assistant-turn cancel cause", () => {
     expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument();
   });
 
-  it("does NOT render badge on user messages even if their sequence matches", () => {
+  it("renders a standalone badge when an interrupted response has no assistant message", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "userMessage",
@@ -209,6 +213,9 @@ describe("Transcript assistant-turn cancel cause", () => {
         responseMaterializedSequence={2}
       />,
     );
-    expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/responseInterruptedAt/i)).toBeInTheDocument();
   });
 });

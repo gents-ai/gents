@@ -1,11 +1,16 @@
 import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
+import type { BackendHealth } from "../../src/components/backendHealth/types";
 import type {
   CascadeCancelPreview,
   ChatSendResult,
   DesktopClientSnapshot,
+  DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
   InitSummary,
   InterruptRequestResult,
+  MCPServiceHealthView,
+  McpServiceProbeResult,
+  SubagentTreeView,
   TaskRunResult,
 } from "../../src/lib/types";
 import type { TauriDriverChatRequest } from "../tauri-driver";
@@ -96,6 +101,19 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
       runner.taskRunResults.push(result);
       return result;
     },
+    listSubagentTree: async (request) =>
+      runner.postJson<SubagentTreeView>("/desktop/subagent-tree", request),
+    listBackendsWithHealth: async () =>
+      runner.getJson<BackendHealth[]>("/desktop/backend-health"),
+    listMcpServicesWithHealth: async () =>
+      runner.getJson<MCPServiceHealthView[]>("/desktop/mcp-health"),
+    probeMcpService: async (serviceId) =>
+      runner.postJson<McpServiceProbeResult>("/desktop/mcp/probe", { serviceId }),
+    fetchOperationsSnapshot: async (request) =>
+      runner.postJson<DesktopOperationsSnapshot>(
+        "/desktop/operations/snapshot",
+        request,
+      ),
     previewInterruptCascade: async (request) =>
       runner.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
