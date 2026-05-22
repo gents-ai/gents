@@ -95,9 +95,47 @@ describeLive("Tauri app live bridge runner chat", () => {
       expectCompletedSession("turn 3", finalSession);
       expect(finalSession.latestRequestId).toBe(thirdResult.requestId);
       expect(finalSession.timelineItems.length).toBeGreaterThanOrEqual(6);
-      expect(finalSession.timelineItems.some((item) => item.kind === "toolGroup")).toBe(
-        true,
+
+      // Multi-turn coverage assertions:
+      // (1) at least one read_file tool call landed (FIRST_PROMPT + SECOND_PROMPT both ask for one).
+      // (2) every user turn produced non-empty assistant content (no silent failures).
+      // (3) turn 3 ("Without calling more tools") added no new tool groups beyond turn 2.
+      const toolNames = finalSession.timelineItems.flatMap((item) =>
+        item.kind === "toolGroup" ? item.tools.map((tool) => tool.toolName) : [],
       );
+      expect(
+        toolNames.some((name) => /read_file/i.test(name)),
+        `expected at least one read_file call across turns 1+2; saw tool names=${JSON.stringify(toolNames)}`,
+      ).toBe(true);
+
+      const userMessages = finalSession.timelineItems.filter(
+        (item) => item.kind === "userMessage",
+      );
+      expect(userMessages).toHaveLength(3);
+      const assistantMessages = finalSession.timelineItems.filter(
+        (item): item is Extract<typeof item, { kind: "assistantMessage" }> =>
+          item.kind === "assistantMessage",
+      );
+      expect(assistantMessages.length).toBeGreaterThanOrEqual(3);
+      for (const message of assistantMessages) {
+        const content = (message.content ?? "").trim();
+        const reasoning = (message.reasoning ?? "").trim();
+        expect(
+          content.length > 0 || reasoning.length > 0,
+          `assistant message ${message.itemKey} was empty: ${JSON.stringify(message)}`,
+        ).toBe(true);
+      }
+
+      const toolGroupsAfterTurnTwo = secondSession.timelineItems.filter(
+        (item) => item.kind === "toolGroup",
+      ).length;
+      const toolGroupsAfterTurnThree = finalSession.timelineItems.filter(
+        (item) => item.kind === "toolGroup",
+      ).length;
+      expect(
+        toolGroupsAfterTurnThree,
+        `turn 3 was instructed to use no tools but added ${toolGroupsAfterTurnThree - toolGroupsAfterTurnTwo} tool group(s)`,
+      ).toBe(toolGroupsAfterTurnTwo);
 
       const latestSnapshot = await runner.fetchSnapshot();
       const deployment = latestSnapshot.client?.deployments[0];
