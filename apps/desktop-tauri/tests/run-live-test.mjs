@@ -81,6 +81,7 @@ const liveTestSuites = {
   interrupt: "tests/tauri-driver.live.interrupt.test.tsx",
   operations: "tests/tauri-driver.live.operations.test.tsx",
   subagent: "tests/tauri-driver.live.subagent.test.tsx",
+  replication: "tests/tauri-driver.live.replication.test.tsx",
   "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
 };
 
@@ -100,6 +101,7 @@ const liveTestFiles = suite
       liveTestSuites.interrupt,
       liveTestSuites.operations,
       liveTestSuites.subagent,
+      liveTestSuites.replication,
       liveTestSuites["sad-path"],
     ];
 
