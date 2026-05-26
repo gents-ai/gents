@@ -248,6 +248,25 @@ pub(super) fn handle_request(
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
+        // Test-only escape hatch: write a behavior document on the *remote* node so the
+        // subsequent desktop-snapshot read exercises the real P2P propagation path (write
+        // on remote core → visible on desktop core).  This is the D1/D2 cross-node
+        // witness.  Only available when DEFRA_AGENT_TAURI_LIVE=1 (set by run-live-test.mjs).
+        ("POST", "/desktop/test-fixture/remote-save-behavior") => {
+            if std::env::var("DEFRA_AGENT_TAURI_LIVE").as_deref() != Ok("1") {
+                return Ok(HttpResponse::json_error(
+                    "403 Forbidden",
+                    "remote-save-behavior is only available in live test mode (DEFRA_AGENT_TAURI_LIVE=1)",
+                ));
+            }
+            let req =
+                decode::<BehaviorSaveRequest>(&request.body, "decoding remote behavior save request")?;
+            tracing::info!(behavior_id = %req.behavior_id, "remote-save-behavior: writing to remote core");
+            runtime.block_on(save_behavior_config(fixture.remote_core().as_ref(), req))?;
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({ "ok": true }).to_string(),
+            ))
+        }
         ("POST", "/desktop/backend/save") => {
             let request =
                 decode::<BackendSaveRequest>(&request.body, "decoding backend save request")?;

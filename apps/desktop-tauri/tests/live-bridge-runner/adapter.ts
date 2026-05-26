@@ -1,6 +1,7 @@
 import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
 import type { BackendHealth } from "../../src/components/backendHealth/types";
 import type {
+  BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
   DesktopClientSnapshot,
@@ -118,5 +119,21 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
       runner.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
       runner.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+  };
+}
+
+/**
+ * Test-only fixture helpers that are NOT part of DesktopApiAdapter (production
+ * interface).  Kept here, close to the runner, so they never bleed into the
+ * Tauri bridge or the browser bundle.
+ */
+export function createFixtureHelpers(runner: { postJson: <T>(path: string, body: unknown) => Promise<T> }) {
+  return {
+    /** Write a behavior document on the *remote* node.  The write triggers P2P
+     *  replication so the same document becomes visible on the desktop node.
+     *  This is the D1/D2 cross-node witness — write-on-A, read-on-B.
+     *  Requires DEFRA_AGENT_TAURI_LIVE=1 (enforced server-side). */
+    saveBehaviorConfigOnRemote: async (request: BehaviorSaveRequest) =>
+      runner.postJson<{ ok: boolean }>("/desktop/test-fixture/remote-save-behavior", request),
   };
 }

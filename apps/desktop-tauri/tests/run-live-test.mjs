@@ -83,6 +83,11 @@ const liveTestSuites = {
   subagent: "tests/tauri-driver.live.subagent.test.tsx",
   replication: "tests/tauri-driver.live.replication.test.tsx",
   "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
+  // cascade is intentionally excluded from the default sweep — it is
+  // an it.fails suite (B3+C2 pending Rust implementation) that takes
+  // 5-10 minutes with no CI signal.  Run it explicitly:
+  //   bun run test:live:cascade -- --inference-url <url> --model-name <model>
+  cascade: "tests/tauri-driver.live.cascade.test.tsx",
 };
 
 if (suite && !(suite in liveTestSuites)) {
