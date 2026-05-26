@@ -136,10 +136,10 @@ async fn walk_returns_no_rows_for_standalone_root() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn walk_excludes_rows_owned_by_different_agent_did() {
-    // Seed the cascade fixture (owned by did:test:operator) plus one
-    // AgentRequest owned by did:test:other. Walk with agent_did filter.
-    // Assert: the other-agent request is NOT in the result.
+async fn walk_excludes_unlinked_rows_owned_by_different_agent_did() {
+    // The root is scoped by agent_did, but the walk only follows AgentToolCall
+    // bridge edges. A foreign row that is not linked by a tool edge must not
+    // appear just because it points at the root in lineage fields.
     let (core, _tmp) = super::support::seed_cascade_fixture_with_foreign_request().await;
     let req = CascadeWalkRequest {
         root_request_id: "req_root".into(),
@@ -150,11 +150,10 @@ async fn walk_excludes_rows_owned_by_different_agent_did() {
         .await
         .expect("walk ok");
 
-    // The foreign request must not appear in any walked row.
     let has_foreign = result.rows.iter().any(|r| r.request_id == "req_foreign");
     assert!(
         !has_foreign,
-        "walk with agent_did=did:test:operator should NOT include req_foreign (owned by did:test:other)"
+        "walk should not include unlinked foreign request rows"
     );
 
     // The operator's own rows must still be present.
@@ -166,5 +165,29 @@ async fn walk_excludes_rows_owned_by_different_agent_did() {
     assert!(
         operator_count > 0,
         "expected operator-owned rows to be present"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn walk_includes_bridge_linked_child_owned_by_different_agent_did() {
+    let (core, _tmp) = super::support::seed_cascade_fixture_with_foreign_linked_child().await;
+    let preview = build_cascade_preview(
+        &core,
+        &DesktopPreviewInterruptCascadeRequest {
+            request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
+            include_terminal: Some(true),
+        },
+    )
+    .await
+    .expect("preview ok");
+
+    let linked = preview
+        .will_interrupt
+        .iter()
+        .find(|row| row.request_id == "req_foreign_linked");
+    assert!(
+        linked.is_some(),
+        "cascade preview should include cross-DID children reached by bridge edge"
     );
 }

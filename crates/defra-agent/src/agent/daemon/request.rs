@@ -148,25 +148,61 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 ))
                 .await;
 
-            if request_token.is_cancelled() {
-                // Interrupt detected inside run_inference — execute the 6-step flow.
-                // Graceful fallback: if the token was cancelled by a path that did not
-                // also publish an InterruptIntent on the watch channel (e.g. a future
-                // tool-child cancellation from Task 8), treat it as a failure rather
-                // than panicking. This preserves safety as the cancellation hierarchy
-                // expands.
-                let Some(intent) = interrupt_rx.borrow().clone() else {
+            let token_was_cancelled = request_token.is_cancelled();
+            let watched_interrupt = { interrupt_rx.borrow().clone() };
+            let interrupt_at = if token_was_cancelled {
+                // Interrupt detected inside run_inference. Prefer the watch
+                // intent, but fall back to the persisted latch: a foreground
+                // tool path can observe interrupt_requested_at before the
+                // polling observer publishes on the channel.
+                if let Some(intent) = watched_interrupt {
+                    Some(intent.at.to_rfc3339())
+                } else {
+                    crate::interrupt::fetch_interrupt_requested_at(&self.node, &request.request_id)
+                        .await?
+                }
+            } else if let Some(intent) = watched_interrupt {
+                request_token.cancel();
+                Some(intent.at.to_rfc3339())
+            } else {
+                let persisted =
+                    crate::interrupt::fetch_interrupt_requested_at(&self.node, &request.request_id)
+                        .await?;
+                if persisted.is_some() {
+                    request_token.cancel();
+                }
+                persisted
+            };
+
+            if token_was_cancelled && interrupt_at.is_none() {
+                tracing::warn!(
+                    request_id = %lifecycle.request().request_id,
+                    "request_token was cancelled without an interrupt latch; \
+                     treating as failure rather than interrupt"
+                );
+                return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
+                    "request_token cancelled without interrupt latch"
+                )));
+            }
+
+            if let Some(interrupt_at) = interrupt_at {
+                // Interrupt detected inside run_inference, by the observer just
+                // after it returned, or by a synchronous tool path that read
+                // interrupt_requested_at before the observer's next poll.
+                if !request_token.is_cancelled() {
+                    request_token.cancel();
+                }
+                if interrupt_at.trim().is_empty() {
                     tracing::warn!(
                         request_id = %lifecycle.request().request_id,
-                        "request_token was cancelled without an interrupt intent on the channel; \
+                        "request_token was cancelled without an interrupt latch; \
                          treating as failure rather than interrupt"
                     );
                     return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
-                        "request_token cancelled without interrupt intent"
+                        "request_token cancelled without interrupt latch"
                     )));
-                };
+                }
 
-                let interrupt_at = intent.at.to_rfc3339();
                 let flow_span = tracing::info_span!(
                     "interrupt.flow",
                     request_id = %lifecycle.request().request_id,

@@ -16,9 +16,8 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
  * If a theorem's statement changes, this file MUST be updated to match —
  * see CLAUDE.md "Development Flow": spec changes are authoritative.
  *
- * This suite is intentionally excluded from the default live sweep because
- * the B3+C2 test is currently `it.fails` (pending Rust implementation) and
- * takes 5-10 minutes per run with no useful CI signal.  Run it explicitly:
+ * This suite is intentionally excluded from the default live sweep because it
+ * requires live inference and can take several minutes per run. Run it explicitly:
  *
  *   bun run test:live:cascade -- --inference-url <url> --model-name <model>
  */
@@ -33,41 +32,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
   // lifecycleState transitions to "interrupted" and the bridge tool call
   // carries cancelCause.cause === "interrupted".
   //
-  // ⚠️ KNOWN-FAILING — pending Rust implementation. B3 came out of recent
-  // Lean cascade refactoring; the corresponding Rust work was not fully
-  // brought through. Observed gaps (deterministic across 7+ runs):
-  //
-  //   1. apps/desktop-tauri/src-tauri/src/bridge/cascade.rs::interrupt_request
-  //      only latches `interrupt_requested_at` on the parent. The CLI's
-  //      `cancel_descendant_bridges_local`
-  //      (crates/defra-agent-cli/src/commands/subagent.rs:252) walks
-  //      descendants and calls `defra_agent::interrupt_request` on each
-  //      child — the bridge has no equivalent walk. Adding it is necessary
-  //      but not sufficient (verified empirically: even with the descendant
-  //      write, the child still terminates as `failed`).
-  //
-  //   2. When the parent is blocked in a background `wait_subagent` (which
-  //      returns immediately via `backgrounded_receipt_payload` at
-  //      subagent_bridge.rs:161-172), the parent's interrupt observer
-  //      firing doesn't produce a clean `.interrupted` transition — the
-  //      parent ends as `failed` with `cancelCause=undefined`, breaking
-  //      C2's "every live linked tool tagged CancelCause.interrupted"
-  //      conclusion.
-  //
-  //   3. The child runtime's pickup of `interrupt_requested_at` either
-  //      doesn't fire for subagent-spawned requests, or fires but
-  //      transitions through a path that classifies the terminal as
-  //      `failed`, not `interrupted`. Needs trace instrumentation in
-  //      `interrupt.rs::spawn_request_interrupt_observer` + the child
-  //      daemon's inference loop to determine which.
-  //
-  // Marked `it.fails` so the test stays in the suite as a forcing
-  // function: when the Rust catches up and the test starts passing,
-  // vitest reports an unexpected pass and demands removal of the marker.
-  // DO NOT silently delete this test if it flips green — that's the
-  // signal the spec is satisfied. Tracking issue: B3 cascade Rust
-  // implementation stream (file separately).
-  it.fails("B3+C2: cascade-mode interrupt drives a running child subagent to interrupted", async () => {
+  it("B3+C2: cascade-mode interrupt drives a running child subagent to interrupted", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find((b) => b.isDefault);
       const defaultTools = deployment.toolSelections.find(
@@ -131,10 +96,42 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
         .catch(() => null);
       if (dialog) {
         logTurn("cascade dialog opened; confirming cascade (B3 cascade path)");
-        // Confirm cascade (not detach) so we witness B3 rather than B3'.
-        await driver.user.click(
-          within(dialog).getByRole("button", { name: /interrupt parent and cascade/i }),
-        );
+        // Confirm cascade (not detach) so we witness B3 rather than B3'. The
+        // dialog may return a stale preview if the child moves claimed→processing
+        // between preview and submit; in that case it refreshes and requires
+        // another confirmation.
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+          const activeDialog = screen.queryByRole("dialog", {
+            name: /interrupt parent request/i,
+          });
+          if (!activeDialog) break;
+          if (within(activeDialog).queryByText(/preview updated/i)) {
+            logTurn(`cascade preview refreshed; re-confirming attempt ${attempt}`);
+          }
+          await driver.user.click(
+            within(activeDialog).getByRole("button", {
+              name: /interrupt parent and cascade/i,
+            }),
+          );
+          await waitFor(
+            () => {
+              const currentDialog = screen.queryByRole("dialog", {
+                name: /interrupt parent request/i,
+              });
+              if (!currentDialog) return;
+              expect(
+                within(currentDialog).getByRole("button", {
+                  name: /interrupt parent and cascade/i,
+                }),
+              ).toBeEnabled();
+            },
+            { timeout: 15_000, interval: 250 },
+          );
+        }
+        expect(
+          screen.queryByRole("dialog", { name: /interrupt parent request/i }),
+          "cascade dialog should close after an accepted confirmation",
+        ).toBeNull();
       } else {
         // Child completed before the preview call — direct interrupt was taken.
         // B3's cascade precondition requires a live child; if the child finished

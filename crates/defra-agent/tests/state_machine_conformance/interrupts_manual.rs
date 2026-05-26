@@ -444,6 +444,49 @@ async fn transition_to_interrupted_from_processing() {
 }
 
 #[tokio::test]
+async fn fail_after_interrupt_latch_prefers_interrupted() {
+    // B3's second step is interrupt_processing: once interruptRequestedAt is
+    // latched on a processing request, a later failure path must not classify
+    // the terminal state as failed.
+    let db = test_db("fail-after-interrupt-latch").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+
+    lifecycle.fail().await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "interrupted");
+    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_lean_transition_is_legal("Request", "processing", "interrupted");
+    assert_lean_transition_is_illegal("Request", "interrupted", "failed");
+}
+
+#[tokio::test]
 async fn interrupt_request_is_idempotent() {
     // Two calls to `interrupt_request` on the same doc must latch exactly
     // once: the daemon observer relies on the first submitter's timestamp

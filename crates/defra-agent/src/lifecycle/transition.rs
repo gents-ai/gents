@@ -257,6 +257,17 @@ impl RequestLifecycle {
             );
             return Ok(());
         }
+        if crate::interrupt::fetch_interrupt_requested_at(&self.node, &self.request.request_id)
+            .await?
+            .is_some()
+        {
+            tracing::info!(
+                request_id = %self.request.request_id,
+                "request failure observed after interrupt_requested_at was latched; transitioning to interrupted"
+            );
+            self.transition_to_interrupted().await?;
+            return Ok(());
+        }
         self.ensure_state(
             &[LocalLifecycleState::Claimed, LocalLifecycleState::Streaming],
             "fail",

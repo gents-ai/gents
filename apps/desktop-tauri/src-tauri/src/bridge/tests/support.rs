@@ -285,14 +285,14 @@ pub(crate) async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
-/// Seeds the cascade fixture PLUS one `AgentRequest` owned by `did:test:other`
-/// to verify that agent_did-scoped walks exclude foreign-agent rows.
+/// Seeds the cascade fixture PLUS one unlinked `AgentRequest` owned by
+/// `did:test:other` to verify that walks only follow bridge edges.
 pub(crate) async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = seed_cascade_fixture().await;
 
-    // Seed one extra request owned by a different agent DID.
-    // It references req_root's session just to be realistic, but its agent_did
-    // is different so a did:test:operator-scoped walk must not see it.
+    // Seed one extra request owned by a different agent DID. It references the
+    // root lineage fields, but no AgentToolCall points at it, so the walk must
+    // not include it.
     let mutation = r#"mutation {
         create_AgentRequest(input: {
             request_id: "req_foreign",
@@ -313,6 +313,54 @@ pub(crate) async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCo
     assert!(
         !response.has_errors(),
         "seed foreign AgentRequest failed: {:?}",
+        response.errors
+    );
+
+    (core, tmp)
+}
+
+/// Seeds the cascade fixture PLUS one cascade-linked `AgentRequest` owned by
+/// `did:test:other`, matching live cross-deployment subagent edges.
+pub(crate) async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore>, TempDir) {
+    let (core, tmp) = seed_cascade_fixture().await;
+
+    let mutation = r#"mutation {
+        create_AgentRequest(input: {
+            request_id: "req_foreign_linked",
+            agent_did: "did:test:other",
+            behavior_id: "other-behavior",
+            session_id: "sess_foreign_linked",
+            content: "foreign linked child request",
+            status: "processing",
+            lifecycle_state: "processing",
+            backend_id: "",
+            created_at: "2026-05-20T00:07:00Z",
+            retry_count: 0,
+            caused_by_parent_request_id: "req_root",
+            caused_by_parent_tool_call_id: "tc_foreign"
+        }) { _docID }
+
+        create_AgentToolCall(input: {
+            tool_call_key: "sess_root:tc_foreign",
+            request_id: "req_root",
+            session_id: "sess_root",
+            message_sequence: 7,
+            tool_name: "remote_subagent",
+            tool_call_id: "tc_foreign",
+            args: "{}",
+            result: "",
+            status: "called",
+            lifecycle_state: "running",
+            started_at: "2026-05-20T00:07:00Z",
+            await_mode: "background",
+            cancel_policy: "cascade",
+            child_request_id: "req_foreign_linked"
+        }) { _docID }
+    }"#;
+    let response = core.node().execute(mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed foreign linked child failed: {:?}",
         response.errors
     );
 
