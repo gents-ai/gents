@@ -25,6 +25,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 subagent_depth: Some(0),
                 caused_by_parent_request_id: None,
                 caused_by_parent_tool_call_id: None,
+                backend_id: None,
             },
             SubagentNodeView {
                 request_id: case.child_request_id.clone(),
@@ -40,6 +41,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 caused_by_parent_tool_call_id: case
                     .caused_by_parent_tool_call_id_matches
                     .then(|| case.parent_tool_call_id.clone()),
+                backend_id: None,
             },
         ],
         edges: vec![SubagentEdgeView {
