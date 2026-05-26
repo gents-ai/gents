@@ -45,6 +45,7 @@ pub(crate) enum Command {
     Reset(ResetArgs),
     #[command(
         name = "server",
+        alias = "serve",
         about = "Run the local defra-agent runtime from an initialized home",
         after_help = SERVER_AFTER_HELP
     )]
@@ -57,6 +58,8 @@ pub(crate) enum Command {
         after_help = CODEX_SHIM_AFTER_HELP
     )]
     CodexShim(CodexShimArgs),
+    #[command(name = "__native-fs-runner", hide = true)]
+    NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
     P2p {
         #[command(subcommand)]
@@ -125,6 +128,14 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+}
+
+#[derive(clap::Args)]
+pub(crate) struct NativeFsRunnerArgs {
+    #[arg(long, value_name = "ROOT")]
+    pub(crate) root: Option<PathBuf>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) self_test: bool,
 }
 
 #[derive(clap::Args)]
@@ -326,6 +337,27 @@ pub(crate) struct ServeArgs {
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
     pub(crate) tool_root: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Also run the experimental Codex TUI compatibility endpoint"
+    )]
+    pub(crate) codex_shim: bool,
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) codex_shim_bind_addr: IpAddr,
+    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
+    pub(crate) codex_shim_port: u16,
+    #[arg(
+        long,
+        help = "Synthetic model id advertised to the Codex TUI. Defaults to the server default behavior model."
+    )]
+    pub(crate) codex_shim_model: Option<String>,
+    #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
+    pub(crate) codex_shim_behavior_id: Option<String>,
+    #[arg(long, default_value_t = 300)]
+    pub(crate) codex_shim_timeout_secs: u64,
+    #[arg(long, default_value_t = 250)]
+    pub(crate) codex_shim_poll_ms: u64,
     #[arg(long)]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
@@ -373,6 +405,18 @@ pub(crate) struct ChatArgs {
 pub(crate) struct CodexShimArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to submit DEFRA turns through. Defaults to runtime state or localhost."
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Agent DID to submit Codex turns to. Defaults to runtime/init state."
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
+    pub(crate) behavior_id: Option<String>,
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
@@ -383,6 +427,10 @@ pub(crate) struct CodexShimArgs {
         help = "Synthetic model id advertised to the Codex TUI"
     )]
     pub(crate) model: String,
+    #[arg(long, default_value_t = 300)]
+    pub(crate) timeout_secs: u64,
+    #[arg(long, default_value_t = 250)]
+    pub(crate) poll_ms: u64,
 }
 
 #[derive(Subcommand)]

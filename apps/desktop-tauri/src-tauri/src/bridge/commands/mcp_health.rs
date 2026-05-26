@@ -4,8 +4,7 @@ use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool,
-    ServiceHealthMap,
+    run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
 use defra_agent_desktop_core::client::ClientCore;
 use defra_agent_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
@@ -183,7 +182,10 @@ pub(crate) async fn probe_mcp_service(
     }
 }
 
-async fn load_registry_entry(core: &ClientCore, service_id: &str) -> Result<ToolServiceRegistryRow> {
+async fn load_registry_entry(
+    core: &ClientCore,
+    service_id: &str,
+) -> Result<ToolServiceRegistryRow> {
     let escaped = escape_graphql_string(service_id);
     // Match `defra-agent mcp probe`'s scoping: only online registry rows are
     // probe targets; an offline/dropped row should fail loudly with "no

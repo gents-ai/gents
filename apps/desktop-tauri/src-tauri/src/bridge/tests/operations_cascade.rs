@@ -1,4 +1,6 @@
-use crate::bridge::cascade::{build_cascade_preview, CascadeClassification, CascadeWalkRequest, CascadeWalkRow};
+use crate::bridge::cascade::{
+    build_cascade_preview, CascadeClassification, CascadeWalkRequest, CascadeWalkRow,
+};
 use crate::bridge::types::DesktopPreviewInterruptCascadeRequest;
 
 #[test]
@@ -149,10 +151,7 @@ async fn walk_excludes_rows_owned_by_different_agent_did() {
         .expect("walk ok");
 
     // The foreign request must not appear in any walked row.
-    let has_foreign = result
-        .rows
-        .iter()
-        .any(|r| r.request_id == "req_foreign");
+    let has_foreign = result.rows.iter().any(|r| r.request_id == "req_foreign");
     assert!(
         !has_foreign,
         "walk with agent_did=did:test:operator should NOT include req_foreign (owned by did:test:other)"

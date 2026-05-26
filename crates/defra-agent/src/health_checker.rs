@@ -854,10 +854,7 @@ async fn upsert_persisted_health_state(
 
     let resp = persistence.node.execute(&mutation).await;
     if resp.has_errors() {
-        anyhow::bail!(
-            "upsert_ToolServiceHealthState failed: {:?}",
-            resp.errors
-        );
+        anyhow::bail!("upsert_ToolServiceHealthState failed: {:?}", resp.errors);
     }
     Ok(())
 }
@@ -907,10 +904,7 @@ async fn load_persisted_service_ids(
     );
     let resp = persistence.node.execute(&query).await;
     if resp.has_errors() {
-        anyhow::bail!(
-            "load_persisted_service_ids failed: {:?}",
-            resp.errors
-        );
+        anyhow::bail!("load_persisted_service_ids failed: {:?}", resp.errors);
     }
     let raw = resp
         .data

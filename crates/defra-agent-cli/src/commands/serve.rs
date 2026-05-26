@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::cli::*;
+use crate::commands::codex_shim::bind_codex_shim;
 use crate::http::runtime_contract_router;
 use crate::shared::*;
 use crate::{
@@ -167,6 +168,15 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         "degraded"
     };
+    let codex_shim_model = args.codex_shim_model.clone().unwrap_or_else(|| {
+        agent
+            .behaviors()
+            .iter()
+            .find(|behavior| behavior.behavior_id == default_behavior_id)
+            .or_else(|| agent.behaviors().first())
+            .map(|behavior| behavior.model_name.clone())
+            .unwrap_or_else(|| "defra-default".to_string())
+    });
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -225,6 +235,42 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         },
     )?;
 
+    let mut codex_shim_handle = if args.codex_shim {
+        let bound = bind_codex_shim(CodexShimArgs {
+            home: Some(home_dir.clone()),
+            graphql: Some(graphql_url.clone()),
+            agent_did: Some(identity.did().to_string()),
+            behavior_id: args.codex_shim_behavior_id.clone(),
+            bind_addr: args.codex_shim_bind_addr,
+            port: args.codex_shim_port,
+            model: codex_shim_model.clone(),
+            timeout_secs: args.codex_shim_timeout_secs,
+            poll_ms: args.codex_shim_poll_ms,
+        })
+        .await?;
+        eprintln!(
+            "Codex shim is running on ws://{}/ with CODEX_HOME={}",
+            bound.addr(),
+            bound.codex_home().display()
+        );
+        eprintln!(
+            "Launch Codex with: CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://{}/",
+            bound.codex_home().display(),
+            bound.addr()
+        );
+        Some(bound.spawn())
+    } else {
+        None
+    };
+
+    let codex_shim_output = args.codex_shim.then(|| {
+        json!({
+            "websocket": format!("ws://{}:{}/", display_host(args.codex_shim_bind_addr), args.codex_shim_port),
+            "codex_home": home_dir.join("codex-ui"),
+            "model": codex_shim_model,
+        })
+    });
+
     let output = json!({
         "status": "serving",
         "behavior_readiness": behavior_readiness,
@@ -240,15 +286,29 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
         "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
         "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
+        "codex_shim": codex_shim_output,
     });
     print_json(&output)?;
     eprintln!(
         "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
     );
 
-    run_handle
-        .await
-        .context("joining defra-agent runtime task")?
+    if let Some(handle) = codex_shim_handle.as_mut() {
+        tokio::select! {
+            result = &mut run_handle => {
+                result.context("joining defra-agent runtime task")?
+            }
+            result = handle => {
+                result.context("joining Codex shim task")?
+                    .context("Codex shim task failed")?;
+                Ok(())
+            }
+        }
+    } else {
+        run_handle
+            .await
+            .context("joining defra-agent runtime task")?
+    }
 }
 
 struct ServerIdentity {

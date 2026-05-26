@@ -83,9 +83,7 @@ pub(crate) fn derive_tool_call_cause(
             confidence: "derived".into(),
             at: tool.completed_at.clone(),
             evidence: vec![
-                format!(
-                    "AgentToolCall.lifecycle_state = \"timedOut\""
-                ),
+                format!("AgentToolCall.lifecycle_state = \"timedOut\""),
                 format!(
                     "deadline_at = {:?}",
                     tool.deadline_at.as_deref().unwrap_or("(unset)")
@@ -99,13 +97,9 @@ pub(crate) fn derive_tool_call_cause(
     }
 
     // ---- Precedence 2: interrupted (parent cascade wins over user-cancel on child) ----
-    if req.caused_by_parent_request_id.is_some()
-        && tool.cancel_policy.as_deref() == Some("cascade")
+    if req.caused_by_parent_request_id.is_some() && tool.cancel_policy.as_deref() == Some("cascade")
     {
-        let parent = req
-            .caused_by_parent_request_id
-            .clone()
-            .unwrap_or_default();
+        let parent = req.caused_by_parent_request_id.clone().unwrap_or_default();
         return Some(DerivedCancelCauseView {
             cause: "interrupted".into(),
             source: "parentCascade".into(),

@@ -125,6 +125,10 @@ Common flow:
   defra-agent-desktop
   defra-agent chat
 
+Codex flow:
+  defra-agent server --codex-shim
+  CODEX_HOME=$HOME/.defra-agent/codex-ui codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
   Homes with a real agent DID and no key_path must include a supported identity_backend and label in init.json.";
@@ -319,9 +323,16 @@ pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let cli = Cli::parse();
-    let result = match cli.command {
+    let command = match cli.command {
+        Command::NativeFsRunner(args) => {
+            return commands::native_fs_runner::native_fs_runner(args);
+        }
+        command => command,
+    };
+
+    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
+    let result = match command {
         Command::Version => {
             print!("{}", http::version::version_text());
             Ok(())
@@ -345,6 +356,7 @@ async fn main() -> Result<()> {
         Command::Response { command } => commands::response::dispatch(command).await,
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
+        Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();
     result

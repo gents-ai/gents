@@ -30,7 +30,10 @@ fn user_cancelled_when_root_has_interrupt_and_no_parent_cascade() {
     assert_eq!(cause.cause, "userCancelled");
     assert_eq!(cause.source, "requestInterrupt");
     assert_eq!(cause.confidence, "direct");
-    assert!(cause.evidence.iter().any(|e| e.contains("interrupt_requested_at")));
+    assert!(cause
+        .evidence
+        .iter()
+        .any(|e| e.contains("interrupt_requested_at")));
 }
 
 #[test]
@@ -119,9 +122,15 @@ fn unknown_when_cancelled_but_no_evidence() {
     assert_eq!(cause.cause, "unknown");
     assert_eq!(cause.source, "unresolved");
     // Evidence should enumerate what was checked.
-    assert!(cause.evidence.iter().any(|e| e.contains("no parent cascade")));
+    assert!(cause
+        .evidence
+        .iter()
+        .any(|e| e.contains("no parent cascade")));
     assert!(cause.evidence.iter().any(|e| e.contains("no deadline")));
-    assert!(cause.evidence.iter().any(|e| e.contains("no interrupt_requested_at")));
+    assert!(cause
+        .evidence
+        .iter()
+        .any(|e| e.contains("no interrupt_requested_at")));
 }
 
 #[test]

@@ -97,8 +97,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
     let mut covered_thresholds = std::collections::BTreeSet::<usize>::new();
 
     for case in cases {
-        let (Some(next_state), Some(next_count)) =
-            (case.next_state.as_deref(), case.next_count)
+        let (Some(next_state), Some(next_count)) = (case.next_state.as_deref(), case.next_count)
         else {
             // Lean's `registryAbsent` event removes the service from the
             // state machine; the bridge view collection naturally drops

@@ -104,8 +104,20 @@ fn resolve_runner_command(root: &Path) -> Result<RunnerCommand, ToolError> {
         });
     }
 
+    if let Some(candidate) = self_runner_binary() {
+        return Ok(RunnerCommand {
+            argv: vec![
+                candidate.to_string_lossy().into_owned(),
+                "__native-fs-runner".to_string(),
+                "--root".to_string(),
+                root.to_string_lossy().into_owned(),
+            ],
+            cwd: root.to_path_buf(),
+        });
+    }
+
     Err(anyhow!(
-        "native filesystem runner binary not found; set {RUNNER_ENV} or install defra-native-fs-runner next to the defra-agent binary"
+        "native filesystem runner binary not found; set {RUNNER_ENV}, install defra-native-fs-runner next to the defra-agent binary, or run a defra-agent binary with the built-in native filesystem runner"
     )
     .into())
 }
@@ -129,6 +141,16 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
     dirs.into_iter()
         .map(|dir| dir.join(exe_name))
         .find(|candidate| candidate.is_file())
+}
+
+fn self_runner_binary() -> Option<PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    let stem = current.file_stem()?.to_str()?;
+    if stem == "defra-agent" {
+        Some(current)
+    } else {
+        None
+    }
 }
 
 fn handle_exited(
