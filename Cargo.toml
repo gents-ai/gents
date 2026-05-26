@@ -37,6 +37,7 @@ repository = "https://github.com/sourcenetwork/defra-agent"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+codex-app-server-protocol = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
 crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.13.1" }
 defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.13.1" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }

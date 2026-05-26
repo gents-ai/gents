@@ -11,11 +11,17 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
+use codex_app_server_protocol as codex;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
 use crate::cli::CodexShimArgs;
 use crate::home_state::resolve_home_dir;
+
+const JSONRPC_INVALID_REQUEST: i64 = -32600;
+const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 
 #[derive(Clone)]
 struct ShimState {
@@ -75,19 +81,31 @@ async fn handle_socket(mut socket: WebSocket, state: ShimState) {
             continue;
         };
 
-        let Ok(payload) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        let Some(method) = payload.get("method").and_then(Value::as_str) else {
+        let Ok(payload) = serde_json::from_str::<codex::JSONRPCMessage>(&text) else {
+            tracing::warn!("dropping invalid Codex shim JSON-RPC message");
             continue;
         };
 
-        if payload.get("id").is_none() {
-            continue;
-        }
+        let result = match payload {
+            codex::JSONRPCMessage::Request(request) => {
+                handle_request(&mut socket, &state, request).await
+            }
+            codex::JSONRPCMessage::Notification(notification) => {
+                tracing::trace!(?notification, "Codex shim received client notification");
+                Ok(())
+            }
+            codex::JSONRPCMessage::Response(response) => {
+                tracing::trace!(?response, "Codex shim received client response");
+                Ok(())
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                tracing::trace!(?error, "Codex shim received client error");
+                Ok(())
+            }
+        };
 
-        if let Err(err) = handle_request(&mut socket, &state, &payload, method).await {
-            tracing::warn!(%err, method, "Codex shim request handling failed");
+        if let Err(err) = result {
+            tracing::warn!(%err, "Codex shim request handling failed");
             return;
         }
     }
@@ -96,41 +114,58 @@ async fn handle_socket(mut socket: WebSocket, state: ShimState) {
 async fn handle_request(
     socket: &mut WebSocket,
     state: &ShimState,
-    payload: &Value,
-    method: &str,
+    request: codex::JSONRPCRequest,
 ) -> Result<()> {
-    let id = payload
-        .get("id")
-        .cloned()
-        .context("JSON-RPC request missing id")?;
-    match method {
-        "initialize" => send_result(socket, id, initialize_result(state)).await,
-        "account/read" => {
-            send_result(
+    let request_id = request.id.clone();
+    let method = request.method.clone();
+    let codex_request = match client_request_from_jsonrpc(request) {
+        Ok(request) => request,
+        Err(err) => {
+            return send_error(
                 socket,
-                id,
-                json!({
-                    "account": null,
-                    "requiresOpenaiAuth": false
-                }),
+                request_id,
+                JSONRPC_INVALID_REQUEST,
+                format!("invalid Codex shim request `{method}`: {err}"),
+            )
+            .await;
+        }
+    };
+
+    match codex_request {
+        codex::ClientRequest::Initialize { request_id, .. } => {
+            send_typed_json_result::<codex::InitializeResponse>(
+                socket,
+                request_id,
+                initialize_result(state),
             )
             .await
         }
-        "account/rateLimits/read" => {
+        codex::ClientRequest::GetAccount { request_id, .. } => {
             send_result(
                 socket,
-                id,
-                json!({
-                    "rateLimits": empty_rate_limits(),
-                    "rateLimitsByLimitId": null
-                }),
+                request_id,
+                codex::GetAccountResponse {
+                    account: None,
+                    requires_openai_auth: false,
+                },
             )
             .await
         }
-        "model/list" => {
+        codex::ClientRequest::GetAccountRateLimits { request_id, .. } => {
             send_result(
                 socket,
-                id,
+                request_id,
+                codex::GetAccountRateLimitsResponse {
+                    rate_limits: empty_rate_limits(),
+                    rate_limits_by_limit_id: None,
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::ModelList { request_id, .. } => {
+            send_typed_json_result::<codex::ModelListResponse>(
+                socket,
+                request_id,
                 json!({
                     "data": [model_summary(state)],
                     "nextCursor": null
@@ -138,38 +173,39 @@ async fn handle_request(
             )
             .await
         }
-        "modelProvider/capabilities/read" => {
+        codex::ClientRequest::ModelProviderCapabilitiesRead { request_id, .. } => {
             send_result(
                 socket,
-                id,
-                json!({
-                    "namespaceTools": false,
-                    "imageGeneration": false,
-                    "webSearch": false
-                }),
+                request_id,
+                codex::ModelProviderCapabilitiesReadResponse {
+                    namespace_tools: false,
+                    image_generation: false,
+                    web_search: false,
+                },
             )
             .await
         }
-        "config/read" => {
-            send_result(
+        codex::ClientRequest::ConfigRead { request_id, .. } => {
+            send_typed_json_result::<codex::ConfigReadResponse>(
                 socket,
-                id,
+                request_id,
                 json!({
                     "config": {
                         "model": state.model.as_ref(),
-                        "modelProvider": "defra",
-                        "approvalPolicy": "never",
-                        "sandboxMode": "danger-full-access"
+                        "model_provider": "defra",
+                        "approval_policy": "never",
+                        "sandbox_mode": "danger-full-access"
                     },
                     "origins": {}
                 }),
             )
             .await
         }
-        "config/batchWrite" | "config/value/write" => {
-            send_result(
+        codex::ClientRequest::ConfigBatchWrite { request_id, .. }
+        | codex::ClientRequest::ConfigValueWrite { request_id, .. } => {
+            send_typed_json_result::<codex::ConfigWriteResponse>(
                 socket,
-                id,
+                request_id,
                 json!({
                     "status": "ok",
                     "version": "defra-shim",
@@ -179,44 +215,120 @@ async fn handle_request(
             )
             .await
         }
-        "configRequirements/read" => send_result(socket, id, json!({ "requirements": null })).await,
-        "externalAgentConfig/detect" => send_result(socket, id, json!({ "items": [] })).await,
-        "externalAgentConfig/import" => send_result(socket, id, json!({})).await,
-        "experimentalFeature/list" => {
-            send_result(socket, id, json!({ "data": [], "nextCursor": null })).await
-        }
-        "permissionProfile/list" => {
-            send_result(socket, id, json!({ "data": [], "nextCursor": null })).await
-        }
-        "collaborationMode/list" => send_result(socket, id, json!({ "data": [] })).await,
-        "skills/list" | "hooks/list" => send_result(socket, id, json!({ "data": [] })).await,
-        "plugin/list" => {
+        codex::ClientRequest::ConfigRequirementsRead { request_id, .. } => {
             send_result(
                 socket,
-                id,
-                json!({
-                    "marketplaces": [],
-                    "marketplaceLoadErrors": [],
-                    "featuredPluginIds": []
-                }),
+                request_id,
+                codex::ConfigRequirementsReadResponse { requirements: None },
             )
             .await
         }
-        "mcpServerStatus/list" => {
-            send_result(socket, id, json!({ "data": [], "nextCursor": null })).await
-        }
-        "thread/start" => {
-            let thread_id = state.next_id("defra-thread");
-            let thread = thread_value(state, &thread_id, None, "idle", Vec::new());
+        codex::ClientRequest::ExternalAgentConfigDetect { request_id, .. } => {
             send_result(
                 socket,
-                id,
+                request_id,
+                codex::ExternalAgentConfigDetectResponse { items: Vec::new() },
+            )
+            .await
+        }
+        codex::ClientRequest::ExternalAgentConfigImport { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::ExternalAgentConfigImportResponse {},
+            )
+            .await
+        }
+        codex::ClientRequest::ExperimentalFeatureList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::ExperimentalFeatureListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::PermissionProfileList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::PermissionProfileListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::CollaborationModeList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::CollaborationModeListResponse { data: Vec::new() },
+            )
+            .await
+        }
+        codex::ClientRequest::SkillsList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::SkillsListResponse { data: Vec::new() },
+            )
+            .await
+        }
+        codex::ClientRequest::HooksList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::HooksListResponse { data: Vec::new() },
+            )
+            .await
+        }
+        codex::ClientRequest::PluginList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::PluginListResponse {
+                    marketplaces: Vec::new(),
+                    marketplace_load_errors: Vec::new(),
+                    featured_plugin_ids: Vec::new(),
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::McpServerStatusList { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::ListMcpServerStatusResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::ThreadStart {
+            request_id, params, ..
+        } => {
+            let cwd = effective_cwd(state, params.cwd.as_deref());
+            let thread_id = state.next_id("defra-thread");
+            let thread = thread_json(
+                &cwd,
+                &thread_id,
+                None,
+                codex::ThreadStatus::Idle,
+                Vec::new(),
+            );
+            send_typed_json_result::<codex::ThreadStartResponse>(
+                socket,
+                request_id,
                 json!({
                     "thread": thread,
                     "model": state.model.as_ref(),
                     "modelProvider": "defra",
                     "serviceTier": null,
-                    "cwd": absolute_path(&state.cwd),
+                    "cwd": absolute_path(&cwd),
                     "runtimeWorkspaceRoots": [],
                     "instructionSources": [],
                     "approvalPolicy": "never",
@@ -228,38 +340,93 @@ async fn handle_request(
             )
             .await
         }
-        "thread/list" => {
+        codex::ClientRequest::ThreadList { request_id, .. } => {
             send_result(
                 socket,
-                id,
-                json!({ "data": [], "nextCursor": null, "backwardsCursor": null }),
+                request_id,
+                codex::ThreadListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                    backwards_cursor: None,
+                },
             )
             .await
         }
-        "thread/loaded/list" => {
-            send_result(socket, id, json!({ "data": [], "nextCursor": null })).await
-        }
-        "thread/read" => {
-            let thread_id = payload
-                .pointer("/params/threadId")
-                .and_then(Value::as_str)
-                .unwrap_or("defra-thread");
+        codex::ClientRequest::ThreadLoadedList { request_id, .. } => {
             send_result(
                 socket,
-                id,
-                json!({ "thread": thread_value(state, thread_id, None, "idle", Vec::new()) }),
+                request_id,
+                codex::ThreadLoadedListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                },
             )
             .await
         }
-        "thread/unsubscribe" => send_result(socket, id, json!({ "status": "unsubscribed" })).await,
-        "turn/start" | "turn/steer" => start_echo_turn(socket, state, payload, id).await,
-        "turn/interrupt" => send_result(socket, id, json!({})).await,
-        _ => {
+        codex::ClientRequest::ThreadRead {
+            request_id, params, ..
+        } => {
+            send_typed_json_result::<codex::ThreadReadResponse>(
+                socket,
+                request_id,
+                json!({
+                    "thread": thread_json(
+                        &state.cwd,
+                        &params.thread_id,
+                        None,
+                        codex::ThreadStatus::Idle,
+                        Vec::new()
+                    )
+                }),
+            )
+            .await
+        }
+        codex::ClientRequest::ThreadUnsubscribe { request_id, .. } => {
+            send_result(
+                socket,
+                request_id,
+                codex::ThreadUnsubscribeResponse {
+                    status: codex::ThreadUnsubscribeStatus::Unsubscribed,
+                },
+            )
+            .await
+        }
+        codex::ClientRequest::TurnStart {
+            request_id, params, ..
+        } => {
+            start_echo_turn(
+                socket,
+                state,
+                request_id,
+                params.thread_id,
+                params.input,
+                true,
+            )
+            .await
+        }
+        codex::ClientRequest::TurnSteer {
+            request_id, params, ..
+        } => {
+            start_echo_turn(
+                socket,
+                state,
+                request_id,
+                params.thread_id,
+                params.input,
+                false,
+            )
+            .await
+        }
+        codex::ClientRequest::TurnInterrupt { request_id, .. } => {
+            send_result(socket, request_id, codex::TurnInterruptResponse {}).await
+        }
+        unsupported => {
+            let request_id = unsupported.id().clone();
             send_error(
                 socket,
-                id,
-                -32601,
-                format!("unsupported Codex shim method `{method}`"),
+                request_id,
+                JSONRPC_METHOD_NOT_FOUND,
+                format!("unsupported Codex shim method `{}`", unsupported.method()),
             )
             .await
         }
@@ -269,35 +436,46 @@ async fn handle_request(
 async fn start_echo_turn(
     socket: &mut WebSocket,
     state: &ShimState,
-    payload: &Value,
-    id: Value,
+    request_id: codex::RequestId,
+    thread_id: String,
+    input: Vec<codex::UserInput>,
+    start_response: bool,
 ) -> Result<()> {
-    let thread_id = payload
-        .pointer("/params/threadId")
-        .and_then(Value::as_str)
-        .unwrap_or("defra-thread");
     let turn_id = state.next_id("defra-turn");
     let item_id = state.next_id("defra-message");
-    let user_text = user_text_from_turn(payload);
+    let user_text = user_text_from_input(&input);
     let response_text = if user_text.is_empty() {
-        "DEFRA Codex shim is alive. GraphQL-backed turns will land in a follow-up."
+        "DEFRA Codex shim is alive. GraphQL-backed turns will land in a follow-up.".to_string()
     } else {
-        "DEFRA Codex shim echo: "
+        format!("DEFRA Codex shim echo: {user_text}")
     };
-    let response_text = if user_text.is_empty() {
-        response_text.to_string()
-    } else {
-        format!("{response_text}{user_text}")
-    };
-    let started_turn = turn_value(&turn_id, "inProgress", Vec::new(), None);
+    let started_turn = turn_value(&turn_id, codex::TurnStatus::InProgress, Vec::new(), None);
 
-    send_result(socket, id, json!({ "turn": started_turn.clone() })).await?;
+    if start_response {
+        send_result(
+            socket,
+            request_id,
+            codex::TurnStartResponse {
+                turn: started_turn.clone(),
+            },
+        )
+        .await?;
+    } else {
+        send_result(
+            socket,
+            request_id,
+            codex::TurnSteerResponse {
+                turn_id: turn_id.clone(),
+            },
+        )
+        .await?;
+    }
+
     send_notification(
         socket,
-        "turn/started",
-        json!({
-            "threadId": thread_id,
-            "turn": started_turn
+        codex::ServerNotification::TurnStarted(codex::TurnStartedNotification {
+            thread_id: thread_id.clone(),
+            turn: started_turn,
         }),
     )
     .await?;
@@ -305,23 +483,21 @@ async fn start_echo_turn(
     let started_item = agent_message_item(&item_id, "");
     send_notification(
         socket,
-        "item/started",
-        json!({
-            "item": started_item,
-            "threadId": thread_id,
-            "turnId": turn_id,
-            "startedAtMs": now_millis()
+        codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+            item: started_item,
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            started_at_ms: now_millis(),
         }),
     )
     .await?;
     send_notification(
         socket,
-        "item/agentMessage/delta",
-        json!({
-            "threadId": thread_id,
-            "turnId": turn_id,
-            "itemId": item_id,
-            "delta": response_text
+        codex::ServerNotification::AgentMessageDelta(codex::AgentMessageDeltaNotification {
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            item_id: item_id.clone(),
+            delta: response_text.clone(),
         }),
     )
     .await?;
@@ -329,51 +505,90 @@ async fn start_echo_turn(
     let completed_item = agent_message_item(&item_id, &response_text);
     send_notification(
         socket,
-        "item/completed",
-        json!({
-            "item": completed_item.clone(),
-            "threadId": thread_id,
-            "turnId": turn_id,
-            "completedAtMs": now_millis()
+        codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+            item: completed_item.clone(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            completed_at_ms: now_millis(),
         }),
     )
     .await?;
     send_notification(
         socket,
-        "turn/completed",
-        json!({
-            "threadId": thread_id,
-            "turn": turn_value(&turn_id, "completed", vec![completed_item], None)
+        codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
+            thread_id,
+            turn: turn_value(
+                &turn_id,
+                codex::TurnStatus::Completed,
+                vec![completed_item],
+                None,
+            ),
         }),
     )
     .await
 }
 
-async fn send_result(socket: &mut WebSocket, id: Value, result: Value) -> Result<()> {
-    send_json(socket, json!({ "id": id, "result": result })).await
+fn client_request_from_jsonrpc(
+    request: codex::JSONRPCRequest,
+) -> std::result::Result<codex::ClientRequest, serde_json::Error> {
+    serde_json::from_value(serde_json::to_value(request)?)
 }
 
-async fn send_error(socket: &mut WebSocket, id: Value, code: i64, message: String) -> Result<()> {
+async fn send_typed_json_result<T>(
+    socket: &mut WebSocket,
+    id: codex::RequestId,
+    value: Value,
+) -> Result<()>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let response = serde_json::from_value::<T>(value)
+        .with_context(|| format!("validating Codex response {}", std::any::type_name::<T>()))?;
+    send_result(socket, id, response).await
+}
+
+async fn send_result<T>(socket: &mut WebSocket, id: codex::RequestId, response: T) -> Result<()>
+where
+    T: Serialize,
+{
+    let result = serde_json::to_value(response).context("serializing Codex response payload")?;
+    send_json(socket, &codex::JSONRPCResponse { id, result }).await
+}
+
+async fn send_error(
+    socket: &mut WebSocket,
+    id: codex::RequestId,
+    code: i64,
+    message: String,
+) -> Result<()> {
     send_json(
         socket,
-        json!({
-            "id": id,
-            "error": {
-                "code": code,
-                "message": message
-            }
-        }),
+        &codex::JSONRPCError {
+            id,
+            error: codex::JSONRPCErrorError {
+                code,
+                data: None,
+                message,
+            },
+        },
     )
     .await
 }
 
-async fn send_notification(socket: &mut WebSocket, method: &str, params: Value) -> Result<()> {
-    send_json(socket, json!({ "method": method, "params": params })).await
+async fn send_notification(
+    socket: &mut WebSocket,
+    notification: codex::ServerNotification,
+) -> Result<()> {
+    send_json(socket, &notification).await
 }
 
-async fn send_json(socket: &mut WebSocket, value: Value) -> Result<()> {
+async fn send_json<T>(socket: &mut WebSocket, value: &T) -> Result<()>
+where
+    T: Serialize,
+{
+    let text = serde_json::to_string(value).context("serializing Codex shim WebSocket message")?;
     socket
-        .send(Message::Text(value.to_string().into()))
+        .send(Message::Text(text.into()))
         .await
         .context("sending Codex shim WebSocket message")
 }
@@ -408,12 +623,12 @@ fn model_summary(state: &ShimState) -> Value {
     })
 }
 
-fn thread_value(
-    state: &ShimState,
+fn thread_json(
+    cwd: &Path,
     thread_id: &str,
     preview: Option<&str>,
-    status: &str,
-    turns: Vec<Value>,
+    status: codex::ThreadStatus,
+    turns: Vec<codex::Turn>,
 ) -> Value {
     let now = now_seconds();
     json!({
@@ -425,9 +640,9 @@ fn thread_value(
         "modelProvider": "defra",
         "createdAt": now,
         "updatedAt": now,
-        "status": { "type": status },
+        "status": status,
         "path": null,
-        "cwd": absolute_path(&state.cwd),
+        "cwd": absolute_path(cwd),
         "cliVersion": env!("CARGO_PKG_VERSION"),
         "source": "cli",
         "threadSource": null,
@@ -439,59 +654,71 @@ fn thread_value(
     })
 }
 
-fn turn_value(turn_id: &str, status: &str, items: Vec<Value>, error: Option<Value>) -> Value {
+fn turn_value(
+    turn_id: &str,
+    status: codex::TurnStatus,
+    items: Vec<codex::ThreadItem>,
+    error: Option<codex::TurnError>,
+) -> codex::Turn {
     let now = now_seconds();
-    let completed_at = (status != "inProgress").then_some(now);
-    json!({
-        "id": turn_id,
-        "items": items,
-        "itemsView": "full",
-        "status": status,
-        "error": error,
-        "startedAt": now,
-        "completedAt": completed_at,
-        "durationMs": null
-    })
+    let completed_at = (!matches!(status, codex::TurnStatus::InProgress)).then_some(now);
+    codex::Turn {
+        id: turn_id.to_string(),
+        items,
+        items_view: codex::TurnItemsView::Full,
+        status,
+        error,
+        started_at: Some(now),
+        completed_at,
+        duration_ms: None,
+    }
 }
 
-fn agent_message_item(item_id: &str, text: &str) -> Value {
-    json!({
-        "type": "agentMessage",
-        "id": item_id,
-        "text": text,
-        "phase": null,
-        "memoryCitation": null
-    })
+fn agent_message_item(item_id: &str, text: &str) -> codex::ThreadItem {
+    codex::ThreadItem::AgentMessage {
+        id: item_id.to_string(),
+        text: text.to_string(),
+        phase: None,
+        memory_citation: None,
+    }
 }
 
-fn empty_rate_limits() -> Value {
-    json!({
-        "limitId": null,
-        "limitName": null,
-        "primary": null,
-        "secondary": null,
-        "credits": null,
-        "planType": null,
-        "rateLimitReachedType": null
-    })
+fn empty_rate_limits() -> codex::RateLimitSnapshot {
+    codex::RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }
 }
 
-fn user_text_from_turn(payload: &Value) -> String {
-    payload
-        .pointer("/params/input")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("text"))
-                        .then(|| item.get("text").and_then(Value::as_str))
-                        .flatten()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+fn user_text_from_input(input: &[codex::UserInput]) -> String {
+    input
+        .iter()
+        .filter_map(|item| match item {
+            codex::UserInput::Text { text, .. } => Some(text.as_str()),
+            codex::UserInput::Image { .. }
+            | codex::UserInput::LocalImage { .. }
+            | codex::UserInput::Skill { .. }
+            | codex::UserInput::Mention { .. } => None,
         })
-        .unwrap_or_default()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn effective_cwd(state: &ShimState, cwd: Option<&str>) -> PathBuf {
+    let Some(cwd) = cwd else {
+        return state.cwd.clone();
+    };
+    let path = PathBuf::from(cwd);
+    if path.is_absolute() {
+        path
+    } else {
+        state.cwd.join(path)
+    }
 }
 
 fn absolute_path(path: &Path) -> String {
@@ -533,30 +760,37 @@ mod tests {
 
     #[test]
     fn extracts_text_items_from_codex_turn_payload() {
-        let payload = json!({
-            "params": {
-                "input": [
-                    { "type": "text", "text": "hello", "textElements": [] },
-                    { "type": "image", "url": "https://example.invalid/image.png" },
-                    { "type": "text", "text": "world", "textElements": [] }
-                ]
-            }
-        });
+        let input = vec![
+            codex::UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            },
+            codex::UserInput::Image {
+                detail: None,
+                url: "https://example.invalid/image.png".to_string(),
+            },
+            codex::UserInput::Text {
+                text: "world".to_string(),
+                text_elements: Vec::new(),
+            },
+        ];
 
-        assert_eq!(user_text_from_turn(&payload), "hello\nworld");
+        assert_eq!(user_text_from_input(&input), "hello\nworld");
     }
 
     #[test]
     fn thread_status_uses_codex_tag_shape() {
-        let state = ShimState {
-            codex_home: PathBuf::from("/tmp/defra-codex-ui"),
-            cwd: PathBuf::from("/tmp"),
-            model: Arc::from("defra-default"),
-            id_counter: Arc::new(AtomicU64::new(1)),
-        };
+        let thread = thread_json(
+            Path::new("/tmp"),
+            "thread-1",
+            Some("preview"),
+            codex::ThreadStatus::Idle,
+            Vec::new(),
+        );
+        let typed: codex::Thread = serde_json::from_value(thread).unwrap();
+        let serialized = serde_json::to_value(typed).unwrap();
 
-        let thread = thread_value(&state, "thread-1", Some("preview"), "idle", Vec::new());
-        assert_eq!(thread.pointer("/status/type"), Some(&json!("idle")));
-        assert_eq!(thread.pointer("/source"), Some(&json!("cli")));
+        assert_eq!(serialized.pointer("/status/type"), Some(&json!("idle")));
+        assert_eq!(serialized.pointer("/source"), Some(&json!("cli")));
     }
 }

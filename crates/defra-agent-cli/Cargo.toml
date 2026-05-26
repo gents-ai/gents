@@ -15,6 +15,7 @@ anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 chrono.workspace = true
 clap.workspace = true
+codex-app-server-protocol.workspace = true
 defra-agent = { path = "../defra-agent" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
