@@ -39,6 +39,7 @@ const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
 const DEFAULT_HTTP_PORT: u16 = 9191;
+const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -136,6 +137,17 @@ Examples:
 Diagnostics:
   defra-agent status
   defra-agent show response REQUEST_ID";
+const CODEX_SHIM_AFTER_HELP: &str = "\
+Experimental Codex TUI compatibility endpoint.
+
+Start the shim:
+  defra-agent codex-shim
+
+Then launch Codex separately against the printed URL:
+  CODEX_HOME=$HOME/.defra-agent/codex-ui codex --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292
+
+Note:
+  Stock Codex may run local onboarding before connecting to --remote when CODEX_HOME is empty.";
 const P2P_AFTER_HELP: &str = "\
 Examples:
   defra-agent p2p status
@@ -319,6 +331,7 @@ async fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,
+        Command::CodexShim(args) => commands::codex_shim::codex_shim(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,

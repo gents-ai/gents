@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 chrono.workspace = true
 clap.workspace = true
 defra-agent = { path = "../defra-agent" }
