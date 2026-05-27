@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it, test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
@@ -68,7 +68,9 @@ type LeanContractSnapshot = {
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
 
-function conversation(overrides: Partial<ConversationSummary> = {}): ConversationSummary {
+function conversation(
+  overrides: Partial<ConversationSummary> = {},
+): ConversationSummary {
   return {
     sessionId: "session-1",
     title: "conversation",
@@ -85,7 +87,9 @@ function conversation(overrides: Partial<ConversationSummary> = {}): Conversatio
   };
 }
 
-function session(overrides: Partial<DesktopSessionSnapshot> = {}): DesktopSessionSnapshot {
+function session(
+  overrides: Partial<DesktopSessionSnapshot> = {},
+): DesktopSessionSnapshot {
   return {
     sessionId: "session-1",
     agentDid: "did:defra:amy",
@@ -127,7 +131,9 @@ function loadLeanContractSnapshot(): LeanContractSnapshot {
       leanContractSnapshot.frontend_client_shell_case_count !==
       leanContractSnapshot.frontend_client_shell_cases.length
     ) {
-      throw new Error("Lean frontend ClientShell case count drifted from emitted cases");
+      throw new Error(
+        "Lean frontend ClientShell case count drifted from emitted cases",
+      );
     }
   }
 
@@ -150,7 +156,9 @@ function runLeanCommand(proofsDir: string, args: string[]) {
   });
 
   if (result.error) {
-    throw new Error(`failed to run ${command} in ${proofsDir}: ${result.error.message}`);
+    throw new Error(
+      `failed to run ${command} in ${proofsDir}: ${result.error.message}`,
+    );
   }
   if (result.status !== 0) {
     throw new Error(
@@ -168,7 +176,9 @@ function uniqueMarkerPosition(stdout: string, marker: string) {
     throw new Error(`Lean contract generator stdout did not contain ${marker}`);
   }
   if (first !== last) {
-    throw new Error(`Lean contract generator stdout contained duplicate ${marker} sentinels`);
+    throw new Error(
+      `Lean contract generator stdout contained duplicate ${marker} sentinels`,
+    );
   }
   return first;
 }
@@ -222,27 +232,34 @@ function conversationFromContract(contractCase: LeanClientShellCase) {
     return null;
   }
   return conversation({
-    sessionId: sessionId(contractCase.frontend_conversation_session_id) ?? "session-missing",
+    sessionId:
+      sessionId(contractCase.frontend_conversation_session_id) ?? "session-missing",
     latestRequestId: requestId(contractCase.frontend_conversation_latest_request_id),
     turnState: contractCase.frontend_conversation_turn_state,
   });
 }
 
-function localWorkflowFromContract(contractCase: LeanClientShellCase): ChatWorkflowState {
+function localWorkflowFromContract(
+  contractCase: LeanClientShellCase,
+): ChatWorkflowState {
   switch (contractCase.frontend_local_workflow_kind) {
     case "ready":
       return { kind: "ready" };
     case "submittingRequest":
       return {
         kind: "submittingRequest",
-        agentDid: agentDid(contractCase.frontend_selected_agent_did) ?? "did:defra:agent-missing",
+        agentDid:
+          agentDid(contractCase.frontend_selected_agent_did) ??
+          "did:defra:agent-missing",
         sessionId: sessionId(contractCase.frontend_local_workflow_session),
       };
     case "awaitingObservation":
       return {
         kind: "awaitingObservation",
-        sessionId: sessionId(contractCase.frontend_local_workflow_session) ?? "session-missing",
-        requestId: requestId(contractCase.frontend_local_workflow_request) ?? "req-missing",
+        sessionId:
+          sessionId(contractCase.frontend_local_workflow_session) ?? "session-missing",
+        requestId:
+          requestId(contractCase.frontend_local_workflow_request) ?? "req-missing",
       };
     case "blocked":
       return {
@@ -301,44 +318,46 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 }
 
 describe("projectChatShell", () => {
-  test("matches generated Lean ClientShell projection contracts", () => {
-    const contractCases = loadLeanClientShellCases();
-    expect(contractCases).toHaveLength(15);
+  test(
+    "matches generated Lean ClientShell projection contracts",
+    () => {
+      const contractCases = loadLeanClientShellCases();
+      expect(contractCases).toHaveLength(15);
 
-    for (const contractCase of contractCases) {
-      const projection = projectChatShell({
-        clientAvailable: contractCase.frontend_client_available,
-        selectedAgentDid: agentDid(contractCase.frontend_selected_agent_did),
-        selectedSessionId: sessionId(contractCase.frontend_selected_session_id),
-        draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
-        sending: contractCase.frontend_sending,
-        selectedConversation: conversationFromContract(contractCase),
-        session: sessionFromContract(contractCase),
-        localWorkflow: localWorkflowFromContract(contractCase),
-      });
+      for (const contractCase of contractCases) {
+        const projection = projectChatShell({
+          clientAvailable: contractCase.frontend_client_available,
+          selectedAgentDid: agentDid(contractCase.frontend_selected_agent_did),
+          selectedSessionId: sessionId(contractCase.frontend_selected_session_id),
+          draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
+          sending: contractCase.frontend_sending,
+          selectedConversation: conversationFromContract(contractCase),
+          session: sessionFromContract(contractCase),
+          localWorkflow: localWorkflowFromContract(contractCase),
+        });
 
-      expect(compactWorkflow(projection.workflow)).toEqual(
-        expectedWorkflowFromContract(contractCase),
-      );
-      expect(projection.activeRequestId).toBe(
-        requestId(contractCase.frontend_expected_active_request_id),
-      );
-      expect(projection.turnState).toBe(
-        contractCase.frontend_expected_turn_state,
-      );
+        expect(compactWorkflow(projection.workflow)).toEqual(
+          expectedWorkflowFromContract(contractCase),
+        );
+        expect(projection.activeRequestId).toBe(
+          requestId(contractCase.frontend_expected_active_request_id),
+        );
+        expect(projection.turnState).toBe(contractCase.frontend_expected_turn_state);
 
-      if (contractCase.frontend_expected_send_status === "ready") {
-        expect(projection.sendStatus).toEqual({ kind: "ready" });
-      } else {
-        expect(projection.sendStatus.kind).toBe("disabled");
-        if (projection.sendStatus.kind === "disabled") {
-          expect(projection.sendStatus.reason).toBe(
-            contractCase.frontend_expected_send_blocked_reason,
-          );
+        if (contractCase.frontend_expected_send_status === "ready") {
+          expect(projection.sendStatus).toEqual({ kind: "ready" });
+        } else {
+          expect(projection.sendStatus.kind).toBe("disabled");
+          if (projection.sendStatus.kind === "disabled") {
+            expect(projection.sendStatus.reason).toBe(
+              contractCase.frontend_expected_send_blocked_reason,
+            );
+          }
         }
       }
-    }
-  }, GENERATED_CONTRACT_TEST_TIMEOUT_MS);
+    },
+    GENERATED_CONTRACT_TEST_TIMEOUT_MS,
+  );
 
   test("blocks follow up while turn is streaming", () => {
     const projection = projectChatShell({
@@ -367,7 +386,10 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ latestRequestId: "req-old", turnState: "completed" }),
+      selectedConversation: conversation({
+        latestRequestId: "req-old",
+        turnState: "completed",
+      }),
       session: session({
         latestRequestId: "req-new",
         turnState: "streaming",
@@ -397,7 +419,10 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ latestRequestId: "req-old", turnState: "completed" }),
+      selectedConversation: conversation({
+        latestRequestId: "req-old",
+        turnState: "completed",
+      }),
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
       localWorkflow: {
         kind: "awaitingObservation",
@@ -455,7 +480,10 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ latestRequestId: "req-missing", turnState: undefined }),
+      selectedConversation: conversation({
+        latestRequestId: "req-missing",
+        turnState: undefined,
+      }),
       session: session({ latestRequestId: undefined, turnState: undefined }),
       localWorkflow: { kind: "ready" },
     });

@@ -8,6 +8,7 @@ import type {
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import {
+  ignoreHandledActionError,
   isOptionalFloat,
   isOptionalInt,
   parseOptionalFloat,
@@ -114,16 +115,12 @@ export function InferenceProfileConfigEditor({
       profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
     );
     setMaxTurns(profile?.maxTurns != null ? String(profile.maxTurns) : "");
-    setTemperature(
-      profile?.temperature != null ? String(profile.temperature) : "",
-    );
+    setTemperature(profile?.temperature != null ? String(profile.temperature) : "");
     setStreamBatchMs(
       profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
     );
     setDeadlineSecs(
-      profile?.deadlineDurationSecs != null
-        ? String(profile.deadlineDurationSecs)
-        : "",
+      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
     );
   }, [profile]);
 
@@ -137,17 +134,21 @@ export function InferenceProfileConfigEditor({
   async function submitProfile(event: FormEvent) {
     event.preventDefault();
     const nextId = profileId.trim();
-    await onSaveInferenceProfileConfig({
-      profileId: nextId,
-      displayName,
-      contextWindow: parseOptionalInt(contextWindow),
-      maxOutputTokens: parseOptionalInt(maxOutputTokens),
-      maxTurns: parseOptionalInt(maxTurns),
-      temperature: parseOptionalFloat(temperature),
-      streamBatchMs: parseOptionalInt(streamBatchMs),
-      deadlineDurationSecs: parseOptionalInt(deadlineSecs),
-    });
-    onSaved(nextId);
+    try {
+      await onSaveInferenceProfileConfig({
+        profileId: nextId,
+        displayName,
+        contextWindow: parseOptionalInt(contextWindow),
+        maxOutputTokens: parseOptionalInt(maxOutputTokens),
+        maxTurns: parseOptionalInt(maxTurns),
+        temperature: parseOptionalFloat(temperature),
+        streamBatchMs: parseOptionalInt(streamBatchMs),
+        deadlineDurationSecs: parseOptionalInt(deadlineSecs),
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (
@@ -168,7 +169,9 @@ export function InferenceProfileConfigEditor({
               }
             }}
             readOnly={Boolean(profile)}
-            title={profile ? "Profile IDs cannot be renamed after creation." : undefined}
+            title={
+              profile ? "Profile IDs cannot be renamed after creation." : undefined
+            }
             value={profileId}
           />
         </label>

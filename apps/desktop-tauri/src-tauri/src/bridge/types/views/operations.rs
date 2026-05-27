@@ -129,6 +129,8 @@ pub(crate) struct SubagentNodeView {
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     pub caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    pub backend_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,9 +284,9 @@ pub(crate) struct McpServiceProbeResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DerivedCancelCauseView {
-    pub cause: String,        // "userCancelled" | "interrupted" | "deadline" | "unknown"
-    pub source: String,       // "requestInterrupt" | "parentCascade" | "deadline" | "toolLifecycle" | "responseInterruptedAt" | "unresolved"
-    pub confidence: String,   // "direct" | "derived"
+    pub cause: String,      // "userCancelled" | "interrupted" | "deadline" | "unknown"
+    pub source: String, // "requestInterrupt" | "parentCascade" | "deadline" | "toolLifecycle" | "responseInterruptedAt" | "unresolved"
+    pub confidence: String, // "direct" | "derived"
     pub at: Option<String>,
     pub evidence: Vec<String>,
 }

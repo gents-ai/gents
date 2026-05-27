@@ -26,6 +26,10 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
 }
 
+fn is_stream_liveness_timeout(error: &rig::agent::StreamingError) -> bool {
+    error.to_string().contains("stream liveness timeout")
+}
+
 fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
     let deadline = deadline?;
     let now = Utc::now();
@@ -309,6 +313,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         if let Some(error) = stream_error {
                             let classified = classify_completion_error(&error);
                             let can_retry = classified.is_retryable()
+                                && !is_stream_liveness_timeout(&error)
                                 && !had_observable_activity
                                 && attempt_index < max_attempts;
 
@@ -452,8 +457,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 #[cfg(test)]
 mod tests {
     use super::{
-        await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
-        terminal_response_has_visible_output,
+        await_with_request_deadline, ensure_request_deadline_open, is_stream_liveness_timeout,
+        request_deadline_remaining, terminal_response_has_visible_output,
     };
     use std::time::Duration;
 
@@ -464,6 +469,17 @@ mod tests {
         assert!(!terminal_response_has_visible_output("", Some("   ")));
         assert!(terminal_response_has_visible_output("hello", None));
         assert!(terminal_response_has_visible_output("", Some("hello")));
+    }
+
+    #[test]
+    fn detects_stream_liveness_timeout_errors() {
+        let error = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError(
+                "stream liveness timeout: no data received for 30s".into(),
+            ),
+        );
+
+        assert!(is_stream_liveness_timeout(&error));
     }
 
     #[test]

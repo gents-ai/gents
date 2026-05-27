@@ -24,6 +24,7 @@ use crate::bridge::types::{DesktopBootstrapSummary, SavedPeerView};
 use self::agent::{spawn_live_agent, RunningAgent};
 use self::backend::AgentBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
+pub(crate) use self::backend::LiveSubagentBackendOverride;
 use self::replication::{
     configure_live_replicators, wait_for_connectable_iroh_addr, wait_for_connected_peer,
     wait_for_live_documents, write_peer_directory_records,
@@ -103,10 +104,15 @@ impl LiveBridgeFixture {
         Ok(())
     }
 
-    pub(crate) fn start(backend_override: Option<LiveBackendOverride>) -> Result<Arc<Self>> {
+    pub(crate) fn start(
+        backend_override: Option<LiveBackendOverride>,
+        subagent_backend_override: Option<LiveSubagentBackendOverride>,
+    ) -> Result<Arc<Self>> {
         init_live_runner_tracing();
 
         let backend = AgentBackendConfig::resolve(backend_override.as_ref())?;
+        let subagent_backend =
+            AgentBackendConfig::resolve_subagent(subagent_backend_override.as_ref(), &backend)?;
         let runtime = live_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote"));
@@ -124,6 +130,7 @@ impl LiveBridgeFixture {
             agent_key,
             DEFAULT_AGENT_NAME,
             &backend,
+            subagent_backend.as_ref(),
         ))?;
 
         let remote_addr = runtime.block_on(wait_for_connectable_iroh_addr(

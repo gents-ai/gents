@@ -289,6 +289,18 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         .expect("session snapshot");
 
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
+    assert_eq!(
+        snapshot
+            .latest_response
+            .as_ref()
+            .and_then(|response| response.error_message.as_deref()),
+        Some("request deadline exceeded")
+    );
+    let serialized = serde_json::to_value(&snapshot).expect("serialize snapshot");
+    assert_eq!(
+        serialized["latestResponse"]["errorMessage"],
+        "request deadline exceeded"
+    );
     assert!(snapshot.active_response_overlay.is_none());
 
     let has_live = snapshot

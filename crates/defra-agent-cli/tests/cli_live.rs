@@ -200,9 +200,6 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             home_dir
                 .to_str()
                 .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
-            "--enable-bash",
-            "--bash-mode",
-            "ReadOnly",
         ],
     )?;
 
@@ -265,7 +262,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .ok_or_else(|| anyhow!("first live chat output missing response content: {first}"))?;
     assert!(
         first_content.contains(&alpha_token),
-        "expected first response to contain {alpha_token}, got {first_content}"
+        "expected first response to contain {alpha_token}, got content={first_content:?}; full output={first}"
     );
 
     let second_prompt = "Continue this same conversation. Read demo-files/beta.txt with the filesystem tools, then reply with the alpha token from the previous turn and the exact beta token, separated by a single space.";
@@ -296,7 +293,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .ok_or_else(|| anyhow!("second live chat output missing response content: {second}"))?;
     assert!(
         second_content.contains(&alpha_token) && second_content.contains(&beta_token),
-        "expected second response to contain {alpha_token} and {beta_token}, got {second_content}"
+        "expected second response to contain {alpha_token} and {beta_token}, got content={second_content:?}; full output={second}"
     );
 
     wait_for_completed_tool_calls(&graphql, &session_id, "list_files", 1).await?;
@@ -403,6 +400,30 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--selection-id",
+            &selection_id,
+            "--display-name",
+            "Live Smoke File Tools",
+            "--enable-file-tools",
+            "--file-tools-mode",
+            "ReadOnly",
+            "--file-tool-root",
+            home_dir
+                .to_str()
+                .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
+        ],
+    )?;
 
     for (index, spec) in request_specs.iter().enumerate() {
         let display_name = format!("Live Smoke {}", index + 1);

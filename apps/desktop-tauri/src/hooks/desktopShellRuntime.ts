@@ -70,11 +70,8 @@ export function trackedRequestIdForSession(
     return null;
   }
 
-  if (
-    workflow.kind === "awaitingObservation" ||
-    workflow.kind === "turnInProgress"
-  ) {
-    return workflow.sessionId === sessionId ? workflow.requestId ?? null : null;
+  if (workflow.kind === "awaitingObservation" || workflow.kind === "turnInProgress") {
+    return workflow.sessionId === sessionId ? (workflow.requestId ?? null) : null;
   }
 
   return null;

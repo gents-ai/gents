@@ -37,37 +37,24 @@ function lastCallEndedAt(c: InferenceCallSummary): string | null {
   return c.endedAt ?? c.startedAt ?? c.queuedAt;
 }
 
-function LastCallHint({
-  backend,
-  now,
-}: {
-  backend: BackendHealth;
-  now: Date;
-}) {
+function LastCallHint({ backend, now }: { backend: BackendHealth; now: Date }) {
   const last = backend.recentCalls[0];
   if (!last) {
-    return (
-      <div className="backend-health__last-call-hint">no calls observed</div>
-    );
+    return <div className="backend-health__last-call-hint">no calls observed</div>;
   }
   if (last.failureReason) {
     return (
       <div className="backend-health__last-call-hint">
         last call failed:{" "}
-        <span className="backend-health__last-call-reason">
-          {last.failureReason}
-        </span>{" "}
-        · {ageString(lastCallEndedAt(last), now)}
+        <span className="backend-health__last-call-reason">{last.failureReason}</span> ·{" "}
+        {ageString(lastCallEndedAt(last), now)}
       </div>
     );
   }
   return (
     <div className="backend-health__last-call-hint">
       last call{" "}
-      <span
-        className="backend-health__last-call-reason"
-        data-tone="ok"
-      >
+      <span className="backend-health__last-call-reason" data-tone="ok">
         {last.callState}
       </span>{" "}
       · {ageString(lastCallEndedAt(last), now)}
@@ -102,18 +89,12 @@ function ConfigCell({
   );
 }
 
-function CallsTable({
-  calls,
-  now,
-}: {
-  calls: InferenceCallSummary[];
-  now: Date;
-}) {
+function CallsTable({ calls, now }: { calls: InferenceCallSummary[]; now: Date }) {
   if (calls.length === 0) {
     return (
       <div className="backend-health__empty-calls">
-        No InferenceCall records for this backend. Either no work has been
-        routed here yet, or all records have aged out of the query window.
+        No InferenceCall records for this backend. Either no work has been routed here
+        yet, or all records have aged out of the query window.
       </div>
     );
   }
@@ -136,17 +117,12 @@ function CallsTable({
             <td>{c.callSeq}</td>
             <td>{c.callKind}</td>
             <td>
-              <span
-                className="backend-health__call-state"
-                data-state={c.callState}
-              >
+              <span className="backend-health__call-state" data-state={c.callState}>
                 {c.callState}
               </span>
             </td>
             <td>{c.queueDepthAtEnqueue ?? "—"}</td>
-            <td className="backend-health__call-reason">
-              {c.failureReason ?? "—"}
-            </td>
+            <td className="backend-health__call-reason">{c.failureReason ?? "—"}</td>
             <td>
               {c.promptTokens != null
                 ? `${c.promptTokens} / ${c.completionTokens ?? "—"}`
@@ -194,9 +170,7 @@ export function BackendHealthRow({ backend, now }: BackendHealthRowProps) {
         <div className="backend-health__identity">
           <div className="backend-health__name">
             <span>{backend.name}</span>
-            <span className="backend-health__kind-badge">
-              {backend.providerKind}
-            </span>
+            <span className="backend-health__kind-badge">{backend.providerKind}</span>
           </div>
           <div className="backend-health__endpoint">{backend.endpoint}</div>
           <LastCallHint backend={backend} now={now} />

@@ -73,11 +73,7 @@ export type StuckWorkDiagnosticView = {
   requestId: string;
   sessionId?: string | null;
   severity: "warning" | "critical";
-  reason:
-    | "expiredProcessing"
-    | "expiredTool"
-    | "stuckTool"
-    | "pendingRemoteCancelAck";
+  reason: "expiredProcessing" | "expiredTool" | "stuckTool" | "pendingRemoteCancelAck";
   deadlineAgeMs?: number | null;
   lastProgressAgeMs?: number | null;
   toolCallId?: string | null;
@@ -102,6 +98,7 @@ export type SubagentNodeView = {
   subagentDepth?: number | null;
   causedByParentRequestId?: string | null;
   causedByParentToolCallId?: string | null;
+  backendId?: string | null;
 };
 
 export type SubagentEdgeView = {
@@ -148,8 +145,12 @@ export type InterruptRequestResult = {
 export type DerivedCancelCauseView = {
   cause: "userCancelled" | "interrupted" | "deadline" | "unknown";
   source:
-    | "requestInterrupt" | "parentCascade" | "deadline"
-    | "toolLifecycle"   | "responseInterruptedAt" | "unresolved";
+    | "requestInterrupt"
+    | "parentCascade"
+    | "deadline"
+    | "toolLifecycle"
+    | "responseInterruptedAt"
+    | "unresolved";
   confidence: "direct" | "derived";
   at?: string | null;
   evidence: string[];

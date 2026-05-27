@@ -82,11 +82,7 @@ export async function waitForReadyMessage(
   });
 }
 
-export function appendRunnerArg(
-  args: string[],
-  flag: string,
-  value?: string | null,
-) {
+export function appendRunnerArg(args: string[], flag: string, value?: string | null) {
   const trimmed = value?.trim();
   if (!trimmed) {
     return;
@@ -102,12 +98,7 @@ export function normalizePeerStatusUrl(serverAddress: string) {
       : `http://${trimmed}`,
   );
   const path = url.pathname.replace(/\/+$/, "");
-  if (
-    path === "" ||
-    path === "/" ||
-    path === "/api/v0" ||
-    path === "/api/v0/graphql"
-  ) {
+  if (path === "" || path === "/" || path === "/api/v0" || path === "/api/v0/graphql") {
     url.pathname = "/status";
   } else if (!path.endsWith("/status")) {
     url.pathname = `${path}/status`;

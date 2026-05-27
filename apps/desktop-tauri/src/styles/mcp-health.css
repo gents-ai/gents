@@ -89,11 +89,21 @@
     box-shadow: 0 0 0 3px rgb(255 255 255 / 0.04);
   }
 
-  .mcp-health-pill-green .mcp-health-pill-dot { background: var(--color-success-strong); }
-  .mcp-health-pill-yellow .mcp-health-pill-dot { background: var(--color-warning); }
-  .mcp-health-pill-red .mcp-health-pill-dot { background: var(--color-error-strong); }
-  .mcp-health-pill-blue .mcp-health-pill-dot { background: var(--color-info); }
-  .mcp-health-pill-gray .mcp-health-pill-dot { background: var(--color-text-muted); }
+  .mcp-health-pill-green .mcp-health-pill-dot {
+    background: var(--color-success-strong);
+  }
+  .mcp-health-pill-yellow .mcp-health-pill-dot {
+    background: var(--color-warning);
+  }
+  .mcp-health-pill-red .mcp-health-pill-dot {
+    background: var(--color-error-strong);
+  }
+  .mcp-health-pill-blue .mcp-health-pill-dot {
+    background: var(--color-info);
+  }
+  .mcp-health-pill-gray .mcp-health-pill-dot {
+    background: var(--color-text-muted);
+  }
 
   .mcp-health-filters {
     display: flex;
@@ -198,7 +208,7 @@
   }
 
   .mcp-health-row:focus-visible > td {
-    background: rgb(var(--source-blue-rgb) / 0.10);
+    background: rgb(var(--source-blue-rgb) / 0.1);
     outline: 1px solid var(--color-info);
     outline-offset: -1px;
   }
@@ -254,12 +264,24 @@
     font-size: 13px;
   }
 
-  .mcp-health-status-healthy { color: var(--color-success); }
-  .mcp-health-status-degraded { color: var(--color-warning); }
-  .mcp-health-status-evicted { color: var(--color-error); }
-  .mcp-health-status-reconnecting { color: var(--color-info); }
-  .mcp-health-status-stuck { color: var(--color-error-strong); }
-  .mcp-health-status-unknown { color: var(--color-text-muted); }
+  .mcp-health-status-healthy {
+    color: var(--color-success);
+  }
+  .mcp-health-status-degraded {
+    color: var(--color-warning);
+  }
+  .mcp-health-status-evicted {
+    color: var(--color-error);
+  }
+  .mcp-health-status-reconnecting {
+    color: var(--color-info);
+  }
+  .mcp-health-status-stuck {
+    color: var(--color-error-strong);
+  }
+  .mcp-health-status-unknown {
+    color: var(--color-text-muted);
+  }
 
   .mcp-health-dot {
     width: 10px;
@@ -268,9 +290,15 @@
     box-shadow: 0 0 0 3px rgb(255 255 255 / 0.04);
   }
 
-  .mcp-health-dot-green { background: var(--color-success-strong); }
-  .mcp-health-dot-yellow { background: var(--color-warning); }
-  .mcp-health-dot-red { background: var(--color-error-strong); }
+  .mcp-health-dot-green {
+    background: var(--color-success-strong);
+  }
+  .mcp-health-dot-yellow {
+    background: var(--color-warning);
+  }
+  .mcp-health-dot-red {
+    background: var(--color-error-strong);
+  }
   .mcp-health-dot-blue {
     background: var(--color-info);
     animation: mcp-health-pulse 1.4s ease-in-out infinite;
@@ -281,12 +309,19 @@
   }
 
   @keyframes mcp-health-pulse {
-    0%, 100% { box-shadow: 0 0 0 3px rgb(var(--source-blue-rgb) / 0.10); }
-    50%      { box-shadow: 0 0 0 6px rgb(var(--source-blue-rgb) / 0.30); }
+    0%,
+    100% {
+      box-shadow: 0 0 0 3px rgb(var(--source-blue-rgb) / 0.1);
+    }
+    50% {
+      box-shadow: 0 0 0 6px rgb(var(--source-blue-rgb) / 0.3);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .mcp-health-dot-blue { animation: none; }
+    .mcp-health-dot-blue {
+      animation: none;
+    }
   }
 
   .mcp-health-k-cell {
@@ -304,7 +339,7 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
     font-weight: 600;
-    background: rgb(var(--source-green-rgb) / 0.10);
+    background: rgb(var(--source-green-rgb) / 0.1);
     color: var(--color-accent-strong);
     border: 1px solid var(--border-strong);
   }
@@ -316,15 +351,15 @@
   }
 
   .mcp-health-k-badge-warn {
-    background: rgb(var(--source-orange-rgb) / 0.10);
+    background: rgb(var(--source-orange-rgb) / 0.1);
     color: var(--color-warning);
-    border-color: rgb(var(--source-orange-rgb) / 0.40);
+    border-color: rgb(var(--source-orange-rgb) / 0.4);
   }
 
   .mcp-health-k-badge-alarm {
-    background: rgb(255 111 95 / 0.10);
+    background: rgb(255 111 95 / 0.1);
     color: var(--color-error-strong);
-    border-color: rgb(255 111 95 / 0.40);
+    border-color: rgb(255 111 95 / 0.4);
   }
 
   .mcp-health-k-explainer {
@@ -357,7 +392,9 @@
     display: inline-block;
   }
 
-  .mcp-health-last-error-muted { color: var(--color-text-muted); }
+  .mcp-health-last-error-muted {
+    color: var(--color-text-muted);
+  }
 
   .mcp-health-probe-btn {
     padding: 6px 12px;

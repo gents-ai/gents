@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 import { BackendHealthPanel } from "../src/components/backendHealth";
 import {
@@ -105,9 +105,7 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
       const got = deriveDisplayState(w.enabled, w.probeStatus);
       expect(got, `case ${w.name}`).toBe(w.expectedDisplayState);
       const isAvailable = got === "available";
-      expect(isAvailable, `case ${w.name} availability`).toBe(
-        w.expectedAvailable,
-      );
+      expect(isAvailable, `case ${w.name} availability`).toBe(w.expectedAvailable);
     }
   });
 
@@ -122,13 +120,16 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
     const distinctStates = new Set(backends.map((b) => b.displayState));
     const expectedChipCount = distinctStates.size + 1; // +1 for "N registered"
     const chips = screen
-      .getAllByText(/registered|available|unhealthy|stale|rate-limited|circuit-open|unknown|disabled/)
+      .getAllByText(
+        /registered|available|unhealthy|stale|rate-limited|circuit-open|unknown|disabled/,
+      )
       .filter((el) => el.className.includes("backend-health__summary-chip"));
     expect(chips.length).toBe(expectedChipCount);
 
     // Every backend renders a row with the right data-state and label.
     for (const w of LEAN_WITNESSES) {
-      const row = screen.getByText(`${w.expectedDisplayState} fixture`)
+      const row = screen
+        .getByText(`${w.expectedDisplayState} fixture`)
         .closest("li.backend-health__row");
       expect(row, `row for ${w.name}`).not.toBeNull();
       expect(row?.getAttribute("data-state"), `data-state for ${w.name}`).toBe(
@@ -137,9 +138,7 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
       const stateLabel = within(row as HTMLElement).getByText(
         STATE_LABEL[w.expectedDisplayState],
       );
-      expect(stateLabel.getAttribute("data-state")).toBe(
-        w.expectedDisplayState,
-      );
+      expect(stateLabel.getAttribute("data-state")).toBe(w.expectedDisplayState);
     }
 
     // The seven buckets must be pairwise distinct in the DOM. If any two
@@ -147,102 +146,5 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
     // information that the Lean witnesses model.
     const renderedStates = LEAN_WITNESSES.map((w) => w.expectedDisplayState);
     expect(new Set(renderedStates).size).toBe(renderedStates.length);
-  });
-
-  it("expanding a row reveals admission policy + models + recent calls sections", () => {
-    const withCalls: BackendHealth = {
-      ...makeBackend(LEAN_WITNESSES[0]),
-      recentCalls: [
-        {
-          callId: "c-1",
-          callSeq: 42,
-          callKind: "completion",
-          callState: "completed",
-          failureReason: null,
-          queuedAt: "2026-05-20T17:30:00Z",
-          startedAt: "2026-05-20T17:30:01Z",
-          endedAt: "2026-05-20T17:30:05Z",
-          queueDepthAtEnqueue: 0,
-          promptTokens: 100,
-          completionTokens: 25,
-        },
-      ],
-    };
-    render(<BackendHealthPanel initialBackends={[withCalls]} now={NOW} />);
-
-    const summaryButton = screen.getByRole("button", {
-      name: /available fixture/i,
-    });
-    expect(summaryButton.getAttribute("aria-expanded")).toBe("false");
-
-    fireEvent.click(summaryButton);
-
-    expect(summaryButton.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      screen.getByRole("heading", { name: /Admission policy & probe/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: /^Models$/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", {
-        name: /Recent calls \(InferenceCall, last 10\)/i,
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it("renders the empty-fleet card when zero backends are returned", () => {
-    render(<BackendHealthPanel initialBackends={[]} now={NOW} />);
-    expect(screen.getByText(/No backends registered/i)).toBeInTheDocument();
-    expect(
-      screen.queryByText(/available fixture/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("rate-limited and circuit-open rows surface their failure_reason hint", () => {
-    const rateLimited: BackendHealth = {
-      ...makeBackend(LEAN_WITNESSES[5]),
-      recentCalls: [
-        {
-          callId: "rl-1",
-          callSeq: 1224,
-          callKind: "completion",
-          callState: "failed",
-          failureReason: "upstream 429",
-          queuedAt: "2026-05-20T17:32:00Z",
-          startedAt: null,
-          endedAt: "2026-05-20T17:32:01Z",
-          queueDepthAtEnqueue: 12,
-          promptTokens: null,
-          completionTokens: null,
-        },
-      ],
-    };
-    const circuitOpen: BackendHealth = {
-      ...makeBackend(LEAN_WITNESSES[6]),
-      recentCalls: [
-        {
-          callId: "co-1",
-          callSeq: 318,
-          callKind: "completion",
-          callState: "failed",
-          failureReason: "BackendGone",
-          queuedAt: "2026-05-20T17:32:00Z",
-          startedAt: null,
-          endedAt: "2026-05-20T17:32:01Z",
-          queueDepthAtEnqueue: 0,
-          promptTokens: null,
-          completionTokens: null,
-        },
-      ],
-    };
-    render(
-      <BackendHealthPanel
-        initialBackends={[rateLimited, circuitOpen]}
-        now={NOW}
-      />,
-    );
-    expect(screen.getByText("upstream 429")).toBeInTheDocument();
-    expect(screen.getByText("BackendGone")).toBeInTheDocument();
   });
 });

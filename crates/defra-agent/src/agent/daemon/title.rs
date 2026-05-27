@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -13,6 +14,7 @@ const RECENT_TITLE_LIMIT: usize = 5;
 const GENERATED_TITLE_MAX_WORDS: usize = 5;
 const GENERATED_TITLE_MAX_LEN: usize = 48;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
+const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_GENERATION_PREAMBLE: &str =
     "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
@@ -97,11 +99,19 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
         let prompt = prompt.clone();
         let title_agent = title_agent.clone();
         match admission::scope_call(CallKind::OneOff, attempt, async move {
-            title_agent
-                .prompt(prompt)
-                .await
-                .map(|response| response.to_string())
-                .map_err(anyhow::Error::from)
+            tokio::time::timeout(
+                Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),
+                title_agent.prompt(prompt),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "conversation title inference timed out after {}s",
+                    TITLE_GENERATION_TIMEOUT_SECS
+                )
+            })?
+            .map(|response| response.to_string())
+            .map_err(anyhow::Error::from)
         })
         .await
         {

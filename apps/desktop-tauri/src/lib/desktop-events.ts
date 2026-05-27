@@ -25,9 +25,8 @@ async function defaultDesktopClientUpdatedListenerFactory(
   };
 }
 
-let desktopClientUpdatedListenerFactoryOverride:
-  | DesktopClientUpdatedListenerFactory
-  | null = null;
+let desktopClientUpdatedListenerFactoryOverride: DesktopClientUpdatedListenerFactory | null =
+  null;
 
 export function setDesktopClientUpdatedListenerFactoryForTests(
   factory: DesktopClientUpdatedListenerFactory | null,
@@ -35,9 +34,7 @@ export function setDesktopClientUpdatedListenerFactoryForTests(
   desktopClientUpdatedListenerFactoryOverride = factory;
 }
 
-export function listenToDesktopClientUpdates(
-  handler: DesktopClientUpdatedHandler,
-) {
+export function listenToDesktopClientUpdates(handler: DesktopClientUpdatedHandler) {
   return (
     desktopClientUpdatedListenerFactoryOverride ??
     defaultDesktopClientUpdatedListenerFactory

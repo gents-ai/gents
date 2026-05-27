@@ -8,7 +8,7 @@ use super::super::cause_derivation::{
     ToolCallEvidence,
 };
 use super::super::types::{
-    normalize_optional, turn_state_label, DesktopSessionSnapshot, DerivedCancelCauseView,
+    normalize_optional, turn_state_label, DerivedCancelCauseView, DesktopSessionSnapshot,
     MessageView, PendingTurnView, ResponseView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
@@ -110,6 +110,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 completed_at: normalize_optional(row.completed_at.as_deref()),
             };
             let cancel_cause = derive_response_cause(&req_evidence, &resp_evidence);
+            let backend_id = latest_request
+                .and_then(|r| normalize_optional(r.backend_id.as_deref()));
             ResponseView {
                 status: normalize_optional(row.status.as_deref()),
                 content: row
@@ -129,6 +131,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
                 cancel_cause,
+                backend_id,
             }
         });
     let active_response_overlay = latest_response.clone().filter(|response| {
@@ -200,51 +203,52 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         .collect::<Vec<_>>();
 
     // Index requests by id for O(1) per-tool-call lookup.
-    let requests_by_id: HashMap<&str, &AgentRequestRow> =
-        requests.iter().map(|r| (r.request_id.as_str(), *r)).collect();
+    let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
+        .iter()
+        .map(|r| (r.request_id.as_str(), *r))
+        .collect();
 
     let tool_calls = transcript
         .tool_calls
         .into_iter()
         .map(|row| {
             // Prefer persisted cancel_cause when present; only derive when absent.
-            let cancel_cause = if let Some(persisted) =
-                row.cancel_cause.as_deref().filter(|s| !s.is_empty())
-            {
-                Some(DerivedCancelCauseView {
-                    cause: persisted.to_string(),
-                    source: "toolLifecycle".into(),
-                    confidence: "direct".into(),
-                    at: normalize_optional(row.completed_at.as_deref()),
-                    evidence: vec![format!(
-                        "AgentToolCall.cancel_cause = {persisted:?} (persisted)"
-                    )],
-                })
-            } else {
-                // Derive from this tool's OWN parent request, not latest_request.
-                let req_for_tool = row
-                    .request_id
-                    .as_deref()
-                    .and_then(|rid| requests_by_id.get(rid).copied())
-                    .or(latest_request);
-                let req_evidence = req_for_tool
-                    .map(|r| RequestEvidence {
-                        request_id: r.request_id.clone(),
-                        interrupt_requested_at: r.interrupt_requested_at.clone(),
-                        caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
-                        deadline_breached: false,
+            let cancel_cause =
+                if let Some(persisted) = row.cancel_cause.as_deref().filter(|s| !s.is_empty()) {
+                    Some(DerivedCancelCauseView {
+                        cause: persisted.to_string(),
+                        source: "toolLifecycle".into(),
+                        confidence: "direct".into(),
+                        at: normalize_optional(row.completed_at.as_deref()),
+                        evidence: vec![format!(
+                            "AgentToolCall.cancel_cause = {persisted:?} (persisted)"
+                        )],
                     })
-                    .unwrap_or_default();
-                let tool_evidence = ToolCallEvidence {
-                    tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
-                    lifecycle_state: row.lifecycle_state.clone(),
-                    deadline_at: row.deadline_at.clone(),
-                    cancel_policy: row.cancel_policy.clone(),
-                    completed_at: row.completed_at.clone(),
-                    timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+                } else {
+                    // Derive from this tool's OWN parent request, not latest_request.
+                    let req_for_tool = row
+                        .request_id
+                        .as_deref()
+                        .and_then(|rid| requests_by_id.get(rid).copied())
+                        .or(latest_request);
+                    let req_evidence = req_for_tool
+                        .map(|r| RequestEvidence {
+                            request_id: r.request_id.clone(),
+                            interrupt_requested_at: r.interrupt_requested_at.clone(),
+                            caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
+                            deadline_breached: false,
+                        })
+                        .unwrap_or_default();
+                    let tool_evidence = ToolCallEvidence {
+                        tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
+                        lifecycle_state: row.lifecycle_state.clone(),
+                        deadline_at: row.deadline_at.clone(),
+                        cancel_policy: row.cancel_policy.clone(),
+                        completed_at: row.completed_at.clone(),
+                        timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+                    };
+                    derive_tool_call_cause(&req_evidence, &tool_evidence)
                 };
-                derive_tool_call_cause(&req_evidence, &tool_evidence)
-            };
             ToolCallView {
                 tool_call_key: row.tool_call_key.clone(),
                 request_id: normalize_optional(row.request_id.as_deref()),

@@ -131,9 +131,7 @@ async fn bfs(
     rows: &mut Vec<CascadeWalkRow>,
 ) -> Result<(), String> {
     if depth >= MAX_CASCADE_DEPTH {
-        return Err(format!(
-            "cascade depth exceeded at {parent_request_id}"
-        ));
+        return Err(format!("cascade depth exceeded at {parent_request_id}"));
     }
 
     // Query all AgentToolCall rows where request_id == parent AND child_request_id is set.
@@ -198,7 +196,9 @@ async fn bfs(
                 continue;
             }
             Err(e) => {
-                return Err(format!("cascade::walk: child request {child_id} not found: {e}"));
+                return Err(format!(
+                    "cascade::walk: child request {child_id} not found: {e}"
+                ));
             }
         };
 
@@ -481,14 +481,18 @@ pub(crate) async fn interrupt_request(
     }
 
     // Cascade path:
-    let expected_sig = req.expected_preview_signature.clone().ok_or_else(|| {
-        "cascade=true requires expectedPreviewSignature".to_string()
-    })?;
-    let preview = build_cascade_preview(core, &DesktopPreviewInterruptCascadeRequest {
-        request_id: req.request_id.clone(),
-        agent_did: None,
-        include_terminal: Some(true),
-    })
+    let expected_sig = req
+        .expected_preview_signature
+        .clone()
+        .ok_or_else(|| "cascade=true requires expectedPreviewSignature".to_string())?;
+    let preview = build_cascade_preview(
+        core,
+        &DesktopPreviewInterruptCascadeRequest {
+            request_id: req.request_id.clone(),
+            agent_did: None,
+            include_terminal: Some(true),
+        },
+    )
     .await?;
     if preview.preview_signature != expected_sig {
         return Ok(InterruptRequestResult {

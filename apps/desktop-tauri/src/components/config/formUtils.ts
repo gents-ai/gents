@@ -63,3 +63,7 @@ export function isOptionalFloat(
     (options.max == null || parsed <= options.max)
   );
 }
+
+export function ignoreHandledActionError(_error: unknown) {
+  // Shell-level action handlers set the shared error banner before rethrowing.
+}

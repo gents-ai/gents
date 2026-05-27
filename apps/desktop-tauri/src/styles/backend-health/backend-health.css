@@ -102,13 +102,25 @@
   transition: border-color 120ms ease;
 }
 
-.backend-health__row[data-state="available"]    { border-left: 3px solid var(--color-success-strong); }
-.backend-health__row[data-state="unhealthy"]    { border-left: 3px solid var(--color-error-strong); }
-.backend-health__row[data-state="stale"]        { border-left: 3px solid var(--color-warning); }
-.backend-health__row[data-state="rate-limited"] { border-left: 3px solid var(--color-warning); }
-.backend-health__row[data-state="circuit-open"] { border-left: 3px solid var(--color-warning); }
-.backend-health__row[data-state="unknown"]      { border-left: 3px solid var(--color-text-muted); }
-.backend-health__row[data-state="disabled"]     {
+.backend-health__row[data-state="available"] {
+  border-left: 3px solid var(--color-success-strong);
+}
+.backend-health__row[data-state="unhealthy"] {
+  border-left: 3px solid var(--color-error-strong);
+}
+.backend-health__row[data-state="stale"] {
+  border-left: 3px solid var(--color-warning);
+}
+.backend-health__row[data-state="rate-limited"] {
+  border-left: 3px solid var(--color-warning);
+}
+.backend-health__row[data-state="circuit-open"] {
+  border-left: 3px solid var(--color-warning);
+}
+.backend-health__row[data-state="unknown"] {
+  border-left: 3px solid var(--color-text-muted);
+}
+.backend-health__row[data-state="disabled"] {
   border-left: 3px solid var(--color-text-muted);
   opacity: 0.78;
 }
@@ -217,13 +229,21 @@
   letter-spacing: 0.06em;
 }
 
-.backend-health__state-label[data-state="available"]    { color: var(--color-success); }
-.backend-health__state-label[data-state="unhealthy"]    { color: var(--color-error); }
+.backend-health__state-label[data-state="available"] {
+  color: var(--color-success);
+}
+.backend-health__state-label[data-state="unhealthy"] {
+  color: var(--color-error);
+}
 .backend-health__state-label[data-state="stale"],
 .backend-health__state-label[data-state="rate-limited"],
-.backend-health__state-label[data-state="circuit-open"] { color: var(--color-warning); }
+.backend-health__state-label[data-state="circuit-open"] {
+  color: var(--color-warning);
+}
 .backend-health__state-label[data-state="unknown"],
-.backend-health__state-label[data-state="disabled"]     { color: var(--color-text-muted); }
+.backend-health__state-label[data-state="disabled"] {
+  color: var(--color-text-muted);
+}
 
 .backend-health__last-call-hint {
   font-size: 12px;
@@ -313,9 +333,15 @@
   color: var(--color-text-muted);
 }
 
-.backend-health__config-value[data-tone="success"] { color: var(--color-success); }
-.backend-health__config-value[data-tone="warning"] { color: var(--color-warning); }
-.backend-health__config-value[data-tone="error"]   { color: var(--color-error); }
+.backend-health__config-value[data-tone="success"] {
+  color: var(--color-success);
+}
+.backend-health__config-value[data-tone="warning"] {
+  color: var(--color-warning);
+}
+.backend-health__config-value[data-tone="error"] {
+  color: var(--color-error);
+}
 
 .backend-health__model-chips {
   display: flex;

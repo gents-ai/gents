@@ -70,10 +70,8 @@ export function requestProgressSignature(diagnostics: RequestDiagnostics) {
     toolResultCount: diagnostics.toolResultCount,
     messageCount: diagnostics.messageCount,
     timelineCount: diagnostics.timelineCount,
-    activeResponseOverlayContentLen:
-      diagnostics.activeResponseOverlayContentLen,
-    activeResponseOverlayReasoningLen:
-      diagnostics.activeResponseOverlayReasoningLen,
+    activeResponseOverlayContentLen: diagnostics.activeResponseOverlayContentLen,
+    activeResponseOverlayReasoningLen: diagnostics.activeResponseOverlayReasoningLen,
   });
 }
 
@@ -82,13 +80,10 @@ function isRemoteAheadOfDesktop(diagnostics: RequestDiagnosticsBundle) {
     progressNumber(diagnostics.remote.response?.progressSeq) >
       progressNumber(diagnostics.desktop.response?.progressSeq) ||
     progressNumber(diagnostics.remote.response?.materializedMessageSequence) >
-      progressNumber(
-        diagnostics.desktop.response?.materializedMessageSequence,
-      ) ||
+      progressNumber(diagnostics.desktop.response?.materializedMessageSequence) ||
     progressNumber(diagnostics.remote.response?.contentLen) >
       progressNumber(diagnostics.desktop.response?.contentLen) ||
-    diagnostics.remote.toolCalls.completed >
-      diagnostics.desktop.toolCalls.completed ||
+    diagnostics.remote.toolCalls.completed > diagnostics.desktop.toolCalls.completed ||
     diagnostics.remote.toolResultCount > diagnostics.desktop.toolResultCount ||
     diagnostics.remote.messageCount > diagnostics.desktop.messageCount ||
     diagnostics.remote.timelineCount > diagnostics.desktop.timelineCount ||

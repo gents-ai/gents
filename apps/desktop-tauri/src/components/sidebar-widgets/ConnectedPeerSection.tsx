@@ -15,8 +15,7 @@ export function ConnectedPeerSection({
   onConfigureDeployment,
 }: ConnectedPeerSectionProps) {
   const selectedDeployment =
-    deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ??
-    null;
+    deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
   const agentIdentity = displayAgentIdentity(selectedDeployment?.agentDid);
   const graphqlEndpoint = displayGraphqlEndpoint(selectedDeployment?.graphql);
 

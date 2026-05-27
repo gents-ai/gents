@@ -281,10 +281,7 @@ export function useDesktopShellEffects({
   }, [selectedSessionId, selectedTrackedRequestId]);
 
   useEffect(() => {
-    if (
-      localWorkflow.kind === "submittingRequest" &&
-      !sending
-    ) {
+    if (localWorkflow.kind === "submittingRequest" && !sending) {
       setLocalWorkflow({ kind: "ready" });
     }
   }, [localWorkflow, sending, setLocalWorkflow]);

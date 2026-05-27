@@ -41,12 +41,8 @@ type ConfigWorkspaceProps = {
   onSaveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<unknown>;
-  onSaveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
-  ) => Promise<unknown>;
-  onSaveToolServiceConfig: (
-    request: ToolServiceSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
+  onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -54,13 +50,8 @@ type ConfigWorkspaceProps = {
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
-  onSaveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
-  ) => Promise<unknown>;
-  onRunTask: (request: {
-    taskId: string;
-    args?: unknown;
-  }) => Promise<TaskRunResult>;
+  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
+  onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
 export function ConfigWorkspace({

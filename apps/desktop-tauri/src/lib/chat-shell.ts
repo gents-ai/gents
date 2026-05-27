@@ -52,11 +52,9 @@ export type ChatShellProjection = {
   activeRequestId: string | null;
 };
 
-export function isTerminalTurnState(turnState?: string | null): turnState is
-  | "completed"
-  | "failed"
-  | "superseded"
-  | "interrupted" {
+export function isTerminalTurnState(
+  turnState?: string | null,
+): turnState is "completed" | "failed" | "superseded" | "interrupted" {
   return (
     turnState === "completed" ||
     turnState === "failed" ||
@@ -76,7 +74,10 @@ function isTurnState(value?: string | null): value is TurnState {
   );
 }
 
-function blocked(reason: ChatBlockedReason, turnState?: TurnState | null): ChatWorkflowState {
+function blocked(
+  reason: ChatBlockedReason,
+  turnState?: TurnState | null,
+): ChatWorkflowState {
   return { kind: "blocked", reason, turnState };
 }
 
@@ -119,13 +120,16 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       input.localWorkflow.kind === "turnInProgress") &&
     (input.selectedSessionId === input.localWorkflow.sessionId ||
       input.session?.sessionId === input.localWorkflow.sessionId)
-      ? input.localWorkflow.requestId ?? null
+      ? (input.localWorkflow.requestId ?? null)
       : null;
 
   const observedLatestRequestId =
-    input.session?.latestRequestId ?? input.selectedConversation?.latestRequestId ?? null;
+    input.session?.latestRequestId ??
+    input.selectedConversation?.latestRequestId ??
+    null;
   const pendingRequestId = input.session?.pendingTurn?.requestId ?? null;
-  const activeRequestId = trackedRequestId ?? pendingRequestId ?? observedLatestRequestId;
+  const activeRequestId =
+    trackedRequestId ?? pendingRequestId ?? observedLatestRequestId;
 
   let workflow: ChatWorkflowState = input.localWorkflow;
 
@@ -174,7 +178,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
             requestId: input.localWorkflow.requestId,
             turnState: observedTurnState,
           };
-    } else if (!observedTurnState && activeRequestId === input.localWorkflow.requestId) {
+    } else if (
+      !observedTurnState &&
+      activeRequestId === input.localWorkflow.requestId
+    ) {
       workflow = blocked("inconsistentTurnObservation");
     }
   } else if (input.localWorkflow.kind !== "submittingRequest") {

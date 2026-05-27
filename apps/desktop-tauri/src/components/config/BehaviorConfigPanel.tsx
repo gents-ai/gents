@@ -13,6 +13,7 @@ import type {
 import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
+  ignoreHandledActionError,
   isOptionalFloat,
   optionalString,
   parseOptionalFloat,
@@ -139,8 +140,9 @@ export function BehaviorConfigEditor({
   const [backendId, setBackendId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [toolSelectionId, setToolSelectionId] = useState("");
-  const [compactionStrategy, setCompactionStrategy] =
-    useState(DEFAULT_COMPACTION_STRATEGY);
+  const [compactionStrategy, setCompactionStrategy] = useState(
+    DEFAULT_COMPACTION_STRATEGY,
+  );
   const [compactionThreshold, setCompactionThreshold] = useState(
     DEFAULT_COMPACTION_THRESHOLD,
   );
@@ -182,45 +184,48 @@ export function BehaviorConfigEditor({
       : "Select a backend";
   const promptRows = Math.min(
     28,
-    Math.max(
-      14,
-      systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90),
-    ),
+    Math.max(14, systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90)),
   );
-  const compactionThresholdValid =
-    isOptionalFloat(compactionThreshold, {
-      min: 0,
-      max: 1,
-    });
+  const compactionThresholdValid = isOptionalFloat(compactionThreshold, {
+    min: 0,
+    max: 1,
+  });
 
   async function submitBehavior(event: FormEvent) {
     event.preventDefault();
     const nextId = behaviorId.trim();
-    await onSaveBehaviorConfig({
-      agentDid,
-      behaviorId: nextId,
-      displayName: nextId,
-      systemPrompt,
-      backendId: optionalString(backendId),
-      inferenceProfileId: profileId.trim(),
-      toolSelectionId: optionalString(toolSelectionId),
-      compactionStrategy: optionalString(compactionStrategy),
-      compactionThreshold: parseOptionalFloat(compactionThreshold),
-      enabled,
-    });
-    if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
-      await onSaveAgentConfig({
+    try {
+      await onSaveBehaviorConfig({
         agentDid,
-        displayName: agentDisplayName,
-        defaultBehaviorId: nextId,
-        enabled: agentEnabled,
+        behaviorId: nextId,
+        displayName: nextId,
+        systemPrompt,
+        backendId: optionalString(backendId),
+        inferenceProfileId: profileId.trim(),
+        toolSelectionId: optionalString(toolSelectionId),
+        compactionStrategy: optionalString(compactionStrategy),
+        compactionThreshold: parseOptionalFloat(compactionThreshold),
+        enabled,
       });
+      if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
+        await onSaveAgentConfig({
+          agentDid,
+          displayName: agentDisplayName,
+          defaultBehaviorId: nextId,
+          enabled: agentEnabled,
+        });
+      }
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
     }
-    onSaved(nextId);
   }
 
   return (
-    <form className="panel config-editor behavior-config-editor" onSubmit={submitBehavior}>
+    <form
+      className="panel config-editor behavior-config-editor"
+      onSubmit={submitBehavior}
+    >
       <div className="panel-header behavior-config-header">
         <div>
           <p className="eyebrow">Behavior</p>
@@ -370,9 +375,7 @@ export function BehaviorConfigEditor({
               data-testid="behavior-compaction-threshold"
               max="1"
               min="0"
-              onChange={(event) =>
-                setCompactionThreshold(event.currentTarget.value)
-              }
+              onChange={(event) => setCompactionThreshold(event.currentTarget.value)}
               step="0.01"
               type="number"
               value={compactionThreshold}

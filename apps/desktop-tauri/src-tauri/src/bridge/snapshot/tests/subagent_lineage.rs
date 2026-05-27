@@ -1,5 +1,3 @@
-use super::*;
-
 #[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
@@ -27,6 +25,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 subagent_depth: Some(0),
                 caused_by_parent_request_id: None,
                 caused_by_parent_tool_call_id: None,
+                backend_id: None,
             },
             SubagentNodeView {
                 request_id: case.child_request_id.clone(),
@@ -42,6 +41,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 caused_by_parent_tool_call_id: case
                     .caused_by_parent_tool_call_id_matches
                     .then(|| case.parent_tool_call_id.clone()),
+                backend_id: None,
             },
         ],
         edges: vec![SubagentEdgeView {
@@ -74,7 +74,11 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
         assert_eq!(case.cancel_policy, "cascade", "{}", case.name);
 
         let view = subagent_tree_view_from_lean_case(case);
-        assert_eq!(view.root_request_id, case.parent_request_id, "{}", case.name);
+        assert_eq!(
+            view.root_request_id, case.parent_request_id,
+            "{}",
+            case.name
+        );
         assert_eq!(view.nodes.len(), 2, "{}", case.name);
         assert_eq!(view.edges.len(), 1, "{}", case.name);
         assert!(!view.truncated, "{} should not be truncated", case.name);
@@ -91,12 +95,21 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
             .expect("child node present");
         let edge = view.edges.first().expect("bridge edge present");
 
-        assert_eq!(parent.agent_did.as_deref(), Some(case.parent_deployment.as_str()));
-        assert_eq!(child.agent_did.as_deref(), Some(case.child_deployment.as_str()));
+        assert_eq!(
+            parent.agent_did.as_deref(),
+            Some(case.parent_deployment.as_str())
+        );
+        assert_eq!(
+            child.agent_did.as_deref(),
+            Some(case.child_deployment.as_str())
+        );
         assert_eq!(edge.tool_name.as_deref(), Some("spawn_subagent"));
         assert_eq!(edge.await_mode.as_deref(), Some("background"));
         assert_eq!(edge.cancel_policy.as_deref(), Some("cascade"));
-        assert_eq!(edge.parent_tool_call_id.as_deref(), Some(case.parent_tool_call_id.as_str()));
+        assert_eq!(
+            edge.parent_tool_call_id.as_deref(),
+            Some(case.parent_tool_call_id.as_str())
+        );
 
         if case.cross_deployment_routing_fired {
             cross_seen = true;
@@ -144,7 +157,11 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
         // chain at once.
         let payload = serde_json::to_string(&view).expect("serialize subagent tree");
         assert!(payload.contains("\"rootRequestId\""), "{}", case.name);
-        assert!(payload.contains("\"causedByParentRequestId\""), "{}", case.name);
+        assert!(
+            payload.contains("\"causedByParentRequestId\""),
+            "{}",
+            case.name
+        );
         assert!(payload.contains("\"awaitMode\""), "{}", case.name);
         let round_tripped: SubagentTreeView =
             serde_json::from_str(&payload).expect("deserialize subagent tree");

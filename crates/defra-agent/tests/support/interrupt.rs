@@ -1,11 +1,15 @@
 use std::time::Duration;
 
+use defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use defra_agent::defra_node::{EmbeddedNode, QueryResponse};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::snapshots::{fetch_request_snapshot, fetch_response_content, fetch_runtime_snapshot};
+use super::{
+    first_row,
+    snapshots::{fetch_request_snapshot, fetch_response_content, fetch_runtime_snapshot},
+};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -236,18 +240,58 @@ pub async fn wait_for_response_content_min_len(
     response_doc_id: &str,
     min_len: usize,
 ) -> String {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS + 15);
     loop {
-        let content = fetch_response_content(node, response_doc_id).await;
-        if content.len() >= min_len {
-            return content;
+        let snapshot = fetch_response_state(node, response_doc_id).await;
+        if snapshot.content.len() >= min_len {
+            return snapshot.content;
+        }
+        if snapshot.status == "error" {
+            panic!(
+                "live response failed before content length reached {min_len}; error_message={:?}",
+                snapshot.error_message.unwrap_or_default()
+            );
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for live response content length >= {min_len}; last={content:?}"
+            "timed out waiting for live response content length >= {min_len}; last_status={}; last_content={:?}; last_error={:?}",
+            snapshot.status,
+            snapshot.content,
+            snapshot.error_message,
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponseStateSnapshot {
+    status: String,
+    content: String,
+    error_message: Option<String>,
+}
+
+async fn fetch_response_state(node: &EmbeddedNode, response_doc_id: &str) -> ResponseStateSnapshot {
+    let doc_id = escape_graphql_string(response_doc_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                content
+                error_message
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentResponse state query failed: {:?}",
+        response.errors
+    );
+    first_row::<ResponseStateSnapshot>(&response, "AgentResponse")
 }
 
 pub async fn wait_for_request_lifecycle_state(

@@ -29,11 +29,7 @@
 
   code,
   .mono {
-    font-family:
-      "SF Mono",
-      "JetBrains Mono",
-      ui-monospace,
-      monospace;
+    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
   }
 
   h1,

@@ -31,10 +31,7 @@ export function BehaviorSelectorSection({
       ) : (
         <div className="list compact-list">
           {behaviorOptions.map((behavior) => (
-            <div
-              className="behavior-list-row"
-              key={behavior.behaviorId}
-            >
+            <div className="behavior-list-row" key={behavior.behaviorId}>
               <button
                 className={
                   behavior.behaviorId === selectedBehaviorId

@@ -9,7 +9,7 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { isOptionalInt, parseOptionalInt } from "./formUtils";
+import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
 
 export type ScheduleConfigPanelProps = {
   deployment: DeploymentView;
@@ -130,19 +130,27 @@ export function ScheduleConfigEditor({
   async function submitSchedule(event: FormEvent) {
     event.preventDefault();
     const nextId = scheduleId.trim();
-    await onSaveScheduleConfig({
-      scheduleId: nextId,
-      taskId,
-      intervalSecs: parseOptionalInt(intervalSecs),
-      enabled,
-      concurrency,
-    });
-    onSaved(nextId);
+    try {
+      await onSaveScheduleConfig({
+        scheduleId: nextId,
+        taskId,
+        intervalSecs: parseOptionalInt(intervalSecs),
+        enabled,
+        concurrency,
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   async function runSelectedSchedule() {
-    const result = await onRunSchedule({ scheduleId: scheduleId.trim() });
-    setRunStatus(result);
+    try {
+      const result = await onRunSchedule({ scheduleId: scheduleId.trim() });
+      setRunStatus(result);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (
@@ -163,7 +171,9 @@ export function ScheduleConfigEditor({
               }
             }}
             readOnly={Boolean(schedule)}
-            title={schedule ? "Schedule IDs cannot be renamed after creation." : undefined}
+            title={
+              schedule ? "Schedule IDs cannot be renamed after creation." : undefined
+            }
             value={scheduleId}
           />
         </label>

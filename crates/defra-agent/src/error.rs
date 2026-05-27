@@ -135,13 +135,28 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
             match completion_err {
                 // HTTP errors (connection reset, DNS, timeout) are transient.
                 rig::completion::CompletionError::HttpError(_) => {
-                    InferenceError::TransientFailure { reason }
+                    if error_message_has_status(&reason, 429) {
+                        InferenceError::RateLimited {
+                            retry_after_secs: 60,
+                        }
+                    } else if error_message_has_status(&reason, 400)
+                        || error_message_has_status(&reason, 401)
+                        || error_message_has_status(&reason, 403)
+                        || error_message_has_status(&reason, 404)
+                        || error_message_has_status(&reason, 422)
+                    {
+                        InferenceError::PermanentFailure { reason }
+                    } else {
+                        InferenceError::TransientFailure { reason }
+                    }
                 }
                 rig::completion::CompletionError::ProviderError(provider_msg) => {
                     if provider_msg.contains("rate_limit") || provider_msg.contains("429") {
                         InferenceError::RateLimited {
                             retry_after_secs: 60,
                         }
+                    } else if error_message_has_status(provider_msg, 404) {
+                        InferenceError::PermanentFailure { reason }
                     } else if provider_msg.contains("401")
                         || provider_msg.contains("invalid_api_key")
                         || provider_msg.contains("authentication")
@@ -178,6 +193,14 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
         rig::agent::StreamingError::Tool(_) => InferenceError::PermanentFailure { reason: msg },
         rig::agent::StreamingError::Prompt(_) => InferenceError::PermanentFailure { reason: msg },
     }
+}
+
+fn error_message_has_status(message: &str, status: u16) -> bool {
+    message.contains(&format!("InvalidStatusCodeWithMessage({status}"))
+        || message.contains(&format!("Invalid status code {status}"))
+        || message.contains(&format!("Invalid status code: {status}"))
+        || message.contains(&format!("status code {status}"))
+        || message.contains(&format!("HTTP status {status}"))
 }
 
 #[cfg(test)]

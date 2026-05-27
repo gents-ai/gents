@@ -8,7 +8,12 @@ import type {
   ToolServiceRegistryView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { linesToArray } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  linesToArray,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type ToolSelectionConfigPanelProps = {
   deployment: DeploymentView;
@@ -18,9 +23,7 @@ export type ToolSelectionConfigPanelProps = {
   onSelectToolSelection: (selectionId: string) => void;
   onCreateToolSelection: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
   toolCeiling?: string | null;
   toolRoot?: string | null;
 };
@@ -57,6 +60,7 @@ export function ToolSelectionConfigPanel({
               selection.enableFileTools ? "files" : null,
               selection.enableBash ? "bash" : null,
               selection.enableMetaTools ? "meta" : null,
+              selection.subagentTargets?.length ? "subagents" : null,
             ]
               .filter(Boolean)
               .join(" / ") || "tool selection",
@@ -95,9 +99,7 @@ export type ToolSelectionConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (selectionId: string) => void;
-  onSaveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
 };
 
 export function ToolSelectionConfigEditor({
@@ -118,13 +120,28 @@ export function ToolSelectionConfigEditor({
   const [fileToolRoot, setFileToolRoot] = useState("");
   const [enableBash, setEnableBash] = useState(false);
   const [bashMode, setBashMode] = useState("ReadOnly");
+  const [commandExecutionPolicy, setCommandExecutionPolicy] = useState("");
+  const [commandAllowedArgvPrefixes, setCommandAllowedArgvPrefixes] = useState("");
+  const [commandForbiddenArgvPrefixes, setCommandForbiddenArgvPrefixes] = useState("");
+  const [commandNetworkMode, setCommandNetworkMode] = useState("");
   const [cliToolNames, setCliToolNames] = useState("");
   const [enableMetaTools, setEnableMetaTools] = useState(false);
   const [allowedMcpServiceIds, setAllowedMcpServiceIds] = useState("");
   const [delegateTo, setDelegateTo] = useState("");
+  const [backgroundableToolNames, setBackgroundableToolNames] = useState("");
+  const [subagentTargets, setSubagentTargets] = useState("");
+  const [subagentSpawnEnabled, setSubagentSpawnEnabled] = useState(false);
+  const [subagentSteeringEnabled, setSubagentSteeringEnabled] = useState(false);
+  const [subagentBackgroundEnabled, setSubagentBackgroundEnabled] = useState(false);
+  const [crossDeploymentSpawnTimeoutSeconds, setCrossDeploymentSpawnTimeoutSeconds] =
+    useState("");
   const ceiling = normalizeToolCeiling(toolCeiling);
   const fileToolsDisabledByCeiling = ceiling === "MetaOnly";
   const writeToolsDisabledByCeiling = ceiling !== "Readwrite";
+  const crossDeploymentSpawnTimeoutValid = isOptionalInt(
+    crossDeploymentSpawnTimeoutSeconds,
+    { min: 1 },
+  );
   const toolServiceIdKey = useMemo(
     () =>
       toolServiceRegistries
@@ -144,13 +161,19 @@ export function ToolSelectionConfigEditor({
     setBashMode(
       toolSelection?.bashMode === "ReadWrite"
         ? "Unrestricted"
-        : toolSelection?.bashMode ?? "ReadOnly",
+        : (toolSelection?.bashMode ?? "ReadOnly"),
     );
+    setCommandExecutionPolicy(toolSelection?.commandExecutionPolicy ?? "");
+    setCommandAllowedArgvPrefixes(
+      (toolSelection?.commandAllowedArgvPrefixes ?? []).join("\n"),
+    );
+    setCommandForbiddenArgvPrefixes(
+      (toolSelection?.commandForbiddenArgvPrefixes ?? []).join("\n"),
+    );
+    setCommandNetworkMode(toolSelection?.commandNetworkMode ?? "");
     setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
     setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
-    const knownServiceIds = new Set(
-      toolServiceIdKey.split("\n").filter(Boolean),
-    );
+    const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
     const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
     const existingDelegateTo = toolSelection?.delegateTo ?? [];
     const legacyServiceDelegates =
@@ -164,9 +187,19 @@ export function ToolSelectionConfigEditor({
       ).join("\n"),
     );
     setDelegateTo(
-      existingDelegateTo
-        .filter((value) => !knownServiceIds.has(value))
-        .join("\n"),
+      existingDelegateTo.filter((value) => !knownServiceIds.has(value)).join("\n"),
+    );
+    setBackgroundableToolNames(
+      (toolSelection?.backgroundableToolNames ?? []).join("\n"),
+    );
+    setSubagentTargets((toolSelection?.subagentTargets ?? []).join("\n"));
+    setSubagentSpawnEnabled(toolSelection?.subagentSpawnEnabled ?? false);
+    setSubagentSteeringEnabled(toolSelection?.subagentSteeringEnabled ?? false);
+    setSubagentBackgroundEnabled(toolSelection?.subagentBackgroundEnabled ?? false);
+    setCrossDeploymentSpawnTimeoutSeconds(
+      toolSelection?.crossDeploymentSpawnTimeoutSeconds != null
+        ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
+        : "",
     );
   }, [toolSelection, toolServiceIdKey]);
 
@@ -183,8 +216,7 @@ export function ToolSelectionConfigEditor({
   async function submitToolSelection(event: FormEvent) {
     event.preventDefault();
     const nextId = selectionId.trim();
-    const effectiveEnableFileTools =
-      !fileToolsDisabledByCeiling && enableFileTools;
+    const effectiveEnableFileTools = !fileToolsDisabledByCeiling && enableFileTools;
     const effectiveEnableBash = !fileToolsDisabledByCeiling && enableBash;
     const effectiveFileToolsMode =
       writeToolsDisabledByCeiling && fileToolsMode === "ReadWrite"
@@ -194,21 +226,37 @@ export function ToolSelectionConfigEditor({
       writeToolsDisabledByCeiling && bashMode === "Unrestricted"
         ? "ReadOnly"
         : bashMode;
-    await onSaveToolSelectionConfig({
-      agentDid,
-      selectionId: nextId,
-      displayName,
-      enableFileTools: effectiveEnableFileTools,
-      fileToolsMode: effectiveFileToolsMode,
-      fileToolRoot,
-      enableBash: effectiveEnableBash,
-      bashMode: effectiveBashMode,
-      cliToolNames: linesToArray(cliToolNames),
-      enableMetaTools,
-      allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
-      delegateTo: linesToArray(delegateTo),
-    });
-    onSaved(nextId);
+    try {
+      await onSaveToolSelectionConfig({
+        agentDid,
+        selectionId: nextId,
+        displayName,
+        enableFileTools: effectiveEnableFileTools,
+        fileToolsMode: effectiveFileToolsMode,
+        fileToolRoot,
+        enableBash: effectiveEnableBash,
+        bashMode: effectiveBashMode,
+        commandExecutionPolicy,
+        commandAllowedArgvPrefixes: linesToArray(commandAllowedArgvPrefixes),
+        commandForbiddenArgvPrefixes: linesToArray(commandForbiddenArgvPrefixes),
+        commandNetworkMode,
+        cliToolNames: linesToArray(cliToolNames),
+        enableMetaTools,
+        allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
+        delegateTo: linesToArray(delegateTo),
+        backgroundableToolNames: linesToArray(backgroundableToolNames),
+        subagentTargets: linesToArray(subagentTargets),
+        subagentSpawnEnabled,
+        subagentSteeringEnabled,
+        subagentBackgroundEnabled,
+        crossDeploymentSpawnTimeoutSeconds: parseOptionalInt(
+          crossDeploymentSpawnTimeoutSeconds,
+        ),
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (
@@ -321,6 +369,48 @@ export function ToolSelectionConfigEditor({
           </select>
         </label>
       </div>
+      <div className="grid-2">
+        <label className="field">
+          <span>Command policy</span>
+          <input
+            data-testid="tool-command-execution-policy"
+            onChange={(event) => setCommandExecutionPolicy(event.currentTarget.value)}
+            value={commandExecutionPolicy}
+          />
+        </label>
+        <label className="field">
+          <span>Command network mode</span>
+          <input
+            data-testid="tool-command-network-mode"
+            onChange={(event) => setCommandNetworkMode(event.currentTarget.value)}
+            value={commandNetworkMode}
+          />
+        </label>
+      </div>
+      <div className="grid-2">
+        <label className="field">
+          <span>Allowed argv prefixes</span>
+          <textarea
+            className="config-small-textarea"
+            data-testid="tool-command-allowed-argv-prefixes"
+            onChange={(event) =>
+              setCommandAllowedArgvPrefixes(event.currentTarget.value)
+            }
+            value={commandAllowedArgvPrefixes}
+          />
+        </label>
+        <label className="field">
+          <span>Forbidden argv prefixes</span>
+          <textarea
+            className="config-small-textarea"
+            data-testid="tool-command-forbidden-argv-prefixes"
+            onChange={(event) =>
+              setCommandForbiddenArgvPrefixes(event.currentTarget.value)
+            }
+            value={commandForbiddenArgvPrefixes}
+          />
+        </label>
+      </div>
       <label className="field">
         <span>CLI tool names</span>
         <textarea
@@ -353,10 +443,7 @@ export function ToolSelectionConfigEditor({
                     data-testid={`tool-allowed-mcp-service-${serviceId}`}
                     disabled={!enableMetaTools}
                     onChange={(event) =>
-                      toggleAllowedMcpService(
-                        serviceId,
-                        event.currentTarget.checked,
-                      )
+                      toggleAllowedMcpService(serviceId, event.currentTarget.checked)
                     }
                     type="checkbox"
                   />
@@ -379,11 +466,81 @@ export function ToolSelectionConfigEditor({
           value={delegateTo}
         />
       </label>
+      <label className="field">
+        <span>Backgroundable tool names</span>
+        <textarea
+          className="config-small-textarea"
+          data-testid="tool-backgroundable-tool-names"
+          onChange={(event) => setBackgroundableToolNames(event.currentTarget.value)}
+          value={backgroundableToolNames}
+        />
+      </label>
+      <div className="grid-2">
+        <label className="field">
+          <span>Subagent targets</span>
+          <textarea
+            className="config-small-textarea"
+            data-testid="tool-subagent-targets"
+            onChange={(event) => setSubagentTargets(event.currentTarget.value)}
+            value={subagentTargets}
+          />
+        </label>
+        <label className="field">
+          <span>Cross-deployment spawn timeout</span>
+          <input
+            aria-invalid={!crossDeploymentSpawnTimeoutValid}
+            data-testid="tool-cross-deployment-spawn-timeout"
+            inputMode="numeric"
+            onChange={(event) =>
+              setCrossDeploymentSpawnTimeoutSeconds(event.currentTarget.value)
+            }
+            value={crossDeploymentSpawnTimeoutSeconds}
+          />
+        </label>
+      </div>
+      <div className="grid-2">
+        <label className="checkbox">
+          <input
+            checked={subagentSpawnEnabled}
+            data-testid="tool-subagent-spawn-enabled"
+            onChange={(event) => setSubagentSpawnEnabled(event.currentTarget.checked)}
+            type="checkbox"
+          />
+          <span>Subagent spawn</span>
+        </label>
+        <label className="checkbox">
+          <input
+            checked={subagentSteeringEnabled}
+            data-testid="tool-subagent-steering-enabled"
+            onChange={(event) =>
+              setSubagentSteeringEnabled(event.currentTarget.checked)
+            }
+            type="checkbox"
+          />
+          <span>Subagent steering</span>
+        </label>
+        <label className="checkbox">
+          <input
+            checked={subagentBackgroundEnabled}
+            data-testid="tool-subagent-background-enabled"
+            onChange={(event) =>
+              setSubagentBackgroundEnabled(event.currentTarget.checked)
+            }
+            type="checkbox"
+          />
+          <span>Subagent background</span>
+        </label>
+      </div>
       <div className="config-actions">
         <button
           className="primary-button"
           data-testid="tool-selection-save"
-          disabled={saving || !selectionId.trim() || !displayName.trim()}
+          disabled={
+            saving ||
+            !selectionId.trim() ||
+            !displayName.trim() ||
+            !crossDeploymentSpawnTimeoutValid
+          }
           type="submit"
         >
           {saving ? "Saving..." : "Save Tool Selection"}

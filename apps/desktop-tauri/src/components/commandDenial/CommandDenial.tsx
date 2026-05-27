@@ -20,10 +20,7 @@ export function CommandDenialToolItem({
   denial: CommandDenialView;
 }) {
   return (
-    <details
-      className="tool-item tool-item-denied"
-      data-rule-id={denial.ruleId}
-    >
+    <details className="tool-item tool-item-denied" data-rule-id={denial.ruleId}>
       <summary className="tool-item-summary">
         <span className="tool-item-summary-left">
           <span aria-hidden="true" className="tool-item-dot tool-item-dot-denied" />
@@ -52,17 +49,13 @@ export function CommandDenialToolItem({
                 {denial.deniedSubcommand ? (
                   <>
                     {" "}
-                    <span className="denied-token">
-                      {denial.deniedSubcommand}
-                    </span>
+                    <span className="denied-token">{denial.deniedSubcommand}</span>
                   </>
                 ) : null}
                 {denial.deniedArgument ? (
                   <>
                     {" "}
-                    <span className="denied-token">
-                      {denial.deniedArgument}
-                    </span>
+                    <span className="denied-token">{denial.deniedArgument}</span>
                   </>
                 ) : null}
               </div>

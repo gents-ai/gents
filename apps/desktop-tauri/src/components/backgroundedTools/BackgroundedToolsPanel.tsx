@@ -1,8 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 
-import type {
-  DesktopOperationsSnapshotRequest,
-} from "../../lib/types/operations";
+import type { DesktopOperationsSnapshotRequest } from "../../lib/types/operations";
 import {
   correlateProcess,
   derivedState,
@@ -11,7 +9,13 @@ import {
 } from "./derivedState";
 import { useOperationsSnapshot } from "./useOperationsSnapshot";
 
-type SortKey = "toolName" | "ageMs" | "requestId" | "awaitMode" | "derivedState" | "processLabel";
+type SortKey =
+  | "toolName"
+  | "ageMs"
+  | "requestId"
+  | "awaitMode"
+  | "derivedState"
+  | "processLabel";
 type SortDir = "ascending" | "descending";
 
 // 8-slot ceiling per the operator-surfaces spec §"Panel 1". Hardcoded
@@ -22,7 +26,9 @@ export type BackgroundedToolsPanelProps = {
   rootRequestId?: string | null;
 };
 
-export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanelProps = {}) {
+export function BackgroundedToolsPanel({
+  rootRequestId,
+}: BackgroundedToolsPanelProps = {}) {
   const request: DesktopOperationsSnapshotRequest = useMemo(
     () => ({ rootRequestId: rootRequestId ?? null }),
     [rootRequestId],
@@ -56,8 +62,16 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
     const rows = projected.filter((r) => {
       if (parentFilter !== "all" && r.requestId !== parentFilter) return false;
       if (stateFilters.size > 0 && !stateFilters.has(r.derivedState)) return false;
-      if (awaitFilters.size > 0 && (r.awaitMode == null || !awaitFilters.has(r.awaitMode))) return false;
-      if (hideHealthy && !["stuck", "cancelPending", "deadline+"].includes(r.derivedState)) return false;
+      if (
+        awaitFilters.size > 0 &&
+        (r.awaitMode == null || !awaitFilters.has(r.awaitMode))
+      )
+        return false;
+      if (
+        hideHealthy &&
+        !["stuck", "cancelPending", "deadline+"].includes(r.derivedState)
+      )
+        return false;
       return true;
     });
     const dir = sortDir === "ascending" ? 1 : -1;
@@ -70,7 +84,15 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
       if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
-  }, [projected, parentFilter, stateFilters, awaitFilters, hideHealthy, sortKey, sortDir]);
+  }, [
+    projected,
+    parentFilter,
+    stateFilters,
+    awaitFilters,
+    hideHealthy,
+    sortKey,
+    sortDir,
+  ]);
 
   const parents = useMemo(
     () => Array.from(new Set(projected.map((r) => r.requestId))),
@@ -108,7 +130,9 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
     return (
       <section className="background-tools-panel" aria-label="Background tools">
         <div className="empty-state">
-          <span className="glyph" aria-hidden="true">○</span>
+          <span className="glyph" aria-hidden="true">
+            ○
+          </span>
           Snapshot bridge unavailable: {error}
         </div>
       </section>
@@ -141,7 +165,15 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
       </div>
       <div className="chip-row" role="group" aria-label="Filter by state">
         <span className="chip-label">State</span>
-        {(["running", "background", "stuck", "cancelPending", "deadline+"] as DerivedState[]).map((s) => (
+        {(
+          [
+            "running",
+            "background",
+            "stuck",
+            "cancelPending",
+            "deadline+",
+          ] as DerivedState[]
+        ).map((s) => (
           <button
             key={s}
             type="button"
@@ -149,7 +181,9 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
             aria-pressed={stateFilters.has(s)}
             onClick={() => toggleStateFilter(s)}
           >
-            {s === "deadline+" ? "Past deadline" : s.charAt(0).toUpperCase() + s.slice(1)}
+            {s === "deadline+"
+              ? "Past deadline"
+              : s.charAt(0).toUpperCase() + s.slice(1)}
           </button>
         ))}
       </div>
@@ -181,7 +215,8 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
 
       <div className="panel-summary">
         <div className="live-count">
-          <em>{filtered.length}</em> live <span className="root">/ {MAX_BACKGROUND_SLOTS} max</span>
+          <em>{filtered.length}</em> live{" "}
+          <span className="root">/ {MAX_BACKGROUND_SLOTS} max</span>
         </div>
       </div>
 
@@ -189,7 +224,16 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
         <table className="tools" role="grid">
           <thead>
             <tr>
-              {(["toolName", "ageMs", "requestId", "awaitMode", "derivedState", "processLabel"] as SortKey[]).map((key) => (
+              {(
+                [
+                  "toolName",
+                  "ageMs",
+                  "requestId",
+                  "awaitMode",
+                  "derivedState",
+                  "processLabel",
+                ] as SortKey[]
+              ).map((key) => (
                 <th
                   key={key}
                   scope="col"
@@ -203,11 +247,17 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                     }
                   }}
                 >
-                  {key === "toolName" ? "Tool" :
-                   key === "ageMs" ? "Age" :
-                   key === "requestId" ? "Parent" :
-                   key === "awaitMode" ? "Await" :
-                   key === "derivedState" ? "Status" : "Process"}
+                  {key === "toolName"
+                    ? "Tool"
+                    : key === "ageMs"
+                      ? "Age"
+                      : key === "requestId"
+                        ? "Parent"
+                        : key === "awaitMode"
+                          ? "Await"
+                          : key === "derivedState"
+                            ? "Status"
+                            : "Process"}
                 </th>
               ))}
               <th scope="col" aria-label="Row actions" />
@@ -218,14 +268,18 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
               <tr>
                 <td colSpan={7}>
                   <div className="empty-state">
-                    <span className="glyph" aria-hidden="true">○</span>
+                    <span className="glyph" aria-hidden="true">
+                      ○
+                    </span>
                     No backgrounded tools.
                   </div>
                 </td>
               </tr>
             )}
             {filtered.map((row) => {
-              const isWarn = ["stuck", "cancelPending", "deadline+"].includes(row.derivedState);
+              const isWarn = ["stuck", "cancelPending", "deadline+"].includes(
+                row.derivedState,
+              );
               return (
                 <tr
                   key={row.toolCallId}
@@ -242,7 +296,10 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                   </td>
                   <td>
                     <span className="pill pill-status" data-state={row.derivedState}>
-                      {row.derivedState === "stuck" || row.derivedState === "cancelPending" ? "⚠ " : ""}
+                      {row.derivedState === "stuck" ||
+                      row.derivedState === "cancelPending"
+                        ? "⚠ "
+                        : ""}
                       {row.derivedState}
                     </span>
                   </td>
@@ -261,7 +318,11 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                           e.stopPropagation();
                           // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
                           // Until then, log to console so the developer can verify the action surface.
-                          console.log("[backgroundedTools] open-lineage", row.toolCallId, row.requestId);
+                          console.log(
+                            "[backgroundedTools] open-lineage",
+                            row.toolCallId,
+                            row.requestId,
+                          );
                         }}
                       >
                         Lineage
@@ -274,7 +335,10 @@ export function BackgroundedToolsPanel({ rootRequestId }: BackgroundedToolsPanel
                           e.stopPropagation();
                           // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
                           // Until then, log to console so the developer can verify the action surface.
-                          console.log("[backgroundedTools] interrupt-parent", row.requestId);
+                          console.log(
+                            "[backgroundedTools] interrupt-parent",
+                            row.requestId,
+                          );
                         }}
                       >
                         Interrupt

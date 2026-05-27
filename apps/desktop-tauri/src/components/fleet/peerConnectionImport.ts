@@ -32,9 +32,7 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     firstStringAt(record, "p2p.p2p_listen_addresses");
 
   if (!agentDid || !addr) {
-    throw new Error(
-      "Connection JSON must include agent_did and a P2P address",
-    );
+    throw new Error("Connection JSON must include agent_did and a P2P address");
   }
   const validatedAgentDid = validateAgentDid(agentDid);
   const graphql =
@@ -101,10 +99,12 @@ function firstStringAt(record: JsonRecord, path: string) {
   if (!Array.isArray(value)) {
     return null;
   }
-  return value.find(
-    (candidate): candidate is string =>
-      typeof candidate === "string" && candidate.trim().length > 0,
-  ) ?? null;
+  return (
+    value.find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.trim().length > 0,
+    ) ?? null
+  );
 }
 
 function valueAt(record: JsonRecord, path: string): unknown {

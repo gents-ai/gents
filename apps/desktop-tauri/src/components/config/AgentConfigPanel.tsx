@@ -9,6 +9,7 @@ import type {
   DeploymentView,
 } from "../../lib/types";
 import { PencilIcon } from "./ConfigChrome";
+import { ignoreHandledActionError } from "./formUtils";
 
 export type AgentConfigPanelProps = {
   bootstrap: BootstrapSummary | null;
@@ -77,21 +78,22 @@ export function AgentConfigEditor({
 
   async function submitAgent(event: FormEvent) {
     event.preventDefault();
-    await onSaveAgentConfig({
-      agentDid: agent.agentDid,
-      displayName,
-      defaultBehaviorId,
-      enabled: agent.enabled ?? true,
-    });
-    setEditingDisplayName(false);
-    onSaved(agent.agentDid);
+    try {
+      await onSaveAgentConfig({
+        agentDid: agent.agentDid,
+        displayName,
+        defaultBehaviorId,
+        enabled: agent.enabled ?? true,
+      });
+      setEditingDisplayName(false);
+      onSaved(agent.agentDid);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (
-    <form
-      className="panel config-editor agent-config-editor"
-      onSubmit={submitAgent}
-    >
+    <form className="panel config-editor agent-config-editor" onSubmit={submitAgent}>
       <div className="panel-header agent-config-header">
         <div>
           <p className="eyebrow">Agent</p>

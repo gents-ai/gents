@@ -14,17 +14,20 @@ use defra_agent_desktop_core::client::ClientCore;
 use reqwest::Url;
 use tauri::State;
 
-use super::super::commands::{load_mcp_services_with_health, probe_mcp_service};
+use super::super::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
 use super::super::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
+};
+use super::super::snapshot::subagent_tree::{
+    build_local_subagent_tree, effective_subagent_tree_max_depth,
 };
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
-    InferenceCallSummaryView, InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult,
-    NativeExecutorStatusView, RuntimeLivenessView, SubagentTreeView,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, InferenceCallSummaryView,
+    InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView,
+    RuntimeLivenessView, SubagentTreeView,
 };
 
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -220,10 +223,16 @@ pub(crate) async fn desktop_list_subagent_tree(
             .ok_or_else(|| "no agent selected; pass agentDid explicitly".to_string())?,
     };
 
-    let graphql = core
-        .graphql_for_agent(&agent_did)
+    let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
+        return build_local_subagent_tree(
+            core.node(),
+            root_request_id,
+            request.include_terminal.unwrap_or(false),
+            effective_subagent_tree_max_depth(request.max_depth),
+        )
         .await
-        .ok_or_else(|| format!("no graphql URL configured for agent {agent_did}"))?;
+        .map_err(|error| format!("local subagent tree query failed: {error:#}"));
+    };
     let url = subagent_tree_url(&graphql, root_request_id, &request)?;
 
     let client = reqwest::Client::builder()
@@ -297,7 +306,10 @@ fn subagent_tree_url(
 mod subagent_tree_url_tests {
     use super::*;
 
-    fn request(include_terminal: Option<bool>, max_depth: Option<u32>) -> DesktopListSubagentTreeRequest {
+    fn request(
+        include_terminal: Option<bool>,
+        max_depth: Option<u32>,
+    ) -> DesktopListSubagentTreeRequest {
         DesktopListSubagentTreeRequest {
             root_request_id: "req-root".to_string(),
             agent_did: None,
@@ -320,8 +332,8 @@ mod subagent_tree_url_tests {
 
     #[test]
     fn accepts_bare_host_and_defaults_scheme() {
-        let url = subagent_tree_url("127.0.0.1:9181", "req-root", &request(Some(true), Some(4)))
-            .unwrap();
+        let url =
+            subagent_tree_url("127.0.0.1:9181", "req-root", &request(Some(true), Some(4))).unwrap();
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.path(), "/subagents/tree");
         let query = url.query().unwrap();
@@ -377,16 +389,24 @@ pub(crate) async fn desktop_list_backends_with_health(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    list_backends_with_health_for_core(core).await
+}
 
+pub(crate) async fn list_backends_with_health_for_core(
+    core: Arc<ClientCore>,
+) -> Result<Vec<BackendHealthView>, String> {
     let node = core.node();
-    let backends = list_all_backends(node).await.map_err(|err| err.to_string())?;
+    let backends = list_all_backends(node)
+        .await
+        .map_err(|err| err.to_string())?;
 
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
         let recent_calls = fetch_recent_calls(node, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
-        let display_state = derive_display_state(backend.enabled, &backend.probe_status).to_string();
+        let display_state =
+            derive_display_state(backend.enabled, &backend.probe_status).to_string();
         views.push(BackendHealthView {
             backend_id: backend.backend_id,
             name: backend.name,
@@ -504,6 +524,12 @@ pub(crate) async fn desktop_list_mcp_services_with_health(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    list_mcp_services_with_health_for_core(core).await
+}
+
+pub(crate) async fn list_mcp_services_with_health_for_core(
+    core: Arc<ClientCore>,
+) -> Result<Vec<MCPServiceHealthView>, String> {
     load_mcp_services_with_health(core.as_ref())
         .await
         .map_err(|error| error.to_string())
@@ -521,6 +547,13 @@ pub(crate) async fn desktop_probe_mcp_service(
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
+    probe_mcp_service_for_core(core, request).await
+}
+
+pub(crate) async fn probe_mcp_service_for_core(
+    core: Arc<ClientCore>,
+    request: DesktopProbeMcpServiceRequest,
+) -> Result<McpServiceProbeResult, String> {
     probe_mcp_service(core.as_ref(), &request.service_id)
         .await
         .map_err(|error| error.to_string())

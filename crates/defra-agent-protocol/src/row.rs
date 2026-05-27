@@ -510,6 +510,16 @@ pub struct ToolSelectionRow {
     pub delegate_to: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub backgroundable_tool_names: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub subagent_targets: Vec<String>,
+    #[serde(default)]
+    pub subagent_spawn_enabled: Option<bool>,
+    #[serde(default)]
+    pub subagent_steering_enabled: Option<bool>,
+    #[serde(default)]
+    pub subagent_background_enabled: Option<bool>,
+    #[serde(default)]
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -676,6 +686,8 @@ mod tests {
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
+        assert!(row.backgroundable_tool_names.is_empty());
+        assert!(row.subagent_targets.is_empty());
     }
 
     #[test]
@@ -685,12 +697,16 @@ mod tests {
             "agent_did": "did:defra:amy",
             "cli_tool_names": null,
             "allowed_mcp_service_ids": null,
-            "delegate_to": null
+            "delegate_to": null,
+            "backgroundable_tool_names": null,
+            "subagent_targets": null
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
+        assert!(row.backgroundable_tool_names.is_empty());
+        assert!(row.subagent_targets.is_empty());
     }
 
     #[test]
@@ -700,11 +716,38 @@ mod tests {
             "agent_did": "did:defra:amy",
             "cli_tool_names": "",
             "allowed_mcp_service_ids": "",
-            "delegate_to": ""
+            "delegate_to": "",
+            "backgroundable_tool_names": "",
+            "subagent_targets": ""
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
+        assert!(row.backgroundable_tool_names.is_empty());
+        assert!(row.subagent_targets.is_empty());
+    }
+
+    #[test]
+    fn tool_selection_row_round_trips_subagent_fields() {
+        let json = r#"{
+            "selection_id": "sel-4",
+            "agent_did": "did:defra:amy",
+            "subagent_targets": ["amy-research"],
+            "subagent_spawn_enabled": true,
+            "subagent_steering_enabled": true,
+            "subagent_background_enabled": true,
+            "cross_deployment_spawn_timeout_seconds": 45
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.subagent_targets, vec!["amy-research".to_string()]);
+        assert_eq!(row.subagent_spawn_enabled, Some(true));
+        assert_eq!(row.subagent_steering_enabled, Some(true));
+        assert_eq!(row.subagent_background_enabled, Some(true));
+        assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
+
+        let re: String = serde_json::to_string(&row).expect("serialize");
+        let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");
+        assert_eq!(row, round);
     }
 }

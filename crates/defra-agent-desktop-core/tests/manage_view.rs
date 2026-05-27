@@ -76,7 +76,12 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec!["planner".to_string()],
-        backgroundable_tool_names: Vec::new(),
+        backgroundable_tool_names: vec!["read_file".to_string()],
+        subagent_targets: vec!["amy-research".to_string()],
+        subagent_spawn_enabled: Some(true),
+        subagent_steering_enabled: Some(true),
+        subagent_background_enabled: Some(true),
+        cross_deployment_spawn_timeout_seconds: Some(45),
     })
     .await?;
 
@@ -136,10 +141,21 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         .iter()
         .any(|row| row.profile_id == "profile-amy"
             && row.display_name.as_deref() == Some("Amy Profile")));
-    assert!(snapshot
+    let tools = snapshot
         .tool_selections
         .iter()
-        .any(|row| row.selection_id == "tools-amy" && row.cli_tool_names.len() == 2));
+        .find(|row| row.selection_id == "tools-amy")
+        .expect("tool selection should be present");
+    assert_eq!(tools.cli_tool_names.len(), 2);
+    assert_eq!(
+        tools.backgroundable_tool_names,
+        vec!["read_file".to_string()]
+    );
+    assert_eq!(tools.subagent_targets, vec!["amy-research".to_string()]);
+    assert_eq!(tools.subagent_spawn_enabled, Some(true));
+    assert_eq!(tools.subagent_steering_enabled, Some(true));
+    assert_eq!(tools.subagent_background_enabled, Some(true));
+    assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
     assert!(snapshot
         .behaviors
         .iter()
