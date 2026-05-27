@@ -873,6 +873,81 @@ async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
 }
 
 #[tokio::test]
+async fn fork_at_total_user_turns_copies_full_history() {
+    let db = test_db("fork-end-of-history").await;
+
+    let parent_session = "parent-end";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "assistant",
+        "a1",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        3,
+        "user",
+        "u2",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        4,
+        "assistant",
+        "a2",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 2,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork at end of history succeeds");
+
+    assert_eq!(outcome.copied_messages, 4);
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_messages.len(), 4);
+    assert_eq!(child_messages[0].content, "u1");
+    assert_eq!(child_messages[1].content, "a1");
+    assert_eq!(child_messages[2].content, "u2");
+    assert_eq!(child_messages[3].content, "a2");
+
+    let child_conv = support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+        .await
+        .expect("child conversation exists");
+    assert_eq!(
+        child_conv.forked_from_session_id.as_deref(),
+        Some(parent_session)
+    );
+    assert_eq!(child_conv.fork_at_user_turn, Some(2));
+}
+
+#[tokio::test]
 async fn fork_leaves_parent_byte_identical() {
     let db = test_db("fork-parent-unchanged").await;
 

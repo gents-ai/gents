@@ -177,6 +177,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             .map(|behavior| behavior.model_name.clone())
             .unwrap_or_else(|| "defra-default".to_string())
     });
+    let background_execution_registry = agent.background_execution_registry();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -238,7 +239,10 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     let mut codex_shim_handle = if args.codex_shim {
         let bound = bind_codex_shim(CodexShimBindArgs {
             home: home_dir.clone(),
+            fs_root: effective_tool_root.clone(),
+            fs_writes_enabled: matches!(effective_tool_ceiling, ToolCeilingArg::Readwrite),
             node: node.clone(),
+            background_execution_registry: background_execution_registry.clone(),
             graphql: graphql_url.clone(),
             agent_did: identity.did().to_string(),
             behavior_id: args.codex_shim_behavior_id.clone(),

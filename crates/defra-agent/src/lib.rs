@@ -42,6 +42,7 @@ pub mod session;
 pub mod streaming;
 pub mod template;
 pub mod tool_call_lifecycle;
+pub mod tool_control;
 pub mod tool_surface;
 pub mod toolset;
 pub mod trace_export;
@@ -80,7 +81,9 @@ pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
     HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
 };
-pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
+pub use hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
+};
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -115,6 +118,7 @@ pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
 };
+pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
     ToolRuntimeContext, ToolSelection, ToolSurface,

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 
+pub mod host_fs;
 pub mod protocol;
 
 mod context;

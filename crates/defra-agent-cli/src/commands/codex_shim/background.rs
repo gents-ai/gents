@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use codex_app_server_protocol as codex;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::CancelBackgroundToolCallOutcome;
 use defra_agent::UpdateSubscriptionSource;
 use serde_json::Value;
 
@@ -167,31 +167,42 @@ async fn send_background_tool_completion(
 
 #[derive(Debug, Clone)]
 struct BackgroundTerminalRow {
-    doc_id: String,
     tool_call_key: String,
-    child_request_id: Option<String>,
-    started_at: Option<String>,
-    deadline_at: Option<String>,
 }
 
 pub(super) async fn clean_background_terminals(state: &ShimState, thread_id: &str) -> Result<()> {
     let rows = load_running_background_terminal_rows(state.node.as_ref(), thread_id).await?;
     for row in rows {
-        if let Some(child_request_id) = row.child_request_id.as_deref() {
-            if let Err(error) =
-                defra_agent::interrupt_request(state.node.as_ref(), child_request_id).await
-            {
-                tracing::warn!(
-                    %error,
-                    child_request_id,
-                    tool_call_key = %row.tool_call_key,
-                    "Codex shim failed to interrupt background child request"
-                );
-            }
-        }
-        mark_background_terminal_cancelled(state.node.as_ref(), &row).await?;
+        cancel_projected_background_tool_key(state, &row.tool_call_key).await?;
     }
     Ok(())
+}
+
+pub(super) async fn cancel_projected_background_tool_key(
+    state: &ShimState,
+    tool_call_key: &str,
+) -> Result<CancelBackgroundToolCallOutcome> {
+    let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
+        anyhow::bail!("Codex process id `{tool_call_key}` is not a DEFRA background tool key");
+    };
+    let outcome = defra_agent::cancel_background_tool_call(
+        state.node.clone(),
+        &state.background_execution_registry,
+        state.agent_did.as_ref(),
+        session_id,
+        tool_call_id,
+    )
+    .await?;
+    match &outcome {
+        CancelBackgroundToolCallOutcome::Cancelled { .. }
+        | CancelBackgroundToolCallOutcome::AlreadyTerminal { .. } => Ok(outcome),
+        CancelBackgroundToolCallOutcome::NotFound => {
+            anyhow::bail!("unknown DEFRA background tool `{tool_call_key}`")
+        }
+        CancelBackgroundToolCallOutcome::NotBackground => {
+            anyhow::bail!("DEFRA tool `{tool_call_key}` is not a background tool")
+        }
+    }
 }
 
 async fn load_running_background_terminal_rows(
@@ -209,11 +220,7 @@ async fn load_running_background_terminal_rows(
                 }},
                 order: {{ started_at: ASC }}
             ) {{
-                _docID
                 tool_call_key
-                child_request_id
-                started_at
-                deadline_at
             }}
         }}"#
     );
@@ -231,77 +238,6 @@ async fn load_running_background_terminal_rows(
 
 fn decode_background_terminal_row(row: &Value) -> Option<BackgroundTerminalRow> {
     Some(BackgroundTerminalRow {
-        doc_id: row.get("_docID")?.as_str()?.to_string(),
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
-        child_request_id: row
-            .get("child_request_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned),
-        started_at: row
-            .get("started_at")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        deadline_at: row
-            .get("deadline_at")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
     })
-}
-
-async fn mark_background_terminal_cancelled(
-    node: &EmbeddedNode,
-    row: &BackgroundTerminalRow,
-) -> Result<()> {
-    let now = Utc::now();
-    let started_at = parse_defra_datetime(row.started_at.as_deref()).unwrap_or(now);
-    let deadline_at = parse_defra_datetime(row.deadline_at.as_deref()).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
-    let escaped_doc_id = escape_graphql_string(&row.doc_id);
-    let result = escape_graphql_string("cancelled by Codex background terminal cleanup");
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }},
-                    await_mode: {{ _eq: "background" }}
-                }},
-                input: {{
-                    result: "{result}",
-                    status: "completed",
-                    lifecycle_state: "cancelled",
-                    cancel_cause: "userCancelled",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    completed_at: "{completed_at}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null
-                }}
-            ) {{ _docID }}
-        }}"#,
-        started_at = started_at.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        completed_at = now.to_rfc3339(),
-    );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "cancelling background tool {} failed: {}",
-            row.tool_call_key,
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    Ok(())
-}
-
-fn parse_defra_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
 }

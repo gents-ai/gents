@@ -116,12 +116,9 @@ impl DefraSessionHook {
         lifecycle.start_running().await?;
 
         let cancellation_token = tokio_util::sync::CancellationToken::new();
-        self.background_executions.lock().await.insert(
-            background_tool_call_id.clone(),
-            super::BackgroundExecution {
-                cancellation_token: cancellation_token.clone(),
-            },
-        );
+        self.background_executions
+            .insert(background_tool_call_id.clone(), cancellation_token.clone())
+            .await;
 
         let node = self.node.clone();
         let executions = self.background_executions.clone();
@@ -256,7 +253,7 @@ impl DefraSessionHook {
                 }
             }
 
-            executions.lock().await.remove(&execution_call_id);
+            executions.remove(&execution_call_id).await;
         });
 
         Ok(ToolCallHookAction::skip(json_string(json!({

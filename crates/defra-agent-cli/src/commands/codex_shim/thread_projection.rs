@@ -36,6 +36,10 @@ pub(super) struct ConversationRow {
     #[serde(default)]
     pub(super) status: String,
     #[serde(default)]
+    pub(super) created_at: Option<String>,
+    #[serde(default)]
+    pub(super) updated_at: Option<String>,
+    #[serde(default)]
     pub(super) latest_request_id: String,
     #[serde(default)]
     pub(super) forked_from_session_id: Option<String>,
@@ -206,16 +210,25 @@ pub(super) async fn load_codex_thread(
 }
 
 pub(super) async fn list_codex_threads(state: &ShimState) -> Result<Vec<CodexThreadRecord>> {
+    list_codex_threads_by_archived(state, false).await
+}
+
+pub(super) async fn list_codex_threads_by_archived(
+    state: &ShimState,
+    archived: bool,
+) -> Result<Vec<CodexThreadRecord>> {
     let response = query_node_json(
         &state.node,
-        r#"{
+        &format!(
+            r#"{{
             CodexThreadProjection(
-                filter: { archived: { _eq: false } },
-                order: { updated_at: DESC }
-            ) {
+                filter: {{ archived: {{ _eq: {archived} }} }},
+                order: {{ updated_at: DESC }}
+            ) {{
                 session_id cwd archived loaded memory_mode name settings_json goal_json git_info_json
-            }
-        }"#,
+            }}
+        }}"#
+        ),
     )
     .await?;
     let rows = response
@@ -244,6 +257,33 @@ pub(super) async fn list_codex_threads(state: &ShimState) -> Result<Vec<CodexThr
     }
 
     Ok(records)
+}
+
+pub(super) async fn store_forked_codex_thread(
+    state: &ShimState,
+    source: &CodexThreadRecord,
+    child_session_id: &str,
+    cwd: &Path,
+) -> Result<CodexThreadRecord> {
+    upsert_projection(
+        state,
+        &ProjectionUpdate {
+            session_id: child_session_id,
+            cwd,
+            archived: false,
+            loaded: true,
+            memory_mode: &source.memory_mode,
+            name: "",
+            settings_json: &source.settings_json,
+            goal_json: "{}",
+            rollback_user_turn: -1,
+            git_info_json: &source.git_info_json,
+        },
+    )
+    .await?;
+    load_codex_thread(state, child_session_id)
+        .await?
+        .with_context(|| format!("loading forked Codex thread {child_session_id}"))
 }
 
 pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<String>> {
@@ -465,7 +505,14 @@ pub(super) async fn clear_codex_thread_goal(state: &ShimState, thread_id: &str) 
     Ok(had_goal)
 }
 
-pub(super) fn codex_thread_json(record: &CodexThreadRecord, include_turns: bool) -> Value {
+pub(super) fn codex_thread_json(record: &CodexThreadRecord, _include_turns: bool) -> Value {
+    codex_thread_json_with_turns(record, Vec::new())
+}
+
+pub(super) fn codex_thread_json_with_turns(
+    record: &CodexThreadRecord,
+    turns: Vec<codex::Turn>,
+) -> Value {
     let conversation = record.conversation.as_ref();
     let preview = conversation.and_then(|conversation| {
         let preview = conversation.preview_text.trim();
@@ -476,11 +523,7 @@ pub(super) fn codex_thread_json(record: &CodexThreadRecord, include_turns: bool)
         &record.session_id,
         preview,
         codex::ThreadStatus::Idle,
-        if include_turns {
-            Vec::new()
-        } else {
-            Vec::new()
-        },
+        turns,
     );
     let object = thread
         .as_object_mut()
@@ -519,8 +562,16 @@ pub(super) fn codex_thread_json(record: &CodexThreadRecord, include_turns: bool)
 }
 
 pub(super) fn thread_start_response_json(state: &ShimState, record: &CodexThreadRecord) -> Value {
+    thread_response_json(state, record, codex_thread_json(record, false))
+}
+
+pub(super) fn thread_response_json(
+    state: &ShimState,
+    record: &CodexThreadRecord,
+    thread: Value,
+) -> Value {
     json!({
-        "thread": codex_thread_json(record, false),
+        "thread": thread,
         "model": state.model.as_ref(),
         "modelProvider": "defra",
         "serviceTier": null,
@@ -683,7 +734,7 @@ async fn load_conversation(state: &ShimState, thread_id: &str) -> Result<Option<
                 filter: {{ session_id: {{ _eq: "{escaped_thread_id}" }} }},
                 limit: 1
             ) {{
-                title preview_text status latest_request_id forked_from_session_id
+                title preview_text status created_at updated_at latest_request_id forked_from_session_id
             }}
         }}"#
     );

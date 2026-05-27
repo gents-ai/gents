@@ -48,6 +48,9 @@ impl<'a> TurnProjection<'a> {
         if delta.is_empty() {
             return Ok(());
         }
+        if suppress_blank_agent_delta(&self.active_agent_text, delta) {
+            return Ok(());
+        }
         let delta = if self.rendered_agent_text.is_empty() {
             delta.trim_start()
         } else {
@@ -314,5 +317,30 @@ impl<'a> TurnProjection<'a> {
 
     pub(super) fn rendered_agent_text(&self) -> &str {
         &self.rendered_agent_text
+    }
+}
+
+fn suppress_blank_agent_delta(active_agent_text: &str, delta: &str) -> bool {
+    delta.trim().is_empty() && active_agent_text.trim().is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suppress_blank_agent_delta;
+
+    #[test]
+    fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
+        assert!(suppress_blank_agent_delta("", "\n  "));
+        assert!(suppress_blank_agent_delta("  ", "\n  "));
+    }
+
+    #[test]
+    fn keeps_blank_delta_inside_visible_agent_stream() {
+        assert!(!suppress_blank_agent_delta("visible", "\n\n"));
+    }
+
+    #[test]
+    fn keeps_visible_delta() {
+        assert!(!suppress_blank_agent_delta("", "answer"));
     }
 }

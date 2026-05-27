@@ -6,10 +6,12 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -210,7 +212,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             request_id: request_id(32),
             params: codex::ThreadReadParams {
                 thread_id: thread_id.clone(),
-                include_turns: false,
+                include_turns: true,
             },
         },
     )
@@ -416,6 +418,807 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             .iter()
             .any(|request| request_contains_role_text(request, "user", &prompt)),
         "mock endpoint did not receive the Codex prompt; captured={captured_requests:?}"
+    );
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(42),
+            params: codex::ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let thread_history: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(42)).await?;
+    assert_eq!(thread_history.thread.id, thread_id);
+    assert_eq!(thread_history.thread.turns.len(), 1);
+    let history_turn = &thread_history.thread.turns[0];
+    assert_eq!(history_turn.id, completed_turn.id);
+    assert_eq!(history_turn.items_view, codex::TurnItemsView::Full);
+    assert_eq!(history_turn.status, codex::TurnStatus::Completed);
+    assert_turn_has_user_text(history_turn, &prompt);
+    assert_turn_has_agent_text(history_turn, &expected_reply);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadTurnsList {
+            request_id: request_id(43),
+            params: codex::ThreadTurnsListParams {
+                thread_id: thread_id.clone(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+                items_view: None,
+            },
+        },
+    )
+    .await?;
+    let turns_list: codex::ThreadTurnsListResponse =
+        read_typed_response(&mut ws, request_id(43)).await?;
+    assert_eq!(turns_list.data.len(), 1);
+    assert_eq!(turns_list.data[0].id, completed_turn.id);
+    assert_eq!(turns_list.data[0].items_view, codex::TurnItemsView::Summary);
+    assert_turn_has_user_text(&turns_list.data[0], &prompt);
+    assert_turn_has_agent_text(&turns_list.data[0], &expected_reply);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadTurnsItemsList {
+            request_id: request_id(44),
+            params: codex::ThreadTurnsItemsListParams {
+                thread_id: thread_id.clone(),
+                turn_id: completed_turn.id.clone(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+            },
+        },
+    )
+    .await?;
+    let items_list: codex::ThreadTurnsItemsListResponse =
+        read_typed_response(&mut ws, request_id(44)).await?;
+    assert!(
+        items_list.data.len() >= 2,
+        "expected persisted turn items, got {:?}",
+        items_list.data
+    );
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(45),
+        "getConversationSummary",
+        json!({ "conversationId": thread_id.clone() }),
+    )
+    .await?;
+    let summary: codex::GetConversationSummaryResponse =
+        read_typed_response(&mut ws, request_id(45)).await?;
+    assert_eq!(summary.summary.conversation_id.to_string(), thread_id);
+    assert_eq!(summary.summary.model_provider, "defra");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_thread_fork_and_search_project_defra_sessions() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("fork-search-reply-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-codex-shim-fork-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-fork-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+
+    let search_token = format!("FORKSEARCH{}", Uuid::new_v4().simple());
+    let prompt = format!("Reply with exactly {search_token} and no extra words.");
+    send_turn(&mut ws, &thread_id, &prompt).await?;
+    let (_final_text, completed_turn) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed_turn.status, codex::TurnStatus::Completed);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadFork {
+            request_id: request_id(120),
+            params: codex::ThreadForkParams {
+                thread_id: thread_id.clone(),
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let forked: codex::ThreadForkResponse = read_typed_response(&mut ws, request_id(120)).await?;
+    let forked_id = forked.thread.id.clone();
+    assert_ne!(forked_id, thread_id);
+    assert_eq!(forked.thread.session_id, forked_id);
+    assert_eq!(
+        forked.thread.forked_from_id.as_deref(),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(forked.thread.status, codex::ThreadStatus::Idle);
+    assert_eq!(forked.thread.turns.len(), 1);
+    assert_turn_has_user_text(&forked.thread.turns[0], &prompt);
+    assert_turn_has_agent_text(&forked.thread.turns[0], &expected_reply);
+
+    let forked_conversation = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    forked_from_session_id
+                    fork_at_user_turn
+                }}
+            }}"#,
+            escape_graphql_string(&forked_id),
+        ),
+    )
+    .await?;
+    let child = first_graphql_row(&forked_conversation, "AgentConversation")?;
+    assert_eq!(
+        child.get("forked_from_session_id").and_then(Value::as_str),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(
+        child.get("fork_at_user_turn").and_then(Value::as_i64),
+        Some(1)
+    );
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(121),
+            params: codex::ThreadReadParams {
+                thread_id: forked_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let forked_read: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(121)).await?;
+    assert_eq!(forked_read.thread.id, forked_id);
+    assert_eq!(
+        forked_read.thread.forked_from_id.as_deref(),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(forked_read.thread.turns.len(), 1);
+    assert_turn_has_user_text(&forked_read.thread.turns[0], &prompt);
+    assert_turn_has_agent_text(&forked_read.thread.turns[0], &expected_reply);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadSearch {
+            request_id: request_id(122),
+            params: codex::ThreadSearchParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                source_kinds: None,
+                archived: None,
+                search_term: search_token.clone(),
+            },
+        },
+    )
+    .await?;
+    let search: codex::ThreadSearchResponse = read_typed_response(&mut ws, request_id(122)).await?;
+    let result_ids = search
+        .data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        result_ids.contains(&thread_id.as_str()),
+        "thread/search did not include source thread {thread_id}: {search:?}"
+    );
+    assert!(
+        result_ids.contains(&forked_id.as_str()),
+        "thread/search did not include forked thread {forked_id}: {search:?}"
+    );
+    assert!(
+        search
+            .data
+            .iter()
+            .any(|result| result.snippet.contains(&search_token)),
+        "thread/search snippets did not include token {search_token}: {search:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_fs_routes_project_defra_host_filesystem() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("unused-fs-route-reply-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-codex-shim-fs-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-fs-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--write-tools",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+
+    let workspace = home_dir.join("fs-routes");
+    let nested = workspace.join("nested");
+    send_raw_client_request(
+        &mut ws,
+        request_id(501),
+        "fs/createDirectory",
+        json!({
+            "path": nested.display().to_string(),
+            "recursive": true,
+        }),
+    )
+    .await?;
+    let _: codex::FsCreateDirectoryResponse = read_typed_response(&mut ws, request_id(501)).await?;
+
+    let watch_id = format!("watch-{}", Uuid::new_v4().simple());
+    send_raw_client_request(
+        &mut ws,
+        request_id(511),
+        "fs/watch",
+        json!({
+            "watchId": watch_id,
+            "path": nested.display().to_string(),
+        }),
+    )
+    .await?;
+    let watch: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(511)).await?;
+    assert_eq!(watch.path.as_path(), nested.as_path());
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(512),
+        "fs/watch",
+        json!({
+            "watchId": watch_id,
+            "path": nested.display().to_string(),
+        }),
+    )
+    .await?;
+    let duplicate_watch = read_error_response(&mut ws, request_id(512)).await?;
+    assert_eq!(duplicate_watch.code, -32602);
+    assert!(duplicate_watch.message.contains("watchId already exists"));
+
+    let file = nested.join("bytes.bin");
+    let payload = b"DEFRA fs route bytes\n\0\x7f";
+    send_raw_client_request(
+        &mut ws,
+        request_id(502),
+        "fs/writeFile",
+        json!({
+            "path": file.display().to_string(),
+            "dataBase64": STANDARD.encode(payload),
+        }),
+    )
+    .await?;
+    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(502)).await?;
+    let changed = read_fs_changed_notification(&mut ws).await?;
+    assert_eq!(changed.watch_id, watch_id);
+    assert_eq!(changed.changed_paths.len(), 1);
+    assert_eq!(changed.changed_paths[0].as_path(), file.as_path());
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(513),
+        "fs/unwatch",
+        json!({
+            "watchId": changed.watch_id,
+        }),
+    )
+    .await?;
+    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(513)).await?;
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(503),
+        "fs/readFile",
+        json!({
+            "path": file.display().to_string(),
+        }),
+    )
+    .await?;
+    let read_file: codex::FsReadFileResponse =
+        read_typed_response(&mut ws, request_id(503)).await?;
+    assert_eq!(STANDARD.decode(read_file.data_base64)?, payload);
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(504),
+        "fs/getMetadata",
+        json!({
+            "path": file.display().to_string(),
+        }),
+    )
+    .await?;
+    let metadata: codex::FsGetMetadataResponse =
+        read_typed_response(&mut ws, request_id(504)).await?;
+    assert!(metadata.is_file);
+    assert!(!metadata.is_directory);
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(505),
+        "fs/readDirectory",
+        json!({
+            "path": nested.display().to_string(),
+        }),
+    )
+    .await?;
+    let read_dir: codex::FsReadDirectoryResponse =
+        read_typed_response(&mut ws, request_id(505)).await?;
+    assert!(
+        read_dir
+            .entries
+            .iter()
+            .any(|entry| entry.file_name == "bytes.bin" && entry.is_file),
+        "fs/readDirectory did not include bytes.bin: {read_dir:?}"
+    );
+
+    let workspace_copy = home_dir.join("fs-routes-copy");
+    send_raw_client_request(
+        &mut ws,
+        request_id(506),
+        "fs/copy",
+        json!({
+            "sourcePath": workspace.display().to_string(),
+            "destinationPath": workspace_copy.display().to_string(),
+            "recursive": false,
+        }),
+    )
+    .await?;
+    let copy_error = read_error_response(&mut ws, request_id(506)).await?;
+    assert_eq!(copy_error.code, -32602);
+    assert!(copy_error.message.contains("recursive: true"));
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(507),
+        "fs/copy",
+        json!({
+            "sourcePath": workspace.display().to_string(),
+            "destinationPath": workspace_copy.display().to_string(),
+            "recursive": true,
+        }),
+    )
+    .await?;
+    let _: codex::FsCopyResponse = read_typed_response(&mut ws, request_id(507)).await?;
+    assert_eq!(fs::read(workspace_copy.join("nested/bytes.bin"))?, payload);
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(508),
+        "fs/remove",
+        json!({
+            "path": workspace_copy.display().to_string(),
+            "recursive": true,
+            "force": false,
+        }),
+    )
+    .await?;
+    let _: codex::FsRemoveResponse = read_typed_response(&mut ws, request_id(508)).await?;
+    assert!(!workspace_copy.exists());
+
+    let quiet_file = nested.join("quiet.txt");
+    send_raw_client_request(
+        &mut ws,
+        request_id(514),
+        "fs/writeFile",
+        json!({
+            "path": quiet_file.display().to_string(),
+            "dataBase64": STANDARD.encode(b"quiet"),
+        }),
+    )
+    .await?;
+    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(514)).await?;
+    assert!(
+        maybe_read_fs_changed_notification(&mut ws, Duration::from_millis(700))
+            .await?
+            .is_none(),
+        "fs/unwatch should stop future fs/changed notifications"
+    );
+
+    let missing_watch_id = format!("missing-watch-{}", Uuid::new_v4().simple());
+    let missing_file = nested.join("FETCH_HEAD");
+    send_raw_client_request(
+        &mut ws,
+        request_id(515),
+        "fs/watch",
+        json!({
+            "watchId": missing_watch_id,
+            "path": missing_file.display().to_string(),
+        }),
+    )
+    .await?;
+    let missing_watch: codex::FsWatchResponse =
+        read_typed_response(&mut ws, request_id(515)).await?;
+    assert_eq!(missing_watch.path.as_path(), missing_file.as_path());
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(516),
+        "fs/writeFile",
+        json!({
+            "path": missing_file.display().to_string(),
+            "dataBase64": STANDARD.encode(b"origin/main\n"),
+        }),
+    )
+    .await?;
+    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(516)).await?;
+    let missing_changed = read_fs_changed_notification(&mut ws).await?;
+    assert_eq!(missing_changed.watch_id, missing_watch_id);
+    assert_eq!(missing_changed.changed_paths.len(), 1);
+    assert_eq!(
+        missing_changed.changed_paths[0].as_path(),
+        missing_file.as_path()
+    );
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(517),
+        "fs/unwatch",
+        json!({
+            "watchId": missing_changed.watch_id,
+        }),
+    )
+    .await?;
+    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(517)).await?;
+
+    let file_watch_id = format!("file-watch-{}", Uuid::new_v4().simple());
+    send_raw_client_request(
+        &mut ws,
+        request_id(518),
+        "fs/watch",
+        json!({
+            "watchId": file_watch_id,
+            "path": file.display().to_string(),
+        }),
+    )
+    .await?;
+    let file_watch: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(518)).await?;
+    assert_eq!(file_watch.path.as_path(), file.as_path());
+    let temp_replace = file.with_extension("lock");
+    fs::write(&temp_replace, b"replaced")?;
+    fs::rename(&temp_replace, &file)?;
+    let file_changed = read_fs_changed_notification(&mut ws).await?;
+    assert_eq!(file_changed.watch_id, file_watch_id);
+    assert_eq!(file_changed.changed_paths.len(), 1);
+    assert_eq!(file_changed.changed_paths[0].as_path(), file.as_path());
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(519),
+        "fs/unwatch",
+        json!({
+            "watchId": file_changed.watch_id,
+        }),
+    )
+    .await?;
+    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(519)).await?;
+
+    let outside = tempdir.path().join("outside.txt");
+    send_raw_client_request(
+        &mut ws,
+        request_id(509),
+        "fs/writeFile",
+        json!({
+            "path": outside.display().to_string(),
+            "dataBase64": STANDARD.encode(b"outside"),
+        }),
+    )
+    .await?;
+    let outside_error = read_error_response(&mut ws, request_id(509)).await?;
+    assert_eq!(outside_error.code, -32602);
+    assert!(
+        outside_error
+            .message
+            .contains("outside the allowed tool root"),
+        "unexpected outside-root error: {outside_error:?}"
+    );
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(510),
+        "fs/writeFile",
+        json!({
+            "path": file.display().to_string(),
+            "dataBase64": "not base64",
+        }),
+    )
+    .await?;
+    let base64_error = read_error_response(&mut ws, request_id(510)).await?;
+    assert_eq!(base64_error.code, -32602);
+    assert!(
+        base64_error
+            .message
+            .contains("requires valid base64 dataBase64"),
+        "unexpected base64 error: {base64_error:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
+    require_command("git")?;
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("unused-host-runtime-reply-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-codex-shim-host-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-host-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--write-tools",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(551),
+        "command/exec",
+        json!({
+            "command": ["/bin/sh", "-lc", "printf defra-host-exec"],
+            "cwd": home_dir.display().to_string(),
+            "timeoutMs": 5000,
+        }),
+    )
+    .await?;
+    let exec_error = read_error_response(&mut ws, request_id(551)).await?;
+    assert_eq!(exec_error.code, -32601);
+    assert!(exec_error.message.contains("DEFRA tool-call"));
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(581),
+        "process/spawn",
+        json!({
+            "command": ["/bin/sh", "-lc", "printf defra-process-spawn"],
+            "processHandle": format!("process-{}", Uuid::new_v4().simple()),
+            "cwd": home_dir.display().to_string(),
+            "streamStdoutStderr": true,
+            "timeoutMs": 5000,
+        }),
+    )
+    .await?;
+    let process_error = read_error_response(&mut ws, request_id(581)).await?;
+    assert_eq!(process_error.code, -32601);
+    assert!(process_error
+        .message
+        .contains("managed-exec state machines"));
+
+    fs::write(home_dir.join("alpha_notes.txt"), "alpha")?;
+    fs::create_dir_all(home_dir.join("nested"))?;
+    fs::write(home_dir.join("nested/beta_alpha.md"), "alpha")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::FuzzyFileSearch {
+            request_id: request_id(552),
+            params: codex::FuzzyFileSearchParams {
+                query: "alpha".to_string(),
+                roots: vec![home_dir.display().to_string()],
+                cancellation_token: None,
+            },
+        },
+    )
+    .await?;
+    let fuzzy: codex::FuzzyFileSearchResponse =
+        read_typed_response(&mut ws, request_id(552)).await?;
+    assert!(
+        fuzzy
+            .files
+            .iter()
+            .any(|file| file.path == "alpha_notes.txt" && file.file_name == "alpha_notes.txt"),
+        "fuzzy search did not include alpha_notes.txt: {fuzzy:?}"
+    );
+
+    let session_id = format!("fuzzy-{}", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::FuzzyFileSearchSessionStart {
+            request_id: request_id(553),
+            params: codex::FuzzyFileSearchSessionStartParams {
+                session_id: session_id.clone(),
+                roots: vec![home_dir.display().to_string()],
+            },
+        },
+    )
+    .await?;
+    let _: codex::FuzzyFileSearchSessionStartResponse =
+        read_typed_response(&mut ws, request_id(553)).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::FuzzyFileSearchSessionUpdate {
+            request_id: request_id(554),
+            params: codex::FuzzyFileSearchSessionUpdateParams {
+                session_id: session_id.clone(),
+                query: "beta".to_string(),
+            },
+        },
+    )
+    .await?;
+    let _: codex::FuzzyFileSearchSessionUpdateResponse =
+        read_typed_response(&mut ws, request_id(554)).await?;
+    let fuzzy_update = read_fuzzy_file_search_update(&mut ws).await?;
+    assert_eq!(fuzzy_update.session_id, session_id);
+    assert_eq!(fuzzy_update.query, "beta");
+    assert!(
+        fuzzy_update
+            .files
+            .iter()
+            .any(|file| file.path == "nested/beta_alpha.md"),
+        "fuzzy search session update did not include nested/beta_alpha.md: {fuzzy_update:?}"
+    );
+    let fuzzy_completed = read_fuzzy_file_search_completed(&mut ws).await?;
+    assert_eq!(fuzzy_completed.session_id, session_id);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::FuzzyFileSearchSessionStop {
+            request_id: request_id(555),
+            params: codex::FuzzyFileSearchSessionStopParams {
+                session_id: session_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let _: codex::FuzzyFileSearchSessionStopResponse =
+        read_typed_response(&mut ws, request_id(555)).await?;
+
+    let repo = home_dir.join("git-repo");
+    fs::create_dir_all(&repo)?;
+    run_git_command(&repo, &["init"])?;
+    fs::write(repo.join("tracked.txt"), "base\n")?;
+    run_git_command(&repo, &["add", "tracked.txt"])?;
+    run_git_command(
+        &repo,
+        &[
+            "-c",
+            "user.name=Defra Test",
+            "-c",
+            "user.email=defra-test@example.invalid",
+            "commit",
+            "-m",
+            "base",
+        ],
+    )?;
+    fs::write(repo.join("tracked.txt"), "base\nchanged\n")?;
+    fs::write(repo.join("untracked.txt"), "new\n")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::GitDiffToRemote {
+            request_id: request_id(556),
+            params: codex::GitDiffToRemoteParams { cwd: repo },
+        },
+    )
+    .await?;
+    let diff: codex::GitDiffToRemoteResponse =
+        read_typed_response(&mut ws, request_id(556)).await?;
+    assert!(
+        diff.diff.contains("+changed"),
+        "git diff did not include tracked change: {diff:?}"
+    );
+    assert!(
+        diff.diff.contains("untracked.txt"),
+        "git diff did not include untracked file: {diff:?}"
     );
 
     Ok(())
@@ -752,6 +1555,137 @@ async fn codex_shim_live_protocol_uses_real_backend() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
+async fn codex_shim_live_fs_routes_share_files_with_real_backend_tools() -> Result<()> {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let token = format!("FSLIVE-{}", &suffix[..8]);
+    let smoke = start_live_codex_shim_with_write_tools(true, None).await?;
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
+        .await
+        .context("connecting to live codex-shim websocket")?;
+
+    initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
+    let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
+
+    let fixture_dir = smoke.home_dir.join("live-fs-route");
+    let fixture_file = fixture_dir.join("fixture.txt");
+    let relative_fixture = "live-fs-route/fixture.txt";
+    send_raw_client_request(
+        &mut ws,
+        request_id(701),
+        "fs/createDirectory",
+        json!({
+            "path": fixture_dir.display().to_string(),
+            "recursive": true,
+        }),
+    )
+    .await?;
+    let _: codex::FsCreateDirectoryResponse = read_typed_response(&mut ws, request_id(701)).await?;
+
+    let watch_id = format!("live-watch-{}", Uuid::new_v4().simple());
+    send_raw_client_request(
+        &mut ws,
+        request_id(702),
+        "fs/watch",
+        json!({
+            "watchId": watch_id,
+            "path": fixture_dir.display().to_string(),
+        }),
+    )
+    .await?;
+    let _: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(702)).await?;
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(703),
+        "fs/writeFile",
+        json!({
+            "path": fixture_file.display().to_string(),
+            "dataBase64": STANDARD.encode(token.as_bytes()),
+        }),
+    )
+    .await?;
+    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(703)).await?;
+    let changed = read_fs_changed_notification(&mut ws).await?;
+    assert_eq!(changed.watch_id, watch_id);
+    assert!(
+        changed
+            .changed_paths
+            .iter()
+            .any(|path| path.as_path() == fixture_file.as_path()),
+        "fs/changed did not include fixture file: {changed:?}"
+    );
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(704),
+        "fs/readFile",
+        json!({
+            "path": fixture_file.display().to_string(),
+        }),
+    )
+    .await?;
+    let read_back: codex::FsReadFileResponse =
+        read_typed_response(&mut ws, request_id(704)).await?;
+    assert_eq!(
+        String::from_utf8(STANDARD.decode(read_back.data_base64)?)?,
+        token
+    );
+
+    send_raw_client_request(
+        &mut ws,
+        request_id(705),
+        "fs/unwatch",
+        json!({
+            "watchId": watch_id,
+        }),
+    )
+    .await?;
+    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(705)).await?;
+
+    let prompt = format!(
+        "Use the read_file tool to read `{relative_fixture}` from the current working directory. Reply with exactly the file contents and no extra words."
+    );
+    send_turn(&mut ws, &thread_id, &prompt).await?;
+    let capture = read_turn_capture(&mut ws).await?;
+
+    assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
+    assert!(
+        capture.text.contains(&token),
+        "expected live backend to read fs route fixture token {token}, got:\n{}",
+        capture.text
+    );
+    assert!(
+        capture
+            .completed_tools
+            .iter()
+            .any(|tool| tool.contains("read_file")),
+        "live backend did not complete read_file; completed tools: {:?}\ntext:\n{}",
+        capture.completed_tools,
+        capture.text
+    );
+    let (_request_id, session_id, _behavior_id) =
+        wait_for_request(&smoke.graphql, &smoke.agent_did, &prompt).await?;
+    assert_eq!(session_id, thread_id);
+    assert_shim_trace_methods(
+        &smoke.shim_trace,
+        &[
+            "initialize",
+            "config/read",
+            "thread/start",
+            "fs/createDirectory",
+            "fs/watch",
+            "fs/writeFile",
+            "fs/readFile",
+            "fs/unwatch",
+            "turn/start",
+        ],
+    )?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the configured real OpenAI-compatible backend"]
 async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Result<()> {
     let prompt_token = "PROJLIVE";
     let thread_name = format!("DEFRA live projection {}", Uuid::new_v4().simple());
@@ -995,6 +1929,19 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             .and_then(|git| git.branch.as_deref()),
         Some(git_branch.as_str())
     );
+    let history_turn = thread_read
+        .thread
+        .turns
+        .iter()
+        .find(|turn| turn.id == completed_turn.id)
+        .ok_or_else(|| {
+            anyhow!(
+                "live thread/read did not include turn {}",
+                completed_turn.id
+            )
+        })?;
+    assert_turn_has_user_text(history_turn, &prompt);
+    assert_turn_has_agent_text(history_turn, prompt_token);
 
     send_client_request(
         &mut ws,
@@ -1573,6 +2520,24 @@ fn require_command(name: &str) -> Result<()> {
     }
 }
 
+fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed in {}\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            cwd.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
 fn gh_is_authenticated() -> bool {
     Command::new("gh")
         .arg("auth")
@@ -1856,6 +2821,21 @@ async fn send_client_request(ws: &mut ShimWebSocket, request: codex::ClientReque
     write_jsonrpc(ws, codex::JSONRPCMessage::Request(request)).await
 }
 
+async fn send_raw_client_request(
+    ws: &mut ShimWebSocket,
+    request_id: codex::RequestId,
+    method: &str,
+    params: Value,
+) -> Result<()> {
+    let request: codex::JSONRPCRequest = serde_json::from_value(json!({
+        "id": request_id,
+        "method": method,
+        "params": params,
+    }))
+    .with_context(|| format!("building raw JSON-RPC request for {method}"))?;
+    write_jsonrpc(ws, codex::JSONRPCMessage::Request(request)).await
+}
+
 async fn send_client_notification(
     ws: &mut ShimWebSocket,
     notification: codex::ClientNotification,
@@ -1929,6 +2909,93 @@ async fn read_turn_started(ws: &mut ShimWebSocket) -> Result<codex::TurnStartedN
                     server_notification_from_jsonrpc(notification)?
                 {
                     return Ok(started);
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_fs_changed_notification(
+    ws: &mut ShimWebSocket,
+) -> Result<codex::FsChangedNotification> {
+    maybe_read_fs_changed_notification(ws, Duration::from_secs(5))
+        .await?
+        .ok_or_else(|| anyhow!("timed out waiting for fs/changed notification"))
+}
+
+async fn maybe_read_fs_changed_notification(
+    ws: &mut ShimWebSocket,
+    timeout: Duration,
+) -> Result<Option<codex::FsChangedNotification>> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        let message = match tokio::time::timeout(remaining, read_jsonrpc(ws)).await {
+            Ok(message) => message?,
+            Err(_) => return Ok(None),
+        };
+        match message {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::FsChanged(changed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    return Ok(Some(changed));
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_fuzzy_file_search_update(
+    ws: &mut ShimWebSocket,
+) -> Result<codex::FuzzyFileSearchSessionUpdatedNotification> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::FuzzyFileSearchSessionUpdated(update) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    return Ok(update);
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_fuzzy_file_search_completed(
+    ws: &mut ShimWebSocket,
+) -> Result<codex::FuzzyFileSearchSessionCompletedNotification> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::FuzzyFileSearchSessionCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    return Ok(completed);
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
@@ -2080,6 +3147,35 @@ fn mcp_tool_ids(turn: &codex::Turn) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+fn assert_turn_has_user_text(turn: &codex::Turn, expected: &str) {
+    assert!(
+        turn.items.iter().any(|item| match item {
+            codex::ThreadItem::UserMessage { content, .. } => {
+                content.iter().any(|input| match input {
+                    codex::UserInput::Text { text, .. } => text.contains(expected),
+                    _ => false,
+                })
+            }
+            _ => false,
+        }),
+        "turn {} did not include user text {expected:?}: {:?}",
+        turn.id,
+        turn.items
+    );
+}
+
+fn assert_turn_has_agent_text(turn: &codex::Turn, expected: &str) {
+    assert!(
+        turn.items.iter().any(|item| match item {
+            codex::ThreadItem::AgentMessage { text, .. } => text.contains(expected),
+            _ => false,
+        }),
+        "turn {} did not include agent text {expected:?}: {:?}",
+        turn.id,
+        turn.items
+    );
 }
 
 async fn wait_for_request_metadata(

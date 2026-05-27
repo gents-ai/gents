@@ -22,11 +22,15 @@ use tokio::task::JoinHandle;
 mod background;
 mod command_projection;
 mod compat;
+mod fs_adapter;
 mod handlers;
+mod history_projection;
+mod host_runtime;
 mod progress;
 mod protocol;
 mod store;
 mod thread_projection;
+mod thread_routes;
 mod trace;
 mod turn;
 mod turn_projection;
@@ -41,7 +45,10 @@ struct ShimState {
     codex_home: PathBuf,
     trace_path: PathBuf,
     cwd: PathBuf,
+    fs_root: Option<PathBuf>,
+    fs_writes_enabled: bool,
     node: Arc<EmbeddedNode>,
+    background_execution_registry: defra_agent::BackgroundExecutionRegistry,
     graphql: Arc<str>,
     agent_did: Arc<str>,
     behavior_id: Option<Arc<str>>,
@@ -58,6 +65,8 @@ struct ConnectionState {
     outbound: Outbound,
     active_turn: Arc<Mutex<Option<ActiveTurn>>>,
     thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
+    fs_watches: Arc<Mutex<BTreeMap<String, fs_adapter::FsWatchRegistration>>>,
+    fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +80,10 @@ struct ActiveTurn {
 
 pub(crate) struct CodexShimBindArgs {
     pub(crate) home: PathBuf,
+    pub(crate) fs_root: Option<PathBuf>,
+    pub(crate) fs_writes_enabled: bool,
     pub(crate) node: Arc<EmbeddedNode>,
+    pub(crate) background_execution_registry: defra_agent::BackgroundExecutionRegistry,
     pub(crate) graphql: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,
@@ -125,7 +137,10 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
         cwd: std::env::current_dir().context("resolving current working directory")?,
+        fs_root: args.fs_root,
+        fs_writes_enabled: args.fs_writes_enabled,
         node: args.node,
+        background_execution_registry: args.background_execution_registry,
         graphql: Arc::from(args.graphql.clone()),
         agent_did: Arc::from(args.agent_did.clone()),
         behavior_id: args
@@ -177,6 +192,8 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         outbound,
         active_turn: Arc::new(Mutex::new(None)),
         thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
+        fs_watches: Arc::new(Mutex::new(BTreeMap::new())),
+        fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
     while let Some(message) = receiver.next().await {
@@ -216,6 +233,8 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         }
     }
 
+    fs_adapter::close_all_watches(&connection).await;
+    connection.fuzzy_file_search_sessions.lock().await.clear();
     writer.abort();
 }
 

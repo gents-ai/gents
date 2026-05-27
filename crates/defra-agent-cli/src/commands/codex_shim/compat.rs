@@ -111,6 +111,10 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::ThreadList { .. }
         | codex::ClientRequest::ThreadLoadedList { .. }
         | codex::ClientRequest::ThreadRead { .. }
+        | codex::ClientRequest::ThreadTurnsList { .. }
+        | codex::ClientRequest::ThreadTurnsItemsList { .. }
+        | codex::ClientRequest::ThreadFork { .. }
+        | codex::ClientRequest::ThreadSearch { .. }
         | codex::ClientRequest::ThreadUnsubscribe { .. }
         | codex::ClientRequest::TurnStart { .. }
         | codex::ClientRequest::TurnSteer { .. }
@@ -129,6 +133,22 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::ThreadSettingsUpdate { .. }
         | codex::ClientRequest::MemoryReset { .. }
         | codex::ClientRequest::ThreadApproveGuardianDeniedAction { .. }
+        | codex::ClientRequest::FsReadFile { .. }
+        | codex::ClientRequest::FsWriteFile { .. }
+        | codex::ClientRequest::FsCreateDirectory { .. }
+        | codex::ClientRequest::FsGetMetadata { .. }
+        | codex::ClientRequest::FsReadDirectory { .. }
+        | codex::ClientRequest::FsRemove { .. }
+        | codex::ClientRequest::FsCopy { .. }
+        | codex::ClientRequest::FsWatch { .. }
+        | codex::ClientRequest::FsUnwatch { .. }
+        | codex::ClientRequest::GitDiffToRemote { .. }
+        | codex::ClientRequest::FuzzyFileSearch { .. }
+        | codex::ClientRequest::FuzzyFileSearchSessionStart { .. }
+        | codex::ClientRequest::FuzzyFileSearchSessionUpdate { .. }
+        | codex::ClientRequest::FuzzyFileSearchSessionStop { .. }
+        | codex::ClientRequest::CommandExecTerminate { .. }
+        | codex::ClientRequest::ProcessKill { .. }
         | codex::ClientRequest::MarketplaceAdd { .. }
         | codex::ClientRequest::MarketplaceRemove { .. }
         | codex::ClientRequest::MarketplaceUpgrade { .. }
@@ -149,53 +169,43 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::LogoutAccount { .. }
         | codex::ClientRequest::SendAddCreditsNudgeEmail { .. }
         | codex::ClientRequest::FeedbackUpload { .. }
-        | codex::ClientRequest::GetAuthStatus { .. } => None,
+        | codex::ClientRequest::GetAuthStatus { .. }
+        | codex::ClientRequest::GetConversationSummary { .. } => None,
 
-        codex::ClientRequest::ThreadFork { .. }
-        | codex::ClientRequest::ThreadRollback { .. }
-        | codex::ClientRequest::ThreadSearch { .. }
-        | codex::ClientRequest::ThreadTurnsList { .. }
-        | codex::ClientRequest::ThreadTurnsItemsList { .. }
-        | codex::ClientRequest::GetConversationSummary { .. } => Some(CompatGap {
+        codex::ClientRequest::ThreadRollback { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::LocalStateProjection,
             area: "thread/session projection",
-            plan: "persist enough Codex thread and turn view state to replay, resume, fork, rename, and list turns",
+            plan: "keep same-thread rollback unsupported; if needed, expose Codex rollback UX as a DEFRA-backed fork-at-turn workflow",
         }),
 
         codex::ClientRequest::ThreadCompactStart { .. }
-        | codex::ClientRequest::ThreadInjectItems { .. }
         | codex::ClientRequest::ReviewStart { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::DefraBackedWorkflow,
             area: "turn workflow",
-            plan: "map the Codex workflow onto DEFRA requests, turn metadata, and streamed turn notifications",
+            plan: "leave unsupported unless stock Codex starts requiring it; DEFRA has its own compaction and review policy primitives",
+        }),
+
+        codex::ClientRequest::ThreadInjectItems { .. } => Some(CompatGap {
+            difficulty: CompatDifficulty::DefraBackedWorkflow,
+            area: "thread transcript",
+            plan: "future work: persist raw model-visible context as DEFRA transcript/context documents, not Codex-local rollout items",
+        }),
+
+        codex::ClientRequest::OneOffCommandExec { .. }
+        | codex::ClientRequest::ProcessSpawn { .. } => Some(CompatGap {
+            difficulty: CompatDifficulty::HostRuntimeIntegration,
+            area: "host process runtime",
+            plan: "unsupported until execution and cancellation route through DEFRA tool-call and managed-exec state machines",
         }),
 
         codex::ClientRequest::ThreadShellCommand { .. }
-        | codex::ClientRequest::FsReadFile { .. }
-        | codex::ClientRequest::FsWriteFile { .. }
-        | codex::ClientRequest::FsCreateDirectory { .. }
-        | codex::ClientRequest::FsGetMetadata { .. }
-        | codex::ClientRequest::FsReadDirectory { .. }
-        | codex::ClientRequest::FsRemove { .. }
-        | codex::ClientRequest::FsCopy { .. }
-        | codex::ClientRequest::FsWatch { .. }
-        | codex::ClientRequest::FsUnwatch { .. }
-        | codex::ClientRequest::OneOffCommandExec { .. }
         | codex::ClientRequest::CommandExecWrite { .. }
-        | codex::ClientRequest::CommandExecTerminate { .. }
         | codex::ClientRequest::CommandExecResize { .. }
-        | codex::ClientRequest::ProcessSpawn { .. }
         | codex::ClientRequest::ProcessWriteStdin { .. }
-        | codex::ClientRequest::ProcessKill { .. }
-        | codex::ClientRequest::ProcessResizePty { .. }
-        | codex::ClientRequest::GitDiffToRemote { .. }
-        | codex::ClientRequest::FuzzyFileSearch { .. }
-        | codex::ClientRequest::FuzzyFileSearchSessionStart { .. }
-        | codex::ClientRequest::FuzzyFileSearchSessionUpdate { .. }
-        | codex::ClientRequest::FuzzyFileSearchSessionStop { .. } => Some(CompatGap {
+        | codex::ClientRequest::ProcessResizePty { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::HostRuntimeIntegration,
-            area: "host filesystem/process runtime",
-            plan: "reuse native filesystem and managed exec primitives while preserving Codex item and terminal notifications",
+            area: "interactive host process runtime",
+            plan: "intentionally unsupported for now; stdin and PTY control need DEFRA managed-exec documents before the shim can expose them",
         }),
 
         codex::ClientRequest::PluginRead { .. }
@@ -217,7 +227,7 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::WindowsSandboxSetupStart { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::ExternalOrLargeFeature,
             area: "extended Codex feature",
-            plan: "decide whether DEFRA should emulate this protocol path or explicitly advertise it as unavailable",
+            plan: "explicitly unavailable in the DEFRA shim unless we later map it onto DEFRA-native P2P, MCP, or platform support",
         }),
     }
 }

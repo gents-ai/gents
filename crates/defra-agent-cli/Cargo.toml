@@ -13,9 +13,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
 chrono.workspace = true
 clap.workspace = true
 codex-app-server-protocol.workspace = true
+codex-utils-absolute-path.workspace = true
 defra-agent = { path = "../defra-agent" }
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true

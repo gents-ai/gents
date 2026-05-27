@@ -10,7 +10,7 @@ use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::BehaviorDaemon;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_agent;
-use crate::hook::BackgroundToolRegistry;
+use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
@@ -23,6 +23,7 @@ pub(super) struct RuntimeContext {
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) retry_policy: RetryPolicy,
     pub(super) hook_failure_policy: crate::hook::FailurePolicy,
+    pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
 }
 
@@ -184,6 +185,7 @@ impl RuntimeContext {
             self.retry_policy.clone(),
             self.hook_failure_policy,
             background_tool_registry,
+            self.background_execution_registry.clone(),
             self.startup_barrier.clone(),
         );
         daemon.run(request_rx, shutdown).await
