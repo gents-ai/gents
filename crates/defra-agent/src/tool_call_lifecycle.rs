@@ -30,6 +30,7 @@ pub enum ToolCallState {
 }
 
 impl ToolCallState {
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 6] = [
         Self::Pending,
         Self::Running,
@@ -69,6 +70,7 @@ impl ToolCallState {
         )
     }
 
+    #[cfg(test)]
     pub(crate) const fn is_cancellable(self) -> bool {
         matches!(self, Self::Pending | Self::Running)
     }
@@ -390,6 +392,7 @@ impl ToolCallLifecycle {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_doc_id(&mut self, doc_id: Option<String>) {
         self.doc_id = doc_id;
     }
@@ -442,20 +445,14 @@ impl ToolCallLifecycle {
         self.state == ToolCallState::Cancelled
     }
 
+    #[cfg(test)]
     pub(crate) fn set_state(&mut self, state: ToolCallState) {
         self.state = state;
     }
 
+    #[cfg(test)]
     pub(crate) fn set_started_at(&mut self, t: Option<chrono::DateTime<chrono::Utc>>) {
         self.started_at = t;
-    }
-
-    pub(crate) fn set_failure_class(&mut self, fc: Option<FailureClass>) {
-        self.failure_class = fc;
-    }
-
-    pub(crate) fn set_deadline_at(&mut self, deadline_at: chrono::DateTime<chrono::Utc>) {
-        self.deadline_at = deadline_at;
     }
 
     pub(crate) fn set_unclaimed_deadline_at(

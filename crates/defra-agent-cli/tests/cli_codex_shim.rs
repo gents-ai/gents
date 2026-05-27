@@ -2,7 +2,7 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -40,25 +40,25 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, server_port)?;
-    wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut shim = ServeProcess::new(spawn_cli(
+    let mut serve = spawn_server_with_env(
         &home_dir,
+        server_port,
         &[
-            "codex-shim",
-            "--port",
+            "--codex-shim",
+            "--codex-shim-port",
             &shim_port_string,
-            "--poll-ms",
+            "--codex-shim-poll-ms",
             "100",
-            "--timeout-secs",
+            "--codex-shim-timeout-secs",
             "60",
         ],
-    )?);
-    wait_for_port(shim_port, &mut shim)?;
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
@@ -99,7 +99,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     )
     .await?;
     let config: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(2)).await?;
-    assert_eq!(config.config.model.as_deref(), Some("defra-default"));
+    assert_eq!(config.config.model.as_deref(), Some(model_name.as_str()));
 
     send_client_request(
         &mut ws,
@@ -257,10 +257,9 @@ async fn stock_codex_remote_pty_smoke_uses_real_backend() -> Result<()> {
     let transcript = fs::read_to_string(&transcript).unwrap_or_default();
     if !output.status.success() {
         let (server_stdout, server_stderr) = smoke._server.captured_output()?;
-        let (shim_stdout, shim_stderr) = smoke._shim.captured_output()?;
         let shim_trace = fs::read_to_string(&smoke.shim_trace).unwrap_or_default();
         bail!(
-            "codex --remote PTY smoke failed\nstdout:\n{stdout}\nstderr:\n{stderr}\ntranscript:\n{transcript}\nserver stdout:\n{server_stdout}\nserver stderr:\n{server_stderr}\nshim stdout:\n{shim_stdout}\nshim stderr:\n{shim_stderr}\nshim trace:\n{shim_trace}"
+            "codex --remote PTY smoke failed\nstdout:\n{stdout}\nstderr:\n{stderr}\ntranscript:\n{transcript}\nserver stdout:\n{server_stdout}\nserver stderr:\n{server_stderr}\nshim trace:\n{shim_trace}"
         );
     }
     let token_search_text = terminal_token_search_text(&transcript);
@@ -410,7 +409,6 @@ struct LiveCodexShim {
     shim_port: u16,
     shim_trace: std::path::PathBuf,
     _server: ServeProcess,
-    _shim: ServeProcess,
 }
 
 async fn start_live_codex_shim() -> Result<LiveCodexShim> {
@@ -432,33 +430,37 @@ async fn start_live_codex_shim() -> Result<LiveCodexShim> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let mut server = spawn_server(&home_dir, server_port)?;
-    wait_for_port(server_port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let shim_trace = tempdir.path().join("codex-shim.trace");
-    let mut shim = spawn_logged_cli(
+    let mut server = spawn_server_with_env(
         &home_dir,
+        server_port,
         &[
-            "codex-shim",
-            "--port",
+            "--codex-shim",
+            "--codex-shim-port",
             &shim_port_string,
-            "--model",
+            "--codex-shim-model",
             DEFAULT_MODEL_NAME,
-            "--poll-ms",
+            "--codex-shim-poll-ms",
             "250",
-            "--timeout-secs",
+            "--codex-shim-timeout-secs",
             "180",
         ],
-        "error,defra_agent_cli::commands::codex_shim=info",
-        &[(
-            "DEFRA_CODEX_SHIM_TRACE",
-            shim_trace.to_string_lossy().as_ref(),
-        )],
+        &[
+            (
+                "RUST_LOG",
+                "error,defra_agent_cli::commands::codex_shim=info",
+            ),
+            (
+                "DEFRA_CODEX_SHIM_TRACE",
+                shim_trace.to_string_lossy().as_ref(),
+            ),
+        ],
     )?;
-    wait_for_port(shim_port, &mut shim)?;
+    wait_for_port(server_port, &mut server)?;
+    wait_for_port(shim_port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     Ok(LiveCodexShim {
         codex_home: home_dir.join(".defra-agent").join("codex-ui"),
@@ -469,7 +471,6 @@ async fn start_live_codex_shim() -> Result<LiveCodexShim> {
         shim_port,
         shim_trace,
         _server: server,
-        _shim: shim,
     })
 }
 
@@ -552,37 +553,6 @@ fn require_command(name: &str) -> Result<()> {
     } else {
         bail!("{name} is required for this smoke test")
     }
-}
-
-fn spawn_logged_cli(
-    home_dir: &std::path::Path,
-    args: &[&str],
-    rust_log: &str,
-    envs: &[(&str, &str)],
-) -> Result<ServeProcess> {
-    let stdout_log = tempfile::NamedTempFile::new().context("creating defra-agent stdout log")?;
-    let stderr_log = tempfile::NamedTempFile::new().context("creating defra-agent stderr log")?;
-    let stdout = stdout_log
-        .reopen()
-        .context("opening defra-agent stdout log")?;
-    let stderr = stderr_log
-        .reopen()
-        .context("opening defra-agent stderr log")?;
-    let mut command = Command::new(cli_bin());
-    command
-        .env("HOME", home_dir)
-        .env("RUST_LOG", rust_log)
-        .current_dir(home_dir)
-        .args(args)
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-    let child = command
-        .spawn()
-        .with_context(|| format!("spawning defra-agent {}", args.join(" ")))?;
-    Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
 fn which(name: &str) -> Option<std::path::PathBuf> {

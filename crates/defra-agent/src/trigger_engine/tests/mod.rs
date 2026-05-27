@@ -46,7 +46,6 @@ type SupersedeCall = (String, TriggerKind);
 /// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
 /// `debug_assert!`. Does not exercise signing.
 fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
-    use crate::identity::AgentIdentity as _;
     let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),

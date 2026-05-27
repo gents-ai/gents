@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::cli::*;
-use crate::commands::codex_shim::bind_codex_shim;
+use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::http::runtime_contract_router;
 use crate::shared::*;
 use crate::{
@@ -236,10 +236,11 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     )?;
 
     let mut codex_shim_handle = if args.codex_shim {
-        let bound = bind_codex_shim(CodexShimArgs {
-            home: Some(home_dir.clone()),
-            graphql: Some(graphql_url.clone()),
-            agent_did: Some(identity.did().to_string()),
+        let bound = bind_codex_shim(CodexShimBindArgs {
+            home: home_dir.clone(),
+            node: node.clone(),
+            graphql: graphql_url.clone(),
+            agent_did: identity.did().to_string(),
             behavior_id: args.codex_shim_behavior_id.clone(),
             bind_addr: args.codex_shim_bind_addr,
             port: args.codex_shim_port,
@@ -253,6 +254,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             bound.addr(),
             bound.codex_home().display()
         );
+        eprintln!("Codex shim event log: {}", bound.trace_path().display());
         eprintln!(
             "Launch Codex with: CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://{}/",
             bound.codex_home().display(),
@@ -267,6 +269,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         json!({
             "websocket": format!("ws://{}:{}/", display_host(args.codex_shim_bind_addr), args.codex_shim_port),
             "codex_home": home_dir.join("codex-ui"),
+            "event_log": home_dir.join("codex-ui").join("log").join("codex-shim-events.jsonl"),
             "model": codex_shim_model,
         })
     });

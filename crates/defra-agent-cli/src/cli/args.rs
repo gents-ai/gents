@@ -9,11 +9,11 @@ use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_SHIM_AFTER_HELP,
-    CONFIG_AFTER_HELP, CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT,
-    DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP,
-    PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP,
-    SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
+    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
+    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
+    FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
+    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
+    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
     SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
@@ -52,12 +52,6 @@ pub(crate) enum Command {
     Server(ServeArgs),
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
-    #[command(
-        name = "codex-shim",
-        about = "Run an experimental Codex TUI compatibility endpoint",
-        after_help = CODEX_SHIM_AFTER_HELP
-    )]
-    CodexShim(CodexShimArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
@@ -399,38 +393,6 @@ pub(crate) struct ChatArgs {
     pub(crate) poll_secs: u64,
     #[arg(value_name = "MESSAGE")]
     pub(crate) message: Vec<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct CodexShimArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "GraphQL endpoint to submit DEFRA turns through. Defaults to runtime state or localhost."
-    )]
-    pub(crate) graphql: Option<String>,
-    #[arg(
-        long,
-        help = "Agent DID to submit Codex turns to. Defaults to runtime/init state."
-    )]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
-    pub(crate) behavior_id: Option<String>,
-    #[arg(long, default_value = "127.0.0.1")]
-    pub(crate) bind_addr: IpAddr,
-    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
-    pub(crate) port: u16,
-    #[arg(
-        long,
-        default_value = "defra-default",
-        help = "Synthetic model id advertised to the Codex TUI"
-    )]
-    pub(crate) model: String,
-    #[arg(long, default_value_t = 300)]
-    pub(crate) timeout_secs: u64,
-    #[arg(long, default_value_t = 250)]
-    pub(crate) poll_ms: u64,
 }
 
 #[derive(Subcommand)]

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,18 +13,27 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use codex_app_server_protocol as codex;
-use defra_agent::graphql::escape_graphql_string;
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::UpdateSubscriptionSource;
+use defra_agent_protocol::transcript::present_persisted_message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-use crate::cli::CodexShimArgs;
-use crate::home_state::{resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir};
+mod progress;
+mod trace;
+
+use progress::{
+    content_delta, decode_defra_tool_call_progress, decode_defra_turn_progress,
+    defra_tool_call_status, defra_tool_item, defra_turn_progress_query, response_field_is_blank,
+    terminal_error_message, terminal_turn_status, DefraToolCallProgress,
+};
+
 use crate::{
-    create_agent_request, hydrate_materialized_response_content, is_terminal_lifecycle_state,
-    post_graphql, request_diagnostic_hint, RequestSubmitOptions, SubmittedRequest,
+    create_agent_request, is_terminal_lifecycle_state, materialized_message_query,
+    request_diagnostic_hint, RequestSubmitOptions, SubmittedRequest,
 };
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
@@ -35,7 +43,9 @@ const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 #[derive(Clone)]
 struct ShimState {
     codex_home: PathBuf,
+    trace_path: PathBuf,
     cwd: PathBuf,
+    node: Arc<EmbeddedNode>,
     graphql: Arc<str>,
     agent_did: Arc<str>,
     behavior_id: Option<Arc<str>>,
@@ -45,17 +55,23 @@ struct ShimState {
     poll_interval: Duration,
 }
 
-pub(crate) async fn codex_shim(args: CodexShimArgs) -> Result<()> {
-    let bound = bind_codex_shim(args).await?;
-    bound.print_startup();
-    bound.serve().await
+pub(crate) struct CodexShimBindArgs {
+    pub(crate) home: PathBuf,
+    pub(crate) node: Arc<EmbeddedNode>,
+    pub(crate) graphql: String,
+    pub(crate) agent_did: String,
+    pub(crate) behavior_id: Option<String>,
+    pub(crate) bind_addr: std::net::IpAddr,
+    pub(crate) port: u16,
+    pub(crate) model: String,
+    pub(crate) timeout_secs: u64,
+    pub(crate) poll_ms: u64,
 }
 
 pub(crate) struct BoundCodexShim {
     addr: SocketAddr,
     codex_home: PathBuf,
-    graphql: String,
-    agent_did: String,
+    trace_path: PathBuf,
     listener: TcpListener,
     app: Router,
 }
@@ -69,19 +85,8 @@ impl BoundCodexShim {
         &self.codex_home
     }
 
-    pub(crate) fn print_startup(&self) {
-        println!("Codex TUI shim listening on ws://{}/", self.addr);
-        println!("DEFRA GraphQL endpoint: {}", self.graphql);
-        println!("DEFRA agent DID: {}", self.agent_did);
-        println!("Suggested launch:");
-        println!(
-            "  CODEX_HOME={} codex --dangerously-bypass-approvals-and-sandbox --remote ws://{}/",
-            self.codex_home.display(),
-            self.addr
-        );
-        println!(
-            "Note: stock Codex may run local onboarding before connecting when CODEX_HOME is empty."
-        );
+    pub(crate) fn trace_path(&self) -> &Path {
+        &self.trace_path
     }
 
     pub(crate) fn spawn(self) -> JoinHandle<Result<()>> {
@@ -95,19 +100,20 @@ impl BoundCodexShim {
     }
 }
 
-pub(crate) async fn bind_codex_shim(args: CodexShimArgs) -> Result<BoundCodexShim> {
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let codex_home = home_dir.join("codex-ui");
-    fs::create_dir_all(&codex_home)
-        .with_context(|| format!("creating Codex UI home {}", codex_home.display()))?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCodexShim> {
+    let codex_home = args.home.join("codex-ui");
+    let codex_log_dir = codex_home.join("log");
+    fs::create_dir_all(&codex_log_dir)
+        .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))?;
+    let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
 
     let state = ShimState {
         codex_home: codex_home.clone(),
+        trace_path: trace_path.clone(),
         cwd: std::env::current_dir().context("resolving current working directory")?,
-        graphql: Arc::from(graphql.clone()),
-        agent_did: Arc::from(agent_did.clone()),
+        node: args.node,
+        graphql: Arc::from(args.graphql.clone()),
+        agent_did: Arc::from(args.agent_did.clone()),
         behavior_id: args
             .behavior_id
             .as_deref()
@@ -131,8 +137,7 @@ pub(crate) async fn bind_codex_shim(args: CodexShimArgs) -> Result<BoundCodexShi
     Ok(BoundCodexShim {
         addr,
         codex_home,
-        graphql,
-        agent_did,
+        trace_path,
         listener,
         app,
     })
@@ -144,7 +149,7 @@ async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<ShimState>) -> imp
 
 async fn handle_socket(mut socket: WebSocket, state: ShimState) {
     tracing::info!("Codex shim WebSocket connected");
-    trace_shim_event("websocket connected");
+    trace::shim_event(&state.trace_path, "websocket connected");
     while let Some(message) = socket.recv().await {
         let Ok(message) = message else {
             return;
@@ -191,7 +196,7 @@ async fn handle_request(
     let request_id = request.id.clone();
     let method = request.method.clone();
     tracing::info!(%method, %request_id, "Codex shim request");
-    trace_shim_event(format!("request {request_id} {method}"));
+    trace::shim_event(&state.trace_path, format!("request {request_id} {method}"));
     let codex_request = match client_request_from_jsonrpc(request) {
         Ok(request) => request,
         Err(err) => {
@@ -549,7 +554,6 @@ async fn start_defra_turn(
     };
 
     let turn_id = submitted.request_id.clone();
-    let item_id = state.next_id("defra-message");
     let started_turn = turn_value(&turn_id, codex::TurnStatus::InProgress, Vec::new(), None);
 
     if start_response {
@@ -574,6 +578,7 @@ async fn start_defra_turn(
 
     send_notification(
         socket,
+        state,
         codex::ServerNotification::TurnStarted(codex::TurnStartedNotification {
             thread_id: thread_id.clone(),
             turn: started_turn,
@@ -581,60 +586,206 @@ async fn start_defra_turn(
     )
     .await?;
 
-    let mut rendered_text = String::new();
-    let mut agent_item_started = false;
+    let mut projection = TurnProjection::new(state, &thread_id, &turn_id);
 
-    match stream_defra_turn(
-        socket,
-        state,
-        &thread_id,
-        &turn_id,
-        &item_id,
-        &submitted,
-        &mut rendered_text,
-        &mut agent_item_started,
-    )
-    .await
-    {
+    match stream_defra_turn(socket, state, &submitted, &mut projection).await {
         Ok(()) => Ok(()),
         Err(err) => {
             let message = format!("DEFRA turn failed: {err}");
-            append_agent_delta(
+            projection
+                .append_agent_delta(socket, &format!("[agent error] {message}\n"))
+                .await?;
+            projection
+                .finish_turn(socket, codex::TurnStatus::Failed, Some(message))
+                .await
+        }
+    }
+}
+
+struct TurnProjection<'a> {
+    state: &'a ShimState,
+    thread_id: &'a str,
+    turn_id: &'a str,
+    active_agent_item_id: Option<String>,
+    active_agent_text: String,
+    rendered_agent_text: String,
+    completed_items: Vec<codex::ThreadItem>,
+}
+
+impl<'a> TurnProjection<'a> {
+    fn new(state: &'a ShimState, thread_id: &'a str, turn_id: &'a str) -> Self {
+        Self {
+            state,
+            thread_id,
+            turn_id,
+            active_agent_item_id: None,
+            active_agent_text: String::new(),
+            rendered_agent_text: String::new(),
+            completed_items: Vec::new(),
+        }
+    }
+
+    async fn append_agent_delta(&mut self, socket: &mut WebSocket, delta: &str) -> Result<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let delta = if self.rendered_agent_text.is_empty() {
+            delta.trim_start()
+        } else {
+            delta
+        };
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let item_id = if let Some(item_id) = self.active_agent_item_id.as_ref() {
+            item_id.clone()
+        } else {
+            let item_id = self.state.next_id("defra-message");
+            send_notification(
                 socket,
-                &thread_id,
-                &turn_id,
-                &item_id,
-                &mut rendered_text,
-                &mut agent_item_started,
-                &format!("[agent error] {message}\n"),
+                self.state,
+                codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                    item: agent_message_item(&item_id, ""),
+                    thread_id: self.thread_id.to_string(),
+                    turn_id: self.turn_id.to_string(),
+                    started_at_ms: now_millis(),
+                }),
             )
             .await?;
-            finish_defra_turn(
-                socket,
-                &thread_id,
-                &turn_id,
-                &item_id,
-                rendered_text,
-                agent_item_started,
-                codex::TurnStatus::Failed,
-                Some(message),
-            )
-            .await
+            self.active_agent_item_id = Some(item_id.clone());
+            item_id
+        };
+
+        self.active_agent_text.push_str(delta);
+        self.rendered_agent_text.push_str(delta);
+        send_notification(
+            socket,
+            self.state,
+            codex::ServerNotification::AgentMessageDelta(codex::AgentMessageDeltaNotification {
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                item_id,
+                delta: delta.to_string(),
+            }),
+        )
+        .await
+    }
+
+    async fn finish_agent_message(&mut self, socket: &mut WebSocket) -> Result<()> {
+        let Some(item_id) = self.active_agent_item_id.take() else {
+            return Ok(());
+        };
+        let text = std::mem::take(&mut self.active_agent_text);
+        if text.trim().is_empty() {
+            return Ok(());
         }
+        let completed_item = agent_message_item(&item_id, &text);
+        send_notification(
+            socket,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: completed_item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: now_millis(),
+            }),
+        )
+        .await?;
+        self.completed_items.push(completed_item);
+        Ok(())
+    }
+
+    async fn send_tool_started(
+        &mut self,
+        socket: &mut WebSocket,
+        tool: &DefraToolCallProgress,
+    ) -> Result<()> {
+        self.finish_agent_message(socket).await?;
+        send_notification(
+            socket,
+            self.state,
+            codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                item: defra_tool_item(tool, codex::McpToolCallStatus::InProgress),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                started_at_ms: now_millis(),
+            }),
+        )
+        .await
+    }
+
+    async fn send_tool_completed(
+        &mut self,
+        socket: &mut WebSocket,
+        tool: &DefraToolCallProgress,
+        status: codex::McpToolCallStatus,
+    ) -> Result<()> {
+        self.finish_agent_message(socket).await?;
+        let completed_item = defra_tool_item(tool, status);
+        send_notification(
+            socket,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: completed_item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: now_millis(),
+            }),
+        )
+        .await?;
+        self.completed_items.push(completed_item);
+        Ok(())
+    }
+
+    async fn finish_turn(
+        &mut self,
+        socket: &mut WebSocket,
+        status: codex::TurnStatus,
+        error_message: Option<String>,
+    ) -> Result<()> {
+        self.finish_agent_message(socket).await?;
+        let turn_error = if status == codex::TurnStatus::Failed {
+            Some(codex::TurnError {
+                message: error_message.unwrap_or_else(|| "DEFRA turn failed".to_string()),
+                codex_error_info: None,
+                additional_details: None,
+            })
+        } else {
+            None
+        };
+        send_notification(
+            socket,
+            self.state,
+            codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
+                thread_id: self.thread_id.to_string(),
+                turn: turn_value(
+                    self.turn_id,
+                    status,
+                    std::mem::take(&mut self.completed_items),
+                    turn_error,
+                ),
+            }),
+        )
+        .await
+    }
+
+    fn active_agent_text(&self) -> &str {
+        &self.active_agent_text
+    }
+
+    fn rendered_agent_text(&self) -> &str {
+        &self.rendered_agent_text
     }
 }
 
 async fn stream_defra_turn(
     socket: &mut WebSocket,
     state: &ShimState,
-    thread_id: &str,
-    turn_id: &str,
-    item_id: &str,
     submitted: &SubmittedRequest,
-    rendered_text: &mut String,
-    agent_item_started: &mut bool,
+    projection: &mut TurnProjection<'_>,
 ) -> Result<()> {
     let mut known_tool_calls: BTreeMap<String, codex::McpToolCallStatus> = BTreeMap::new();
+    let mut updates = state.node.subscribe_updates();
     let mut latest_content = String::new();
     let mut latest_reasoning = String::new();
     let mut latest_error_message: Option<String> = None;
@@ -642,8 +793,8 @@ async fn stream_defra_turn(
     let mut last_progress_at = tokio::time::Instant::now();
 
     loop {
-        let response = post_graphql(
-            state.graphql.as_ref(),
+        let response = query_node_json(
+            state.node.as_ref(),
             &defra_turn_progress_query(&submitted.request_id, &submitted.session_id),
         )
         .await?;
@@ -682,22 +833,17 @@ async fn stream_defra_turn(
             }
 
             if previous_status.is_none() && codex_status != codex::McpToolCallStatus::InProgress {
-                send_defra_tool_started(socket, thread_id, turn_id, &tool).await?;
+                projection.send_tool_started(socket, &tool).await?;
             }
 
             match codex_status {
                 codex::McpToolCallStatus::InProgress => {
-                    send_defra_tool_started(socket, thread_id, turn_id, &tool).await?;
+                    projection.send_tool_started(socket, &tool).await?;
                 }
                 codex::McpToolCallStatus::Completed | codex::McpToolCallStatus::Failed => {
-                    send_defra_tool_completed(
-                        socket,
-                        thread_id,
-                        turn_id,
-                        &tool,
-                        codex_status.clone(),
-                    )
-                    .await?;
+                    projection
+                        .send_tool_completed(socket, &tool, codex_status.clone())
+                        .await?;
                 }
             }
 
@@ -709,16 +855,7 @@ async fn stream_defra_turn(
             if progress.content != latest_content {
                 let delta = content_delta(&latest_content, &progress.content);
                 latest_content = progress.content.clone();
-                append_agent_delta(
-                    socket,
-                    thread_id,
-                    turn_id,
-                    item_id,
-                    rendered_text,
-                    agent_item_started,
-                    &delta,
-                )
-                .await?;
+                projection.append_agent_delta(socket, &delta).await?;
             }
             latest_reasoning = progress.reasoning.clone();
             latest_error_message = progress.error_message.clone();
@@ -755,11 +892,9 @@ async fn stream_defra_turn(
                     && terminal_response
                         .get("materialized_message_sequence")
                         .is_some_and(|value| !value.is_null());
-            let hydrated = hydrate_materialized_response_content(
-                state.graphql.as_ref(),
-                &mut terminal_response,
-            )
-            .await?;
+            let hydrated =
+                hydrate_materialized_response_content(state.node.as_ref(), &mut terminal_response)
+                    .await?;
             if should_wait_for_materialized_content && !hydrated {
                 if last_progress_at.elapsed() >= state.timeout {
                     anyhow::bail!(
@@ -774,17 +909,8 @@ async fn stream_defra_turn(
             }
 
             if let Some(content) = terminal_response.get("content").and_then(Value::as_str) {
-                let delta = content_delta(rendered_text, content);
-                append_agent_delta(
-                    socket,
-                    thread_id,
-                    turn_id,
-                    item_id,
-                    rendered_text,
-                    agent_item_started,
-                    &delta,
-                )
-                .await?;
+                let delta = content_delta(projection.active_agent_text(), content);
+                projection.append_agent_delta(socket, &delta).await?;
             }
 
             let error_message = terminal_error_message(
@@ -794,32 +920,17 @@ async fn stream_defra_turn(
                 failure_reason,
             );
             if let Some(error_message) = error_message.as_deref() {
-                if !rendered_text.contains(error_message) {
-                    append_agent_delta(
-                        socket,
-                        thread_id,
-                        turn_id,
-                        item_id,
-                        rendered_text,
-                        agent_item_started,
-                        &format!("\n[agent error] {error_message}\n"),
-                    )
-                    .await?;
+                if !projection.rendered_agent_text().contains(error_message) {
+                    projection
+                        .append_agent_delta(socket, &format!("\n[agent error] {error_message}\n"))
+                        .await?;
                 }
             }
 
             let turn_status = terminal_turn_status(lifecycle_state, response_status);
-            return finish_defra_turn(
-                socket,
-                thread_id,
-                turn_id,
-                item_id,
-                std::mem::take(rendered_text),
-                *agent_item_started,
-                turn_status,
-                error_message,
-            )
-            .await;
+            return projection
+                .finish_turn(socket, turn_status, error_message)
+                .await;
         }
 
         if last_progress_at.elapsed() >= state.timeout {
@@ -832,407 +943,96 @@ async fn stream_defra_turn(
         }
 
         let _ = &latest_reasoning;
-        tokio::time::sleep(state.poll_interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(state.poll_interval) => {}
+            msg = updates.recv() => {
+                if msg.is_none() {
+                    tracing::warn!("Codex shim embedded-node update subscription closed");
+                }
+                let dropped = updates.check_and_reset_dropped();
+                if dropped > 0 {
+                    tracing::warn!(dropped, "Codex shim update subscription dropped messages");
+                }
+            }
+        }
     }
 }
 
-async fn append_agent_delta(
-    socket: &mut WebSocket,
-    thread_id: &str,
-    turn_id: &str,
-    item_id: &str,
-    rendered_text: &mut String,
-    agent_item_started: &mut bool,
-    delta: &str,
-) -> Result<()> {
-    if delta.is_empty() {
-        return Ok(());
+async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!("DEFRA Codex shim query failed: {:?}", response.errors);
     }
-    let delta = if rendered_text.is_empty() {
-        delta.trim_start()
-    } else {
-        delta
+    Ok(json!({
+        "data": response.data.unwrap_or_else(|| json!({})),
+    }))
+}
+
+async fn hydrate_materialized_response_content(
+    node: &EmbeddedNode,
+    response: &mut Value,
+) -> Result<bool> {
+    let content_blank = response_field_is_blank(response, "content");
+    let reasoning_blank = response_field_is_blank(response, "reasoning");
+    if !content_blank && !reasoning_blank {
+        return Ok(true);
+    }
+
+    let Some(sequence) = response_materialized_sequence(response) else {
+        return Ok(!content_blank || !reasoning_blank);
     };
-    if delta.is_empty() {
-        return Ok(());
-    }
-    if !*agent_item_started {
-        send_notification(
-            socket,
-            codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
-                item: agent_message_item(item_id, ""),
-                thread_id: thread_id.to_string(),
-                turn_id: turn_id.to_string(),
-                started_at_ms: now_millis(),
-            }),
-        )
-        .await?;
-        *agent_item_started = true;
-    }
-    rendered_text.push_str(delta);
-    send_notification(
-        socket,
-        codex::ServerNotification::AgentMessageDelta(codex::AgentMessageDeltaNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
-            item_id: item_id.to_string(),
-            delta: delta.to_string(),
-        }),
-    )
-    .await
-}
-
-async fn send_defra_tool_started(
-    socket: &mut WebSocket,
-    thread_id: &str,
-    turn_id: &str,
-    tool: &DefraToolCallProgress,
-) -> Result<()> {
-    send_notification(
-        socket,
-        codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
-            item: defra_tool_item(tool, codex::McpToolCallStatus::InProgress),
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
-            started_at_ms: now_millis(),
-        }),
-    )
-    .await
-}
-
-async fn send_defra_tool_completed(
-    socket: &mut WebSocket,
-    thread_id: &str,
-    turn_id: &str,
-    tool: &DefraToolCallProgress,
-    status: codex::McpToolCallStatus,
-) -> Result<()> {
-    send_notification(
-        socket,
-        codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
-            item: defra_tool_item(tool, status),
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
-            completed_at_ms: now_millis(),
-        }),
-    )
-    .await
-}
-
-async fn finish_defra_turn(
-    socket: &mut WebSocket,
-    thread_id: &str,
-    turn_id: &str,
-    item_id: &str,
-    rendered_text: String,
-    agent_item_started: bool,
-    status: codex::TurnStatus,
-    error_message: Option<String>,
-) -> Result<()> {
-    let turn_error = if status == codex::TurnStatus::Failed {
-        Some(codex::TurnError {
-            message: error_message.unwrap_or_else(|| "DEFRA turn failed".to_string()),
-            codex_error_info: None,
-            additional_details: None,
-        })
-    } else {
-        None
-    };
-    let completed_item = agent_message_item(item_id, &rendered_text);
-    if agent_item_started || !rendered_text.trim().is_empty() {
-        send_notification(
-            socket,
-            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
-                item: completed_item.clone(),
-                thread_id: thread_id.to_string(),
-                turn_id: turn_id.to_string(),
-                completed_at_ms: now_millis(),
-            }),
-        )
-        .await?;
-    }
-    send_notification(
-        socket,
-        codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn: turn_value(
-                turn_id,
-                status,
-                if rendered_text.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    vec![completed_item]
-                },
-                turn_error,
-            ),
-        }),
-    )
-    .await
-}
-
-#[derive(Debug, Clone)]
-struct DefraTurnProgress {
-    content: String,
-    reasoning: String,
-    error_message: Option<String>,
-    status: String,
-}
-
-#[derive(Debug, Clone)]
-struct DefraToolCallProgress {
-    tool_call_key: String,
-    tool_name: String,
-    status: String,
-    args: String,
-    result: String,
-}
-
-fn defra_turn_progress_query(request_id: &str, session_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{
-                request_id
-                lifecycle_state
-                failure_reason
-                interrupt_requested_at
-                valid_until
-            }}
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{
-                request_id
-                session_id
-                status
-                content
-                reasoning
-                error_message
-                progress_seq
-                materialized_message_sequence
-                materialized_at
-                completed_at
-                interrupted_at
-            }}
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{request_id}" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
-                tool_call_key
-                tool_name
-                status
-                args
-                result
-                started_at
-                completed_at
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-        session_id = escape_graphql_string(session_id),
-    )
-}
-
-fn decode_defra_turn_progress(row: &Value) -> Option<DefraTurnProgress> {
-    Some(DefraTurnProgress {
-        content: row
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        reasoning: row
-            .get("reasoning")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        error_message: row
-            .get("error_message")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned),
-        status: row.get("status")?.as_str()?.to_string(),
-    })
-}
-
-fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCallProgress> {
-    Some(DefraToolCallProgress {
-        tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
-        tool_name: row.get("tool_name")?.as_str()?.to_string(),
-        status: row.get("status")?.as_str()?.to_string(),
-        args: row
-            .get("args")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        result: row
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-    })
-}
-
-fn defra_tool_item(
-    tool: &DefraToolCallProgress,
-    status: codex::McpToolCallStatus,
-) -> codex::ThreadItem {
-    let (result, error) = match status {
-        codex::McpToolCallStatus::Completed => (
-            Some(Box::new(codex::McpToolCallResult {
-                content: defra_tool_result_content(&tool.result),
-                structured_content: parse_json_value(&tool.result),
-                meta: None,
-            })),
-            None,
-        ),
-        codex::McpToolCallStatus::Failed => (
-            None,
-            Some(codex::McpToolCallError {
-                message: preview_compact_text(&tool.result)
-                    .unwrap_or_else(|| "DEFRA tool call failed".to_string()),
-            }),
-        ),
-        codex::McpToolCallStatus::InProgress => (None, None),
+    let Some(session_id) = response.get("session_id").and_then(Value::as_str) else {
+        return Ok(!content_blank || !reasoning_blank);
     };
 
-    codex::ThreadItem::McpToolCall {
-        id: tool.tool_call_key.clone(),
-        server: "defra".to_string(),
-        tool: tool.tool_name.clone(),
-        status,
-        arguments: parse_json_value(&tool.args).unwrap_or_else(|| json!({})),
-        mcp_app_resource_uri: None,
-        plugin_id: None,
-        result,
-        error,
-        duration_ms: None,
-    }
-}
+    let message_response =
+        query_node_json(node, &materialized_message_query(session_id, sequence)).await?;
+    let Some(message) = message_response
+        .pointer("/data/AgentMessage")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(false);
+    };
+    let Some(role) = message.get("role").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(content) = message.get("content").and_then(Value::as_str) else {
+        return Ok(false);
+    };
 
-fn defra_tool_result_content(result: &str) -> Vec<Value> {
-    preview_compact_text(result)
-        .map(|text| vec![json!({ "type": "text", "text": text })])
-        .unwrap_or_default()
-}
+    let presentation = present_persisted_message(role, content);
+    let Some(object) = response.as_object_mut() else {
+        return Ok(false);
+    };
 
-fn defra_tool_call_status(tool: &DefraToolCallProgress) -> codex::McpToolCallStatus {
-    let status = tool.status.trim().to_ascii_lowercase();
-    if matches!(status.as_str(), "error" | "failed" | "failure" | "dead")
-        || tool_result_looks_error(&tool.result)
-    {
-        return codex::McpToolCallStatus::Failed;
-    }
-    if matches!(
-        status.as_str(),
-        "completed" | "complete" | "success" | "succeeded"
-    ) {
-        return codex::McpToolCallStatus::Completed;
-    }
-    codex::McpToolCallStatus::InProgress
-}
-
-fn tool_result_looks_error(result: &str) -> bool {
-    let trimmed = result.trim_start();
-    trimmed.starts_with("Toolset error:") || trimmed.starts_with("JsonError:")
-}
-
-fn parse_json_value(raw: &str) -> Option<Value> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    serde_json::from_str(trimmed)
-        .ok()
-        .or_else(|| Some(Value::String(trimmed.to_string())))
-}
-
-fn content_delta(previous: &str, current: &str) -> String {
-    if current.is_empty() || previous == current {
-        return String::new();
-    }
-    if let Some(delta) = current.strip_prefix(previous) {
-        return delta.to_string();
-    }
-    let previous_trimmed_start = previous.trim_start();
-    let current_trimmed_start = current.trim_start();
-    if previous_trimmed_start == current_trimmed_start {
-        return String::new();
-    }
-    if let Some(delta) = current_trimmed_start.strip_prefix(previous_trimmed_start) {
-        return delta.to_string();
-    }
-    if previous.trim() == current.trim() {
-        return String::new();
-    }
-    if previous.is_empty() {
-        current.to_string()
-    } else {
-        format!("\n{current}")
-    }
-}
-
-fn response_field_is_blank(response: &Value, field: &str) -> bool {
-    response
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .is_empty()
-}
-
-fn terminal_turn_status(lifecycle_state: &str, response_status: &str) -> codex::TurnStatus {
-    match (lifecycle_state, response_status) {
-        ("interrupted" | "superseded", _) => codex::TurnStatus::Interrupted,
-        ("failed" | "dead", _) | (_, "error") => codex::TurnStatus::Failed,
-        _ => codex::TurnStatus::Completed,
-    }
-}
-
-fn terminal_error_message(
-    response_status: &str,
-    response_error: Option<&str>,
-    lifecycle_state: &str,
-    failure_reason: &str,
-) -> Option<String> {
-    if let Some(error) = response_error
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(error.to_string());
-    }
-    if response_status == "error" {
-        return Some("DEFRA response ended with status error".to_string());
-    }
-    if matches!(lifecycle_state, "failed" | "dead") {
-        return Some(
-            failure_reason
-                .trim()
-                .is_empty()
-                .then(|| format!("DEFRA request ended with lifecycle_state {lifecycle_state}"))
-                .unwrap_or_else(|| failure_reason.trim().to_string()),
+    if content_blank && !presentation.body_markdown.trim().is_empty() {
+        object.insert(
+            "content".to_string(),
+            Value::String(presentation.body_markdown),
         );
     }
-    None
+    if reasoning_blank {
+        if let Some(reasoning) = presentation
+            .reasoning_markdown
+            .filter(|value| !value.trim().is_empty())
+        {
+            object.insert("reasoning".to_string(), Value::String(reasoning));
+        }
+    }
+
+    Ok(!response_field_is_blank(response, "content")
+        || !response_field_is_blank(response, "reasoning"))
 }
 
-fn preview_compact_text(value: &str) -> Option<String> {
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = compact.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let preview = if trimmed.chars().count() > 120 {
-        format!("{}...", trimmed.chars().take(120).collect::<String>())
-    } else {
-        trimmed.to_string()
-    };
-    Some(preview)
+fn response_materialized_sequence(response: &Value) -> Option<i64> {
+    response
+        .get("materialized_message_sequence")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        })
 }
 
 fn client_request_from_jsonrpc(
@@ -1284,8 +1084,10 @@ async fn send_error(
 
 async fn send_notification(
     socket: &mut WebSocket,
+    state: &ShimState,
     notification: codex::ServerNotification,
 ) -> Result<()> {
+    trace::codex_notification(&state.trace_path, &notification);
     send_json(socket, &notification).await
 }
 
@@ -1452,15 +1254,6 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
-}
-
-fn trace_shim_event(message: impl AsRef<str>) {
-    let Some(path) = std::env::var_os("DEFRA_CODEX_SHIM_TRACE") else {
-        return;
-    };
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{}", message.as_ref());
-    }
 }
 
 impl ShimState {
