@@ -156,7 +156,7 @@ async fn probe_service(
             &health_map,
             local_hostname,
             local_subnet,
-            &HealthCheckerOptions::default(),
+            &one_shot_probe_options(timeout),
             None,
         ),
     )
@@ -244,6 +244,14 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn one_shot_probe_options(timeout: Duration) -> HealthCheckerOptions {
+    HealthCheckerOptions {
+        probe_timeout: timeout,
+        failure_threshold_k: 1,
+        ..HealthCheckerOptions::default()
+    }
 }
 
 enum ProbeTarget {

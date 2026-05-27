@@ -110,8 +110,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 completed_at: normalize_optional(row.completed_at.as_deref()),
             };
             let cancel_cause = derive_response_cause(&req_evidence, &resp_evidence);
-            let backend_id = latest_request
-                .and_then(|r| normalize_optional(r.backend_id.as_deref()));
+            let backend_id =
+                latest_request.and_then(|r| normalize_optional(r.backend_id.as_deref()));
             ResponseView {
                 status: normalize_optional(row.status.as_deref()),
                 content: row

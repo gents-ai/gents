@@ -259,8 +259,10 @@ pub(super) fn handle_request(
                     "remote-save-behavior is only available in live test mode (DEFRA_AGENT_TAURI_LIVE=1)",
                 ));
             }
-            let req =
-                decode::<BehaviorSaveRequest>(&request.body, "decoding remote behavior save request")?;
+            let req = decode::<BehaviorSaveRequest>(
+                &request.body,
+                "decoding remote behavior save request",
+            )?;
             tracing::info!(behavior_id = %req.behavior_id, "remote-save-behavior: writing to remote core");
             runtime.block_on(save_behavior_config(fixture.remote_core().as_ref(), req))?;
             Ok(HttpResponse::json_ok(
