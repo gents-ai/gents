@@ -6,8 +6,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
@@ -670,12 +668,12 @@ async fn codex_shim_thread_fork_and_search_project_defra_sessions() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_fs_routes_project_defra_host_filesystem() -> Result<()> {
+async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let expected_reply = format!("unused-fs-route-reply-{}", Uuid::new_v4().simple());
+    let expected_reply = format!("unused-fs-unsupported-reply-{}", Uuid::new_v4().simple());
     let model_name = format!("mock-codex-shim-fs-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
 
@@ -719,302 +717,81 @@ async fn codex_shim_fs_routes_project_defra_host_filesystem() -> Result<()> {
         .context("connecting to codex-shim websocket")?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
 
-    let workspace = home_dir.join("fs-routes");
-    let nested = workspace.join("nested");
-    send_raw_client_request(
-        &mut ws,
-        request_id(501),
-        "fs/createDirectory",
-        json!({
-            "path": nested.display().to_string(),
-            "recursive": true,
-        }),
-    )
-    .await?;
-    let _: codex::FsCreateDirectoryResponse = read_typed_response(&mut ws, request_id(501)).await?;
-
-    let watch_id = format!("watch-{}", Uuid::new_v4().simple());
-    send_raw_client_request(
-        &mut ws,
-        request_id(511),
-        "fs/watch",
-        json!({
-            "watchId": watch_id,
-            "path": nested.display().to_string(),
-        }),
-    )
-    .await?;
-    let watch: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(511)).await?;
-    assert_eq!(watch.path.as_path(), nested.as_path());
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(512),
-        "fs/watch",
-        json!({
-            "watchId": watch_id,
-            "path": nested.display().to_string(),
-        }),
-    )
-    .await?;
-    let duplicate_watch = read_error_response(&mut ws, request_id(512)).await?;
-    assert_eq!(duplicate_watch.code, -32602);
-    assert!(duplicate_watch.message.contains("watchId already exists"));
-
-    let file = nested.join("bytes.bin");
-    let payload = b"DEFRA fs route bytes\n\0\x7f";
-    send_raw_client_request(
-        &mut ws,
-        request_id(502),
-        "fs/writeFile",
-        json!({
-            "path": file.display().to_string(),
-            "dataBase64": STANDARD.encode(payload),
-        }),
-    )
-    .await?;
-    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(502)).await?;
-    let changed = read_fs_changed_notification(&mut ws).await?;
-    assert_eq!(changed.watch_id, watch_id);
-    assert_eq!(changed.changed_paths.len(), 1);
-    assert_eq!(changed.changed_paths[0].as_path(), file.as_path());
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(513),
-        "fs/unwatch",
-        json!({
-            "watchId": changed.watch_id,
-        }),
-    )
-    .await?;
-    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(513)).await?;
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(503),
-        "fs/readFile",
-        json!({
-            "path": file.display().to_string(),
-        }),
-    )
-    .await?;
-    let read_file: codex::FsReadFileResponse =
-        read_typed_response(&mut ws, request_id(503)).await?;
-    assert_eq!(STANDARD.decode(read_file.data_base64)?, payload);
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(504),
-        "fs/getMetadata",
-        json!({
-            "path": file.display().to_string(),
-        }),
-    )
-    .await?;
-    let metadata: codex::FsGetMetadataResponse =
-        read_typed_response(&mut ws, request_id(504)).await?;
-    assert!(metadata.is_file);
-    assert!(!metadata.is_directory);
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(505),
-        "fs/readDirectory",
-        json!({
-            "path": nested.display().to_string(),
-        }),
-    )
-    .await?;
-    let read_dir: codex::FsReadDirectoryResponse =
-        read_typed_response(&mut ws, request_id(505)).await?;
-    assert!(
-        read_dir
-            .entries
-            .iter()
-            .any(|entry| entry.file_name == "bytes.bin" && entry.is_file),
-        "fs/readDirectory did not include bytes.bin: {read_dir:?}"
-    );
-
-    let workspace_copy = home_dir.join("fs-routes-copy");
-    send_raw_client_request(
-        &mut ws,
-        request_id(506),
-        "fs/copy",
-        json!({
-            "sourcePath": workspace.display().to_string(),
-            "destinationPath": workspace_copy.display().to_string(),
-            "recursive": false,
-        }),
-    )
-    .await?;
-    let copy_error = read_error_response(&mut ws, request_id(506)).await?;
-    assert_eq!(copy_error.code, -32602);
-    assert!(copy_error.message.contains("recursive: true"));
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(507),
-        "fs/copy",
-        json!({
-            "sourcePath": workspace.display().to_string(),
-            "destinationPath": workspace_copy.display().to_string(),
-            "recursive": true,
-        }),
-    )
-    .await?;
-    let _: codex::FsCopyResponse = read_typed_response(&mut ws, request_id(507)).await?;
-    assert_eq!(fs::read(workspace_copy.join("nested/bytes.bin"))?, payload);
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(508),
-        "fs/remove",
-        json!({
-            "path": workspace_copy.display().to_string(),
-            "recursive": true,
-            "force": false,
-        }),
-    )
-    .await?;
-    let _: codex::FsRemoveResponse = read_typed_response(&mut ws, request_id(508)).await?;
-    assert!(!workspace_copy.exists());
-
-    let quiet_file = nested.join("quiet.txt");
-    send_raw_client_request(
-        &mut ws,
-        request_id(514),
-        "fs/writeFile",
-        json!({
-            "path": quiet_file.display().to_string(),
-            "dataBase64": STANDARD.encode(b"quiet"),
-        }),
-    )
-    .await?;
-    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(514)).await?;
-    assert!(
-        maybe_read_fs_changed_notification(&mut ws, Duration::from_millis(700))
-            .await?
-            .is_none(),
-        "fs/unwatch should stop future fs/changed notifications"
-    );
-
-    let missing_watch_id = format!("missing-watch-{}", Uuid::new_v4().simple());
-    let missing_file = nested.join("FETCH_HEAD");
-    send_raw_client_request(
-        &mut ws,
-        request_id(515),
-        "fs/watch",
-        json!({
-            "watchId": missing_watch_id,
-            "path": missing_file.display().to_string(),
-        }),
-    )
-    .await?;
-    let missing_watch: codex::FsWatchResponse =
-        read_typed_response(&mut ws, request_id(515)).await?;
-    assert_eq!(missing_watch.path.as_path(), missing_file.as_path());
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(516),
-        "fs/writeFile",
-        json!({
-            "path": missing_file.display().to_string(),
-            "dataBase64": STANDARD.encode(b"origin/main\n"),
-        }),
-    )
-    .await?;
-    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(516)).await?;
-    let missing_changed = read_fs_changed_notification(&mut ws).await?;
-    assert_eq!(missing_changed.watch_id, missing_watch_id);
-    assert_eq!(missing_changed.changed_paths.len(), 1);
-    assert_eq!(
-        missing_changed.changed_paths[0].as_path(),
-        missing_file.as_path()
-    );
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(517),
-        "fs/unwatch",
-        json!({
-            "watchId": missing_changed.watch_id,
-        }),
-    )
-    .await?;
-    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(517)).await?;
-
-    let file_watch_id = format!("file-watch-{}", Uuid::new_v4().simple());
-    send_raw_client_request(
-        &mut ws,
-        request_id(518),
-        "fs/watch",
-        json!({
-            "watchId": file_watch_id,
-            "path": file.display().to_string(),
-        }),
-    )
-    .await?;
-    let file_watch: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(518)).await?;
-    assert_eq!(file_watch.path.as_path(), file.as_path());
-    let temp_replace = file.with_extension("lock");
-    fs::write(&temp_replace, b"replaced")?;
-    fs::rename(&temp_replace, &file)?;
-    let file_changed = read_fs_changed_notification(&mut ws).await?;
-    assert_eq!(file_changed.watch_id, file_watch_id);
-    assert_eq!(file_changed.changed_paths.len(), 1);
-    assert_eq!(file_changed.changed_paths[0].as_path(), file.as_path());
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(519),
-        "fs/unwatch",
-        json!({
-            "watchId": file_changed.watch_id,
-        }),
-    )
-    .await?;
-    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(519)).await?;
-
-    let outside = tempdir.path().join("outside.txt");
-    send_raw_client_request(
-        &mut ws,
-        request_id(509),
-        "fs/writeFile",
-        json!({
-            "path": outside.display().to_string(),
-            "dataBase64": STANDARD.encode(b"outside"),
-        }),
-    )
-    .await?;
-    let outside_error = read_error_response(&mut ws, request_id(509)).await?;
-    assert_eq!(outside_error.code, -32602);
-    assert!(
-        outside_error
-            .message
-            .contains("outside the allowed tool root"),
-        "unexpected outside-root error: {outside_error:?}"
-    );
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(510),
-        "fs/writeFile",
-        json!({
-            "path": file.display().to_string(),
-            "dataBase64": "not base64",
-        }),
-    )
-    .await?;
-    let base64_error = read_error_response(&mut ws, request_id(510)).await?;
-    assert_eq!(base64_error.code, -32602);
-    assert!(
-        base64_error
-            .message
-            .contains("requires valid base64 dataBase64"),
-        "unexpected base64 error: {base64_error:?}"
-    );
+    for (idx, method, params) in [
+        (
+            0,
+            "fs/readFile",
+            json!({ "path": home_dir.join("file.txt").display().to_string() }),
+        ),
+        (
+            1,
+            "fs/writeFile",
+            json!({
+                "path": home_dir.join("file.txt").display().to_string(),
+                "dataBase64": "ZGVmcmE=",
+            }),
+        ),
+        (
+            2,
+            "fs/createDirectory",
+            json!({
+                "path": home_dir.join("dir").display().to_string(),
+                "recursive": true,
+            }),
+        ),
+        (
+            3,
+            "fs/getMetadata",
+            json!({ "path": home_dir.display().to_string() }),
+        ),
+        (
+            4,
+            "fs/readDirectory",
+            json!({ "path": home_dir.display().to_string() }),
+        ),
+        (
+            5,
+            "fs/remove",
+            json!({
+                "path": home_dir.join("file.txt").display().to_string(),
+                "recursive": true,
+                "force": true,
+            }),
+        ),
+        (
+            6,
+            "fs/copy",
+            json!({
+                "sourcePath": home_dir.join("file.txt").display().to_string(),
+                "destinationPath": home_dir.join("copy.txt").display().to_string(),
+                "recursive": false,
+            }),
+        ),
+        (
+            7,
+            "fs/watch",
+            json!({
+                "watchId": "watch-unsupported",
+                "path": home_dir.display().to_string(),
+            }),
+        ),
+        (8, "fs/unwatch", json!({ "watchId": "watch-unsupported" })),
+    ] {
+        let id = request_id(501 + idx);
+        send_raw_client_request(&mut ws, id.clone(), method, params).await?;
+        let error = read_error_response(&mut ws, id).await?;
+        assert_eq!(error.code, -32601);
+        assert!(
+            error.message.contains("unsupported Codex shim method"),
+            "unexpected fs/* unsupported message for {method}: {error:?}"
+        );
+        assert!(
+            error
+                .message
+                .contains("model filesystem activity must run through DEFRA"),
+            "fs/* error should describe the DEFRA tool-call boundary for {method}: {error:?}"
+        );
+    }
 
     Ok(())
 }
@@ -1555,7 +1332,7 @@ async fn codex_shim_live_protocol_uses_real_backend() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_fs_routes_share_files_with_real_backend_tools() -> Result<()> {
+async fn codex_shim_live_defra_filesystem_tools_project_to_codex_items() -> Result<()> {
     let suffix = Uuid::new_v4().simple().to_string();
     let token = format!("FSLIVE-{}", &suffix[..8]);
     let smoke = start_live_codex_shim_with_write_tools(true, None).await?;
@@ -1569,78 +1346,8 @@ async fn codex_shim_live_fs_routes_share_files_with_real_backend_tools() -> Resu
     let fixture_dir = smoke.home_dir.join("live-fs-route");
     let fixture_file = fixture_dir.join("fixture.txt");
     let relative_fixture = "live-fs-route/fixture.txt";
-    send_raw_client_request(
-        &mut ws,
-        request_id(701),
-        "fs/createDirectory",
-        json!({
-            "path": fixture_dir.display().to_string(),
-            "recursive": true,
-        }),
-    )
-    .await?;
-    let _: codex::FsCreateDirectoryResponse = read_typed_response(&mut ws, request_id(701)).await?;
-
-    let watch_id = format!("live-watch-{}", Uuid::new_v4().simple());
-    send_raw_client_request(
-        &mut ws,
-        request_id(702),
-        "fs/watch",
-        json!({
-            "watchId": watch_id,
-            "path": fixture_dir.display().to_string(),
-        }),
-    )
-    .await?;
-    let _: codex::FsWatchResponse = read_typed_response(&mut ws, request_id(702)).await?;
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(703),
-        "fs/writeFile",
-        json!({
-            "path": fixture_file.display().to_string(),
-            "dataBase64": STANDARD.encode(token.as_bytes()),
-        }),
-    )
-    .await?;
-    let _: codex::FsWriteFileResponse = read_typed_response(&mut ws, request_id(703)).await?;
-    let changed = read_fs_changed_notification(&mut ws).await?;
-    assert_eq!(changed.watch_id, watch_id);
-    assert!(
-        changed
-            .changed_paths
-            .iter()
-            .any(|path| path.as_path() == fixture_file.as_path()),
-        "fs/changed did not include fixture file: {changed:?}"
-    );
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(704),
-        "fs/readFile",
-        json!({
-            "path": fixture_file.display().to_string(),
-        }),
-    )
-    .await?;
-    let read_back: codex::FsReadFileResponse =
-        read_typed_response(&mut ws, request_id(704)).await?;
-    assert_eq!(
-        String::from_utf8(STANDARD.decode(read_back.data_base64)?)?,
-        token
-    );
-
-    send_raw_client_request(
-        &mut ws,
-        request_id(705),
-        "fs/unwatch",
-        json!({
-            "watchId": watch_id,
-        }),
-    )
-    .await?;
-    let _: codex::FsUnwatchResponse = read_typed_response(&mut ws, request_id(705)).await?;
+    fs::create_dir_all(&fixture_dir)?;
+    fs::write(&fixture_file, &token)?;
 
     let prompt = format!(
         "Use the read_file tool to read `{relative_fixture}` from the current working directory. Reply with exactly the file contents and no extra words."
@@ -1668,17 +1375,7 @@ async fn codex_shim_live_fs_routes_share_files_with_real_backend_tools() -> Resu
     assert_eq!(session_id, thread_id);
     assert_shim_trace_methods(
         &smoke.shim_trace,
-        &[
-            "initialize",
-            "config/read",
-            "thread/start",
-            "fs/createDirectory",
-            "fs/watch",
-            "fs/writeFile",
-            "fs/readFile",
-            "fs/unwatch",
-            "turn/start",
-        ],
+        &["initialize", "config/read", "thread/start", "turn/start"],
     )?;
 
     Ok(())
@@ -2909,47 +2606,6 @@ async fn read_turn_started(ws: &mut ShimWebSocket) -> Result<codex::TurnStartedN
                     server_notification_from_jsonrpc(notification)?
                 {
                     return Ok(started);
-                }
-            }
-            codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
-            }
-            codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
-            }
-            codex::JSONRPCMessage::Response(_) => {}
-        }
-    }
-}
-
-async fn read_fs_changed_notification(
-    ws: &mut ShimWebSocket,
-) -> Result<codex::FsChangedNotification> {
-    maybe_read_fs_changed_notification(ws, Duration::from_secs(5))
-        .await?
-        .ok_or_else(|| anyhow!("timed out waiting for fs/changed notification"))
-}
-
-async fn maybe_read_fs_changed_notification(
-    ws: &mut ShimWebSocket,
-    timeout: Duration,
-) -> Result<Option<codex::FsChangedNotification>> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        let message = match tokio::time::timeout(remaining, read_jsonrpc(ws)).await {
-            Ok(message) => message?,
-            Err(_) => return Ok(None),
-        };
-        match message {
-            codex::JSONRPCMessage::Notification(notification) => {
-                if let codex::ServerNotification::FsChanged(changed) =
-                    server_notification_from_jsonrpc(notification)?
-                {
-                    return Ok(Some(changed));
                 }
             }
             codex::JSONRPCMessage::Error(error) => {

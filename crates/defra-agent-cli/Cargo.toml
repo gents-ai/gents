@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }
-base64 = "0.22"
 chrono.workspace = true
 clap.workspace = true
 codex-app-server-protocol.workspace = true

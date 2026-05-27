@@ -22,7 +22,6 @@ use tokio::task::JoinHandle;
 mod background;
 mod command_projection;
 mod compat;
-mod fs_adapter;
 mod handlers;
 mod history_projection;
 mod host_runtime;
@@ -46,7 +45,6 @@ struct ShimState {
     trace_path: PathBuf,
     cwd: PathBuf,
     fs_root: Option<PathBuf>,
-    fs_writes_enabled: bool,
     node: Arc<EmbeddedNode>,
     background_execution_registry: defra_agent::BackgroundExecutionRegistry,
     graphql: Arc<str>,
@@ -65,7 +63,6 @@ struct ConnectionState {
     outbound: Outbound,
     active_turn: Arc<Mutex<Option<ActiveTurn>>>,
     thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
-    fs_watches: Arc<Mutex<BTreeMap<String, fs_adapter::FsWatchRegistration>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
@@ -81,7 +78,6 @@ struct ActiveTurn {
 pub(crate) struct CodexShimBindArgs {
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
-    pub(crate) fs_writes_enabled: bool,
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) background_execution_registry: defra_agent::BackgroundExecutionRegistry,
     pub(crate) graphql: String,
@@ -138,7 +134,6 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         trace_path: trace_path.clone(),
         cwd: std::env::current_dir().context("resolving current working directory")?,
         fs_root: args.fs_root,
-        fs_writes_enabled: args.fs_writes_enabled,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
         graphql: Arc::from(args.graphql.clone()),
@@ -192,7 +187,6 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         outbound,
         active_turn: Arc::new(Mutex::new(None)),
         thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
-        fs_watches: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
@@ -233,7 +227,6 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         }
     }
 
-    fs_adapter::close_all_watches(&connection).await;
     connection.fuzzy_file_search_sessions.lock().await.clear();
     writer.abort();
 }

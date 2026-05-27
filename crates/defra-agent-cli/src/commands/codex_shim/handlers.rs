@@ -4,7 +4,6 @@ use serde_json::json;
 
 use super::background::{cancel_projected_background_tool_key, clean_background_terminals};
 use super::compat::send_planned_stub;
-use super::fs_adapter;
 use super::history_projection::{
     conversation_summary_json, load_thread_turns, thread_turn_items_list_response,
     thread_turns_list_response,
@@ -607,60 +606,6 @@ pub(super) async fn handle_request(
                 )
                 .await
             }
-        },
-        codex::ClientRequest::FsReadFile {
-            request_id, params, ..
-        } => match fs_adapter::read_file(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsWriteFile {
-            request_id, params, ..
-        } => match fs_adapter::write_file(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsCreateDirectory {
-            request_id, params, ..
-        } => match fs_adapter::create_directory(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsGetMetadata {
-            request_id, params, ..
-        } => match fs_adapter::get_metadata(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsReadDirectory {
-            request_id, params, ..
-        } => match fs_adapter::read_directory(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsRemove {
-            request_id, params, ..
-        } => match fs_adapter::remove(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsCopy {
-            request_id, params, ..
-        } => match fs_adapter::copy(state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsWatch {
-            request_id, params, ..
-        } => match fs_adapter::watch(connection, state, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
-        codex::ClientRequest::FsUnwatch {
-            request_id, params, ..
-        } => match fs_adapter::unwatch(connection, params).await {
-            Ok(response) => send_result(outbound, request_id, response).await,
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
         },
         codex::ClientRequest::GitDiffToRemote {
             request_id, params, ..

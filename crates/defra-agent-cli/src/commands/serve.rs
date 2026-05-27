@@ -240,7 +240,6 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         let bound = bind_codex_shim(CodexShimBindArgs {
             home: home_dir.clone(),
             fs_root: effective_tool_root.clone(),
-            fs_writes_enabled: matches!(effective_tool_ceiling, ToolCeilingArg::Readwrite),
             node: node.clone(),
             background_execution_registry: background_execution_registry.clone(),
             graphql: graphql_url.clone(),

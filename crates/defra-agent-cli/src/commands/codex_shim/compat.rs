@@ -133,15 +133,6 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::ThreadSettingsUpdate { .. }
         | codex::ClientRequest::MemoryReset { .. }
         | codex::ClientRequest::ThreadApproveGuardianDeniedAction { .. }
-        | codex::ClientRequest::FsReadFile { .. }
-        | codex::ClientRequest::FsWriteFile { .. }
-        | codex::ClientRequest::FsCreateDirectory { .. }
-        | codex::ClientRequest::FsGetMetadata { .. }
-        | codex::ClientRequest::FsReadDirectory { .. }
-        | codex::ClientRequest::FsRemove { .. }
-        | codex::ClientRequest::FsCopy { .. }
-        | codex::ClientRequest::FsWatch { .. }
-        | codex::ClientRequest::FsUnwatch { .. }
         | codex::ClientRequest::GitDiffToRemote { .. }
         | codex::ClientRequest::FuzzyFileSearch { .. }
         | codex::ClientRequest::FuzzyFileSearchSessionStart { .. }
@@ -189,6 +180,20 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
             difficulty: CompatDifficulty::DefraBackedWorkflow,
             area: "thread transcript",
             plan: "future work: persist raw model-visible context as DEFRA transcript/context documents, not Codex-local rollout items",
+        }),
+
+        codex::ClientRequest::FsReadFile { .. }
+        | codex::ClientRequest::FsWriteFile { .. }
+        | codex::ClientRequest::FsCreateDirectory { .. }
+        | codex::ClientRequest::FsGetMetadata { .. }
+        | codex::ClientRequest::FsReadDirectory { .. }
+        | codex::ClientRequest::FsRemove { .. }
+        | codex::ClientRequest::FsCopy { .. }
+        | codex::ClientRequest::FsWatch { .. }
+        | codex::ClientRequest::FsUnwatch { .. } => Some(CompatGap {
+            difficulty: CompatDifficulty::HostRuntimeIntegration,
+            area: "filesystem host runtime",
+            plan: "intentionally unsupported; model filesystem activity must run through DEFRA tool-call documents and be projected into Codex thread items",
         }),
 
         codex::ClientRequest::OneOffCommandExec { .. }
