@@ -1135,6 +1135,38 @@ async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<(
     );
     assert_ne!(steering_request_id, turn_start.turn.id);
 
+    let second_steer_prompt = format!("second steer while active {}", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnSteer {
+            request_id: request_id(205),
+            params: codex::TurnSteerParams {
+                thread_id: thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: second_steer_prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: None,
+                expected_turn_id: turn_start.turn.id.clone(),
+            },
+        },
+    )
+    .await?;
+    let second_steer: codex::TurnSteerResponse =
+        read_typed_response(&mut ws, request_id(205)).await?;
+    assert_eq!(second_steer.turn_id, turn_start.turn.id);
+
+    let (_second_steering_request_id, second_session_id, second_metadata) =
+        wait_for_request_metadata(&graphql, &agent_did, &second_steer_prompt).await?;
+    assert_eq!(second_session_id, thread_id);
+    assert_eq!(
+        second_metadata
+            .pointer("/queue/queued_after_request_id")
+            .and_then(Value::as_str),
+        Some(steering_request_id.as_str()),
+        "second steering request should queue after the current DEFRA tail, not after the root turn"
+    );
+
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnInterrupt {

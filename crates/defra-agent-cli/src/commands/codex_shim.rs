@@ -61,17 +61,13 @@ type Outbound = mpsc::UnboundedSender<String>;
 #[derive(Clone)]
 struct ConnectionState {
     outbound: Outbound,
-    active_turn: Arc<Mutex<Option<ActiveTurn>>>,
+    turn_streams: Arc<Mutex<BTreeMap<String, TurnStreamControl>>>,
     thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
 #[derive(Clone, Debug)]
-struct ActiveTurn {
-    thread_id: String,
-    turn_id: String,
-    request_id: String,
-    queued_steering_request_ids: Vec<String>,
+struct TurnStreamControl {
     cancel_tx: watch::Sender<bool>,
 }
 
@@ -185,7 +181,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
     });
     let connection = ConnectionState {
         outbound,
-        active_turn: Arc::new(Mutex::new(None)),
+        turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
         thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
     };

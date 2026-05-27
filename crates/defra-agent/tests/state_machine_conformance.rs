@@ -43,9 +43,8 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_steering_case, lean_codex_shim_steering_cases, lean_command_env_case,
-    lean_command_policy_case, lean_command_sandbox_case, lean_compaction_reducer_cases,
-    lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
+    lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
     lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_queue_deadline_case,
@@ -136,11 +135,6 @@ async fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
 #[test]
 fn generated_r4c_background_work_cases_pin_observable_shapes() {
     transcript_background::generated_r4c_background_work_cases_pin_observable_shapes();
-}
-
-#[test]
-fn generated_codex_shim_steering_cases_pin_adapter_contract() {
-    codex_shim::generated_codex_shim_steering_cases_pin_adapter_contract();
 }
 
 #[test]

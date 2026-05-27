@@ -18,7 +18,7 @@ use super::super::progress::{
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
-use super::active::take_next_steering_request;
+use super::active::next_steering_request_after;
 use crate::{is_terminal_lifecycle_state, request_diagnostic_hint, SubmittedRequest};
 
 pub(super) async fn stream_defra_turn(
@@ -200,8 +200,8 @@ pub(super) async fn stream_defra_turn(
             let turn_status = terminal_turn_status(lifecycle_state, response_status);
             if turn_status == codex::TurnStatus::Completed {
                 if let Some(next_request_id) =
-                    take_next_steering_request(connection, projection.thread_id, projection.turn_id)
-                        .await
+                    next_steering_request_after(state, &current.session_id, &current.request_id)
+                        .await?
                 {
                     projection.finish_agent_message(outbound).await?;
                     spawn_background_tool_watcher(

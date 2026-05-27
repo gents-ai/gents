@@ -100,8 +100,6 @@ def snapshotJson : String :=
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"codex_shim_projection_cases\":"
       ++ codexShimProjectionCasesJson ++ ","
-    ++ "\"codex_shim_steering_cases\":"
-      ++ codexShimSteeringCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

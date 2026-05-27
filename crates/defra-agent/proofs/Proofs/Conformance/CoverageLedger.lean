@@ -595,11 +595,6 @@ def caseCoverage : List CoverageEntry :=
       "defra_agent_desktop_tauri::bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "codex_shim_steering_cases"
-      "CodexShimSteeringCases"
-      "state_machine_conformance::generated_codex_shim_steering_cases_pin_adapter_contract")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "codex_shim_projection_cases"
       "CodexShimProjectionCases"
       "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
