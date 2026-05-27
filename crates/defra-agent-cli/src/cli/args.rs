@@ -128,6 +128,8 @@ pub(crate) enum Command {
 pub(crate) struct NativeFsRunnerArgs {
     #[arg(long, value_name = "ROOT")]
     pub(crate) root: Option<PathBuf>,
+    #[arg(long, value_name = "BASE")]
+    pub(crate) base: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     pub(crate) self_test: bool,
 }
@@ -348,7 +350,7 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_model: Option<String>,
     #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
     pub(crate) codex_shim_behavior_id: Option<String>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
     pub(crate) codex_shim_poll_ms: u64,
@@ -387,7 +389,7 @@ pub(crate) struct ChatArgs {
     pub(crate) output_format: ChatOutputFormat,
     #[arg(long = "output-file", help = "Write the final response to a file")]
     pub(crate) output_file: Option<PathBuf>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -782,6 +784,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[arg(long = "delegate-to")]
     pub(crate) delegate_to: Vec<String>,
+    #[arg(
+        long = "backgroundable-tool-name",
+        help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"
+    )]
+    pub(crate) backgroundable_tool_names: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -1246,7 +1253,7 @@ pub(crate) struct RequestSubmitArgs {
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     pub(crate) no_wait: bool,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -1301,7 +1308,7 @@ pub(crate) struct RequestResendArgs {
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = true)]
     pub(crate) no_wait: bool,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -1475,7 +1482,7 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,

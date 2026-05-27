@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::Write;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,8 +20,14 @@ pub struct MockChatEndpoint {
     pub handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
 enum MockChatCompletion {
     Complete(String),
+    RoutedDelayed {
+        routes: Vec<(String, String)>,
+        default_text: String,
+        delay: Duration,
+    },
     Hang,
 }
 
@@ -31,6 +38,23 @@ impl MockChatEndpoint {
 
     pub fn start_hanging(model_name: &str) -> Result<Self> {
         Self::start_with_completion(model_name, None, MockChatCompletion::Hang)
+    }
+
+    pub fn start_routed_delayed(
+        model_name: &str,
+        routes: Vec<(String, String)>,
+        default_text: String,
+        delay: Duration,
+    ) -> Result<Self> {
+        Self::start_with_completion(
+            model_name,
+            None,
+            MockChatCompletion::RoutedDelayed {
+                routes,
+                default_text,
+                delay,
+            },
+        )
     }
 
     pub fn start_with_required_bearer(
@@ -50,6 +74,14 @@ impl MockChatEndpoint {
         required_bearer: Option<&str>,
         completion: MockChatCompletion,
     ) -> Result<Self> {
+        Self::start_with_completions(model_name, required_bearer, vec![completion])
+    }
+
+    fn start_with_completions(
+        model_name: &str,
+        required_bearer: Option<&str>,
+        completions: Vec<MockChatCompletion>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock chat port")?;
         listener
             .set_nonblocking(true)
@@ -64,6 +96,12 @@ impl MockChatEndpoint {
         let required_bearer = required_bearer.map(ToOwned::to_owned);
         let captured_chat_requests = Arc::new(Mutex::new(Vec::new()));
         let captured_chat_requests_for_thread = captured_chat_requests.clone();
+        let default_completion = completions
+            .last()
+            .cloned()
+            .unwrap_or(MockChatCompletion::Hang);
+        let completions = Arc::new(Mutex::new(VecDeque::from(completions)));
+        let completions_for_thread = completions.clone();
 
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
@@ -129,15 +167,42 @@ impl MockChatEndpoint {
                                 captured_chat_requests_for_thread
                                     .lock()
                                     .expect("captured chat request mutex poisoned")
-                                    .push(request_json);
+                                    .push(request_json.clone());
 
-                                match &completion {
+                                let completion = completions_for_thread
+                                    .lock()
+                                    .expect("mock chat completion queue mutex poisoned")
+                                    .pop_front()
+                                    .unwrap_or_else(|| default_completion.clone());
+
+                                match completion {
                                     MockChatCompletion::Complete(final_text) => {
                                         let _ = write_http_response(
                                             &mut stream,
                                             "200 OK",
                                             "text/event-stream",
-                                            &completion_text_sse(final_text),
+                                            &completion_text_sse(&final_text),
+                                        );
+                                    }
+                                    MockChatCompletion::RoutedDelayed {
+                                        routes,
+                                        default_text,
+                                        delay,
+                                    } => {
+                                        let final_text =
+                                            routed_completion_text(&request_json, &routes)
+                                                .unwrap_or(default_text);
+                                        let deadline = std::time::Instant::now() + delay;
+                                        while std::time::Instant::now() < deadline
+                                            && !stop_for_thread.load(Ordering::Relaxed)
+                                        {
+                                            thread::sleep(Duration::from_millis(25));
+                                        }
+                                        let _ = write_http_response(
+                                            &mut stream,
+                                            "200 OK",
+                                            "text/event-stream",
+                                            &completion_text_sse(&final_text),
                                         );
                                     }
                                     MockChatCompletion::Hang => {
@@ -187,6 +252,14 @@ impl MockChatEndpoint {
             .expect("captured chat request mutex poisoned")
             .clone()
     }
+}
+
+fn routed_completion_text(request_json: &Value, routes: &[(String, String)]) -> Option<String> {
+    let request = request_json.to_string();
+    routes
+        .iter()
+        .find(|(needle, _)| request.contains(needle))
+        .map(|(_, response)| response.clone())
 }
 
 impl Drop for MockChatEndpoint {

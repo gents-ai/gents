@@ -6,6 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 #[derive(Clone)]
 pub(crate) struct ToolContext {
     root: Arc<PathBuf>,
+    base: Arc<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -42,6 +43,14 @@ impl ToolContext {
     }
 
     pub(crate) fn new(root: PathBuf, create_missing: bool) -> Result<Self> {
+        Self::new_with_base(root, std::env::current_dir().ok(), create_missing)
+    }
+
+    pub(crate) fn new_with_base(
+        root: PathBuf,
+        base: Option<PathBuf>,
+        create_missing: bool,
+    ) -> Result<Self> {
         if create_missing && !root.exists() {
             std::fs::create_dir_all(&root)
                 .with_context(|| format!("creating tool root {}", root.display()))?;
@@ -50,8 +59,11 @@ impl ToolContext {
         let canonical = std::fs::canonicalize(&root)
             .with_context(|| format!("canonicalizing tool root {}", root.display()))?;
 
+        let base = resolve_base_dir(&canonical, base)?;
+
         Ok(Self {
             root: Arc::new(canonical),
+            base: Arc::new(base),
         })
     }
 
@@ -59,12 +71,16 @@ impl ToolContext {
         self.root.as_path()
     }
 
+    pub(crate) fn base(&self) -> &Path {
+        self.base.as_path()
+    }
+
     pub(crate) fn resolve_path_allow_create(&self, path: &str) -> Result<PathBuf> {
         let candidate = Path::new(path);
         let resolved = if candidate.is_absolute() {
             normalize_for_creation(candidate)?
         } else {
-            normalize_for_creation(&self.root.join(candidate))?
+            normalize_for_creation(&self.effective_base().join(candidate))?
         };
         self.ensure_allowed(resolved)
     }
@@ -75,7 +91,7 @@ impl ToolContext {
             std::fs::canonicalize(candidate)
                 .with_context(|| format!("resolving path {}", candidate.display()))?
         } else {
-            let joined = self.root.join(candidate);
+            let joined = self.effective_base().join(candidate);
             std::fs::canonicalize(&joined)
                 .with_context(|| format!("resolving path {}", joined.display()))?
         };
@@ -85,7 +101,7 @@ impl ToolContext {
     pub(crate) fn resolve_existing_dir(&self, path: Option<&str>) -> Result<PathBuf> {
         let resolved = match path {
             Some(path) if !path.trim().is_empty() => self.resolve_path(path)?,
-            _ => (*self.root).clone(),
+            _ => self.effective_base(),
         };
 
         if !resolved.is_dir() {
@@ -115,18 +131,25 @@ impl ToolContext {
         }
     }
 
+    fn effective_base(&self) -> PathBuf {
+        let runtime_base = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .and_then(|runtime| runtime.workspace_cwd)
+            .and_then(|base| resolve_base_dir(self.root.as_path(), Some(base)).ok());
+        runtime_base.unwrap_or_else(|| (*self.base).clone())
+    }
+
     pub(crate) fn display_path(&self, path: &Path) -> String {
-        path.strip_prefix(self.root.as_path())
-            .ok()
-            .map(|relative| {
+        for prefix in [self.effective_base(), (*self.root).clone()] {
+            if let Ok(relative) = path.strip_prefix(&prefix) {
                 let display = relative.to_string_lossy().replace('\\', "/");
-                if display.is_empty() {
+                return if display.is_empty() {
                     ".".to_string()
                 } else {
                     display
-                }
-            })
-            .unwrap_or_else(|| path.display().to_string())
+                };
+            }
+        }
+        path.display().to_string()
     }
 }
 
@@ -151,6 +174,21 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+fn resolve_base_dir(root: &Path, base: Option<PathBuf>) -> Result<PathBuf> {
+    let Some(base) = base else {
+        return Ok(root.to_path_buf());
+    };
+    let canonical = match std::fs::canonicalize(&base) {
+        Ok(base) => base,
+        Err(_) => return Ok(root.to_path_buf()),
+    };
+    if canonical.is_dir() && canonical.starts_with(root) {
+        Ok(canonical)
+    } else {
+        Ok(root.to_path_buf())
+    }
 }
 
 #[cfg(test)]

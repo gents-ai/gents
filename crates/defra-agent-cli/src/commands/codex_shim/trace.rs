@@ -6,7 +6,7 @@ use codex_app_server_protocol as codex;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::now_millis;
+use super::protocol::now_millis;
 
 pub(super) fn shim_event(default_path: &Path, message: impl AsRef<str>) {
     append_json(
@@ -95,6 +95,20 @@ fn trace_thread_item(method: &str, item: &codex::ThreadItem) -> Value {
             "item_id": id,
             "server": server,
             "tool": tool,
+            "status": trace_json(status),
+        }),
+        codex::ThreadItem::CommandExecution {
+            id,
+            command,
+            source,
+            status,
+            ..
+        } => json!({
+            "method": method,
+            "item_type": "commandExecution",
+            "item_id": id,
+            "command": command,
+            "source": trace_json(source),
             "status": trace_json(status),
         }),
         _ => json!({

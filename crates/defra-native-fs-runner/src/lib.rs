@@ -8,7 +8,7 @@ mod output;
 mod tools;
 mod traversal;
 
-pub use tools::execute_request;
+pub use tools::{execute_request, execute_request_with_base};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest};
 
@@ -36,5 +36,67 @@ pub fn self_test() -> Result<()> {
         Err(anyhow!(
             "self-test output did not include src/main.rs: {output}"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
+
+    #[test]
+    fn request_with_base_resolves_relative_paths_from_base() {
+        let root = std::env::temp_dir().join(format!(
+            "defra-native-fs-runner-root-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let base = root.join("repo");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("README.md"), "ok").unwrap();
+        std::fs::write(root.join("HOME.md"), "wrong").unwrap();
+
+        let output = execute_request_with_base(
+            root.clone(),
+            Some(base),
+            NativeFsRunnerRequest::ListFiles(ListFilesArgs {
+                path: None,
+                recursive: false,
+                max_entries: 10,
+                raw_json: false,
+            }),
+        )
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(output.contains("README.md"));
+        assert!(!output.contains("HOME.md"));
+    }
+
+    #[test]
+    fn grep_accepts_single_file_path() {
+        let root = std::env::temp_dir().join(format!(
+            "defra-native-fs-runner-grep-file-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("repo/src")).unwrap();
+        std::fs::write(root.join("repo/src/lib.rs"), "pub fn useful() {}\n").unwrap();
+
+        let output = execute_request_with_base(
+            root.clone(),
+            Some(root.join("repo")),
+            NativeFsRunnerRequest::Grep(GrepArgs {
+                pattern: "useful".to_string(),
+                path: Some("src/lib.rs".to_string()),
+                case_sensitive: true,
+                max_matches: 10,
+                raw_json: false,
+            }),
+        )
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(output.contains("src/lib.rs:L1: pub fn useful() {}"));
     }
 }

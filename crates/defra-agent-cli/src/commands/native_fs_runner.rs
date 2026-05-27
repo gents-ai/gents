@@ -35,7 +35,7 @@ fn run(args: NativeFsRunnerArgs) -> Result<()> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
     let request: NativeFsRunnerRequest = serde_json::from_str(&input)?;
-    match defra_native_fs_runner::execute_request(root, request) {
+    match defra_native_fs_runner::execute_request_with_base(root, args.base, request) {
         Ok(output) => {
             serde_json::to_writer(
                 std::io::stdout(),

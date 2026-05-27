@@ -15,6 +15,9 @@ pub(super) struct DefraToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
     pub(super) status: String,
+    pub(super) lifecycle_state: Option<String>,
+    pub(super) await_mode: Option<String>,
+    pub(super) child_request_id: Option<String>,
     pub(super) args: String,
     pub(super) result: String,
 }
@@ -60,6 +63,9 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 tool_call_key
                 tool_name
                 status
+                lifecycle_state
+                await_mode
+                child_request_id
                 args
                 result
                 started_at
@@ -97,6 +103,19 @@ pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCa
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
         tool_name: row.get("tool_name")?.as_str()?.to_string(),
         status: row.get("status")?.as_str()?.to_string(),
+        lifecycle_state: row
+            .get("lifecycle_state")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        await_mode: row
+            .get("await_mode")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        child_request_id: row
+            .get("child_request_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned),
         args: row
             .get("args")
             .and_then(Value::as_str)
@@ -148,9 +167,18 @@ pub(super) fn defra_tool_item(
 }
 
 pub(super) fn defra_tool_call_status(tool: &DefraToolCallProgress) -> codex::McpToolCallStatus {
-    let status = tool.status.trim().to_ascii_lowercase();
-    if matches!(status.as_str(), "error" | "failed" | "failure" | "dead")
-        || tool_result_looks_error(&tool.result)
+    let status = tool
+        .lifecycle_state
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&tool.status)
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        status.as_str(),
+        "cancelled" | "dead" | "error" | "failed" | "failure" | "timedout"
+    ) || tool_result_looks_error(&tool.result)
+        || defra_exec_result_failed(&tool.result)
     {
         return codex::McpToolCallStatus::Failed;
     }
@@ -246,6 +274,23 @@ fn tool_result_looks_error(result: &str) -> bool {
     trimmed.starts_with("Toolset error:") || trimmed.starts_with("JsonError:")
 }
 
+fn defra_exec_result_failed(result: &str) -> bool {
+    let Some(metadata) = defra_exec_metadata(result) else {
+        return false;
+    };
+    metadata.get("ok").and_then(Value::as_bool) == Some(false)
+        || metadata
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status != "success")
+}
+
+fn defra_exec_metadata(result: &str) -> Option<Value> {
+    let first_line = result.lines().next()?.trim();
+    let raw = first_line.strip_prefix("defra_exec:")?.trim();
+    serde_json::from_str(raw).ok()
+}
+
 fn parse_json_value(raw: &str) -> Option<Value> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -268,4 +313,76 @@ fn preview_compact_text(value: &str) -> Option<String> {
         trimmed.to_string()
     };
     Some(preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defra_tool_errors_render_as_failed_codex_tool_calls() {
+        let tool = test_tool("glob", "completed", r#"{"pattern":"**/*.lean"}"#)
+            .with_result("Toolset error: missing runner");
+
+        assert_eq!(
+            defra_tool_call_status(&tool),
+            codex::McpToolCallStatus::Failed
+        );
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall {
+            server,
+            tool: tool_name,
+            arguments,
+            status,
+            error,
+            ..
+        } = item
+        else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(server, "defra");
+        assert_eq!(tool_name, "glob");
+        assert_eq!(arguments["pattern"], "**/*.lean");
+        assert_eq!(status, codex::McpToolCallStatus::Failed);
+        assert_eq!(
+            error.expect("failed tool should carry error").message,
+            "Toolset error: missing runner"
+        );
+    }
+
+    #[test]
+    fn content_delta_ignores_terminal_leading_whitespace_normalization() {
+        assert_eq!(
+            content_delta("\n\nAnswer with context", "Answer with context"),
+            ""
+        );
+        assert_eq!(
+            content_delta("\n\nAnswer", "Answer with context"),
+            " with context"
+        );
+    }
+
+    fn test_tool(tool_name: &str, status: &str, args: &str) -> DefraToolCallProgress {
+        DefraToolCallProgress {
+            tool_call_key: "session:call".to_string(),
+            tool_name: tool_name.to_string(),
+            status: status.to_string(),
+            lifecycle_state: Some(status.to_string()),
+            await_mode: None,
+            child_request_id: None,
+            args: args.to_string(),
+            result: String::new(),
+        }
+    }
+
+    trait ToolTestExt {
+        fn with_result(self, result: &str) -> Self;
+    }
+
+    impl ToolTestExt for DefraToolCallProgress {
+        fn with_result(mut self, result: &str) -> Self {
+            self.result = result.to_string();
+            self
+        }
+    }
 }

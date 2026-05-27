@@ -148,11 +148,19 @@ impl DefraSessionHook {
                     text
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        tool_call_id = %internal_call_id,
-                        "failed to load stored tool result, falling back to stream payload"
-                    );
+                    if is_missing_tool_call_result(&e) {
+                        tracing::debug!(
+                            error = %e,
+                            tool_call_id = %internal_call_id,
+                            "stored tool result not found, falling back to stream payload"
+                        );
+                    } else {
+                        tracing::warn!(
+                            error = %e,
+                            tool_call_id = %internal_call_id,
+                            "failed to load stored tool result, falling back to stream payload"
+                        );
+                    }
                     let (text, _, _) = truncate_text(
                         &raw_stream_result,
                         TruncationMode::Head,
@@ -544,4 +552,8 @@ impl DefraSessionHook {
             Ok(SubagentTargetHost::Remote)
         }
     }
+}
+
+fn is_missing_tool_call_result(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("no AgentToolCall")
 }

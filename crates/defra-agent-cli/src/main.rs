@@ -40,6 +40,8 @@ const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
+const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 1_800;
+const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -282,6 +284,7 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentMessage", "message_key"),
     ("AgentToolCall", "tool_call_key"),
     ("CompactionEntry", "compaction_key"),
+    ("CodexThreadProjection", "session_id"),
     ("Task", "task_id"),
     ("Schedule", "schedule_id"),
     ("ToolServiceRegistry", "service_id"),

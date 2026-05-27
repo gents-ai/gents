@@ -60,6 +60,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_steering_cases: Vec<LeanCodexShimSteeringCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
@@ -215,6 +219,8 @@ pub(crate) struct LeanLifecycleTransitionCase {
 mod background_transcript;
 #[path = "lean_vocab_test/client_session.rs"]
 mod client_session;
+#[path = "lean_vocab_test/codex_shim.rs"]
+mod codex_shim;
 #[path = "lean_vocab_test/command_identity_queue.rs"]
 mod command_identity_queue;
 #[path = "lean_vocab_test/event_delivery.rs"]
@@ -226,6 +232,7 @@ mod triggers_runtime_apply;
 
 pub(crate) use background_transcript::*;
 pub(crate) use client_session::*;
+pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use event_delivery::*;
 pub(crate) use slot_persistence_health::*;
@@ -420,6 +427,32 @@ pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBa
         .iter()
         .find(|case| case.witness() == witness)
         .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
+}
+
+pub(crate) fn lean_codex_shim_projection_cases() -> &'static [LeanCodexShimProjectionCase] {
+    &lean_contract_snapshot().codex_shim_projection_cases
+}
+
+pub(crate) fn lean_codex_shim_projection_case(
+    witness: &str,
+) -> &'static LeanCodexShimProjectionCase {
+    lean_contract_snapshot()
+        .codex_shim_projection_cases
+        .iter()
+        .find(|case| case.witness == witness)
+        .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
+}
+
+pub(crate) fn lean_codex_shim_steering_cases() -> &'static [LeanCodexShimSteeringCase] {
+    &lean_contract_snapshot().codex_shim_steering_cases
+}
+
+pub(crate) fn lean_codex_shim_steering_case(witness: &str) -> &'static LeanCodexShimSteeringCase {
+    lean_contract_snapshot()
+        .codex_shim_steering_cases
+        .iter()
+        .find(|case| case.witness == witness)
+        .unwrap_or_else(|| panic!("Lean Codex shim steering witness {witness:?} was not emitted"))
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

@@ -5,6 +5,7 @@ import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
@@ -97,6 +98,10 @@ def snapshotJson : String :=
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
+    ++ "\"codex_shim_projection_cases\":"
+      ++ codexShimProjectionCasesJson ++ ","
+    ++ "\"codex_shim_steering_cases\":"
+      ++ codexShimSteeringCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

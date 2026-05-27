@@ -21,6 +21,7 @@ defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
+futures-util = "0.3"
 query.workspace = true
 hostname.workspace = true
 opentelemetry.workspace = true
@@ -40,7 +41,6 @@ uuid.workspace = true
 [dev-dependencies]
 acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.13.1" }
 defra-agent-lean-contract.workspace = true
-futures-util = "0.3"
 identity.workspace = true
 regex = "1"
 tempfile = "3"

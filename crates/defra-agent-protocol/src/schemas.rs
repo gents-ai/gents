@@ -29,6 +29,9 @@ pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
+pub const CODEX_THREAD_PROJECTION_NAME: &str = "CodexThreadProjection";
+pub const CODEX_THREAD_PROJECTION: &str =
+    include_str!("../schemas/agent/codex_thread_projection.graphql");
 pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const TASK_NAME: &str = "Task";
@@ -79,6 +82,7 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
+    CODEX_THREAD_PROJECTION,
     TASK,
     SCHEDULE,
     EVENT_TRIGGER,
@@ -101,6 +105,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
+    CODEX_THREAD_PROJECTION_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
@@ -119,6 +124,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
+    CODEX_THREAD_PROJECTION_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
@@ -134,7 +140,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            20,
+            21,
             "ALL should enumerate every non-runtime schema"
         );
     }
@@ -142,8 +148,13 @@ mod tests {
     #[test]
     fn every_schema_starts_with_type_declaration() {
         for sdl in ALL.iter().chain(RUNTIME_ALL.iter()) {
+            let first_sdl_line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+                .unwrap_or("");
             assert!(
-                sdl.trim_start().starts_with("type "),
+                first_sdl_line.starts_with("type "),
                 "schema must begin with `type`: {}",
                 sdl.lines().next().unwrap_or("")
             );
