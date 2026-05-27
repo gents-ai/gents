@@ -134,6 +134,49 @@ async fn interrupt_request_cascade_returns_accepted_when_signature_matches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_request_cascade_latches_only_cascade_descendants() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let preview = build_cascade_preview(
+        &core,
+        &DesktopPreviewInterruptCascadeRequest {
+            request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
+            include_terminal: Some(true),
+        },
+    )
+    .await
+    .unwrap();
+
+    let result = interrupt_request(
+        &core,
+        &DesktopInterruptRequest {
+            request_id: "req_root".into(),
+            cause: "userCancelled".into(),
+            cascade: true,
+            expected_preview_signature: Some(preview.preview_signature.clone()),
+        },
+    )
+    .await
+    .expect("cascade interrupt ok");
+
+    assert!(result.accepted);
+    for request_id in ["req_root", "req_b91", "req_b92", "req_c01"] {
+        let row = fetch_request_row(&core, request_id).await;
+        assert!(
+            row.interrupt_requested_at.is_some(),
+            "{request_id} should be latched by cascade interrupt"
+        );
+    }
+    for request_id in ["req_b93", "req_c02", "req_a17_old"] {
+        let row = fetch_request_row(&core, request_id).await;
+        assert!(
+            row.interrupt_requested_at.is_none(),
+            "{request_id} should not be latched by cascade interrupt"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupt_request_cascade_returns_stale_preview_when_signature_drifts() {
     let (core, _tmp) = seed_cascade_fixture().await;
     let result = interrupt_request(

@@ -76,9 +76,10 @@ pub(crate) struct CascadeWalkResult {
 /// Filters terminal rows when `include_terminal == false`, except as
 /// AlreadyTerminal evidence.
 ///
-/// When `req.agent_did` is `Some(did)`, both the root AgentRequest query and
-/// every AgentToolCall / child AgentRequest query include an `agent_did` filter
-/// so the walk is scoped to that operator's documents only.
+/// When `req.agent_did` is `Some(did)`, the root AgentRequest query is scoped
+/// to that operator's documents. Descendants are then authorized by persisted
+/// AgentToolCall.child_request_id edges, because linked subagents may be owned
+/// by a different deployment DID than the root request.
 pub(crate) async fn walk(
     core: &Arc<ClientCore>,
     req: &CascadeWalkRequest,
@@ -105,7 +106,6 @@ pub(crate) async fn walk(
 
     bfs(
         node,
-        agent_did,
         &req.root_request_id,
         req.include_terminal,
         0,
@@ -119,11 +119,8 @@ pub(crate) async fn walk(
 
 /// BFS descent over AgentToolCall edges. `parent_request_id` is the node whose
 /// children we're expanding at this call level. `depth` starts at 0.
-///
-/// When `agent_did` is `Some(did)`, queries filter to rows owned by that DID.
 async fn bfs(
     node: &EmbeddedNode,
-    agent_did: Option<&str>,
     parent_request_id: &str,
     include_terminal: bool,
     depth: usize,
@@ -135,8 +132,9 @@ async fn bfs(
     }
 
     // Query all AgentToolCall rows where request_id == parent AND child_request_id is set.
-    // AgentToolCall does not carry agent_did; operator scoping is enforced via
-    // fetch_request (which does filter by agent_did) for the root and each child.
+    // AgentToolCall does not carry agent_did. Operator scoping is enforced on
+    // the root request before the walk starts; child reachability is the bridge
+    // edge itself, which supports cross-deployment subagents.
     let escaped_parent = escape_graphql_string(parent_request_id);
     let query = format!(
         r#"{{
@@ -187,14 +185,11 @@ async fn bfs(
         let await_mode = string_field(tc, "await_mode");
         let cancel_policy = string_field(tc, "cancel_policy");
 
-        // Fetch child request to determine lifecycle state. Scope by agent_did if provided.
-        // If the child is owned by a different agent (not found under the filter), skip it.
-        let child_row = match fetch_request(node, &child_id, agent_did).await {
+        // Fetch child request to determine lifecycle state. Do not apply the
+        // root agent_did filter here: a valid subagent edge can point at a child
+        // request owned by a different deployment DID.
+        let child_row = match fetch_request(node, &child_id, None).await {
             Ok(row) => row,
-            Err(_) if agent_did.is_some() => {
-                // Child is not visible under the agent_did scope — skip it.
-                continue;
-            }
             Err(e) => {
                 return Err(format!(
                     "cascade::walk: child request {child_id} not found: {e}"
@@ -246,7 +241,6 @@ async fn bfs(
         if should_recurse {
             Box::pin(bfs(
                 node,
-                agent_did,
                 &child_id,
                 include_terminal,
                 depth + 1,
@@ -454,7 +448,6 @@ pub(crate) async fn latch_root_interrupt(
 /// `InterruptRequestResult` reflecting whether this call was the first to set
 /// the field (`accepted`) or the field was already set (`already_interrupted`).
 ///
-/// The cascade path is not yet implemented (Task 6).
 pub(crate) async fn interrupt_request(
     core: &Arc<ClientCore>,
     req: &DesktopInterruptRequest,
@@ -505,10 +498,13 @@ pub(crate) async fn interrupt_request(
         });
     }
 
-    // Signature matches — latch the root. Cascade observers / runtime will
-    // complete child requests; the bridge does not eagerly cancel children
-    // (that's the runtime's contract).
+    // Signature matches — latch the root and every descendant that the
+    // preview classified as cascade-interruptible. This is the Rust bridge
+    // counterpart to Lean's bridge_cancel_cascade step: set
+    // interrupt_requested_at on the child so the child daemon can lift
+    // interrupt_processing to the interrupted terminal state.
     let latched = latch_root_interrupt(core, &req.request_id).await?;
+    latch_cascade_descendants(core, &preview).await?;
     Ok(InterruptRequestResult {
         request_id: req.request_id.clone(),
         accepted: true, // idempotent success — always accepted when latched or already latched
@@ -517,6 +513,28 @@ pub(crate) async fn interrupt_request(
         stale_preview: false,
         preview: None,
     })
+}
+
+async fn latch_cascade_descendants(
+    core: &Arc<ClientCore>,
+    preview: &CascadeCancelPreview,
+) -> Result<(), String> {
+    for child in &preview.will_interrupt {
+        defra_agent::interrupt_request(core.node(), &child.request_id)
+            .await
+            .map_err(|error| {
+                format!(
+                    "cascade interrupt failed to latch child request {}: {error}",
+                    child.request_id
+                )
+            })?;
+        tracing::info!(
+            root_request_id = %preview.root_request_id,
+            child_request_id = %child.request_id,
+            "cascade interrupt latched descendant request"
+        );
+    }
+    Ok(())
 }
 
 /// Extract a non-empty string field from a JSON object.
