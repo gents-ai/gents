@@ -107,10 +107,20 @@ describeLive("Tauri app live subagent backgrounding", () => {
           // When subagent inference is configured separately, parent and child
           // nodes must resolve to distinct backend ids. When it falls back to the
           // primary, the assertion still validates that backend_id is populated.
-          const parentNode = tree.nodes.find((node) => node.requestId === submitted.requestId);
-          const childNode = tree.nodes.find((node) => node.behaviorId === subagentTarget);
-          expect(parentNode?.backendId, "parent backendId should be populated").toBeTruthy();
-          expect(childNode?.backendId, "child backendId should be populated").toBeTruthy();
+          const parentNode = tree.nodes.find(
+            (node) => node.requestId === submitted.requestId,
+          );
+          const childNode = tree.nodes.find(
+            (node) => node.behaviorId === subagentTarget,
+          );
+          expect(
+            parentNode?.backendId,
+            "parent backendId should be populated",
+          ).toBeTruthy();
+          expect(
+            childNode?.backendId,
+            "child backendId should be populated",
+          ).toBeTruthy();
           if (process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
             expect(childNode?.backendId).not.toBe(parentNode?.backendId);
           }
@@ -187,9 +197,7 @@ function collectAssistantText(
   }>,
 ) {
   return timelineItems
-    .filter(
-      (item) => item.kind === "assistantMessage" || item.kind === "liveAssistant",
-    )
+    .filter((item) => item.kind === "assistantMessage" || item.kind === "liveAssistant")
     .map((item) =>
       [normalizeTimelineText(item.content), normalizeTimelineText(item.reasoning)]
         .filter((text) => text.length > 0)

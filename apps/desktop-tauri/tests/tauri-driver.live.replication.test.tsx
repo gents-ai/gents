@@ -56,7 +56,9 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
         toolSelectionId: behavior!.toolSelectionId ?? null,
         inferenceProfileId: behavior!.inferenceProfileId ?? null,
       });
-      logTurn(`D1/D2 remote write issued behaviorId=${behavior!.behaviorId} sentinel=${sentinel}`);
+      logTurn(
+        `D1/D2 remote write issued behaviorId=${behavior!.behaviorId} sentinel=${sentinel}`,
+      );
 
       // Read on the desktop node (node B).  The assertion must pass inside
       // the 5-second D2 window.  If propagation takes longer, the test

@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   addPeer,
   fetchPeerStatus,
+  initLocalStandardRuntime,
   repairP2P,
   startDesktopClient,
 } from "../lib/desktop-api";
@@ -27,6 +28,37 @@ export function createDesktopShellPeerActions({
   setSnapshot,
   setStarting,
 }: PeerActionParams) {
+  async function onInitLocalRuntime(label?: string | null) {
+    setAddingPeer(true);
+    setStarting(true);
+    setError(null);
+    try {
+      const summary = await initLocalStandardRuntime({
+        label: label?.trim() || "Local Agent",
+        dangerouslyOverwrite: false,
+        reset: false,
+      });
+      const peerRequest: PeerAddRequest = {
+        label: summary.label,
+        agentDid: summary.agentDid,
+        addr: summary.p2pListenAddress,
+        graphql: summary.graphql,
+      };
+      const next = snapshot?.client
+        ? await addPeer(peerRequest)
+        : await startDesktopClient();
+      setSnapshot(next);
+      setSelectedAgentDid(summary.agentDid);
+      return summary;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setStarting(false);
+      setAddingPeer(false);
+    }
+  }
+
   async function onAddPeer(request: PeerAddRequest) {
     setAddingPeer(true);
     setError(null);
@@ -77,6 +109,7 @@ export function createDesktopShellPeerActions({
   return {
     onAddPeer,
     onFetchPeerStatus,
+    onInitLocalRuntime,
     onRepairP2P,
   };
 }

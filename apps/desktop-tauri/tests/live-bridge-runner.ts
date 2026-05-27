@@ -98,11 +98,19 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     appendRunnerArg(runnerArgs, "--provider", options.provider);
     appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
     appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
-    appendRunnerArg(runnerArgs, "--subagent-inference-url", options.subagentInferenceUrl);
+    appendRunnerArg(
+      runnerArgs,
+      "--subagent-inference-url",
+      options.subagentInferenceUrl,
+    );
     appendRunnerArg(runnerArgs, "--subagent-model-name", options.subagentModelName);
     appendRunnerArg(runnerArgs, "--subagent-provider", options.subagentProvider);
     appendRunnerArg(runnerArgs, "--subagent-api-key", options.subagentApiKey);
-    appendRunnerArg(runnerArgs, "--subagent-api-key-env-var", options.subagentApiKeyEnvVar);
+    appendRunnerArg(
+      runnerArgs,
+      "--subagent-api-key-env-var",
+      options.subagentApiKeyEnvVar,
+    );
     const child = spawn("cargo", runnerArgs, {
       cwd: REPO_ROOT,
       env: {

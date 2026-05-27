@@ -60,6 +60,40 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
   return invoke<T>(command, args);
 }
 
+type InitSummaryWire = InitSummary & {
+  status_endpoint?: string | null;
+  agent_home?: string;
+  desktop_home?: string;
+  peer_directory?: string;
+  agent_name?: string;
+  agent_did?: string;
+  p2p_transport?: string;
+  p2p_peer_id?: string;
+  p2p_listen_address?: string;
+  peer_record_id?: string;
+  next_steps?: string[];
+};
+
+function normalizeInitSummary(summary: InitSummaryWire): InitSummary {
+  return {
+    status: summary.status,
+    source: summary.source,
+    statusEndpoint: summary.statusEndpoint ?? summary.status_endpoint ?? null,
+    agentHome: summary.agentHome ?? summary.agent_home ?? "",
+    desktopHome: summary.desktopHome ?? summary.desktop_home ?? "",
+    peerDirectory: summary.peerDirectory ?? summary.peer_directory ?? "",
+    label: summary.label,
+    agentName: summary.agentName ?? summary.agent_name ?? "",
+    agentDid: summary.agentDid ?? summary.agent_did ?? "",
+    graphql: summary.graphql,
+    p2pTransport: summary.p2pTransport ?? summary.p2p_transport ?? "",
+    p2pPeerId: summary.p2pPeerId ?? summary.p2p_peer_id ?? "",
+    p2pListenAddress: summary.p2pListenAddress ?? summary.p2p_listen_address ?? "",
+    peerRecordId: summary.peerRecordId ?? summary.peer_record_id ?? "",
+    nextSteps: summary.nextSteps ?? summary.next_steps ?? [],
+  };
+}
+
 export type DesktopApiAdapter = {
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
@@ -266,7 +300,9 @@ export async function initLocalStandardRuntime(request: {
   dangerouslyOverwrite: boolean;
   reset: boolean;
 }) {
-  return desktopApiAdapter().initLocalStandardRuntime(request);
+  return normalizeInitSummary(
+    await desktopApiAdapter().initLocalStandardRuntime(request),
+  );
 }
 
 export async function startDesktopClient() {

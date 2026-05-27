@@ -67,11 +67,14 @@ if (apiKey) {
 if (apiKeyEnvVar) {
   env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
 }
-if (subagentInferenceUrl) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
-if (subagentModelName) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
+if (subagentInferenceUrl)
+  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
+if (subagentModelName)
+  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
 if (subagentProvider) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
 if (subagentApiKey) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
-if (subagentApiKeyEnvVar) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
+if (subagentApiKeyEnvVar)
+  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
 
 const liveTestSuites = {
   fleet: "tests/tauri-driver.live.fleet.test.tsx",

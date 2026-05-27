@@ -242,15 +242,16 @@ export function useDesktopShell() {
     stopping,
   });
 
-  const { onAddPeer, onFetchPeerStatus, onRepairP2P } = createDesktopShellPeerActions({
-    snapshot,
-    setAddingPeer,
-    setError,
-    setRepairingP2P,
-    setSelectedAgentDid,
-    setSnapshot,
-    setStarting,
-  });
+  const { onAddPeer, onFetchPeerStatus, onInitLocalRuntime, onRepairP2P } =
+    createDesktopShellPeerActions({
+      snapshot,
+      setAddingPeer,
+      setError,
+      setRepairingP2P,
+      setSelectedAgentDid,
+      setSnapshot,
+      setStarting,
+    });
 
   const {
     onSaveAgentConfig,
@@ -343,6 +344,7 @@ export function useDesktopShell() {
     refreshSnapshot,
     onAddPeer,
     onFetchPeerStatus,
+    onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,
     onRenameConversationTitle,

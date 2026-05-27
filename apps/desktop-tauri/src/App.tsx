@@ -46,6 +46,7 @@ function App() {
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
           onFetchPeerStatus={shell.onFetchPeerStatus}
+          onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
           onOpenConfig={openConfig}
           onRepairP2P={shell.onRepairP2P}

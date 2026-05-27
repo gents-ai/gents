@@ -92,7 +92,11 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
       // opens the CascadeCancelDialog; if none are live it fires a direct
       // interrupt. Use findByRole to wait for the dialog in either case.
       const dialog = await screen
-        .findByRole("dialog", { name: /interrupt parent request/i }, { timeout: 10_000 })
+        .findByRole(
+          "dialog",
+          { name: /interrupt parent request/i },
+          { timeout: 10_000 },
+        )
         .catch(() => null);
       if (dialog) {
         logTurn("cascade dialog opened; confirming cascade (B3 cascade path)");
@@ -149,7 +153,9 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
       // terminal turn state — this is more reliable than polling listSubagentTree
       // for the parent lifecycle state, which may lag behind the session update.
       const parentSession = await runner.waitForRequestCompletion(submitted);
-      logTurn(`parent session terminal: turnState=${parentSession.turnState} cancelCause=${JSON.stringify(parentSession.latestResponse?.cancelCause)}`);
+      logTurn(
+        `parent session terminal: turnState=${parentSession.turnState} cancelCause=${JSON.stringify(parentSession.latestResponse?.cancelCause)}`,
+      );
       // B3: parent must reach *any* terminal state (not necessarily "interrupted" —
       // the parent may end as "failed" when wait_subagent returns an error on cascade,
       // or "interrupted" when the direct interrupt signal is the first to land).

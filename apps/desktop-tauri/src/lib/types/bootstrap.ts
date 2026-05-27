@@ -33,6 +33,7 @@ export type BootstrapSummary = {
 export type InitSummary = {
   status: string;
   source: string;
+  statusEndpoint?: string | null;
   agentHome: string;
   desktopHome: string;
   peerDirectory: string;

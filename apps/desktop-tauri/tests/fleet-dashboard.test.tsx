@@ -2,8 +2,55 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
+import type { BootstrapSummary } from "../src/lib/types";
+
+const bootstrap: BootstrapSummary = {
+  defaultAgentHome: "/Users/test/.defra-agent",
+  initAgentName: "local-agent",
+  initAgentDid: "did:key:z6MkLocal",
+  initToolCeiling: "read-write",
+  initToolRoot: "/Users/test/project",
+  desktopHome: "/Users/test/Library/Application Support/defra-agent-desktop",
+  peerDirectoryPath:
+    "/Users/test/Library/Application Support/defra-agent-desktop/peers.json",
+  nodeDataDir: "/Users/test/Library/Application Support/defra-agent-desktop/node",
+  logFilePath:
+    "/Users/test/Library/Application Support/defra-agent-desktop/desktop.log",
+  agentHomeExists: true,
+  desktopHomeExists: true,
+  peerDirectoryExists: false,
+  savedPeers: [],
+};
 
 describe("FleetDashboard add connection flow", () => {
+  it("connects the local runtime from the fleet empty state", async () => {
+    const onInitLocalRuntime = vi.fn(async () => undefined);
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onFetchPeerStatus={vi.fn()}
+        onInitLocalRuntime={onInitLocalRuntime}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("fleet-connect-local"));
+
+    await waitFor(() => {
+      expect(onInitLocalRuntime).toHaveBeenCalledWith("local-agent");
+    });
+  });
+
   it("discovers peer connection details from a server /status address", async () => {
     const onFetchPeerStatus = vi.fn(async () => ({
       agent_name: "worker-a",
@@ -26,6 +73,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onFetchPeerStatus={onFetchPeerStatus}
+        onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
@@ -66,6 +114,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
+        onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
@@ -101,6 +150,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onFetchPeerStatus={onFetchPeerStatus}
+        onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}

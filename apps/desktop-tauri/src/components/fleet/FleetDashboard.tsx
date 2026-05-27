@@ -21,6 +21,7 @@ type FleetDashboardProps = {
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
+  onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRepairP2P: () => Promise<unknown>;
@@ -43,17 +44,20 @@ export function FleetDashboard({
   starting,
   onAddPeer,
   onFetchPeerStatus,
+  onInitLocalRuntime,
   onOpenChat,
   onOpenConfig,
   onRepairP2P,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
   const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
-  const [localError, setLocalError] = useState<string | null>(null);
+  const [peerFormError, setPeerFormError] = useState<string | null>(null);
+  const [localRuntimeError, setLocalRuntimeError] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
 
   async function submitPeer(request: PeerAddRequest) {
-    setLocalError(null);
+    setPeerFormError(null);
+    setLocalRuntimeError(null);
     try {
       await onAddPeer({
         ...request,
@@ -62,7 +66,17 @@ export function FleetDashboard({
       setPeerForm(DEFAULT_PEER_FORM);
       setShowAddPeer(false);
     } catch (error) {
-      setLocalError(String(error));
+      setPeerFormError(String(error));
+    }
+  }
+
+  async function connectLocalRuntime() {
+    setLocalRuntimeError(null);
+    setPeerFormError(null);
+    try {
+      await onInitLocalRuntime(bootstrap?.initAgentName ?? "Local Agent");
+    } catch (error) {
+      setLocalRuntimeError(String(error));
     }
   }
 
@@ -77,10 +91,16 @@ export function FleetDashboard({
               Connect the desktop to an agent before opening chat or config.
             </p>
           </div>
+          <LocalRuntimeConnect
+            bootstrap={bootstrap}
+            busy={addingPeer || starting || loading}
+            error={localRuntimeError}
+            onConnect={connectLocalRuntime}
+          />
           <AddPeerForm
             addingPeer={addingPeer}
             disabled={starting || loading}
-            localError={localError}
+            localError={peerFormError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
             onFetchPeerStatus={onFetchPeerStatus}
@@ -108,10 +128,16 @@ export function FleetDashboard({
 
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
+          <LocalRuntimeConnect
+            bootstrap={bootstrap}
+            busy={addingPeer || starting || loading}
+            error={localRuntimeError}
+            onConnect={connectLocalRuntime}
+          />
           <AddPeerForm
             addingPeer={addingPeer}
             disabled={starting || loading}
-            localError={localError}
+            localError={peerFormError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
             onFetchPeerStatus={onFetchPeerStatus}
@@ -150,6 +176,45 @@ export function FleetDashboard({
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+function LocalRuntimeConnect({
+  bootstrap,
+  busy,
+  error,
+  onConnect,
+}: {
+  bootstrap: BootstrapSummary | null;
+  busy: boolean;
+  error: string | null;
+  onConnect: () => Promise<void>;
+}) {
+  const agentName = bootstrap?.initAgentName?.trim() || "Local Agent";
+  const identity = bootstrap?.initAgentDid?.trim() || bootstrap?.defaultAgentHome || "";
+
+  return (
+    <section className="fleet-local-runtime">
+      <div className="fleet-local-runtime-copy">
+        <span className="eyebrow">Local runtime</span>
+        <strong>{agentName}</strong>
+        {identity ? (
+          <span className="muted mono" title={identity}>
+            {identity}
+          </span>
+        ) : null}
+      </div>
+      <button
+        className="primary-button"
+        data-testid="fleet-connect-local"
+        disabled={busy}
+        onClick={() => void onConnect()}
+        type="button"
+      >
+        {busy ? "Connecting..." : "Connect Local Agent"}
+      </button>
+      {error ? <p className="fleet-local-runtime-error">{error}</p> : null}
     </section>
   );
 }
