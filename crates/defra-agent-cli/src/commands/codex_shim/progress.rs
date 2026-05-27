@@ -285,7 +285,7 @@ fn defra_exec_result_failed(result: &str) -> bool {
             .is_some_and(|status| status != "success")
 }
 
-fn defra_exec_metadata(result: &str) -> Option<Value> {
+pub(super) fn defra_exec_metadata(result: &str) -> Option<Value> {
     let first_line = result.lines().next()?.trim();
     let raw = first_line.strip_prefix("defra_exec:")?.trim();
     serde_json::from_str(raw).ok()

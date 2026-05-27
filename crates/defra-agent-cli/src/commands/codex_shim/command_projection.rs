@@ -4,7 +4,7 @@ use std::path::Path;
 use codex_app_server_protocol as codex;
 use serde_json::Value;
 
-use super::progress::{defra_tool_call_status, DefraToolCallProgress};
+use super::progress::{defra_exec_metadata, defra_tool_call_status, DefraToolCallProgress};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ToolProjectionStatus {
@@ -234,12 +234,6 @@ fn defra_exec_exit_code(result: &str) -> Option<i32> {
         .get("exit_code")
         .and_then(Value::as_i64)
         .and_then(|code| i32::try_from(code).ok())
-}
-
-fn defra_exec_metadata(result: &str) -> Option<Value> {
-    let first_line = result.lines().next()?.trim();
-    let json = first_line.strip_prefix("defra_exec:")?.trim();
-    serde_json::from_str(json).ok()
 }
 
 fn shell_join(argv: &[String]) -> String {
