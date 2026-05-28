@@ -309,9 +309,9 @@ pub(crate) async fn create_agent_request(
 ///     `error`).
 ///
 /// Returning is intentionally lenient on partial data:
-///   - `interrupted` requests stamp `interrupted_at` on the response but leave
-///     response `status = "streaming"`; the returned JSON still carries that
-///     partial content so callers can render it.
+///   - `interrupted` requests stamp `interrupted_at` before terminalizing the
+///     response as `error`, so callers can observe a durable interrupt marker
+///     even if the request lifecycle reaches `interrupted` first.
 ///   - `dead`/`Stale` requests (TTL'd before ever claiming) may have no
 ///     `AgentResponse` row at all; in that case we synthesize one and rely on
 ///     the top-level `request` field for the terminal info.
