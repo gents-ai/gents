@@ -8,7 +8,7 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { optionalString } from "./formUtils";
+import { ignoreHandledActionError, optionalString } from "./formUtils";
 
 export type EventTriggerConfigPanelProps = {
   deployment: DeploymentView;
@@ -19,9 +19,7 @@ export type EventTriggerConfigPanelProps = {
   onSelectEventTrigger: (triggerId: string) => void;
   onCreateEventTrigger: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
-  ) => Promise<unknown>;
+  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
 };
 
 export function EventTriggerConfigPanel({
@@ -86,9 +84,7 @@ export type EventTriggerConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (triggerId: string) => void;
-  onSaveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
-  ) => Promise<unknown>;
+  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
 };
 
 export function EventTriggerConfigEditor({
@@ -121,16 +117,20 @@ export function EventTriggerConfigEditor({
   async function submitEventTrigger(event: FormEvent) {
     event.preventDefault();
     const nextId = triggerId.trim();
-    await onSaveEventTriggerConfig({
-      triggerId: nextId,
-      taskId,
-      sourceCollection,
-      eventKind,
-      filter: optionalString(filter),
-      enabled,
-      concurrency,
-    });
-    onSaved(nextId);
+    try {
+      await onSaveEventTriggerConfig({
+        triggerId: nextId,
+        taskId,
+        sourceCollection,
+        eventKind,
+        filter: optionalString(filter),
+        enabled,
+        concurrency,
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   return (

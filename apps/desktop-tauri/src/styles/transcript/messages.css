@@ -28,6 +28,22 @@
     box-shadow: inset 2px 0 0 rgb(var(--source-green-rgb) / 0.18);
   }
 
+  .transcript-panel .response-error-card {
+    border-color: rgb(255 111 95 / 0.34);
+    box-shadow: inset 2px 0 0 var(--color-error-strong);
+  }
+
+  .response-error-card .message-role,
+  .response-error-content {
+    color: var(--color-error);
+  }
+
+  .response-error-content {
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
   .message-role {
     color: var(--color-text-warm);
     font-size: 11px;

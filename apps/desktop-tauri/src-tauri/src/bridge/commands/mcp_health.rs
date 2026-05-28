@@ -101,10 +101,9 @@ fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
 /// once against a fresh `McpPool` + `ServiceHealthMap`, and reports the
 /// snapshot.
 ///
-/// The returned `failure_count` is always 0 because the cycle starts from
-/// `ServiceModel::initial` — for accumulated K-state across many probe
-/// cycles, the desktop reads the persisted `ToolServiceHealthState` row
-/// via `load_mcp_services_with_health`.
+/// A failed one-shot probe reports `unreachable` immediately. For accumulated
+/// K-state across many background probe cycles, the desktop reads the
+/// persisted `ToolServiceHealthState` row via `load_mcp_services_with_health`.
 pub(crate) async fn probe_mcp_service(
     core: &ClientCore,
     service_id: &str,
@@ -128,7 +127,7 @@ pub(crate) async fn probe_mcp_service(
     let health_map = ServiceHealthMap::new();
     let pool = McpPool::new();
     let started = std::time::Instant::now();
-    let options = HealthCheckerOptions::default();
+    let options = one_shot_probe_options();
     let timeout = options.probe_timeout * 2;
     // Resolve the local hostname so `resolve_mcp_url` substitutes 127.0.0.1
     // for services advertised on this host. Mirrors the CLI's
@@ -179,6 +178,13 @@ pub(crate) async fn probe_mcp_service(
                 Duration::from_millis(latency_ms).as_millis()
             )),
         }),
+    }
+}
+
+fn one_shot_probe_options() -> HealthCheckerOptions {
+    HealthCheckerOptions {
+        failure_threshold_k: 1,
+        ..HealthCheckerOptions::default()
     }
 }
 

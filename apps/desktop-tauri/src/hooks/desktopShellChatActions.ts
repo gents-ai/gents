@@ -1,10 +1,7 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 
 import { renameConversation, sendChatMessage } from "../lib/desktop-api";
-import type {
-  ChatShellProjection,
-  ChatWorkflowState,
-} from "../lib/chat-shell";
+import type { ChatShellProjection, ChatWorkflowState } from "../lib/chat-shell";
 import type { DeploymentView, DesktopSessionSnapshot } from "../lib/types";
 
 type ChatActionParams = {

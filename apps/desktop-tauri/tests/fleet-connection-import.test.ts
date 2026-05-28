@@ -29,8 +29,7 @@ describe("parsePeerConnectionJson", () => {
             agent_name: "infra-api",
           },
           p2p: {
-            p2p_shareable_address:
-              "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooInfra",
+            p2p_shareable_address: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooInfra",
           },
         }),
       ),
@@ -48,9 +47,7 @@ describe("parsePeerConnectionJson", () => {
         JSON.stringify({
           agent_name: "worker-a",
           agent_did: "did:key:z6MkWorkerA",
-          p2p_listen_addresses: [
-            "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
-          ],
+          p2p_listen_addresses: ["/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker"],
         }),
       ),
     ).toEqual({

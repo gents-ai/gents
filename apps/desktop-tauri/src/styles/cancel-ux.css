@@ -265,7 +265,10 @@
     border-radius: var(--radius-md);
     font-size: 13px;
     font-weight: 500;
-    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
     cursor: pointer;
   }
 

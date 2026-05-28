@@ -100,9 +100,7 @@ export function ChatHeader({
       <div className="chat-status">
         {behaviorLabel ? <span className="chip">{behaviorLabel}</span> : null}
         <span
-          className={
-            runtimeHealth?.status === "healthy" ? "chip chip-green" : "chip"
-          }
+          className={runtimeHealth?.status === "healthy" ? "chip chip-green" : "chip"}
         >
           {runtimeHealth?.status ?? "unknown"}
         </span>

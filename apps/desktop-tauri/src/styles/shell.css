@@ -19,8 +19,18 @@
     z-index: 0;
     pointer-events: none;
     background:
-      radial-gradient(circle, rgb(var(--source-green-rgb) / 0.42) 0 1.6px, transparent 2px) 0 0 / 22px 22px,
-      radial-gradient(circle, rgb(var(--source-green-rgb) / 0.24) 0 1px, transparent 1.6px) 11px 11px / 22px 22px;
+      radial-gradient(
+          circle,
+          rgb(var(--source-green-rgb) / 0.42) 0 1.6px,
+          transparent 2px
+        )
+        0 0 / 22px 22px,
+      radial-gradient(
+          circle,
+          rgb(var(--source-green-rgb) / 0.24) 0 1px,
+          transparent 1.6px
+        )
+        11px 11px / 22px 22px;
     -webkit-mask-image:
       radial-gradient(ellipse at 72% 24%, black 0 16%, transparent 42%),
       linear-gradient(125deg, transparent 0 24%, black 38% 73%, transparent 88%);

@@ -1,8 +1,4 @@
-import type {
-  BehaviorView,
-  ConversationSummary,
-  DeploymentView,
-} from "../lib/types";
+import type { BehaviorView, ConversationSummary, DeploymentView } from "../lib/types";
 import {
   BehaviorSelectorSection,
   ConnectedPeerSection,

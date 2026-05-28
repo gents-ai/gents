@@ -129,6 +129,8 @@ pub(crate) struct SubagentNodeView {
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     pub caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    pub backend_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

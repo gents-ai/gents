@@ -79,12 +79,9 @@ export function toolCeilingIcons(
   );
   const unrestrictedMetaServices = source.some(
     (selection) =>
-      selection.enableMetaTools &&
-      (selection.allowedMcpServiceIds ?? []).length === 0,
+      selection.enableMetaTools && (selection.allowedMcpServiceIds ?? []).length === 0,
   );
-  const cliTools = uniqueValues(
-    source.flatMap((selection) => selection.cliToolNames),
-  );
+  const cliTools = uniqueValues(source.flatMap((selection) => selection.cliToolNames));
 
   if (bestFileMode) {
     icons.push({
@@ -127,9 +124,7 @@ export function toolCeilingIcons(
 function strongestMode(values: Array<string | null | undefined>) {
   if (
     values.some((value) =>
-      ["readwrite", "read-write", "unrestricted"].includes(
-        (value ?? "").toLowerCase(),
-      ),
+      ["readwrite", "read-write", "unrestricted"].includes((value ?? "").toLowerCase()),
     )
   ) {
     return "readwrite";

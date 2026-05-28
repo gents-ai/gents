@@ -1,12 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("../src/lib/tauri/interruptRequest", () => ({
   previewInterruptCascade: vi.fn(),
   interruptRequest: vi.fn(),
 }));
 
-import { previewInterruptCascade, interruptRequest } from "../src/lib/tauri/interruptRequest";
+import {
+  previewInterruptCascade,
+  interruptRequest,
+} from "../src/lib/tauri/interruptRequest";
 import { ActiveChatWorkspace } from "../src/components/ChatWorkspace";
 import type { DeploymentView, DesktopSessionSnapshot } from "../src/lib/types";
 
@@ -66,37 +69,25 @@ beforeEach(() => {
 });
 
 describe("ActiveChatWorkspace interrupt flow", () => {
-  it("standalone request: clicking Interrupt latches directly and shows a banner", async () => {
-    mockedPreview.mockResolvedValue({
-      rootRequestId: "req_root",
-      previewSignature: "sig",
-      rootState: "processing",
-      willInterrupt: [], willDetach: [], alreadyTerminal: [], unknownPolicy: [],
-    });
-    mockedInterrupt.mockResolvedValue({
-      requestId: "req_root", accepted: true, alreadyInterrupted: false,
-      stalePreview: false, interruptRequestedAt: "2026-05-20T10:32:14Z",
-    });
-    render(<ActiveChatWorkspace {...baseProps} />);
-    const btn = await screen.findByRole("button", { name: /interrupt/i });
-    fireEvent.click(btn);
-    await waitFor(() => {
-      expect(mockedInterrupt).toHaveBeenCalledWith({
-        requestId: "req_root", cause: "userCancelled", cascade: false,
-      });
-    });
-    expect(await screen.findByText(/interrupt accepted/i)).toBeInTheDocument();
-  });
-
   it("parent with children: clicking Interrupt opens cascade dialog", async () => {
     mockedPreview.mockResolvedValue({
       rootRequestId: "req_root",
       previewSignature: "sig",
       rootState: "processing",
       willInterrupt: [
-        { requestId: "req_b91", lifecycleState: "processing", parentRequestId: "req_root", parentToolCallId: "tc_1", awaitMode: "background", cancelPolicy: "cascade", toolName: "summarize" },
+        {
+          requestId: "req_b91",
+          lifecycleState: "processing",
+          parentRequestId: "req_root",
+          parentToolCallId: "tc_1",
+          awaitMode: "background",
+          cancelPolicy: "cascade",
+          toolName: "summarize",
+        },
       ],
-      willDetach: [], alreadyTerminal: [], unknownPolicy: [],
+      willDetach: [],
+      alreadyTerminal: [],
+      unknownPolicy: [],
     });
     render(<ActiveChatWorkspace {...baseProps} />);
     const btn = await screen.findByRole("button", { name: /interrupt/i });

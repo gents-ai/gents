@@ -104,18 +104,16 @@ mod runtime;
 pub(crate) use runtime::build_runtime_snapshot;
 
 #[path = "snapshot/operations_signature.rs"]
-mod operations_signature;
+pub(crate) mod operations_signature;
 
 #[path = "snapshot/operations_snapshot.rs"]
 pub(crate) mod operations_snapshot;
-#[cfg(test)]
-pub(crate) use operations_signature::*;
-#[allow(unused_imports)]
 pub(crate) use operations_signature::{
-    compute_liveness_signature, compute_preview_signature, EmitDecision, LivenessEmitFloor,
-    LivenessSignatureInput, LivenessSignatureRequest, LivenessSignatureToolCall,
-    PreviewSignatureInput, PreviewSignatureRow,
+    compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
 };
+
+#[path = "snapshot/subagent_tree.rs"]
+pub(crate) mod subagent_tree;
 
 #[path = "snapshot/session.rs"]
 mod session;

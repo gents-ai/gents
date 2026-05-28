@@ -6,12 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "format": "prettier --write \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{mjs,ts,tsx}\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{mjs,ts,tsx}\" \"*.json\"",
     "test": "vitest run",
     "test:live": "node ./tests/run-live-test.mjs",
-    "test:live:behavior-config": "node ./tests/run-live-test.mjs -t \"edits behavior config\"",
-    "test:live:config": "node ./tests/run-live-test.mjs -t \"configures backend profile tools behavior task\"",
-    "test:live:chat": "node ./tests/run-live-test.mjs -t \"drives three real UI turns\"",
-    "test:live:interrupt": "node ./tests/run-live-test.mjs -t \"latches an interrupt\"",
+    "test:live:behavior-config": "node ./tests/run-live-test.mjs --suite behavior",
+    "test:live:config": "node ./tests/run-live-test.mjs --suite config",
+    "test:live:chat": "node ./tests/run-live-test.mjs --suite chat",
+    "test:live:fleet": "node ./tests/run-live-test.mjs --suite fleet",
+    "test:live:interrupt": "node ./tests/run-live-test.mjs --suite interrupt",
+    "test:live:operations": "node ./tests/run-live-test.mjs --suite operations",
+    "test:live:subagent": "node ./tests/run-live-test.mjs --suite subagent",
+    "test:live:replication": "node ./tests/run-live-test.mjs --suite replication",
+    "test:live:sad-path": "node ./tests/run-live-test.mjs --suite sad-path",
+    "test:live:cascade": "node ./tests/run-live-test.mjs --suite cascade",
     "smoke:remote-fleet": "node ./scripts/remote-fleet-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -25,6 +33,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
@@ -33,9 +42,9 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "jsdom": "^26.1.0",
+    "prettier": "^3.8.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
-    "vitest": "^3.2.4",
-    "@tauri-apps/cli": "^2"
+    "vitest": "^3.2.4"
   }
 }

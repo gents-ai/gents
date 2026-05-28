@@ -324,6 +324,22 @@ pub async fn execute_graphql_async_with_tx(
             }
         };
 
+        if let Some(error_message) = retryable_graphql_error_message(&value) {
+            if attempt + 1 < options.max_attempts {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error_message,
+                    "retrying async GraphQL request after retryable GraphQL error"
+                );
+                last_error = Some(anyhow!(
+                    "graphql returned retryable errors from {graphql}: {error_message}"
+                ));
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+        }
+
         return finish_graphql_response(graphql, value);
     }
 
@@ -420,6 +436,22 @@ pub fn execute_graphql_blocking(
                     .context(format!("decoding GraphQL response body from {graphql}")));
             }
         };
+
+        if let Some(error_message) = retryable_graphql_error_message(&value) {
+            if attempt + 1 < options.max_attempts {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error_message,
+                    "retrying blocking GraphQL request after retryable GraphQL error"
+                );
+                last_error = Some(anyhow!(
+                    "graphql returned retryable errors from {graphql}: {error_message}"
+                ));
+                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
+                continue;
+            }
+        }
 
         return finish_graphql_response(graphql, value);
     }
@@ -730,6 +762,19 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
+fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> {
+    let errors = value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)?
+        .clone();
+    if errors.is_empty() {
+        return None;
+    }
+    let rendered = serde_json::Value::Array(errors).to_string();
+    (rendered.contains("transaction conflict") || rendered.contains("Please retry"))
+        .then_some(rendered)
+}
+
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
     if error.is_timeout() || error.is_connect() || error.is_request() {
         return true;
@@ -842,6 +887,11 @@ mod tx_tests {
         last_tx_header: Arc<Mutex<Option<String>>>,
     }
 
+    #[derive(Clone, Default)]
+    struct RetryRecorder {
+        attempts: Arc<Mutex<usize>>,
+    }
+
     async fn capture_handler(
         State(state): State<HeaderRecorder>,
         headers: HeaderMap,
@@ -852,6 +902,22 @@ mod tx_tests {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         Json(serde_json::json!({ "data": {} }))
+    }
+
+    async fn retry_once_handler(
+        State(state): State<RetryRecorder>,
+        Json(_body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        let mut attempts = state.attempts.lock().unwrap();
+        *attempts += 1;
+        if *attempts == 1 {
+            return Json(serde_json::json!({
+                "errors": [{
+                    "message": "commit error: datastore error: storage error: transaction conflict. Please retry"
+                }]
+            }));
+        }
+        Json(serde_json::json!({ "data": { "ok": true } }))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -881,5 +947,36 @@ mod tx_tests {
             .await
             .unwrap();
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_transaction_conflict_errors() {
+        let state = RetryRecorder::default();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(retry_once_handler))
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let endpoint = format!("http://{addr}/");
+        let options = GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 2,
+            retry_backoff: std::time::Duration::from_millis(1),
+        };
+
+        let response = execute_graphql_async(&endpoint, "{ __typename }", options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .pointer("/data/ok")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(*state.attempts.lock().unwrap(), 2);
     }
 }

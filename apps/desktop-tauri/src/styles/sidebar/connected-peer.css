@@ -49,11 +49,7 @@
   }
 
   .connected-peer-identity {
-    font-family:
-      "SF Mono",
-      "JetBrains Mono",
-      ui-monospace,
-      monospace;
+    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
   }
 
   .connected-peer-detail {
@@ -74,11 +70,7 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-family:
-      "SF Mono",
-      "JetBrains Mono",
-      ui-monospace,
-      monospace;
+    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
   }
 
   .connected-peer-actions {

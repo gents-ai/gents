@@ -7,8 +7,14 @@ import {
   type MouseEvent,
 } from "react";
 
-import { interruptRequest, previewInterruptCascade } from "../../lib/tauri/interruptRequest";
-import type { CascadeAffectedRequest, CascadeCancelPreview } from "../../lib/types/operations";
+import {
+  interruptRequest,
+  previewInterruptCascade,
+} from "../../lib/tauri/interruptRequest";
+import type {
+  CascadeAffectedRequest,
+  CascadeCancelPreview,
+} from "../../lib/types/operations";
 
 export type CascadeCancelDialogProps = {
   /** When true, dialog is rendered. When transitioning false → true, fetches preview. */
@@ -27,9 +33,18 @@ export type CascadeCancelDialogProps = {
 
 type Phase = "loading" | "showing" | "submitting";
 
-export function CascadeCancelDialog(props: CascadeCancelDialogProps): JSX.Element | null {
-  const { open, rootRequestId, agentDid, onClose, onAccepted, onAlreadyInterrupted, onError } =
-    props;
+export function CascadeCancelDialog(
+  props: CascadeCancelDialogProps,
+): JSX.Element | null {
+  const {
+    open,
+    rootRequestId,
+    agentDid,
+    onClose,
+    onAccepted,
+    onAlreadyInterrupted,
+    onError,
+  } = props;
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [preview, setPreview] = useState<CascadeCancelPreview | null>(null);
@@ -101,7 +116,9 @@ export function CascadeCancelDialog(props: CascadeCancelDialogProps): JSX.Elemen
         if (r.stalePreview && r.preview) {
           setPreview(r.preview);
           setUpdated(true);
-          setAnnounce("Cascade preview has changed — please re-confirm before proceeding.");
+          setAnnounce(
+            "Cascade preview has changed — please re-confirm before proceeding.",
+          );
           setPhase("showing");
           // Re-focus confirm so re-press is one keystroke away
           setTimeout(() => confirmRef.current?.focus(), 0);
@@ -177,7 +194,9 @@ export function CascadeCancelDialog(props: CascadeCancelDialogProps): JSX.Elemen
               </>
             ) : null}
             {updated ? (
-              <span className="preview-updated-pill">preview updated — re-confirm to commit</span>
+              <span className="preview-updated-pill">
+                preview updated — re-confirm to commit
+              </span>
             ) : null}
           </div>
           {/* Visually hidden live region for screen reader announcements */}
@@ -203,16 +222,29 @@ export function CascadeCancelDialog(props: CascadeCancelDialogProps): JSX.Elemen
           {phase === "loading" ? <p>Loading preview…</p> : null}
           {preview ? (
             <>
-              {renderGroup("will-interrupt", "Will request interrupt by cascade", preview.willInterrupt)}
+              {renderGroup(
+                "will-interrupt",
+                "Will request interrupt by cascade",
+                preview.willInterrupt,
+              )}
               {renderGroup("will-detach", "Will continue detached", preview.willDetach)}
-              {renderGroup("already-terminal", "Already terminal", preview.alreadyTerminal)}
+              {renderGroup(
+                "already-terminal",
+                "Already terminal",
+                preview.alreadyTerminal,
+              )}
               {renderUnknownPolicy(preview.unknownPolicy)}
             </>
           ) : null}
         </div>
 
         <footer>
-          <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onClose}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClose}
+          >
             Cancel
           </button>
           <button
@@ -246,7 +278,8 @@ function renderGroup(cls: string, heading: string, items: CascadeAffectedRequest
               {it.behaviorId ? ` · ${it.behaviorId}` : ""}
             </span>
             <span className="meta">
-              {it.awaitMode ?? "-"}/{it.cancelPolicy ?? "?"} · {it.lifecycleState ?? "?"}
+              {it.awaitMode ?? "-"}/{it.cancelPolicy ?? "?"} ·{" "}
+              {it.lifecycleState ?? "?"}
             </span>
           </li>
         ))}
@@ -260,7 +293,8 @@ function renderUnknownPolicy(items: CascadeAffectedRequest[]) {
   return (
     <section className="group unknown-policy">
       <h4>
-        Policy unknown — will be left running <span className="count">{items.length}</span>
+        Policy unknown — will be left running{" "}
+        <span className="count">{items.length}</span>
       </h4>
       <ul>
         {items.map((it) => (
@@ -273,8 +307,8 @@ function renderUnknownPolicy(items: CascadeAffectedRequest[]) {
           </li>
         ))}
         <li className="warning-row">
-          These descendants have no cancel_policy on their bridge row. Confirming will NOT interrupt
-          them.
+          These descendants have no cancel_policy on their bridge row. Confirming will
+          NOT interrupt them.
         </li>
       </ul>
     </section>

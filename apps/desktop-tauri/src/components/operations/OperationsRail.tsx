@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
 import {
   OperationsRailContext,
@@ -20,6 +14,11 @@ export type OperationsRailProviderProps = {
   /** Initial active tab id. Defaults to the first registered tab. */
   initialActiveTabId?: OperationsRailTabId | null;
   children: ReactNode;
+};
+
+export type OperationsRailProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 export function OperationsRailProvider({
@@ -54,7 +53,10 @@ export function OperationsRailProvider({
   );
 }
 
-export function OperationsRail() {
+export function OperationsRail({
+  open = true,
+  onOpenChange,
+}: OperationsRailProps = {}) {
   const value = useContext(OperationsRailContext);
   if (!value || value.tabs.length === 0) {
     // Either no provider (foundation default) or no registered tabs:
@@ -63,8 +65,42 @@ export function OperationsRail() {
   }
   const activeTab =
     value.tabs.find((tab) => tab.id === value.activeTabId) ?? value.tabs[0];
+  const activeLabel = activeTab?.label ?? "Operations";
+
+  if (!open) {
+    return (
+      <aside className="operations-rail is-collapsed" aria-label="Operations">
+        <button
+          type="button"
+          className="operations-rail-collapsed-button"
+          aria-expanded="false"
+          aria-label={`Open operations drawer, ${activeLabel} selected`}
+          onClick={() => onOpenChange?.(true)}
+        >
+          <span aria-hidden="true">‹</span>
+          <span>Ops</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <aside className="operations-rail" aria-label="Operations">
+    <aside className="operations-rail is-open" aria-label="Operations">
+      <header className="operations-rail-header">
+        <div>
+          <h2>Operations</h2>
+          <p>{activeLabel}</p>
+        </div>
+        <button
+          type="button"
+          className="operations-rail-close"
+          aria-expanded="true"
+          aria-label="Close operations drawer"
+          onClick={() => onOpenChange?.(false)}
+        >
+          Close
+        </button>
+      </header>
       <OperationsRailTabs
         tabs={value.tabs}
         activeTabId={value.activeTabId}

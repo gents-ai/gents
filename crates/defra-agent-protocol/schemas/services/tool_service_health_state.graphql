@@ -1,10 +1,10 @@
-# The persisted identity of a single MCP service's health is the compound
-# (service_id, agent_did): each agent on a multi-agent node owns its own row
-# per service so two agents that register the same service_id don't overwrite
-# each other. Writers (the agent's health_checker) and readers (the desktop
-# panel) always filter on both fields; the indices below are non-unique
-# because the compound is enforced at the application layer.
 type ToolServiceHealthState {
+    # The persisted identity of a single MCP service's health is the compound
+    # (service_id, agent_did): each agent on a multi-agent node owns its own row
+    # per service so two agents that register the same service_id don't overwrite
+    # each other. Writers (the agent's health_checker) and readers (the desktop
+    # panel) always filter on both fields; the indices below are non-unique
+    # because the compound is enforced at the application layer.
     service_id: String @index
     agent_did: String @index
     endpoint: String

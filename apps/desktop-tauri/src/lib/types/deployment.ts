@@ -65,10 +65,20 @@ export type ToolSelectionView = {
   fileToolRoot?: string | null;
   enableBash?: boolean | null;
   bashMode?: string | null;
+  commandExecutionPolicy?: string | null;
+  commandAllowedArgvPrefixes: string[];
+  commandForbiddenArgvPrefixes: string[];
+  commandNetworkMode?: string | null;
   cliToolNames: string[];
   enableMetaTools?: boolean | null;
   allowedMcpServiceIds: string[];
   delegateTo: string[];
+  backgroundableToolNames: string[];
+  subagentTargets: string[];
+  subagentSpawnEnabled?: boolean | null;
+  subagentSteeringEnabled?: boolean | null;
+  subagentBackgroundEnabled?: boolean | null;
+  crossDeploymentSpawnTimeoutSeconds?: number | null;
 };
 
 export type ToolServiceRegistryView = {

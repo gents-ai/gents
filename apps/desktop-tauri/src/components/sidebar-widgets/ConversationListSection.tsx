@@ -126,8 +126,7 @@ export function ConversationListSection({
         <p className="muted">Select a deployment to see conversations.</p>
       ) : !conversations.length ? (
         <p className="muted">
-          No conversations yet. Sending the first message will create one
-          automatically.
+          No conversations yet. Sending the first message will create one automatically.
         </p>
       ) : !filteredConversations.length ? (
         <p className="muted">No conversations for this task.</p>
@@ -183,5 +182,5 @@ function displayTaskLabel(task: TaskView) {
 
 function displayConversationTaskLabel(conversation: ConversationSummary) {
   const name = conversation.taskName?.trim();
-  return name && name.length > 0 ? name : conversation.taskId ?? "Task";
+  return name && name.length > 0 ? name : (conversation.taskId ?? "Task");
 }

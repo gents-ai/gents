@@ -44,15 +44,11 @@ type TauriInternalsWindow = Window & {
 function hasTauriInvokeBridge() {
   return (
     typeof window !== "undefined" &&
-    typeof (window as TauriInternalsWindow).__TAURI_INTERNALS__?.invoke ===
-      "function"
+    typeof (window as TauriInternalsWindow).__TAURI_INTERNALS__?.invoke === "function"
   );
 }
 
-function invokeDesktop<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasTauriInvokeBridge()) {
     return Promise.reject(
       new Error(
@@ -62,6 +58,40 @@ function invokeDesktop<T>(
   }
 
   return invoke<T>(command, args);
+}
+
+type InitSummaryWire = InitSummary & {
+  status_endpoint?: string | null;
+  agent_home?: string;
+  desktop_home?: string;
+  peer_directory?: string;
+  agent_name?: string;
+  agent_did?: string;
+  p2p_transport?: string;
+  p2p_peer_id?: string;
+  p2p_listen_address?: string;
+  peer_record_id?: string;
+  next_steps?: string[];
+};
+
+function normalizeInitSummary(summary: InitSummaryWire): InitSummary {
+  return {
+    status: summary.status,
+    source: summary.source,
+    statusEndpoint: summary.statusEndpoint ?? summary.status_endpoint ?? null,
+    agentHome: summary.agentHome ?? summary.agent_home ?? "",
+    desktopHome: summary.desktopHome ?? summary.desktop_home ?? "",
+    peerDirectory: summary.peerDirectory ?? summary.peer_directory ?? "",
+    label: summary.label,
+    agentName: summary.agentName ?? summary.agent_name ?? "",
+    agentDid: summary.agentDid ?? summary.agent_did ?? "",
+    graphql: summary.graphql,
+    p2pTransport: summary.p2pTransport ?? summary.p2p_transport ?? "",
+    p2pPeerId: summary.p2pPeerId ?? summary.p2p_peer_id ?? "",
+    p2pListenAddress: summary.p2pListenAddress ?? summary.p2p_listen_address ?? "",
+    peerRecordId: summary.peerRecordId ?? summary.peer_record_id ?? "",
+    nextSteps: summary.nextSteps ?? summary.next_steps ?? [],
+  };
 }
 
 export type DesktopApiAdapter = {
@@ -88,19 +118,10 @@ export type DesktopApiAdapter = {
     sessionId?: string | null;
     content: string;
   }) => Promise<ChatSendResult>;
-  renameConversation: (request: {
-    sessionId: string;
-    title: string;
-  }) => Promise<void>;
-  saveAgentConfig: (
-    request: AgentConfigSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  saveBehaviorConfig: (
-    request: BehaviorSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  saveBackendConfig: (
-    request: BackendSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
+  renameConversation: (request: { sessionId: string; title: string }) => Promise<void>;
+  saveAgentConfig: (request: AgentConfigSaveRequest) => Promise<DesktopClientSnapshot>;
+  saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
+  saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -110,13 +131,9 @@ export type DesktopApiAdapter = {
   saveToolServiceConfig: (
     request: ToolServiceSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
-  testToolService: (
-    request: ToolServiceTestRequest,
-  ) => Promise<ToolServiceTestResult>;
+  testToolService: (request: ToolServiceTestRequest) => Promise<ToolServiceTestResult>;
   saveTaskConfig: (request: TaskSaveRequest) => Promise<DesktopClientSnapshot>;
-  saveScheduleConfig: (
-    request: ScheduleSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
+  saveScheduleConfig: (request: ScheduleSaveRequest) => Promise<DesktopClientSnapshot>;
   runSchedule: (request: ScheduleRunRequest) => Promise<TaskRunResult>;
   saveEventTriggerConfig: (
     request: EventTriggerSaveRequest,
@@ -248,16 +265,19 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
     });
   },
   fetchOperationsSnapshot(request) {
-    return invokeDesktop<DesktopOperationsSnapshot>(
-      "desktop_operations_snapshot",
-      { request },
-    );
+    return invokeDesktop<DesktopOperationsSnapshot>("desktop_operations_snapshot", {
+      request,
+    });
   },
   previewInterruptCascade(request) {
-    return invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", { request });
+    return invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", {
+      request,
+    });
   },
   interruptRequest(request) {
-    return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", { request });
+    return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", {
+      request,
+    });
   },
 };
 
@@ -280,7 +300,9 @@ export async function initLocalStandardRuntime(request: {
   dangerouslyOverwrite: boolean;
   reset: boolean;
 }) {
-  return desktopApiAdapter().initLocalStandardRuntime(request);
+  return normalizeInitSummary(
+    await desktopApiAdapter().initLocalStandardRuntime(request),
+  );
 }
 
 export async function startDesktopClient() {
@@ -343,15 +365,11 @@ export async function saveBackendConfig(request: BackendSaveRequest) {
   return desktopApiAdapter().saveBackendConfig(request);
 }
 
-export async function saveInferenceProfileConfig(
-  request: InferenceProfileSaveRequest,
-) {
+export async function saveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
   return desktopApiAdapter().saveInferenceProfileConfig(request);
 }
 
-export async function saveToolSelectionConfig(
-  request: ToolSelectionSaveRequest,
-) {
+export async function saveToolSelectionConfig(request: ToolSelectionSaveRequest) {
   return desktopApiAdapter().saveToolSelectionConfig(request);
 }
 
@@ -375,9 +393,7 @@ export async function runSchedule(request: ScheduleRunRequest) {
   return desktopApiAdapter().runSchedule(request);
 }
 
-export async function saveEventTriggerConfig(
-  request: EventTriggerSaveRequest,
-) {
+export async function saveEventTriggerConfig(request: EventTriggerSaveRequest) {
   return desktopApiAdapter().saveEventTriggerConfig(request);
 }
 

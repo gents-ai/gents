@@ -13,10 +13,7 @@ export type DerivedState =
   | "cancelPending"
   | "deadline+";
 
-export function derivedState(
-  row: BackgroundedToolView,
-  nowMs: number,
-): DerivedState {
+export function derivedState(row: BackgroundedToolView, nowMs: number): DerivedState {
   const stuckDwellMs = row.stuckSince
     ? nowMs - new Date(row.stuckSince).getTime()
     : null;

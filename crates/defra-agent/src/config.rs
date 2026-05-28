@@ -71,9 +71,6 @@ impl SamplingConfig {
         if let Some(top_k) = self.top_k {
             params.insert("top_k".to_string(), serde_json::json!(top_k));
         }
-        if let Some(max_tokens) = self.max_tokens {
-            params.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
-        }
 
         (!params.is_empty()).then_some(serde_json::Value::Object(params))
     }

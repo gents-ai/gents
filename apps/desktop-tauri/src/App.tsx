@@ -46,6 +46,7 @@ function App() {
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
           onFetchPeerStatus={shell.onFetchPeerStatus}
+          onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
           onOpenConfig={openConfig}
           onRepairP2P={shell.onRepairP2P}
@@ -86,8 +87,8 @@ function App() {
               selectedBehaviorId={shell.selectedBehaviorId}
               selectedConversationTitle={
                 shell.session
-                  ? shell.session.title ?? null
-                  : shell.selectedConversation?.title ?? null
+                  ? (shell.session.title ?? null)
+                  : (shell.selectedConversation?.title ?? null)
               }
               selectedDeployment={shell.selectedDeployment}
               selectedSessionId={shell.selectedSessionId}

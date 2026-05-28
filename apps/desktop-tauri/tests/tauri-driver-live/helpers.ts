@@ -8,11 +8,11 @@ export const describeLive =
   process.env.DEFRA_AGENT_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
 
 export const FIRST_PROMPT =
-  "Hey amy can you tell me about the p2p communcation between the agent and the desktop in this app and the docuemnt based request model?";
+  "Read workspace/README.md, then summarize what defra-agent is in two short bullets.";
 export const SECOND_PROMPT =
-  "awesome breakdown, can you please tell me what you like about the architecture? use details and point to files";
+  "Read workspace/CLAUDE.md, then summarize the document-driven request model in two short bullets.";
 export const THIRD_PROMPT =
-  "can you please tell me what you don't like about the architecture? use details and point to files";
+  "Without calling more tools, give one concise desktop integration-test risk and one coverage idea.";
 
 export function logTurn(message: string) {
   console.info(`[live-tauri] ${message}`);
@@ -22,10 +22,7 @@ export function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sessionDiagnosticMessage(
-  label: string,
-  session: DesktopSessionSnapshot,
-) {
+function sessionDiagnosticMessage(label: string, session: DesktopSessionSnapshot) {
   return `${label} did not complete: ${JSON.stringify({
     turnState: session.turnState ?? null,
     latestRequestId: session.latestRequestId ?? null,
@@ -36,13 +33,8 @@ function sessionDiagnosticMessage(
   })}`;
 }
 
-export function expectCompletedSession(
-  label: string,
-  session: DesktopSessionSnapshot,
-) {
-  expect(session.turnState, sessionDiagnosticMessage(label, session)).toBe(
-    "completed",
-  );
+export function expectCompletedSession(label: string, session: DesktopSessionSnapshot) {
+  expect(session.turnState, sessionDiagnosticMessage(label, session)).toBe("completed");
 }
 
 export async function waitForBehaviorConfig(
@@ -81,18 +73,26 @@ export async function waitForConfigFlowDocuments(
     async () => {
       const snapshot = await runner.fetchSnapshot();
       const deployment = snapshot.client?.deployments[0];
-      expect(deployment?.inferenceBackends.some(
-        (backend) => backend.backendId === expected.backendId,
-      )).toBe(true);
-      expect(deployment?.inferenceProfiles.some(
-        (profile) => profile.profileId === expected.profileId,
-      )).toBe(true);
-      expect(deployment?.toolSelections.some(
-        (selection) => selection.selectionId === expected.toolSelectionId,
-      )).toBe(true);
-      expect(deployment?.toolServiceRegistries.some(
-        (service) => service.serviceId === expected.toolServiceId,
-      )).toBe(true);
+      expect(
+        deployment?.inferenceBackends.some(
+          (backend) => backend.backendId === expected.backendId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.inferenceProfiles.some(
+          (profile) => profile.profileId === expected.profileId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.toolSelections.some(
+          (selection) => selection.selectionId === expected.toolSelectionId,
+        ),
+      ).toBe(true);
+      expect(
+        deployment?.toolServiceRegistries.some(
+          (service) => service.serviceId === expected.toolServiceId,
+        ),
+      ).toBe(true);
       const behavior = deployment?.behaviors.find(
         (candidate) => candidate.behaviorId === expected.behaviorId,
       );

@@ -85,6 +85,8 @@ pub(crate) struct ResponseView {
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub backend_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,8 +142,6 @@ pub(crate) struct DesktopSessionSnapshot {
     pub status: Option<String>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
     pub pending_turn: Option<PendingTurnView>,

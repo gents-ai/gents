@@ -81,6 +81,61 @@ impl AgentBackendConfig {
     }
 }
 
+const LIVE_SUBAGENT_BACKEND_PREFIX: &str = "DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND";
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LiveSubagentBackendOverride {
+    pub(crate) inference_url: Option<String>,
+    pub(crate) model_name: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) api_key: Option<String>,
+    pub(crate) api_key_env_var: Option<String>,
+}
+
+impl AgentBackendConfig {
+    /// Resolve a subagent-specific override. Returns `Ok(None)` when no
+    /// subagent endpoint is configured (the fixture should fall back to the
+    /// primary backend in that case).
+    pub(crate) fn resolve_subagent(
+        override_config: Option<&LiveSubagentBackendOverride>,
+        primary: &AgentBackendConfig,
+    ) -> Result<Option<Self>> {
+        let endpoint = override_config
+            .and_then(|c| normalize_optional_owned(c.inference_url.as_ref()))
+            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_ENDPOINT")));
+        if endpoint.is_none() {
+            return Ok(None);
+        }
+        let model_name = override_config
+            .and_then(|c| normalize_optional_owned(c.model_name.as_ref()))
+            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_MODEL")))
+            .unwrap_or_else(|| primary.model_name.clone());
+        let provider_kind = override_config
+            .and_then(|c| normalize_optional_owned(c.provider.as_ref()))
+            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_PROVIDER")));
+        let api_key = override_config
+            .and_then(|c| normalize_optional_owned(c.api_key.as_ref()))
+            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY")));
+        let api_key_env_var = override_config
+            .and_then(|c| normalize_optional_owned(c.api_key_env_var.as_ref()))
+            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY_ENV_VAR")));
+        if let Some(env_var_name) = api_key_env_var.as_deref() {
+            std::env::var(env_var_name).with_context(|| {
+                format!(
+                    "set {env_var_name} because {LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY_ENV_VAR points at it"
+                )
+            })?;
+        }
+        Ok(Some(Self {
+            endpoint: endpoint.expect("endpoint presence checked above"),
+            model_name,
+            provider_kind: BackendProviderKind::parse_optional(provider_kind.as_deref())?,
+            api_key,
+            api_key_env_var,
+        }))
+    }
+}
+
 fn optional_env(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()

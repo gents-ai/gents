@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-import type {
-  DeploymentView,
-  DesktopSessionSnapshot,
-  P2PHealth,
-} from "../lib/types";
+import type { DeploymentView, DesktopSessionSnapshot, P2PHealth } from "../lib/types";
 import { displayBehaviorLabel } from "../lib/types";
-import { previewInterruptCascade, interruptRequest } from "../lib/tauri/interruptRequest";
+import {
+  previewInterruptCascade,
+  interruptRequest,
+} from "../lib/tauri/interruptRequest";
 import { BackendHealthPanel } from "./backendHealth";
 import { CascadeCancelDialog } from "./cancelUx";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
@@ -51,9 +50,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
       <article className="panel centered-panel">
         <p className="eyebrow">Chat</p>
         <h2>Select an agent</h2>
-        <p className="muted">
-          Open the fleet dashboard to choose an agent connection.
-        </p>
+        <p className="muted">Open the fleet dashboard to choose an agent connection.</p>
       </article>
     );
   }
@@ -120,7 +117,10 @@ export function ActiveChatWorkspace({
   }, [session?.latestRequestId, selectedDeployment.agentDid]);
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
-  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(null);
+  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(
+    null,
+  );
+  const [operationsOpen, setOperationsOpen] = useState(false);
 
   useEffect(() => {
     if (!interruptResultBanner) return;
@@ -138,7 +138,9 @@ export function ActiveChatWorkspace({
         includeTerminal: false,
       });
       const childCount =
-        preview.willInterrupt.length + preview.willDetach.length + preview.unknownPolicy.length;
+        preview.willInterrupt.length +
+        preview.willDetach.length +
+        preview.unknownPolicy.length;
       if (childCount === 0) {
         const result = await interruptRequest({
           requestId,
@@ -146,7 +148,8 @@ export function ActiveChatWorkspace({
           cascade: false,
         });
         if (result.accepted) setInterruptResultBanner("Interrupt accepted");
-        else if (result.alreadyInterrupted) setInterruptResultBanner("Already interrupted by another caller");
+        else if (result.alreadyInterrupted)
+          setInterruptResultBanner("Already interrupted by another caller");
         return;
       }
       setCascade({ rootRequestId: requestId });
@@ -173,7 +176,12 @@ export function ActiveChatWorkspace({
           />
 
           {interruptResultBanner ? (
-            <div className="muted small" role="status" aria-live="polite" style={{ padding: "4px 12px" }}>
+            <div
+              className="muted small"
+              role="status"
+              aria-live="polite"
+              style={{ padding: "4px 12px" }}
+            >
               {interruptResultBanner}
             </div>
           ) : null}
@@ -195,7 +203,7 @@ export function ActiveChatWorkspace({
             onSend={onSend}
           />
         </div>
-        <OperationsRail />
+        <OperationsRail open={operationsOpen} onOpenChange={setOperationsOpen} />
       </section>
 
       {cascade ? (

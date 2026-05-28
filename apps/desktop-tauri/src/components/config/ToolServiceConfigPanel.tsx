@@ -9,7 +9,12 @@ import type {
   ToolServiceTestResult,
 } from "../../lib/types";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { isOptionalInt, optionalString, parseOptionalInt } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  optionalString,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type ToolServiceConfigPanelProps = {
   deployment: DeploymentView;
@@ -19,9 +24,7 @@ export type ToolServiceConfigPanelProps = {
   onSelectToolService: (serviceId: string) => void;
   onCreateToolService: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveToolServiceConfig: (
-    request: ToolServiceSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -87,9 +90,7 @@ export type ToolServiceConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (serviceId: string) => void;
-  onSaveToolServiceConfig: (
-    request: ToolServiceSaveRequest,
-  ) => Promise<unknown>;
+  onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -113,9 +114,7 @@ export function ToolServiceConfigEditor({
   const [mcpPath, setMcpPath] = useState("/mcp");
   const [status, setStatus] = useState("online");
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(
-    null,
-  );
+  const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -125,9 +124,7 @@ export function ToolServiceConfigEditor({
     setHostname(toolService?.hostname ?? "");
     setTailscaleIp(toolService?.tailscaleIp ?? "");
     setLanIp(toolService?.lanIp ?? "");
-    setMcpPort(
-      toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
-    );
+    setMcpPort(toolService?.mcpPort != null ? String(toolService.mcpPort) : "");
     setMcpPath(toolService?.mcpPath ?? "/mcp");
     setStatus(toolService?.status ?? "online");
     setTestResult(null);
@@ -153,18 +150,22 @@ export function ToolServiceConfigEditor({
   async function submitToolService(event: FormEvent) {
     event.preventDefault();
     const nextId = serviceId.trim();
-    await onSaveToolServiceConfig({
-      serviceId: nextId,
-      displayName,
-      description: optionalString(description),
-      hostname: optionalString(hostname),
-      tailscaleIp: optionalString(tailscaleIp),
-      lanIp: optionalString(lanIp),
-      mcpPort: parseOptionalInt(mcpPort),
-      mcpPath: optionalString(mcpPath) || "/mcp",
-      status: optionalString(status) || "online",
-    });
-    onSaved(nextId);
+    try {
+      await onSaveToolServiceConfig({
+        serviceId: nextId,
+        displayName,
+        description: optionalString(description),
+        hostname: optionalString(hostname),
+        tailscaleIp: optionalString(tailscaleIp),
+        lanIp: optionalString(lanIp),
+        mcpPort: parseOptionalInt(mcpPort),
+        mcpPath: optionalString(mcpPath) || "/mcp",
+        status: optionalString(status) || "online",
+      });
+      onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
   }
 
   async function testToolService() {
@@ -339,7 +340,10 @@ export function ToolServiceConfigEditor({
         </div>
       ) : null}
       {testError ? (
-        <div className="config-result config-result-error" data-testid="tool-service-test-error">
+        <div
+          className="config-result config-result-error"
+          data-testid="tool-service-test-error"
+        >
           {testError}
         </div>
       ) : null}

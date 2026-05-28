@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { BackgroundedToolView, NativeExecutorStatusView } from "../src/lib/types/operations";
+import type {
+  BackgroundedToolView,
+  NativeExecutorStatusView,
+} from "../src/lib/types/operations";
 
 import {
   STUCK_DWELL_MS,
@@ -32,15 +35,21 @@ describe("derivedState", () => {
   });
 
   it("returns 'background' when await_mode=background and lifecycle_state is unset", () => {
-    expect(derivedState({ ...baseRow, lifecycleState: null }, Date.now())).toBe("background");
+    expect(derivedState({ ...baseRow, lifecycleState: null }, Date.now())).toBe(
+      "background",
+    );
   });
 
   it("returns 'deadline+' when deadline_expired flag is set", () => {
-    expect(derivedState({ ...baseRow, deadlineExpired: true }, Date.now())).toBe("deadline+");
+    expect(derivedState({ ...baseRow, deadlineExpired: true }, Date.now())).toBe(
+      "deadline+",
+    );
   });
 
   it("returns 'cancelPending' when cancel_pending_remote_ack is true", () => {
-    expect(derivedState({ ...baseRow, cancelPendingRemoteAck: true }, Date.now())).toBe("cancelPending");
+    expect(derivedState({ ...baseRow, cancelPendingRemoteAck: true }, Date.now())).toBe(
+      "cancelPending",
+    );
   });
 
   it("returns 'stuck' once dwell >= STUCK_DWELL_MS", () => {
@@ -56,13 +65,18 @@ describe("derivedState", () => {
   it("prefers 'stuck' over 'cancelPending' when both apply", () => {
     const stuckSince = new Date(Date.now() - STUCK_DWELL_MS - 100).toISOString();
     expect(
-      derivedState({ ...baseRow, stuckSince, cancelPendingRemoteAck: true }, Date.now()),
+      derivedState(
+        { ...baseRow, stuckSince, cancelPendingRemoteAck: true },
+        Date.now(),
+      ),
     ).toBe("stuck");
   });
 });
 
 describe("correlateProcess", () => {
-  const ne = (overrides: Partial<NativeExecutorStatusView>): NativeExecutorStatusView => ({
+  const ne = (
+    overrides: Partial<NativeExecutorStatusView>,
+  ): NativeExecutorStatusView => ({
     id: 901,
     pid: 41812,
     argv0: "/usr/bin/grep",
@@ -88,9 +102,9 @@ describe("correlateProcess", () => {
   });
 
   it("falls back to 'child req_<id>' when child_request_id is set and no native executor", () => {
-    expect(
-      correlateProcess({ ...baseRow, childRequestId: "req_b91" }, []).label,
-    ).toBe("child req_b91");
+    expect(correlateProcess({ ...baseRow, childRequestId: "req_b91" }, []).label).toBe(
+      "child req_b91",
+    );
   });
 
   it("falls back to '—' when no executor and no child request", () => {

@@ -180,20 +180,40 @@ pub(super) async fn wait_for_live_documents(
             .behaviors
             .iter()
             .any(|row| row.behavior_id == docs.behavior_id);
+        let has_subagent_behavior = snapshot
+            .behaviors
+            .iter()
+            .any(|row| row.behavior_id == docs.subagent_behavior_id);
         let has_backend = snapshot
             .inference_backends
             .iter()
             .any(|row| row.backend_id == docs.backend_id);
+        let has_subagent_backend = snapshot
+            .inference_backends
+            .iter()
+            .any(|row| row.backend_id == docs.subagent_backend_id);
         let has_tools = snapshot
             .tool_selections
             .iter()
             .any(|row| row.selection_id == docs.tool_selection_id);
+        let has_subagent_tools = snapshot
+            .tool_selections
+            .iter()
+            .any(|row| row.selection_id == docs.subagent_tool_selection_id);
         let has_profile = snapshot
             .inference_profiles
             .iter()
             .any(|row| row.profile_id == docs.inference_profile_id);
 
-        if has_principal && has_behavior && has_backend && has_tools && has_profile {
+        if has_principal
+            && has_behavior
+            && has_subagent_behavior
+            && has_backend
+            && has_subagent_backend
+            && has_tools
+            && has_subagent_tools
+            && has_profile
+        {
             return Ok(());
         }
 

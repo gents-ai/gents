@@ -232,15 +232,15 @@ export function workspaceHandlers() {
         tools: [],
       }),
     ),
-    onSaveBehaviorConfig: vi.fn<
-      [(request: BehaviorSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve()),
-    onSaveTaskConfig: vi.fn<[(request: TaskSaveRequest) => Promise<unknown>]>(
+    onSaveBehaviorConfig: vi.fn<[(request: BehaviorSaveRequest) => Promise<unknown>]>(
       () => Promise.resolve(),
     ),
-    onSaveScheduleConfig: vi.fn<
-      [(request: ScheduleSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve()),
+    onSaveTaskConfig: vi.fn<[(request: TaskSaveRequest) => Promise<unknown>]>(() =>
+      Promise.resolve(),
+    ),
+    onSaveScheduleConfig: vi.fn<[(request: ScheduleSaveRequest) => Promise<unknown>]>(
+      () => Promise.resolve(),
+    ),
     onRunSchedule: vi.fn<[(request: { scheduleId: string }) => Promise<TaskRunResult>]>(
       () => Promise.resolve(runResult),
     ),

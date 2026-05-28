@@ -76,4 +76,9 @@ export type LiveBridgeRunnerOptions = {
   provider?: string | null;
   apiKey?: string | null;
   apiKeyEnvVar?: string | null;
+  subagentInferenceUrl?: string | null;
+  subagentModelName?: string | null;
+  subagentProvider?: string | null;
+  subagentApiKey?: string | null;
+  subagentApiKeyEnvVar?: string | null;
 };

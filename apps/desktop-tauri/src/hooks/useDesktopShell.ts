@@ -6,10 +6,7 @@ import {
   shutdownDesktopClient,
   startDesktopClient,
 } from "../lib/desktop-api";
-import {
-  projectChatShell,
-  type ChatWorkflowState,
-} from "../lib/chat-shell";
+import { projectChatShell, type ChatWorkflowState } from "../lib/chat-shell";
 import {
   delay,
   logShellEvent,
@@ -55,7 +52,9 @@ export function useDesktopShell() {
   const [selectedAgentDid, setSelectedAgentDid] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
-  const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({ kind: "ready" });
+  const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
+    kind: "ready",
+  });
   const [draft, setDraft] = useState("");
 
   const deployments = snapshot?.client?.deployments ?? [];
@@ -164,9 +163,7 @@ export function useDesktopShell() {
 
     autoRestartInFlight.current = true;
     const sessionId = selectedSessionIdRef.current;
-    logShellEvent(
-      `restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`,
-    );
+    logShellEvent(`restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`);
     setStopping(true);
     setStarting(true);
     setError(null);
@@ -186,9 +183,7 @@ export function useDesktopShell() {
           logShellEvent(`restart attempt=${attempt} phase=started`);
           break;
         } catch (err) {
-          logShellEvent(
-            `restart attempt=${attempt} failed error=${String(err)}`,
-          );
+          logShellEvent(`restart attempt=${attempt} failed error=${String(err)}`);
           if (attempt === timingConfig().clientRestartMaxAttempts) {
             throw err;
           }
@@ -247,7 +242,7 @@ export function useDesktopShell() {
     stopping,
   });
 
-  const { onAddPeer, onFetchPeerStatus, onRepairP2P } =
+  const { onAddPeer, onFetchPeerStatus, onInitLocalRuntime, onRepairP2P } =
     createDesktopShellPeerActions({
       snapshot,
       setAddingPeer,
@@ -349,6 +344,7 @@ export function useDesktopShell() {
     refreshSnapshot,
     onAddPeer,
     onFetchPeerStatus,
+    onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,
     onRenameConversationTitle,

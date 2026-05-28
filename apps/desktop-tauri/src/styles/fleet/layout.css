@@ -59,6 +59,41 @@
     gap: var(--space-4);
   }
 
+  .fleet-local-runtime {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-5);
+    align-items: center;
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.18);
+    background: rgb(1 8 6 / 0.72);
+  }
+
+  .fleet-local-runtime-copy {
+    display: grid;
+    min-width: 0;
+    gap: var(--space-1);
+  }
+
+  .fleet-local-runtime-copy strong,
+  .fleet-local-runtime-copy .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fleet-local-runtime-copy strong {
+    color: var(--color-text);
+    font-size: 15px;
+  }
+
+  .fleet-local-runtime-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-error);
+    font-size: 12px;
+  }
+
   .fleet-add-panel {
     display: grid;
     gap: var(--space-5);
@@ -66,7 +101,9 @@
 
   .fleet-add-form {
     display: grid;
-    grid-template-columns: minmax(160px, 0.75fr) minmax(240px, 1fr) minmax(340px, 1.4fr) auto;
+    grid-template-columns:
+      minmax(160px, 0.75fr) minmax(240px, 1fr) minmax(340px, 1.4fr)
+      auto;
     gap: var(--space-5);
     align-items: end;
   }
@@ -140,5 +177,33 @@
   .fleet-empty-copy h2 {
     margin: 0;
     font-size: 22px;
+  }
+
+  @media (max-width: 760px) {
+    .fleet-dashboard {
+      gap: var(--space-5);
+    }
+
+    .fleet-local-runtime,
+    .fleet-discovery-row,
+    .fleet-add-form,
+    .fleet-empty-card .fleet-add-form,
+    .fleet-empty-card .fleet-discovery-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fleet-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .fleet-header-actions {
+      justify-content: flex-start;
+    }
+
+    .fleet-local-runtime .primary-button,
+    .fleet-add-actions .primary-button {
+      width: 100%;
+    }
   }
 }
