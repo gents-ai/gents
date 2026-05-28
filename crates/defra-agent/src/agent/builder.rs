@@ -23,7 +23,7 @@ use crate::config::{
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::health_checker::HealthCheckerOptions;
-use crate::hook::FailurePolicy;
+use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
@@ -213,6 +213,7 @@ impl DefraAgentBuilder {
             local_subnet: self.local_subnet,
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
+            background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: self.health_checker_options,
             process_state_observer: self.process_state_observer,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),

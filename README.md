@@ -3,6 +3,7 @@
 `defra-agent` is a DefraDB-backed agent runtime with a small consumer CLI.
 
 If you want to try it, the shortest path is:
+
 1. Build the CLI and desktop binaries.
 2. Run `init`.
 3. Start `server`.

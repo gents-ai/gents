@@ -83,7 +83,7 @@ impl Tool for ReadOnlyBashTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run a single read-only command under the allowed root. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
+            description: "Run a single read-only command under the allowed root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -101,7 +101,7 @@ impl Tool for ReadOnlyBashTool {
                     "cwd": {
                         "type": "string",
                         "default": ".",
-                        "description": "Working directory under the allowed root. Omit for the root."
+                        "description": "Working directory under the allowed root. Omit for the active workspace/root."
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -147,7 +147,7 @@ impl Tool for UnrestrictedBashTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run a write-capable command under the configured writable root. On macOS the default policy uses sandbox-exec to contain writes to that root; an explicit unrestricted command policy is unsandboxed. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
+            description: "Run a write-capable command under the configured writable root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. On macOS the default policy uses sandbox-exec to contain writes to that root; an explicit unrestricted command policy is unsandboxed. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -165,7 +165,7 @@ impl Tool for UnrestrictedBashTool {
                     "cwd": {
                         "type": "string",
                         "default": ".",
-                        "description": "Working directory under the configured writable root. Omit for the root."
+                        "description": "Working directory under the configured writable root. Omit for the active workspace/root."
                     },
                     "timeout_secs": {
                         "type": "integer",

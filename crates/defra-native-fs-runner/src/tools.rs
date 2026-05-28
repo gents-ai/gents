@@ -14,7 +14,15 @@ use crate::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use crate::traversal::{collect_entries, collect_glob_matches, collect_grep_matches};
 
 pub fn execute_request(root: PathBuf, request: NativeFsRunnerRequest) -> Result<String> {
-    let context = RunnerContext::new(root)?;
+    execute_request_with_base(root, None, request)
+}
+
+pub fn execute_request_with_base(
+    root: PathBuf,
+    base: Option<PathBuf>,
+    request: NativeFsRunnerRequest,
+) -> Result<String> {
+    let context = RunnerContext::new_with_base(root, base)?;
     match request {
         NativeFsRunnerRequest::ListFiles(args) => list_files(&context, args),
         NativeFsRunnerRequest::Glob(args) => glob(&context, args),
@@ -77,10 +85,10 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
 }
 
 fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
-    let dir = context.resolve_existing_dir(args.path.as_deref())?;
+    let path = context.resolve_existing_path(args.path.as_deref())?;
     let collected = collect_grep_matches(
         context,
-        &dir,
+        &path,
         &args.pattern,
         args.case_sensitive,
         args.max_matches.max(1),
@@ -105,7 +113,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
             status: "success",
             tool: "grep",
             pattern: args.pattern,
-            path: context.display_path(&dir),
+            path: context.display_path(&path),
             case_sensitive: args.case_sensitive,
             returned_count: matches.len(),
             total_count: total_count(matches.len(), collected.truncated),

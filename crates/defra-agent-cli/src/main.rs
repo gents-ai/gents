@@ -39,6 +39,9 @@ const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
 const DEFAULT_HTTP_PORT: u16 = 9191;
+const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
+const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 1_800;
+const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -123,6 +126,16 @@ Common flow:
   defra-agent-desktop init
   defra-agent-desktop
   defra-agent chat
+
+Codex flow:
+  defra-agent server --codex-shim
+  codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+
+Codex keeps using its normal local ~/.codex config in this mode. The Defra shim state directory is server-side state and is only useful for debugging or an intentionally isolated client profile.
+
+For laptop-to-fleet use, bind the shim on a reachable interface:
+  defra-agent server --codex-shim --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
+  codex --remote ws://<tailscale-host>:9292/
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
@@ -277,6 +290,7 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentMessage", "message_key"),
     ("AgentToolCall", "tool_call_key"),
     ("CompactionEntry", "compaction_key"),
+    ("CodexThreadProjection", "session_id"),
     ("Task", "task_id"),
     ("Schedule", "schedule_id"),
     ("ToolServiceRegistry", "service_id"),
@@ -307,9 +321,16 @@ pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let cli = Cli::parse();
-    let result = match cli.command {
+    let command = match cli.command {
+        Command::NativeFsRunner(args) => {
+            return commands::native_fs_runner::native_fs_runner(args);
+        }
+        command => command,
+    };
+
+    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
+    let result = match command {
         Command::Version => {
             print!("{}", http::version::version_text());
             Ok(())
@@ -319,6 +340,7 @@ async fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,
+        Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,
@@ -332,6 +354,7 @@ async fn main() -> Result<()> {
         Command::Response { command } => commands::response::dispatch(command).await,
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
+        Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();
     result

@@ -52,6 +52,42 @@ def responseTransitionCaseJson
       ++ jsonOptionalString witness.expectedRequestPersistence
     ++ "}"
 
+def responseInterruptFlowCaseJson
+    (witness : StreamingResponse.ResponseInterruptFlowCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"pre_request_state\":"
+      ++ jsonString witness.preRequestState ++ ","
+    ++ "\"post_request_state\":"
+      ++ jsonString witness.postRequestState ++ ","
+    ++ "\"pre_response_status\":"
+      ++ jsonString witness.preResponseStatus ++ ","
+    ++ "\"post_response_status\":"
+      ++ jsonString witness.postResponseStatus ++ ","
+    ++ "\"pre_inference_call_state\":"
+      ++ jsonString witness.preInferenceCallState ++ ","
+    ++ "\"post_inference_call_state\":"
+      ++ jsonString witness.postInferenceCallState ++ ","
+    ++ "\"response_error_reason\":"
+      ++ jsonString witness.responseErrorReason ++ ","
+    ++ "\"interrupted_at_required\":"
+      ++ boolString witness.interruptedAtRequired ++ ","
+    ++ "\"completed_at_required\":"
+      ++ boolString witness.completedAtRequired ++ ","
+    ++ "\"live_tail_cleared\":"
+      ++ boolString witness.liveTailCleared ++ ","
+    ++ "\"partial_turn_materialized\":"
+      ++ boolString witness.partialTurnMaterialized ++ ","
+    ++ "\"request_terminal\":"
+      ++ boolString witness.requestTerminal ++ ","
+    ++ "\"response_terminal\":"
+      ++ boolString witness.responseTerminal ++ ","
+    ++ "\"inference_call_terminal\":"
+      ++ boolString witness.inferenceCallTerminal
+    ++ "}"
+
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

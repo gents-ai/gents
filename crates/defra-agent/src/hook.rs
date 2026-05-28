@@ -87,6 +87,32 @@ struct BackgroundExecution {
     cancellation_token: CancellationToken,
 }
 
+#[derive(Clone, Default)]
+pub struct BackgroundExecutionRegistry {
+    inner: Arc<Mutex<HashMap<String, BackgroundExecution>>>,
+}
+
+impl BackgroundExecutionRegistry {
+    pub async fn cancel(&self, tool_call_id: &str) -> bool {
+        let Some(execution) = self.inner.lock().await.get(tool_call_id).cloned() else {
+            return false;
+        };
+        execution.cancellation_token.cancel();
+        true
+    }
+
+    pub(crate) async fn insert(&self, tool_call_id: String, cancellation_token: CancellationToken) {
+        self.inner
+            .lock()
+            .await
+            .insert(tool_call_id, BackgroundExecution { cancellation_token });
+    }
+
+    pub(crate) async fn remove(&self, tool_call_id: &str) {
+        self.inner.lock().await.remove(tool_call_id);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptTurnState {
     Idle,
@@ -283,7 +309,7 @@ pub struct DefraSessionHook {
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
-    background_executions: Arc<Mutex<HashMap<String, BackgroundExecution>>>,
+    background_executions: BackgroundExecutionRegistry,
 }
 
 enum PolicyDecision {
@@ -321,7 +347,7 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
-            background_executions: Arc::new(Mutex::new(HashMap::new())),
+            background_executions: BackgroundExecutionRegistry::default(),
         }
     }
 
@@ -358,12 +384,20 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
-            background_executions: Arc::new(Mutex::new(HashMap::new())),
+            background_executions: BackgroundExecutionRegistry::default(),
         })
     }
 
     pub fn with_background_tool_registry(mut self, registry: BackgroundToolRegistry) -> Self {
         self.background_tool_registry = registry;
+        self
+    }
+
+    pub fn with_background_execution_registry(
+        mut self,
+        registry: BackgroundExecutionRegistry,
+    ) -> Self {
+        self.background_executions = registry;
         self
     }
 

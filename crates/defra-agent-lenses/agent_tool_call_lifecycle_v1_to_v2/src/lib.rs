@@ -83,21 +83,21 @@ mod tests {
     }
 
     #[test]
-    fn completed_with_tool_timeout_becomes_timedOut() {
+    fn completed_with_tool_timeout_becomes_timed_out() {
         let (state, fc) = compute_v2_fields(Some("completed"), Some("tool_timeout"));
         assert_eq!(state, "timedOut");
         assert_eq!(fc, None);
     }
 
     #[test]
-    fn completed_with_invalid_arguments_becomes_failed_argumentInvalid() {
+    fn completed_with_invalid_arguments_becomes_failed_argument_invalid() {
         let (state, fc) = compute_v2_fields(Some("completed"), Some("invalid_tool_arguments"));
         assert_eq!(state, "failed");
         assert_eq!(fc, Some("argumentInvalid".to_string()));
     }
 
     #[test]
-    fn completed_with_nonzero_exit_becomes_failed_toolReturnedError() {
+    fn completed_with_nonzero_exit_becomes_failed_tool_returned_error() {
         let (state, fc) = compute_v2_fields(Some("completed"), Some("nonzero_command_exit"));
         assert_eq!(state, "failed");
         assert_eq!(fc, Some("toolReturnedError".to_string()));
@@ -114,6 +114,10 @@ mod tests {
     }
 }
 
+#[cfg_attr(
+    not(all(feature = "lens-entry", target_arch = "wasm32")),
+    allow(dead_code)
+)]
 fn try_transform(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
@@ -148,6 +152,10 @@ fn try_transform(
     Ok(StreamOption::EndOfStream)
 }
 
+#[cfg_attr(
+    not(all(feature = "lens-entry", target_arch = "wasm32")),
+    allow(dead_code)
+)]
 fn try_inverse(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {

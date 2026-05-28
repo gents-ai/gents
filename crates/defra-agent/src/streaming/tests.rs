@@ -40,6 +40,7 @@ async fn load_response(
                     status
                     token_count
                     completed_at
+                    interrupted_at
                 }}
             }}"#
     );
@@ -188,11 +189,14 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
             content: String::new(),
             status: "streaming".to_string(),
             token_count: 0,
+            interrupted_at: None,
         }),
         "doc-1",
         &StreamStatus::Complete,
         "2026-03-24T00:00:00Z",
         None,
+        None,
+        RequestFinalizeMode::UpdateRequest,
     );
 
     assert!(mutation.contains(r#"status: "complete""#));
@@ -630,6 +634,78 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
             .get("lifecycle_state")
             .and_then(|value| value.as_str()),
         Some("failed")
+    );
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
+    let (node, data_path) = build_test_node("finalize-interrupted-response").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    writer
+        .write_tokens(&doc_id, "partial response")
+        .await
+        .unwrap();
+    let interrupted_at = chrono::Utc::now().to_rfc3339();
+    assert!(writer
+        .write_interrupted_at(&doc_id, &interrupted_at)
+        .await
+        .unwrap());
+    assert!(
+        !writer
+            .write_interrupted_at(&doc_id, "2099-01-01T00:00:00Z")
+            .await
+            .unwrap(),
+        "interrupted_at must be monotonic once set"
+    );
+
+    let result = writer.finalize_interrupted_response(&doc_id).await.unwrap();
+    assert_eq!(result.status, StreamStatus::Error);
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("error")
+    );
+    assert_eq!(
+        row.get("content").and_then(|value| value.as_str()),
+        Some("")
+    );
+    assert_eq!(
+        row.get("error_message").and_then(|value| value.as_str()),
+        Some("interrupted")
+    );
+    assert_eq!(
+        row.get("interrupted_at").and_then(|value| value.as_str()),
+        Some(interrupted_at.as_str())
+    );
+    assert!(row
+        .get("completed_at")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+
+    let request_row = load_request(&node, &request_id).await;
+    assert_eq!(
+        request_row.get("status").and_then(|value| value.as_str()),
+        Some("processing")
+    );
+    assert_eq!(
+        request_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("processing")
     );
 
     let _ = fs::remove_dir_all(&data_path);

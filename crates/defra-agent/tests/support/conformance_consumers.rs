@@ -406,6 +406,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_r4c_background_work_cases_pin_observable_shapes",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_codex_shim_projection_cases_pin_adapter_mapping",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
@@ -418,6 +425,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
             module_path: "state_machine_conformance",
             function: "generated_streaming_response_cases_pin_lifecycle_contract",
+        },
+        ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
         },
         ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_compaction_reducer_cases_pin_contract",

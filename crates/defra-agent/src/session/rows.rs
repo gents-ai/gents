@@ -19,17 +19,6 @@ pub(super) struct CompactionEntryRow {
     pub(super) created_at: String,
 }
 
-#[derive(Deserialize)]
-pub(super) struct ToolCallDocument {
-    #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
-    pub(super) tool_name: String,
-    pub(super) args: String,
-    pub(super) started_at: String,
-    #[serde(default)]
-    pub(super) completed_at: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct SessionDocument {
     #[serde(rename = "_docID")]
@@ -71,11 +60,6 @@ pub(super) struct ConversationDocument {
     #[serde(default)]
     #[allow(dead_code)]
     pub(super) forked_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct ToolCallResultRow {
-    pub(super) result: String,
 }
 
 impl TryFrom<CompactionEntryRow> for CompactionEntry {

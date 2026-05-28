@@ -29,6 +29,7 @@ use support::interrupt::{
 };
 use support::snapshots::{
     fetch_message_snapshots_for_session, fetch_response_content, fetch_response_interrupted_at,
+    fetch_response_snapshot,
 };
 
 const DEFAULT_LIVE_ENDPOINT: &str = "http://100.74.68.88:8000/v1";
@@ -81,6 +82,12 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     assert_eq!(
         final_content, "",
         "live interrupt must clear AgentResponse.content after persisting the partial turn"
+    );
+    let response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    assert_eq!(response.status, "error");
+    assert!(
+        response.completed_at_present,
+        "live interrupt must terminalize AgentResponse.status"
     );
     let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
     let before_interrupt_prefix = before_interrupt.trim();

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 use super::query::load_conversation_document;
@@ -244,8 +244,11 @@ async fn compute_cut(
         .cloned()
         .unwrap_or_default();
     let total_user_msgs = rows.len() as u32;
-    if (fork_at_user_turn as usize) >= rows.len() {
+    if fork_at_user_turn > total_user_msgs {
         return Ok(Err(total_user_msgs));
+    }
+    if fork_at_user_turn == total_user_msgs {
+        return compute_end_cut(node, source_session_id).await.map(Ok);
     }
     let row = &rows[fork_at_user_turn as usize];
     let seq = row
@@ -258,6 +261,35 @@ async fn compute_cut(
         .ok_or_else(|| anyhow::anyhow!("timestamp missing"))?
         .to_string();
     Ok(Ok((seq, ts)))
+}
+
+async fn compute_end_cut(node: &EmbeddedNode, source_session_id: &str) -> Result<(u32, String)> {
+    let escaped = escape_graphql_string(source_session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{escaped}" }} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{ sequence }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("compute_end_cut query failed: {:?}", resp.errors);
+    }
+    let max_sequence = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("sequence"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cut_seq = u32::try_from(max_sequence.saturating_add(1))
+        .context("message sequence exceeds u32 during fork end cut")?;
+    Ok((cut_seq, "9999-12-31T23:59:59Z".to_string()))
 }
 
 async fn copy_messages(

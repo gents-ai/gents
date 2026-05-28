@@ -15,6 +15,15 @@ pub enum BackendProviderKind {
     OpenAiCompatible,
     #[serde(rename = "OpenRouter", alias = "openrouter")]
     OpenRouter,
+    #[serde(
+        rename = "ChatGptCodex",
+        alias = "ChatGPTCodex",
+        alias = "chatgpt-codex",
+        alias = "chatgpt_codex",
+        alias = "codex-chatgpt",
+        alias = "codex"
+    )]
+    ChatGptCodex,
 }
 
 impl BackendProviderKind {
@@ -27,6 +36,12 @@ impl BackendProviderKind {
             | Some("openai_compatible")
             | Some("openai") => Ok(Self::OpenAiCompatible),
             Some("OpenRouter") | Some("openrouter") => Ok(Self::OpenRouter),
+            Some("ChatGptCodex")
+            | Some("ChatGPTCodex")
+            | Some("chatgpt-codex")
+            | Some("chatgpt_codex")
+            | Some("codex-chatgpt")
+            | Some("codex") => Ok(Self::ChatGptCodex),
             Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
         }
     }
@@ -35,6 +50,7 @@ impl BackendProviderKind {
         match self {
             Self::OpenAiCompatible => "OpenAiCompatible",
             Self::OpenRouter => "OpenRouter",
+            Self::ChatGptCodex => "ChatGptCodex",
         }
     }
 }
@@ -49,6 +65,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
     match kind {
         BackendProviderKind::OpenAiCompatible => "OpenAI-compatible",
         BackendProviderKind::OpenRouter => "OpenRouter",
+        BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
     }
 }
 
@@ -58,11 +75,18 @@ const MODEL_DISCOVERY_PATH: &str = "/models";
 struct OpenAiModelsResponse {
     #[serde(default)]
     data: Vec<OpenAiModelRecord>,
+    #[serde(default)]
+    models: Vec<ChatGptCodexModelRecord>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiModelRecord {
     id: String,
+}
+
+#[derive(Deserialize)]
+struct ChatGptCodexModelRecord {
+    slug: String,
 }
 
 pub async fn discover_models(
@@ -71,10 +95,27 @@ pub async fn discover_models(
     endpoint: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<String>> {
-    let models_url = format!("{}{}", endpoint.trim_end_matches('/'), MODEL_DISCOVERY_PATH);
+    let endpoint = if kind == BackendProviderKind::ChatGptCodex {
+        crate::chatgpt_codex::normalize_endpoint(endpoint)
+    } else {
+        endpoint.trim_end_matches('/').to_string()
+    };
+    let models_url = format!("{}{}", endpoint, MODEL_DISCOVERY_PATH);
     let provider_name = provider_display_name(kind);
     let mut request = client.get(&models_url);
-    if let Some(api_key) = api_key {
+    if kind == BackendProviderKind::ChatGptCodex {
+        let (_codex_home, auth) = crate::chatgpt_codex::load_default_chatgpt_auth().await?;
+        let access_token = auth
+            .get_token()
+            .context("ChatGPT Codex auth did not expose a bearer token")?;
+        request = request.bearer_auth(access_token);
+        for (name, value) in crate::chatgpt_codex::build_chatgpt_codex_headers(&auth)? {
+            if let Some(name) = name {
+                request = request.header(name, value);
+            }
+        }
+        request = request.query(&[("client_version", env!("CARGO_PKG_VERSION"))]);
+    } else if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
     }
     let response = request
@@ -105,7 +146,9 @@ pub async fn discover_models(
         )
     })?;
 
-    Ok(models.data.into_iter().map(|model| model.id).collect())
+    let openai_models = models.data.into_iter().map(|model| model.id);
+    let chatgpt_codex_models = models.models.into_iter().map(|model| model.slug);
+    Ok(openai_models.chain(chatgpt_codex_models).collect())
 }
 
 pub fn truncate_probe_body(body: &str) -> String {

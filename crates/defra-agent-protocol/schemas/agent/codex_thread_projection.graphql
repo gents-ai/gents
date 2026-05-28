@@ -1,0 +1,14 @@
+type CodexThreadProjection @branchable {
+    session_id: String @index(unique: true)
+    cwd: String
+    archived: Boolean @index
+    loaded: Boolean @index
+    memory_mode: String
+    name: String
+    settings_json: String
+    goal_json: String
+    rollback_user_turn: Int
+    git_info_json: String
+    created_at: String @index(direction: DESC)
+    updated_at: String @index(direction: DESC)
+}

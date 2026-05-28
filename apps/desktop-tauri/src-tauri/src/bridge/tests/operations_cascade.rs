@@ -150,6 +150,7 @@ async fn walk_excludes_unlinked_rows_owned_by_different_agent_did() {
         .await
         .expect("walk ok");
 
+    // The foreign request must not appear in any walked row.
     let has_foreign = result.rows.iter().any(|r| r.request_id == "req_foreign");
     assert!(
         !has_foreign,

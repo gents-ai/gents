@@ -1,0 +1,699 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{Context, Result};
+use codex_app_server_protocol as codex;
+use defra_agent::graphql::escape_graphql_string;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use super::command_projection::{
+    command_execution_item, file_change_item, tool_projection_status, ToolProjectionStatus,
+};
+use super::progress::{
+    decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
+    DefraToolCallProgress,
+};
+use super::protocol::{absolute_path, agent_message_item, turn_value};
+use super::store::{hydrate_materialized_response_content, query_node_json};
+use super::thread_projection::CodexThreadRecord;
+use super::ShimState;
+
+#[derive(Debug, Clone, Deserialize)]
+struct RequestRow {
+    request_id: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    lifecycle_state: String,
+    #[serde(default)]
+    failure_reason: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    metadata: String,
+    #[serde(default)]
+    execution_origin: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponseRow {
+    request_id: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    reasoning: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+    #[serde(default)]
+    interrupted_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ToolRow {
+    request_id: String,
+    message_sequence: i64,
+    started_at: Option<String>,
+    progress: DefraToolCallProgress,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MessageRow {
+    sequence: i64,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    content: String,
+}
+
+pub(super) async fn load_thread_turns(
+    state: &ShimState,
+    record: &CodexThreadRecord,
+) -> Result<Vec<codex::Turn>> {
+    let escaped_session_id = escape_graphql_string(&record.session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                content
+                status
+                lifecycle_state
+                failure_reason
+                created_at
+                metadata
+                execution_origin
+            }}
+            AgentResponse(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                session_id
+                content
+                reasoning
+                status
+                error_message
+                materialized_message_sequence
+                created_at
+                completed_at
+                interrupted_at
+            }}
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_key
+                request_id
+                session_id
+                message_sequence
+                tool_name
+                status
+                lifecycle_state
+                await_mode
+                child_request_id
+                args
+                result
+                started_at
+                completed_at
+            }}
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                sequence
+                role
+                content
+            }}
+        }}"#,
+    );
+    let response = query_node_json(&state.node, &query).await?;
+
+    let requests = decode_rows::<RequestRow>(&response, "AgentRequest")
+        .context("decoding AgentRequest history rows")?;
+    let responses = decode_response_rows(state, &response).await?;
+    let tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
+    let messages = decode_rows::<MessageRow>(&response, "AgentMessage")
+        .context("decoding AgentMessage rows")?;
+
+    let mut responses_by_request = BTreeMap::<String, ResponseRow>::new();
+    for response in responses {
+        responses_by_request.insert(response.request_id.clone(), response);
+    }
+
+    let mut tools_by_request = BTreeMap::<String, Vec<ToolRow>>::new();
+    for tool in tools {
+        let request_id = tool.request_id.clone();
+        tools_by_request.entry(request_id).or_default().push(tool);
+    }
+
+    let turns = project_request_turns(record, requests, &responses_by_request, &tools_by_request)?;
+
+    if turns.is_empty() && !messages.is_empty() {
+        return Ok(project_message_turns(messages));
+    }
+
+    Ok(turns)
+}
+
+fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
+    let mut turns = Vec::new();
+    let mut current_id = None::<String>;
+    let mut current_items = Vec::<codex::ThreadItem>::new();
+    let mut saw_assistant = false;
+
+    for message in messages {
+        let role = message.role.trim();
+        if role.eq_ignore_ascii_case("user") {
+            finish_message_turn(
+                &mut turns,
+                current_id.take(),
+                std::mem::take(&mut current_items),
+                saw_assistant,
+            );
+            saw_assistant = false;
+            current_id = Some(format!("defra-message-turn-{}", message.sequence));
+            current_items.push(codex::ThreadItem::UserMessage {
+                id: format!("defra-user-message-{}", message.sequence),
+                content: vec![codex::UserInput::Text {
+                    text: message.content,
+                    text_elements: Vec::new(),
+                }],
+            });
+        } else if role.eq_ignore_ascii_case("assistant") {
+            if current_id.is_none() {
+                current_id = Some(format!("defra-message-turn-{}", message.sequence));
+            }
+            saw_assistant = true;
+            current_items.push(agent_message_item(
+                &format!("defra-agent-message-{}", message.sequence),
+                &message.content,
+            ));
+        }
+    }
+
+    finish_message_turn(&mut turns, current_id.take(), current_items, saw_assistant);
+    turns
+}
+
+fn finish_message_turn(
+    turns: &mut Vec<codex::Turn>,
+    turn_id: Option<String>,
+    items: Vec<codex::ThreadItem>,
+    saw_assistant: bool,
+) {
+    if let Some(turn_id) = turn_id.filter(|_| !items.is_empty()) {
+        let status = if saw_assistant {
+            codex::TurnStatus::Completed
+        } else {
+            codex::TurnStatus::Interrupted
+        };
+        turns.push(turn_value(&turn_id, status, items, None));
+    }
+}
+
+fn project_request_turns(
+    record: &CodexThreadRecord,
+    requests: Vec<RequestRow>,
+    responses_by_request: &BTreeMap<String, ResponseRow>,
+    tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+) -> Result<Vec<codex::Turn>> {
+    let requests = requests
+        .into_iter()
+        .filter(is_codex_visible_request)
+        .collect::<Vec<_>>();
+    let requests_by_id = requests
+        .iter()
+        .map(|request| (request.request_id.as_str(), request))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut root_order = Vec::<String>::new();
+    let mut grouped = BTreeMap::<String, Vec<RequestRow>>::new();
+    for request in &requests {
+        let root_id = steering_root_id(request, &requests_by_id)?;
+        if !grouped.contains_key(&root_id) {
+            root_order.push(root_id.clone());
+        }
+        grouped.entry(root_id).or_default().push(request.clone());
+    }
+
+    let mut turns = Vec::with_capacity(grouped.len());
+    for root_id in root_order {
+        let Some(group) = grouped.remove(&root_id) else {
+            continue;
+        };
+        turns.push(project_turn_group(
+            record,
+            &root_id,
+            &group,
+            responses_by_request,
+            tools_by_request,
+        ));
+    }
+    Ok(turns)
+}
+
+fn steering_root_id(
+    request: &RequestRow,
+    requests_by_id: &BTreeMap<&str, &RequestRow>,
+) -> Result<String> {
+    let mut current = request;
+    let mut seen = BTreeSet::<String>::new();
+    loop {
+        if !seen.insert(current.request_id.clone()) {
+            anyhow::bail!(
+                "cycle in Codex steering history ancestry at request {}",
+                current.request_id
+            );
+        }
+
+        let Some(parent_id) = steering_parent_id(current) else {
+            return Ok(current.request_id.clone());
+        };
+        let Some(parent) = requests_by_id.get(parent_id.as_str()).copied() else {
+            return Ok(parent_id);
+        };
+        current = parent;
+    }
+}
+
+fn steering_parent_id(request: &RequestRow) -> Option<String> {
+    let metadata = request.metadata.trim();
+    if metadata.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(metadata).ok()?;
+    let queue = value.get("queue")?;
+    let source = queue.get("source").and_then(Value::as_str)?;
+    if source != "steering" {
+        return None;
+    }
+    queue
+        .get("queued_after_request_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|request_id| !request_id.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_codex_visible_request(request: &RequestRow) -> bool {
+    request.metadata.contains("\"codex_shim\"")
+        || request
+            .execution_origin
+            .trim()
+            .eq_ignore_ascii_case("interactive")
+}
+
+pub(super) fn thread_turns_list_response(
+    mut turns: Vec<codex::Turn>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    sort_direction: Option<codex::SortDirection>,
+    items_view: Option<codex::TurnItemsView>,
+) -> codex::ThreadTurnsListResponse {
+    if sort_direction.unwrap_or(codex::SortDirection::Desc) == codex::SortDirection::Desc {
+        turns.reverse();
+    }
+
+    let items_view = items_view.unwrap_or(codex::TurnItemsView::Summary);
+    for turn in &mut turns {
+        apply_items_view(turn, items_view);
+    }
+
+    let page = paginate_by_id(turns, cursor.as_deref(), limit, |turn| &turn.id);
+    codex::ThreadTurnsListResponse {
+        data: page.items,
+        next_cursor: page.next_cursor,
+        backwards_cursor: page.backwards_cursor,
+    }
+}
+
+pub(super) fn thread_turn_items_list_response(
+    turns: Vec<codex::Turn>,
+    turn_id: &str,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    sort_direction: Option<codex::SortDirection>,
+) -> Option<codex::ThreadTurnsItemsListResponse> {
+    let mut items = turns.into_iter().find(|turn| turn.id == turn_id)?.items;
+    if sort_direction.unwrap_or(codex::SortDirection::Asc) == codex::SortDirection::Desc {
+        items.reverse();
+    }
+    let page = paginate_by_id(items, cursor.as_deref(), limit, |item| item.id());
+    Some(codex::ThreadTurnsItemsListResponse {
+        data: page.items,
+        next_cursor: page.next_cursor,
+        backwards_cursor: page.backwards_cursor,
+    })
+}
+
+pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadRecord) -> Value {
+    let conversation = record.conversation.as_ref();
+    let preview = conversation
+        .and_then(|conversation| {
+            let preview = conversation.preview_text.trim();
+            (!preview.is_empty()).then_some(preview)
+        })
+        .or_else(|| {
+            conversation.and_then(|conversation| {
+                let title = conversation.title.trim();
+                (!title.is_empty()).then_some(title)
+            })
+        })
+        .unwrap_or("");
+    json!({
+        "summary": {
+            "conversationId": record.session_id,
+            "path": absolute_path(&state.codex_home.join("defra-backed").join(&record.session_id)),
+            "preview": preview,
+            "timestamp": conversation.and_then(|conversation| conversation.created_at.clone()),
+            "updatedAt": conversation.and_then(|conversation| conversation.updated_at.clone()),
+            "modelProvider": "defra",
+            "cwd": absolute_path(&record.cwd),
+            "cliVersion": env!("CARGO_PKG_VERSION"),
+            "source": "cli",
+            "gitInfo": codex_git_info_summary_json(&record.git_info_json),
+        }
+    })
+}
+
+fn project_turn_group(
+    record: &CodexThreadRecord,
+    turn_id: &str,
+    requests: &[RequestRow],
+    responses_by_request: &BTreeMap<String, ResponseRow>,
+    tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+) -> codex::Turn {
+    let Some(first_request) = requests.first() else {
+        return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
+    };
+    let tail_request = requests.last().unwrap_or(first_request);
+    let tail_response = responses_by_request.get(&tail_request.request_id);
+
+    let mut items = Vec::new();
+    for request in requests {
+        let response = responses_by_request.get(&request.request_id);
+        let tools = tools_by_request
+            .get(&request.request_id)
+            .cloned()
+            .unwrap_or_default();
+        append_request_items(record, &mut items, request, response, tools);
+    }
+
+    let status = turn_status(tail_request, tail_response);
+    let error = (status == codex::TurnStatus::Failed)
+        .then(|| turn_error(tail_request, tail_response))
+        .flatten();
+    let started_at = first_request
+        .created_at
+        .as_deref()
+        .and_then(parse_timestamp_seconds);
+    let completed_at = turn_completed_timestamp(tail_response);
+    let duration_ms = started_at
+        .zip(completed_at)
+        .map(|(started, completed)| (completed - started).max(0) * 1000);
+
+    codex::Turn {
+        id: turn_id.to_string(),
+        items,
+        items_view: codex::TurnItemsView::Full,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    }
+}
+
+fn append_request_items(
+    record: &CodexThreadRecord,
+    items: &mut Vec<codex::ThreadItem>,
+    request: &RequestRow,
+    response: Option<&ResponseRow>,
+    mut tools: Vec<ToolRow>,
+) {
+    tools.sort_by(|left, right| {
+        left.message_sequence
+            .cmp(&right.message_sequence)
+            .then_with(|| left.started_at.cmp(&right.started_at))
+    });
+
+    if !request.content.trim().is_empty() {
+        items.push(codex::ThreadItem::UserMessage {
+            id: format!("defra-user-{}", request.request_id),
+            content: vec![codex::UserInput::Text {
+                text: request.content.clone(),
+                text_elements: Vec::new(),
+            }],
+        });
+    }
+
+    if let Some(response) = response {
+        if !response.reasoning.trim().is_empty() {
+            items.push(codex::ThreadItem::Reasoning {
+                id: format!("defra-reasoning-{}", request.request_id),
+                summary: Vec::new(),
+                content: vec![response.reasoning.clone()],
+            });
+        }
+    }
+
+    for tool in tools {
+        if let Some(item) = project_tool(record, &tool.progress) {
+            items.push(item);
+        }
+    }
+
+    if let Some(response) = response {
+        if !response.content.trim().is_empty() {
+            items.push(agent_message_item(
+                &format!("defra-agent-{}", request.request_id),
+                &response.content,
+            ));
+        }
+    }
+}
+
+fn project_tool(
+    record: &CodexThreadRecord,
+    tool: &DefraToolCallProgress,
+) -> Option<codex::ThreadItem> {
+    match tool_projection_status(tool) {
+        ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
+        ToolProjectionStatus::Command(status) => {
+            Some(command_execution_item(&record.cwd, tool, status))
+        }
+        ToolProjectionStatus::DeferredFileChange => None,
+        ToolProjectionStatus::FileChange(status) => file_change_item(tool, status),
+    }
+}
+
+fn turn_status(request: &RequestRow, response: Option<&ResponseRow>) -> codex::TurnStatus {
+    let lifecycle_state = normalized_nonempty(&request.lifecycle_state)
+        .or_else(|| normalized_nonempty(&request.status))
+        .unwrap_or_else(|| "pending".to_string());
+    let response_status = response
+        .and_then(|response| normalized_nonempty(&response.status))
+        .unwrap_or_default();
+
+    if response_status == "interrupted" {
+        codex::TurnStatus::Interrupted
+    } else if response_status == "complete"
+        || response_status == "completed"
+        || response_status == "error"
+        || matches!(
+            lifecycle_state.as_str(),
+            "completed" | "failed" | "dead" | "interrupted" | "superseded"
+        )
+    {
+        terminal_turn_status(&lifecycle_state, &response_status)
+    } else {
+        codex::TurnStatus::InProgress
+    }
+}
+
+fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<codex::TurnError> {
+    let response_status = response.map(|row| row.status.as_str()).unwrap_or_default();
+    let response_error = response.and_then(|row| row.error_message.as_deref());
+    let lifecycle_state = request.lifecycle_state.as_str();
+    terminal_error_message(
+        response_status,
+        response_error,
+        lifecycle_state,
+        &request.failure_reason,
+    )
+    .map(|message| codex::TurnError {
+        message,
+        codex_error_info: None,
+        additional_details: None,
+    })
+}
+
+fn turn_completed_timestamp(response: Option<&ResponseRow>) -> Option<i64> {
+    response.and_then(|response| {
+        response
+            .completed_at
+            .as_deref()
+            .or(response.interrupted_at.as_deref())
+            .or(response.created_at.as_deref())
+            .and_then(parse_timestamp_seconds)
+    })
+}
+
+async fn decode_response_rows(state: &ShimState, response: &Value) -> Result<Vec<ResponseRow>> {
+    let mut rows = Vec::new();
+    for mut row in raw_rows(response, "AgentResponse") {
+        hydrate_materialized_response_content(&state.node, &mut row).await?;
+        rows.push(serde_json::from_value(row).context("decoding AgentResponse history row")?);
+    }
+    Ok(rows)
+}
+
+fn decode_tool_rows(response: &Value) -> Result<Vec<ToolRow>> {
+    raw_rows(response, "AgentToolCall")
+        .into_iter()
+        .map(|row| {
+            let message_sequence = row
+                .get("message_sequence")
+                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+                .unwrap_or(0);
+            let request_id = row
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let started_at = row
+                .get("started_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let progress = decode_defra_tool_call_progress(&row)
+                .with_context(|| format!("decoding AgentToolCall progress row: {row}"))?;
+            Ok(ToolRow {
+                request_id,
+                message_sequence,
+                started_at,
+                progress,
+            })
+        })
+        .collect()
+}
+
+fn decode_rows<T>(response: &Value, collection: &str) -> Result<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    raw_rows(response, collection)
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("decoding {collection} rows"))
+}
+
+fn raw_rows(response: &Value, collection: &str) -> Vec<Value> {
+    response
+        .pointer(&format!("/data/{collection}"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn apply_items_view(turn: &mut codex::Turn, view: codex::TurnItemsView) {
+    match view {
+        codex::TurnItemsView::NotLoaded => {
+            turn.items.clear();
+            turn.items_view = codex::TurnItemsView::NotLoaded;
+        }
+        codex::TurnItemsView::Summary => {
+            let first_user_message = turn
+                .items
+                .iter()
+                .find(|item| matches!(item, codex::ThreadItem::UserMessage { .. }))
+                .cloned();
+            let final_agent_message = turn
+                .items
+                .iter()
+                .rev()
+                .find(|item| matches!(item, codex::ThreadItem::AgentMessage { .. }))
+                .cloned();
+            turn.items = match (first_user_message, final_agent_message) {
+                (Some(user), Some(agent)) if user.id() != agent.id() => vec![user, agent],
+                (Some(user), _) => vec![user],
+                (None, Some(agent)) => vec![agent],
+                (None, None) => Vec::new(),
+            };
+            turn.items_view = codex::TurnItemsView::Summary;
+        }
+        codex::TurnItemsView::Full => {
+            turn.items_view = codex::TurnItemsView::Full;
+        }
+    }
+}
+
+struct Page<T> {
+    items: Vec<T>,
+    next_cursor: Option<String>,
+    backwards_cursor: Option<String>,
+}
+
+fn paginate_by_id<T>(
+    items: Vec<T>,
+    cursor: Option<&str>,
+    limit: Option<u32>,
+    id: impl Fn(&T) -> &str,
+) -> Page<T> {
+    let start = cursor
+        .and_then(|cursor| items.iter().position(|item| id(item) == cursor))
+        .map(|position| position + 1)
+        .unwrap_or(0);
+    let limit = limit.map(|limit| limit as usize).unwrap_or(items.len());
+    let end = start.saturating_add(limit).min(items.len());
+    let backwards_cursor = items.get(start).map(|item| id(item).to_string());
+    let next_cursor = (end < items.len())
+        .then(|| {
+            items
+                .get(end.saturating_sub(1))
+                .map(|item| id(item).to_string())
+        })
+        .flatten();
+    Page {
+        items: items.into_iter().skip(start).take(end - start).collect(),
+        next_cursor,
+        backwards_cursor,
+    }
+}
+
+fn normalized_nonempty(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    (!value.is_empty()).then_some(value)
+}
+
+fn parse_timestamp_seconds(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|timestamp| timestamp.timestamp())
+}
+
+fn codex_git_info_summary_json(raw: &str) -> Option<Value> {
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    let object = value.as_object()?;
+    if object.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "sha": object.get("sha").and_then(Value::as_str),
+        "branch": object.get("branch").and_then(Value::as_str),
+        "origin_url": object
+            .get("originUrl")
+            .or_else(|| object.get("origin_url"))
+            .and_then(Value::as_str),
+    }))
+}

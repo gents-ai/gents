@@ -112,7 +112,7 @@ impl Tool for ListFilesTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "List files and directories under the allowed root ({}). Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.",
+                "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -121,7 +121,7 @@ impl Tool for ListFilesTool {
                     "path": {
                         "type": "string",
                         "default": ".",
-                        "description": "Directory to list, relative to the allowed root. Omit or pass an empty string for the root."
+                        "description": "Directory to list, relative to the active workspace/root. Omit or pass an empty string for the active workspace/root."
                     },
                     "recursive": {
                         "type": "boolean",
@@ -171,7 +171,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}). Returns compact line-numbered text with stable defra_fs metadata. Set raw_json=true for structured JSON.",
+                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable defra_fs metadata. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -179,7 +179,7 @@ impl Tool for ReadFileTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File to read, relative to the allowed root unless an allowed absolute path is provided."
+                        "description": "File to read, relative to the active workspace/root unless an allowed absolute path is provided."
                     },
                     "start_line": {
                         "type": "integer",
@@ -252,18 +252,18 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern under the allowed root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Find files matching a glob pattern under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Glob pattern matched against paths displayed relative to the allowed root."
+                        "description": "Glob pattern matched against paths displayed relative to the active workspace/root."
                     },
                     "path": {
                         "type": "string",
                         "default": ".",
-                        "description": "Directory to search, relative to the allowed root. Omit or pass an empty string for the root."
+                        "description": "Directory to search, relative to the active workspace/root. Omit or pass an empty string for the active workspace/root."
                     },
                     "max_matches": {
                         "type": "integer",
@@ -308,7 +308,7 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root for a substring. Returns compact path:Lline matches with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Search text files under the allowed root for a substring. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file. Returns compact path:Lline matches with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -319,7 +319,7 @@ impl Tool for GrepTool {
                     "path": {
                         "type": "string",
                         "default": ".",
-                        "description": "Directory to search, relative to the allowed root. Omit or pass an empty string for the root."
+                        "description": "Directory or file to search, relative to the active workspace/root. Omit or pass an empty string for the active workspace/root."
                     },
                     "case_sensitive": {
                         "type": "boolean",
@@ -370,13 +370,13 @@ impl Tool for WriteFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Write full file contents under the configured root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Write full file contents under the configured root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File to create or overwrite, relative to the configured writable root unless an allowed absolute path is provided."
+                        "description": "File to create or overwrite, relative to the active workspace/root unless an allowed absolute path is provided."
                     },
                     "content": {
                         "type": "string",
@@ -517,13 +517,13 @@ impl Tool for EditFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Replace text in an existing file under the configured root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Replace text in an existing file under the configured root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Existing file to edit, relative to the configured writable root unless an allowed absolute path is provided."
+                        "description": "Existing file to edit, relative to the active workspace/root unless an allowed absolute path is provided."
                     },
                     "old_text": {
                         "type": "string",

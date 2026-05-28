@@ -276,6 +276,12 @@ async fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         content, "",
         "daemon interrupt must clear the live tail after persisting partial content"
     );
+    let response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    assert_eq!(response.status, "error");
+    assert!(
+        response.completed_at_present,
+        "interrupted response must be terminalized"
+    );
     let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
     assert!(
         messages.iter().any(|message| {

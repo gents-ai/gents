@@ -31,7 +31,7 @@ pub use waits::{
     wait_for_runtime_ready, wait_for_tool_call,
 };
 
-pub const DEFAULT_MODEL_ENDPOINT: &str = "http://workstation-1:8000/v1";
+pub const DEFAULT_MODEL_ENDPOINT: &str = "http://192.168.1.78:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "MiniMax-M2.7-NVFP4";
 
 pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {

@@ -10,6 +10,8 @@ pub(super) struct PersistedResponseState {
     pub content: String,
     pub status: String,
     pub token_count: usize,
+    #[serde(default)]
+    pub interrupted_at: Option<String>,
 }
 
 pub(super) fn extract_mutation_doc_id<'a>(
@@ -55,6 +57,7 @@ pub(super) async fn load_response_state(
                 content
                 status
                 token_count
+                interrupted_at
             }}
         }}"#
     );
@@ -94,6 +97,7 @@ pub(super) async fn load_response_state_by_key(
                 content
                 status
                 token_count
+                interrupted_at
             }}
         }}"#
     );

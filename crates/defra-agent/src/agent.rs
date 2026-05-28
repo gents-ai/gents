@@ -12,7 +12,7 @@ use crate::config::{
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::health_checker::HealthCheckerOptions;
-use crate::hook::FailurePolicy;
+use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
@@ -100,6 +100,7 @@ pub struct DefraAgent {
     local_subnet: Option<String>,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
+    background_execution_registry: BackgroundExecutionRegistry,
     health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
@@ -171,6 +172,7 @@ impl DefraAgent {
             local_subnet: options.local_subnet,
             retry_policy: options.retry_policy,
             hook_failure_policy: options.hook_failure_policy,
+            background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: options.health_checker_options,
             process_state_observer: options.process_state_observer,
             manual_trigger_handle: Arc::new(OnceCell::new()),
@@ -212,6 +214,10 @@ impl DefraAgent {
 
     pub fn unavailable_behaviors(&self) -> &HashMap<String, String> {
         &self.unavailable_behaviors
+    }
+
+    pub fn background_execution_registry(&self) -> BackgroundExecutionRegistry {
+        self.background_execution_registry.clone()
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

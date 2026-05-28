@@ -226,7 +226,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             "failed to stamp interrupted_at on response; continuing to terminal transition"
                         );
                     }
-                    // 5. Write terminal lifecycle_state = interrupted.
+                    // 5. Complete the response-side interrupt edge without
+                    // rewriting the request as failed; the request has its
+                    // own Lean interrupt transition below.
+                    if let Err(error) = self.stream_writer.finalize_interrupted_response(&doc_id).await
+                    {
+                        tracing::warn!(
+                            behavior_id = %self.behavior.behavior_id,
+                            doc_id = %doc_id,
+                            error = %error,
+                            "failed to finalize interrupted response; continuing to terminal request transition"
+                        );
+                    }
+                    // 6. Write terminal lifecycle_state = interrupted.
                     lifecycle.transition_to_interrupted().await?;
                     if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
                         &self.node,

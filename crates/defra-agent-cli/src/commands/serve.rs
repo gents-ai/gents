@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::cli::*;
+use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::http::runtime_contract_router;
 use crate::shared::*;
 use crate::{
@@ -167,6 +168,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         "degraded"
     };
+    let background_execution_registry = agent.background_execution_registry();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -225,6 +227,61 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         },
     )?;
 
+    let mut codex_shim_output = None;
+    let mut codex_shim_handle = if args.codex_shim {
+        let bound = bind_codex_shim(CodexShimBindArgs {
+            home: home_dir.clone(),
+            fs_root: effective_tool_root.clone(),
+            node: node.clone(),
+            background_execution_registry: background_execution_registry.clone(),
+            graphql: graphql_url.clone(),
+            agent_did: identity.did().to_string(),
+            behavior_id: args.codex_shim_behavior_id.clone(),
+            bind_addr: args.codex_shim_bind_addr,
+            port: args.codex_shim_port,
+            timeout_secs: args.codex_shim_timeout_secs,
+            poll_ms: args.codex_shim_poll_ms,
+        })
+        .await?;
+        let codex_shim_url = format!(
+            "ws://{}:{}/",
+            display_host(bound.addr().ip()),
+            bound.addr().port()
+        );
+        eprintln!(
+            "Codex shim is running on {codex_shim_url} with state dir {}",
+            bound.codex_home().display(),
+        );
+        eprintln!("Codex shim event log: {}", bound.trace_path().display());
+        eprintln!(
+            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}",
+        );
+        eprintln!(
+            "No CODEX_HOME override is required; Codex keeps using its normal local config while Defra handles the remote runtime."
+        );
+        if args.codex_shim_bind_addr.is_loopback() {
+            eprintln!(
+                "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
+            );
+        } else {
+            eprintln!(
+                "Codex shim has no transport authentication; only expose this address on a trusted private network."
+            );
+        }
+        codex_shim_output = Some(json!({
+            "websocket": codex_shim_url,
+            "launch_command": format!(
+                "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}"
+            ),
+            "shim_home": bound.codex_home().to_path_buf(),
+            "codex_home": bound.codex_home().to_path_buf(),
+            "event_log": bound.trace_path().to_path_buf(),
+        }));
+        Some(bound.spawn())
+    } else {
+        None
+    };
+
     let output = json!({
         "status": "serving",
         "behavior_readiness": behavior_readiness,
@@ -240,15 +297,29 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
         "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
         "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
+        "codex_shim": codex_shim_output,
     });
     print_json(&output)?;
     eprintln!(
         "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
     );
 
-    run_handle
-        .await
-        .context("joining defra-agent runtime task")?
+    if let Some(handle) = codex_shim_handle.as_mut() {
+        tokio::select! {
+            result = &mut run_handle => {
+                result.context("joining defra-agent runtime task")?
+            }
+            result = handle => {
+                result.context("joining Codex shim task")?
+                    .context("Codex shim task failed")?;
+                Ok(())
+            }
+        }
+    } else {
+        run_handle
+            .await
+            .context("joining defra-agent runtime task")?
+    }
 }
 
 struct ServerIdentity {

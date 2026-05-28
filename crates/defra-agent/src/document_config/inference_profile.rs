@@ -129,7 +129,7 @@ pub(crate) async fn load_inference_profile_by_doc_id(
     ))
 }
 
-pub(crate) async fn list_inference_profile_records(
+pub async fn list_inference_profile_records(
     node: &EmbeddedNode,
 ) -> Result<Vec<(String, InferenceProfile)>> {
     let query = r#"{

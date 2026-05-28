@@ -48,6 +48,7 @@ const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "CompactionEntry",
+    "CodexThreadProjection",
 ];
 
 const P2P_TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];

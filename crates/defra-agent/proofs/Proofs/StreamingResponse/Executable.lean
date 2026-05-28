@@ -28,6 +28,26 @@ structure ResponseTransitionCase where
   expectedRequestPersistence : Option String
   deriving Repr
 
+structure ResponseInterruptFlowCase where
+  name                         : String
+  group                        : String
+  action                       : String
+  preRequestState              : String
+  postRequestState             : String
+  preResponseStatus            : String
+  postResponseStatus           : String
+  preInferenceCallState        : String
+  postInferenceCallState       : String
+  responseErrorReason          : String
+  interruptedAtRequired        : Bool
+  completedAtRequired          : Bool
+  liveTailCleared              : Bool
+  partialTurnMaterialized      : Bool
+  requestTerminal              : Bool
+  responseTerminal             : Bool
+  inferenceCallTerminal        : Bool
+  deriving Repr
+
 def beginEmitsStreamingEmpty : ResponseTransitionCase :=
   { name := "begin_emits_streaming_empty"
   , group := "normal"
@@ -258,5 +278,28 @@ def responseTransitionCases : List ResponseTransitionCase :=
   , setInterruptedAtDoesNotChangeStatus
   , bridgeCompletedPairsRequestCommitted
   ]
+
+def daemonInterruptTerminalizesResponseAndRequest : ResponseInterruptFlowCase :=
+  { name := "daemon_interrupt_terminalizes_response_and_request"
+  , group := "interrupt"
+  , action := "daemon_interrupt_flow"
+  , preRequestState := "processing"
+  , postRequestState := "interrupted"
+  , preResponseStatus := "streaming"
+  , postResponseStatus := "error"
+  , preInferenceCallState := "running"
+  , postInferenceCallState := "cancelled"
+  , responseErrorReason := "interrupted"
+  , interruptedAtRequired := true
+  , completedAtRequired := true
+  , liveTailCleared := true
+  , partialTurnMaterialized := true
+  , requestTerminal := true
+  , responseTerminal := true
+  , inferenceCallTerminal := true
+  }
+
+def responseInterruptFlowCases : List ResponseInterruptFlowCase :=
+  [ daemonInterruptTerminalizesResponseAndRequest ]
 
 end StreamingResponse
