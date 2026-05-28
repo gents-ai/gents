@@ -132,8 +132,12 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))?;
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
 
-    let bound_behavior_id =
-        bound_behavior::resolve_bound_behavior_id(args.behavior_id.as_deref(), &args.agent_did);
+    let bound_behavior_id = bound_behavior::resolve_bound_behavior_id(
+        args.node.as_ref(),
+        args.behavior_id.as_deref(),
+        &args.agent_did,
+    )
+    .await;
     bound_behavior::load_bound_inference_profile_id(args.node.as_ref(), &bound_behavior_id)
         .await
         .with_context(|| format!("validating Codex shim bound behavior {bound_behavior_id:?}"))?;
