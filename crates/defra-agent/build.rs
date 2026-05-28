@@ -68,6 +68,16 @@ fn main() {
 }
 
 fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &str) {
+    // Build the lens with an isolated target directory. This nested `cargo`
+    // invocation must not share the parent build's target dir: the outer
+    // release `cargo` already holds an exclusive flock on
+    // `target/release/.cargo-build-lock`, and a nested `cargo` pointed at the
+    // same target dir blocks forever in flock() waiting for that lock — a
+    // hard deadlock (e.g. release CI hanging indefinitely at 0% CPU). Giving
+    // the inner build its own target dir under OUT_DIR removes the contention.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let lens_target_dir = out_dir.join("lens-target");
+
     let status = Command::new("cargo")
         .args([
             "build",
@@ -77,6 +87,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
             "wasm32-unknown-unknown",
             "--release",
         ])
+        .env("CARGO_TARGET_DIR", &lens_target_dir)
         .current_dir(workspace_root)
         .status();
 
@@ -101,8 +112,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
         );
     }
 
-    let artifact = workspace_root
-        .join("target")
+    let artifact = lens_target_dir
         .join("wasm32-unknown-unknown")
         .join("release")
         .join(artifact_name);
