@@ -505,6 +505,77 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-blank-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-blank-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "50",
+            "--codex-shim-timeout-secs",
+            "5",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+
+    let prompt = "Read notes.txt, then finish without visible final text.";
+    send_turn(&mut ws, &thread_id, prompt).await?;
+    let (request_id, session_id, behavior_id) =
+        wait_for_request(&graphql, &agent_did, prompt).await?;
+    assert_eq!(session_id, thread_id);
+    seed_blank_materialized_completion(&graphql, &request_id, &agent_did, &behavior_id, &thread_id)
+        .await?;
+
+    let capture = tokio::time::timeout(Duration::from_secs(15), read_turn_capture(&mut ws))
+        .await
+        .context("timed out waiting for Codex shim turn completion")??;
+
+    assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
+    assert!(
+        capture.text.trim().is_empty(),
+        "mock final response is intentionally blank; got:\n{}",
+        capture.text
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_thread_fork_and_search_project_defra_sessions() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -2440,6 +2511,77 @@ async fn send_turn(ws: &mut ShimWebSocket, thread_id: &str, prompt: &str) -> Res
     )
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(ws, request_id(104)).await?;
+    Ok(())
+}
+
+async fn seed_blank_materialized_completion(
+    graphql: &str,
+    request_id: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    session_id: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let message_key = format!("{session_id}:blank-terminal");
+    let blank_assistant = "\n\n\n";
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "{message_key}",
+                session_id: "{session_id}",
+                sequence: 2,
+                role: "assistant",
+                content: "{blank_assistant}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+            upsert_AgentResponse(
+                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
+                add: {{
+                    response_key: "{request_id}",
+                    request_id: "{request_id}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session_id}",
+                    content: "",
+                    reasoning: "",
+                    status: "complete",
+                    error_message: "",
+                    token_count: 0,
+                    progress_seq: 0,
+                    materialized_message_sequence: 2,
+                    materialized_at: "{now}",
+                    created_at: "{now}",
+                    completed_at: "{now}"
+                }},
+                update: {{
+                    content: "",
+                    reasoning: "",
+                    status: "complete",
+                    error_message: "",
+                    progress_seq: 0,
+                    materialized_message_sequence: 2,
+                    materialized_at: "{now}",
+                    completed_at: "{now}"
+                }}
+            ) {{ _docID }}
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    failure_reason: ""
+                }}
+            ) {{ _docID }}
+        }}"#,
+        message_key = escape_graphql_string(&message_key),
+        session_id = escape_graphql_string(session_id),
+        blank_assistant = escape_graphql_string(blank_assistant),
+        now = escape_graphql_string(&now),
+        request_id = escape_graphql_string(request_id),
+        agent_did = escape_graphql_string(agent_did),
+        behavior_id = escape_graphql_string(behavior_id),
+    );
+    graphql_query(graphql, &mutation).await?;
     Ok(())
 }
 

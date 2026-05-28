@@ -186,8 +186,11 @@ pub(crate) async fn hydrate_materialized_response_content(
         }
     }
 
-    Ok(!response_field_is_blank(response, "content")
-        || !response_field_is_blank(response, "reasoning"))
+    // A terminal response can legitimately materialize to no visible text,
+    // for example after a final assistant message that only closes a tool
+    // loop. The waiter only needs to know that the referenced message row
+    // exists; visible content is optional.
+    Ok(true)
 }
 
 pub(crate) async fn create_agent_request(

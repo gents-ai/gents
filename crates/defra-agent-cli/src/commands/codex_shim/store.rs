@@ -69,8 +69,10 @@ pub(super) async fn hydrate_materialized_response_content(
         }
     }
 
-    Ok(!response_field_is_blank(response, "content")
-        || !response_field_is_blank(response, "reasoning"))
+    // A terminal response can legitimately materialize to no visible text.
+    // Once the referenced AgentMessage exists, the Codex turn can finish even
+    // if there is no final assistant text to stream.
+    Ok(true)
 }
 
 fn response_materialized_sequence(response: &Value) -> Option<i64> {
