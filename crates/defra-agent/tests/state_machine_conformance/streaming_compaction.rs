@@ -1,5 +1,21 @@
 use super::*;
+use std::sync::Arc;
+
 use defra_agent::StreamWriter;
+use defra_agent_protocol::transcript::present_persisted_message;
+
+use super::support::fixtures::test_identity;
+use super::support::interrupt::{
+    create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
+    wait_for_response_content_contains, wait_for_response_doc_id, wait_for_runtime_ready,
+    BootedAgent,
+};
+use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
+
+const INTERRUPT_FLOW_MODEL: &str = "default";
+const INTERRUPT_FLOW_BACKEND_ID: &str = "backend-streaming-response-interrupt-flow";
+const INTERRUPT_FLOW_MARKER: &str = "streaming-response-interrupt-flow";
+const INTERRUPT_FLOW_PARTIAL: &str = "partial response content ";
 
 #[derive(Debug, Deserialize)]
 struct StreamingResponseRow {
@@ -10,6 +26,7 @@ struct StreamingResponseRow {
     token_count: i64,
     materialized_message_sequence: Option<i64>,
     interrupted_at: Option<String>,
+    completed_at: Option<String>,
 }
 
 pub(super) async fn generated_streaming_response_cases_pin_lifecycle_contract() {
@@ -43,6 +60,145 @@ pub(super) async fn generated_streaming_response_cases_pin_lifecycle_contract() 
     for case in cases {
         drive_streaming_response_case(case).await;
     }
+}
+
+pub(super) async fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract() {
+    let cases = lean_response_interrupt_flow_cases();
+    assert_eq!(cases.len(), 1);
+    let expected_names = ["daemon_interrupt_terminalizes_response_and_request"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        expected_names
+    );
+
+    for case in cases {
+        drive_streaming_response_interrupt_flow_case(case).await;
+    }
+}
+
+async fn drive_streaming_response_interrupt_flow_case(
+    case: &lean_vocab_test::LeanResponseInterruptFlowCase,
+) {
+    assert_eq!(case.group, "interrupt");
+    assert_eq!(case.action, "daemon_interrupt_flow");
+
+    let db = test_db(&format!("streaming-interrupt-flow-{}", case.name)).await;
+    let backend = MockStreamingBackend::start(
+        INTERRUPT_FLOW_MODEL,
+        vec![StreamScript::paused(
+            INTERRUPT_FLOW_MARKER,
+            [INTERRUPT_FLOW_PARTIAL],
+        )],
+    )
+    .expect("start mock streaming backend");
+    let agent = boot_streaming_interrupt_flow_agent(&db, &case.name, backend.endpoint()).await;
+
+    let request_id = format!("{}-{}", case.name, uuid::Uuid::new_v4());
+    let session_id = format!("session-{}", uuid::Uuid::new_v4());
+    let request_doc_id = create_runtime_request(
+        db.node.as_ref(),
+        agent.agent_did.as_str(),
+        AGENT_NAME,
+        &request_id,
+        &session_id,
+        INTERRUPT_FLOW_MARKER,
+    )
+    .await;
+
+    backend.wait_for_chunks(INTERRUPT_FLOW_MARKER, 1).await;
+    let response_doc_id = wait_for_response_doc_id(db.node.as_ref(), &request_id).await;
+    wait_for_response_content_contains(db.node.as_ref(), &response_doc_id, INTERRUPT_FLOW_PARTIAL)
+        .await;
+
+    let pre_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
+    assert_eq!(pre_request.lifecycle_state, case.pre_request_state);
+    let pre_response = load_streaming_response_row(&db.node, &response_doc_id).await;
+    assert_eq!(pre_response.status, case.pre_response_status);
+    let pre_call = wait_for_inference_call_state(
+        db.node.as_ref(),
+        &request_id,
+        &case.pre_inference_call_state,
+    )
+    .await;
+    assert_eq!(pre_call.call_state, case.pre_inference_call_state);
+
+    interrupt_request(db.node.as_ref(), &request_id)
+        .await
+        .expect("interrupt_request should latch interrupt_requested_at");
+
+    wait_for_request_lifecycle_state(db.node.as_ref(), &request_doc_id, &case.post_request_state)
+        .await;
+    let post_call = wait_for_inference_call_state(
+        db.node.as_ref(),
+        &request_id,
+        &case.post_inference_call_state,
+    )
+    .await;
+    assert_eq!(post_call.call_state, case.post_inference_call_state);
+
+    let post_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
+    assert_eq!(post_request.lifecycle_state, case.post_request_state);
+    assert_eq!(post_request.status, case.post_request_state);
+    assert_eq!(
+        request_state_is_terminal(&post_request.lifecycle_state),
+        case.request_terminal
+    );
+
+    let post_response = load_streaming_response_row(&db.node, &response_doc_id).await;
+    assert_eq!(post_response.status, case.post_response_status);
+    assert_eq!(
+        response_status_is_terminal(&post_response.status),
+        case.response_terminal
+    );
+    assert_eq!(
+        post_response.error_message.as_deref(),
+        Some(case.response_error_reason.as_str())
+    );
+    assert_eq!(
+        post_response
+            .interrupted_at
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        case.interrupted_at_required
+    );
+    assert_eq!(
+        post_response
+            .completed_at
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        case.completed_at_required
+    );
+    if case.live_tail_cleared {
+        assert_eq!(post_response.content, "");
+        assert!(post_response
+            .reasoning
+            .as_deref()
+            .map_or(true, |reasoning| reasoning.is_empty()));
+    }
+
+    if case.partial_turn_materialized {
+        let messages = fetch_message_snapshots_for_session(&db.node, &session_id).await;
+        assert!(
+            messages.iter().any(|message| {
+                message.role == "assistant"
+                    && present_persisted_message(&message.role, &message.content).body_markdown
+                        == INTERRUPT_FLOW_PARTIAL.trim()
+            }),
+            "{}: interrupted flow must materialize the partial assistant turn",
+            case.name
+        );
+    }
+    assert_eq!(
+        inference_call_state_is_terminal(&post_call.call_state),
+        case.inference_call_terminal
+    );
+
+    agent.shutdown().await;
 }
 
 async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTransitionCase) {
@@ -417,6 +573,7 @@ async fn load_streaming_response_row(node: &EmbeddedNode, doc_id: &str) -> Strea
                 token_count
                 materialized_message_sequence
                 interrupted_at
+                completed_at
             }}
         }}"#
     );
@@ -435,6 +592,91 @@ fn live_tail_shape(row: &StreamingResponseRow) -> &'static str {
     } else {
         "empty"
     }
+}
+
+fn request_state_is_terminal(state: &str) -> bool {
+    matches!(
+        state,
+        "completed" | "failed" | "superseded" | "dead" | "interrupted"
+    )
+}
+
+fn response_status_is_terminal(status: &str) -> bool {
+    matches!(status, "complete" | "error")
+}
+
+fn inference_call_state_is_terminal(state: &str) -> bool {
+    matches!(state, "cancelled" | "completed" | "failed")
+}
+
+async fn boot_streaming_interrupt_flow_agent(
+    db: &support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+) -> BootedAgent {
+    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
+    upsert_interrupt_flow_backend(db.node.as_ref(), endpoint).await;
+
+    let agent = defra_agent::DefraAgent::builder()
+        .node(db.node.clone())
+        .identity(identity)
+        .default_behavior_id(AGENT_NAME)
+        .tool_ceiling(defra_agent::ToolCeiling::meta_only())
+        .behavior(AGENT_NAME)
+        .backend_id(INTERRUPT_FLOW_BACKEND_ID)
+        .model_name(INTERRUPT_FLOW_MODEL)
+        .stream_batch_ms(0)
+        .done()
+        .build()
+        .await
+        .expect("build streaming interrupt-flow agent");
+    let agent_did = agent.agent_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+
+    BootedAgent::new(shutdown_tx, handle, agent_did)
+}
+
+async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
+    let escaped_backend_id = escape_graphql_string(INTERRUPT_FLOW_BACKEND_ID);
+    let escaped_endpoint = escape_graphql_string(endpoint);
+    let mutation = format!(
+        r#"mutation {{
+            upsert_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
+                add: {{
+                    backend_id: "{escaped_backend_id}",
+                    name: "{escaped_backend_id}",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "{escaped_endpoint}",
+                    api_key: "",
+                    api_key_env_var: "",
+                    max_concurrent: 1,
+                    max_queue_depth: 100,
+                    enabled: true,
+                    models: ["{INTERRUPT_FLOW_MODEL}"],
+                    probe_status: "healthy"
+                }},
+                update: {{
+                    name: "{escaped_backend_id}",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "{escaped_endpoint}",
+                    max_concurrent: 1,
+                    max_queue_depth: 100,
+                    enabled: true,
+                    models: ["{INTERRUPT_FLOW_MODEL}"],
+                    probe_status: "healthy"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "upsert interrupt-flow backend failed: {:?}",
+        response.errors
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

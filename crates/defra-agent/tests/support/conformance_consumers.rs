@@ -427,6 +427,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_streaming_response_cases_pin_lifecycle_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_compaction_reducer_cases_pin_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",

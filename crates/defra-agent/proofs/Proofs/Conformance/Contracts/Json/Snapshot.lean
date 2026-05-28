@@ -115,6 +115,9 @@ def snapshotJson : String :=
     ++ "\"streaming_response_cases\":"
       ++ jsonArray
         (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
+    ++ "\"streaming_response_interrupt_flow_cases\":"
+      ++ jsonArray
+        (StreamingResponse.responseInterruptFlowCases.map responseInterruptFlowCaseJson) ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

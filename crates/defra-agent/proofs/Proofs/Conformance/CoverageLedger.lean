@@ -198,6 +198,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "codex-shim"
+    , required := [Surface.api, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "command-policy"
     , required := [Surface.agentFacing]
     -- #286 ships the inline denial render in the desktop chat shell,
@@ -628,6 +632,11 @@ def caseCoverage : List CoverageEntry :=
       "streaming_response_cases"
       "ResponseTransitionCases"
       "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract")
+      "streaming-response" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "streaming_response_interrupt_flow_cases"
+      "ResponseInterruptFlowCases"
+      "state_machine_conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract")
       "streaming-response" [Surface.agentFacing]
   , tagged (consumerCoverage
       "streaming_response_cases"

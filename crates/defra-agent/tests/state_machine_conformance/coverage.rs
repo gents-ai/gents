@@ -173,6 +173,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
+    assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
 }
 
 #[tokio::test]
@@ -639,6 +640,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ResponseTransitionCases".to_string(),
         ));
     }
+    if !lean_response_interrupt_flow_cases().is_empty() {
+        emitted.insert((
+            "streaming_response_interrupt_flow_cases".to_string(),
+            "ResponseInterruptFlowCases".to_string(),
+        ));
+    }
     if !lean_compaction_reducer_cases().is_empty() {
         emitted.insert((
             "compaction_reducer_cases".to_string(),
@@ -754,6 +761,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",
+        "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",
         "mcp_health_cases",
         "identity_structural_cases",

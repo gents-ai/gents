@@ -51,11 +51,11 @@ use lean_vocab_test::{
     lean_queue_deadline_cases, lean_r4c_background_work_case, lean_r4c_background_work_cases,
     lean_r5_cross_deployment_cases, lean_r6_background_theorem_witness,
     lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_cases,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
-    LeanR4cBackgroundWorkCase,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
+    lean_response_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
+    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
+    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -150,6 +150,12 @@ async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
 #[tokio::test]
 async fn generated_streaming_response_cases_pin_lifecycle_contract() {
     streaming_compaction::generated_streaming_response_cases_pin_lifecycle_contract().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract() {
+    streaming_compaction::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract()
+        .await;
 }
 
 #[test]

@@ -68,6 +68,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
+    #[serde(default)]
+    pub(crate) streaming_response_interrupt_flow_cases: Vec<LeanResponseInterruptFlowCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
@@ -497,6 +499,20 @@ pub(crate) fn lean_response_transition_case(name: &str) -> &'static LeanResponse
         .unwrap_or_else(|| panic!("Lean response-transition case {name:?} was not emitted"))
 }
 
+pub(crate) fn lean_response_interrupt_flow_cases() -> &'static [LeanResponseInterruptFlowCase] {
+    &lean_contract_snapshot().streaming_response_interrupt_flow_cases
+}
+
+pub(crate) fn lean_response_interrupt_flow_case(
+    name: &str,
+) -> &'static LeanResponseInterruptFlowCase {
+    lean_contract_snapshot()
+        .streaming_response_interrupt_flow_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean response-interrupt-flow case {name:?} was not emitted"))
+}
+
 pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
     &lean_contract_snapshot().compaction_reducer_cases
 }
@@ -709,14 +725,12 @@ pub(crate) fn assert_state_machine_contract_is_complete(domain: &str) {
                 .legal_transitions
                 .iter()
                 .all(|pair| !machine.illegal_transitions.contains(pair))
-            && machine
-                .legal_transitions
-                .iter()
-                .all(|pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to))
-            && machine
-                .illegal_transitions
-                .iter()
-                .all(|pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)),
+            && machine.legal_transitions.iter().all(
+                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
+            )
+            && machine.illegal_transitions.iter().all(
+                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
+            ),
         "Lean state-machine contract {domain:?} is incomplete or malformed\n  state_count: {}\n  states: {:?}\n  actions: {:?}\n  legal transitions: {:?}\n  illegal transitions: {:?}\n  duplicate states: {:?}\n  duplicate actions: {:?}\n  duplicate legal pairs: {:?}\n  duplicate illegal pairs: {:?}\n  expected pair partition size: {}\n  actual pair partition size: {}",
         machine.state_count,
         machine.states,
