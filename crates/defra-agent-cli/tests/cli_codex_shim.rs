@@ -3337,3 +3337,106 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let default_behavior_id = format!("{agent_did}:default");
+    let original_profile_id = format!("{agent_did}:default-profile");
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ConfigValueWrite {
+            request_id: request_id(2),
+            params: codex::ConfigValueWriteParams {
+                key_path: "model".to_string(),
+                value: serde_json::Value::String("definitely-not-real".to_string()),
+                merge_strategy: codex::MergeStrategy::Replace,
+                file_path: None,
+                expected_version: None,
+            },
+        },
+    )
+    .await?;
+    let error = read_error_response(&mut ws, request_id(2)).await?;
+    assert!(
+        error.message.contains("InferenceProfile") || error.message.contains("not found"),
+        "expected error to mention missing InferenceProfile; got: {}",
+        error.message
+    );
+
+    let resp = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
+                    limit: 1
+                ) {{ inference_profile_id }}
+            }}"#
+        ),
+    )
+    .await?;
+    let stored = resp
+        .pointer("/data/AgentBehavior/0/inference_profile_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    assert_eq!(
+        stored, original_profile_id,
+        "behavior doc must remain unchanged after rejected write"
+    );
+    Ok(())
+}
