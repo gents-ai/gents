@@ -33,7 +33,7 @@ pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjec
 fn should_project_as_command_execution(tool: &DefraToolCallProgress) -> bool {
     is_defra_background_tool(tool)
         || matches!(tool.tool_name.as_str(), "bash" | "bash_unrestricted")
-        || is_defra_fs_exploration_tool(tool)
+        || is_defra_fs_command_tool(tool)
 }
 
 fn is_defra_background_tool(tool: &DefraToolCallProgress) -> bool {
@@ -43,10 +43,10 @@ fn is_defra_background_tool(tool: &DefraToolCallProgress) -> bool {
         .is_some_and(|value| value == "background")
 }
 
-fn is_defra_fs_exploration_tool(tool: &DefraToolCallProgress) -> bool {
+fn is_defra_fs_command_tool(tool: &DefraToolCallProgress) -> bool {
     matches!(
         tool.tool_name.as_str(),
-        "read_file" | "list_files" | "glob" | "grep"
+        "read_file" | "list_files" | "glob" | "grep" | "write_file" | "edit_file"
     )
 }
 
@@ -122,10 +122,26 @@ fn command_execution_display(tool: &DefraToolCallProgress) -> String {
     if let Some(command) = shell_command_from_tool_args(&tool.args) {
         return command;
     }
+    if let Some(display) = file_command_display_from_tool_args(tool) {
+        return display;
+    }
     if tool.args.trim().is_empty() {
         return format!("background_tool {}", tool.tool_name);
     }
     format!("{} {}", tool.tool_name, tool.args.trim())
+}
+
+fn file_command_display_from_tool_args(tool: &DefraToolCallProgress) -> Option<String> {
+    let value = serde_json::from_str::<Value>(tool.args.trim()).ok()?;
+    let path = value.get("path")?.as_str()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    match tool.tool_name.as_str() {
+        "write_file" | "edit_file" => Some(shell_join(&[tool.tool_name.clone(), path.to_string()])),
+        _ => None,
+    }
 }
 
 fn command_actions_for_tool(
@@ -161,6 +177,9 @@ fn command_actions_for_tool(
                 path: optional_path_arg(&args),
             }]
         }
+        "write_file" | "edit_file" => vec![codex::CommandAction::Unknown {
+            command: command.to_string(),
+        }],
         _ => Vec::new(),
     }
 }
@@ -457,6 +476,71 @@ mod tests {
             command_actions.as_slice(),
             [codex::CommandAction::Search { query: Some(query), path: Some(path), .. }]
                 if query == "RequestState" && path == "crates/defra-agent/proofs"
+        ));
+    }
+
+    #[test]
+    fn write_and_edit_tools_project_as_native_command_blocks() {
+        let write = test_tool(
+            "write_file",
+            "completed",
+            r###"{"path":"README.md","content":"## Summary\n\nThe CodexShim projection"}"###,
+        );
+
+        assert_eq!(
+            tool_projection_status(&write),
+            ToolProjectionStatus::Command(codex::CommandExecutionStatus::Completed)
+        );
+
+        let write_item = command_execution_item(
+            Path::new("/repo"),
+            &write,
+            codex::CommandExecutionStatus::Completed,
+        );
+        let codex::ThreadItem::CommandExecution {
+            command,
+            source,
+            command_actions,
+            ..
+        } = write_item
+        else {
+            panic!("expected command execution item");
+        };
+        assert_eq!(command, "write_file README.md");
+        assert_eq!(source, codex::CommandExecutionSource::Agent);
+        assert!(matches!(
+            command_actions.as_slice(),
+            [codex::CommandAction::Unknown { command }] if command == "write_file README.md"
+        ));
+
+        let edit = test_tool(
+            "edit_file",
+            "running",
+            r#"{"path":"src/lib.rs","old_text":"old","new_text":"new"}"#,
+        );
+
+        assert_eq!(
+            tool_projection_status(&edit),
+            ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
+        );
+
+        let edit_item = command_execution_item(
+            Path::new("/repo"),
+            &edit,
+            codex::CommandExecutionStatus::InProgress,
+        );
+        let codex::ThreadItem::CommandExecution {
+            command,
+            command_actions,
+            ..
+        } = edit_item
+        else {
+            panic!("expected command execution item");
+        };
+        assert_eq!(command, "edit_file src/lib.rs");
+        assert!(matches!(
+            command_actions.as_slice(),
+            [codex::CommandAction::Unknown { command }] if command == "edit_file src/lib.rs"
         ));
     }
 
