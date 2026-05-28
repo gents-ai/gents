@@ -134,7 +134,7 @@ Codex flow:
 Codex keeps using its normal local ~/.codex config in this mode. The Defra shim state directory is server-side state and is only useful for debugging or an intentionally isolated client profile.
 
 For laptop-to-fleet use, bind the shim on a reachable interface:
-  defra-agent server --codex-shim --codex-shim-bind-addr <tailscale-ip-or-0.0.0.0>
+  defra-agent server --codex-shim --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
   codex --remote ws://<tailscale-host>:9292/
 
 Identity note:

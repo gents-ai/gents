@@ -251,11 +251,10 @@ fn strip_system_items(input: &mut Value) {
         Value::Array(items) => {
             items.retain(|item| item.get("role").and_then(Value::as_str) != Some("system"));
         }
-        Value::Object(item) => {
-            if item.get("role").and_then(Value::as_str) == Some("system") {
-                item.clear();
-            }
+        Value::Object(item) if item.get("role").and_then(Value::as_str) == Some("system") => {
+            item.clear();
         }
+        Value::Object(_) => {}
         _ => {}
     }
 }

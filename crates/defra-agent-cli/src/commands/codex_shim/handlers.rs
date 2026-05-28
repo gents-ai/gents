@@ -3,7 +3,7 @@ use codex_app_server_protocol as codex;
 
 use super::compat::send_planned_stub;
 use super::protocol::{client_request_from_jsonrpc, send_error};
-use super::{trace, ConnectionState, ShimState, JSONRPC_INVALID_REQUEST};
+use super::{trace, ConnectionState, ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_REQUEST};
 
 mod background;
 mod basic;
@@ -34,7 +34,7 @@ pub(super) async fn handle_request(
         }
     };
 
-    match codex_request {
+    let result = match codex_request {
         codex::ClientRequest::Initialize { .. }
         | codex::ClientRequest::GetAccount { .. }
         | codex::ClientRequest::GetAccountRateLimits { .. }
@@ -100,5 +100,23 @@ pub(super) async fn handle_request(
         }
 
         unsupported => send_planned_stub(outbound, state, unsupported).await,
+    };
+
+    if let Err(err) = result {
+        tracing::warn!(
+            %method,
+            %request_id,
+            error = %err,
+            "Codex shim request failed"
+        );
+        return send_error(
+            outbound,
+            request_id,
+            JSONRPC_INTERNAL_ERROR,
+            format!("Codex shim request `{method}` failed: {err}"),
+        )
+        .await;
     }
+
+    Ok(())
 }
