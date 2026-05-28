@@ -38,9 +38,15 @@ const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
     {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":11}}
 ]"#;
 
+// Kind 21 == ScalarArrayKind::NillableStringArray in defradb.rs. The SDL
+// `[String]` (nullable elements) for these fields compiles to that kind, so the
+// migration patch must use it. The previous value of 17 was a stale Go-DefraDB
+// field-kind number that is unassigned in defradb.rs's enum, so the SDL builder
+// treated the patch as a named-type reference and failed with
+// "no type found for given name. Kind: 17" — crash-looping every store upgrade.
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":17}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":21}},
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_spawn_enabled","Kind":2}},
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_steering_enabled","Kind":2}},
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_background_enabled","Kind":2}}
@@ -48,7 +54,7 @@ const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
 
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":17}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":21}}
 ]"#;
 
 #[allow(dead_code)]
@@ -462,4 +468,68 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
         "PeerPairingDesired patched with agent_did field"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod patch_kind_tests {
+    use super::*;
+
+    // defradb.rs ScalarArrayKind::NillableStringArray. SDL `[String]` (nullable
+    // elements) compiles to this; migration patches adding such fields must match.
+    const NILLABLE_STRING_ARRAY_KIND: i64 = 21;
+
+    fn field_kinds(patch_json: &str) -> Vec<(String, i64)> {
+        let ops: serde_json::Value = serde_json::from_str(patch_json).expect("patch is valid JSON");
+        ops.as_array()
+            .expect("patch is an array")
+            .iter()
+            .filter_map(|op| {
+                let value = op.get("value")?;
+                let name = value.get("Name")?.as_str()?.to_string();
+                let kind = value.get("Kind")?.as_i64()?;
+                Some((name, kind))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tool_selection_string_array_fields_use_nillable_string_array_kind() {
+        for (name, kind) in field_kinds(ADD_TOOL_SELECTION_SUBAGENT_PATCH) {
+            if name == "subagent_targets" {
+                assert_eq!(
+                    kind, NILLABLE_STRING_ARRAY_KIND,
+                    "subagent_targets must be NillableStringArray (21), got {kind}"
+                );
+            }
+        }
+        for (name, kind) in field_kinds(ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH) {
+            assert_eq!(
+                name, "backgroundable_tool_names",
+                "unexpected field in background-tools patch"
+            );
+            assert_eq!(
+                kind, NILLABLE_STRING_ARRAY_KIND,
+                "backgroundable_tool_names must be NillableStringArray (21), got {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_patch_uses_the_unassigned_kind_17() {
+        // 17 is unassigned in defradb.rs's FieldKind enum; the SDL builder treats
+        // it as a named-type reference and fails with "no type found. Kind: 17".
+        for patch in [
+            ADD_LIFECYCLE_STATE_PATCH,
+            ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH,
+            ADD_AGENT_REQUEST_SUBAGENT_PATCH,
+            ADD_TOOL_SELECTION_SUBAGENT_PATCH,
+            ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH,
+            ADD_AGENT_TOOL_CALL_R5_PATCH,
+            ADD_TOOL_SELECTION_R5_PATCH,
+        ] {
+            for (name, kind) in field_kinds(patch) {
+                assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
+            }
+        }
+    }
 }
