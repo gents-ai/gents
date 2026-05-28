@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
@@ -156,14 +156,7 @@ pub(super) async fn load_thread_turns(
         tools_by_request.entry(request_id).or_default().push(tool);
     }
 
-    let mut turns = Vec::with_capacity(requests.len());
-    for request in requests.into_iter().filter(is_codex_visible_request) {
-        let response = responses_by_request.get(&request.request_id);
-        let request_tools = tools_by_request
-            .remove(&request.request_id)
-            .unwrap_or_default();
-        turns.push(project_turn(record, &request, response, request_tools));
-    }
+    let turns = project_request_turns(record, requests, &responses_by_request, &tools_by_request)?;
 
     if turns.is_empty() && !messages.is_empty() {
         return Ok(project_message_turns(messages));
@@ -226,6 +219,90 @@ fn finish_message_turn(
         };
         turns.push(turn_value(&turn_id, status, items, None));
     }
+}
+
+fn project_request_turns(
+    record: &CodexThreadRecord,
+    requests: Vec<RequestRow>,
+    responses_by_request: &BTreeMap<String, ResponseRow>,
+    tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+) -> Result<Vec<codex::Turn>> {
+    let requests = requests
+        .into_iter()
+        .filter(is_codex_visible_request)
+        .collect::<Vec<_>>();
+    let requests_by_id = requests
+        .iter()
+        .map(|request| (request.request_id.as_str(), request))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut root_order = Vec::<String>::new();
+    let mut grouped = BTreeMap::<String, Vec<RequestRow>>::new();
+    for request in &requests {
+        let root_id = steering_root_id(request, &requests_by_id)?;
+        if !grouped.contains_key(&root_id) {
+            root_order.push(root_id.clone());
+        }
+        grouped.entry(root_id).or_default().push(request.clone());
+    }
+
+    let mut turns = Vec::with_capacity(grouped.len());
+    for root_id in root_order {
+        let Some(group) = grouped.remove(&root_id) else {
+            continue;
+        };
+        turns.push(project_turn_group(
+            record,
+            &root_id,
+            &group,
+            responses_by_request,
+            tools_by_request,
+        ));
+    }
+    Ok(turns)
+}
+
+fn steering_root_id(
+    request: &RequestRow,
+    requests_by_id: &BTreeMap<&str, &RequestRow>,
+) -> Result<String> {
+    let mut current = request;
+    let mut seen = BTreeSet::<String>::new();
+    loop {
+        if !seen.insert(current.request_id.clone()) {
+            anyhow::bail!(
+                "cycle in Codex steering history ancestry at request {}",
+                current.request_id
+            );
+        }
+
+        let Some(parent_id) = steering_parent_id(current) else {
+            return Ok(current.request_id.clone());
+        };
+        let Some(parent) = requests_by_id.get(parent_id.as_str()).copied() else {
+            return Ok(parent_id);
+        };
+        current = parent;
+    }
+}
+
+fn steering_parent_id(request: &RequestRow) -> Option<String> {
+    let metadata = request.metadata.trim();
+    if metadata.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(metadata).ok()?;
+    let queue = value.get("queue")?;
+    let source = queue.get("source").and_then(Value::as_str)?;
+    if source != "steering" {
+        return None;
+    }
+    queue
+        .get("queued_after_request_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|request_id| !request_id.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn is_codex_visible_request(request: &RequestRow) -> bool {
@@ -309,19 +386,67 @@ pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadR
     })
 }
 
-fn project_turn(
+fn project_turn_group(
     record: &CodexThreadRecord,
+    turn_id: &str,
+    requests: &[RequestRow],
+    responses_by_request: &BTreeMap<String, ResponseRow>,
+    tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+) -> codex::Turn {
+    let Some(first_request) = requests.first() else {
+        return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
+    };
+    let tail_request = requests.last().unwrap_or(first_request);
+    let tail_response = responses_by_request.get(&tail_request.request_id);
+
+    let mut items = Vec::new();
+    for request in requests {
+        let response = responses_by_request.get(&request.request_id);
+        let tools = tools_by_request
+            .get(&request.request_id)
+            .cloned()
+            .unwrap_or_default();
+        append_request_items(record, &mut items, request, response, tools);
+    }
+
+    let status = turn_status(tail_request, tail_response);
+    let error = (status == codex::TurnStatus::Failed)
+        .then(|| turn_error(tail_request, tail_response))
+        .flatten();
+    let started_at = first_request
+        .created_at
+        .as_deref()
+        .and_then(parse_timestamp_seconds);
+    let completed_at = turn_completed_timestamp(tail_response);
+    let duration_ms = started_at
+        .zip(completed_at)
+        .map(|(started, completed)| (completed - started).max(0) * 1000);
+
+    codex::Turn {
+        id: turn_id.to_string(),
+        items,
+        items_view: codex::TurnItemsView::Full,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    }
+}
+
+fn append_request_items(
+    record: &CodexThreadRecord,
+    items: &mut Vec<codex::ThreadItem>,
     request: &RequestRow,
     response: Option<&ResponseRow>,
     mut tools: Vec<ToolRow>,
-) -> codex::Turn {
+) {
     tools.sort_by(|left, right| {
         left.message_sequence
             .cmp(&right.message_sequence)
             .then_with(|| left.started_at.cmp(&right.started_at))
     });
 
-    let mut items = Vec::new();
     if !request.content.trim().is_empty() {
         items.push(codex::ThreadItem::UserMessage {
             id: format!("defra-user-{}", request.request_id),
@@ -353,30 +478,6 @@ fn project_turn(
                 &response.content,
             ));
         }
-    }
-
-    let status = turn_status(request, response);
-    let error = (status == codex::TurnStatus::Failed)
-        .then(|| turn_error(request, response))
-        .flatten();
-    let started_at = request
-        .created_at
-        .as_deref()
-        .and_then(parse_timestamp_seconds);
-    let completed_at = turn_completed_timestamp(response);
-    let duration_ms = started_at
-        .zip(completed_at)
-        .map(|(started, completed)| (completed - started).max(0) * 1000);
-
-    codex::Turn {
-        id: request.request_id.clone(),
-        items,
-        items_view: codex::TurnItemsView::Full,
-        status,
-        error,
-        started_at,
-        completed_at,
-        duration_ms,
     }
 }
 

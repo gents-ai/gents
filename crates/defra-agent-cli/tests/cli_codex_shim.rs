@@ -1347,6 +1347,31 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         "mock endpoint did not receive the steering prompt; captured={captured_requests:?}"
     );
 
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(303),
+            params: codex::ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let thread_history: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(303)).await?;
+    assert_eq!(
+        thread_history.thread.turns.len(),
+        1,
+        "queued steering should reload as one Codex turn"
+    );
+    let history_turn = &thread_history.thread.turns[0];
+    assert_eq!(history_turn.id, turn_start.turn.id);
+    assert_turn_has_user_text(history_turn, &initial_prompt);
+    assert_turn_has_agent_text(history_turn, &first_reply);
+    assert_turn_has_user_text(history_turn, &steer_prompt);
+    assert_turn_has_agent_text(history_turn, &second_reply);
+
     Ok(())
 }
 
