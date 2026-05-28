@@ -114,6 +114,9 @@ mod tests {
     fn synthesized_fallback_matches_did_default() {
         // When no override and no loadable principal default, resolution falls
         // back to this synthesized form.
-        assert_eq!(default_behavior_id_for_agent("did:key:zABC"), "did:key:zABC:default");
+        assert_eq!(
+            default_behavior_id_for_agent("did:key:zABC"),
+            "did:key:zABC:default"
+        );
     }
 }

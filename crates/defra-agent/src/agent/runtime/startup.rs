@@ -670,7 +670,9 @@ mod degraded_reason_tests {
 
     #[test]
     fn disabled_behavior_is_degraded() {
-        assert!(is_degraded_startup_unavailable_reason("behavior 'x' is disabled"));
+        assert!(is_degraded_startup_unavailable_reason(
+            "behavior 'x' is disabled"
+        ));
     }
 
     #[test]

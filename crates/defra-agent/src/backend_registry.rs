@@ -375,20 +375,22 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
         )
         .await
         {
-            Ok(_) => match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
-                .await
-            {
-                Ok(()) => tracing::info!(
-                    backend_id = %backend.backend_id,
-                    endpoint = %backend.endpoint,
-                    "startup backend probe: promoted to healthy"
-                ),
-                Err(error) => tracing::warn!(
-                    backend_id = %backend.backend_id,
-                    error = %error,
-                    "startup backend probe: reachable but failed to persist healthy status"
-                ),
-            },
+            Ok(_) => {
+                match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
+                    .await
+                {
+                    Ok(()) => tracing::info!(
+                        backend_id = %backend.backend_id,
+                        endpoint = %backend.endpoint,
+                        "startup backend probe: promoted to healthy"
+                    ),
+                    Err(error) => tracing::warn!(
+                        backend_id = %backend.backend_id,
+                        error = %error,
+                        "startup backend probe: reachable but failed to persist healthy status"
+                    ),
+                }
+            }
             Err(error) => tracing::warn!(
                 backend_id = %backend.backend_id,
                 endpoint = %backend.endpoint,
