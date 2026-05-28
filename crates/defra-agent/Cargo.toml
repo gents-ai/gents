@@ -12,7 +12,10 @@ rocksdb = ["defra-node/rocksdb"]
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
+bytes.workspace = true
 chrono.workspace = true
+codex-login.workspace = true
+codex-model-provider-info.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }

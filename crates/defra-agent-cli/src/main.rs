@@ -334,6 +334,7 @@ async fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,
+        Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,

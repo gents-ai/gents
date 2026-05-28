@@ -10,9 +10,9 @@ pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
 pub(crate) mod background_tools;
+pub mod chatgpt_codex;
 pub mod collection;
 pub mod compaction;
-pub mod chatgpt_codex;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod desired_fields;
@@ -75,9 +75,8 @@ pub use document_config::{
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     list_inference_profile_records, load_agent_behavior, load_agent_principal,
     load_inference_profile, load_tool_selection, upsert_agent_behavior, upsert_agent_principal,
-    upsert_inference_profile, upsert_tool_selection,
-    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap,
-    ToolSelectionDocument,
+    upsert_inference_profile, upsert_tool_selection, AgentBehavior as AgentBehaviorDocument,
+    InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,

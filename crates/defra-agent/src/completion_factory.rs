@@ -171,6 +171,7 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
                 .require_parameters(true)
                 .to_json(),
         ),
+        BackendProviderKind::ChatGptCodex => None,
     }
 }
 
@@ -181,6 +182,7 @@ fn request_additional_params(
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
         BackendProviderKind::OpenRouter => None,
+        BackendProviderKind::ChatGptCodex => None,
     }
 }
 
