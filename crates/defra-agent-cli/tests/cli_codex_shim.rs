@@ -2991,7 +2991,10 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     // Point the shim at a behavior_id that doesn't exist. The startup
-    // precondition should reject it before the listener opens.
+    // precondition should reject it before opening the WebSocket listener.
+    // Watch the child directly rather than wait_for_port — under parallel
+    // execution another test could already be listening on the same port,
+    // which would mask the expected exit.
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
@@ -3004,16 +3007,29 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
         ],
         &[],
     )?;
-    let result = wait_for_port(shim_port, &mut serve);
-    let err = result.expect_err("expected server to exit because bound behavior is unknown");
-    let message = format!("{err:?}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = serve.child.try_wait().context("waiting for serve child")? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = serve.child.kill();
+            bail!("server did not exit within 30s after misconfigured shim startup");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
-        message.contains("behavior-that-does-not-exist"),
-        "expected error to name the missing behavior id; got: {message}"
+        !status.success(),
+        "expected server to exit non-zero with misconfigured shim, got {status}"
+    );
+    let (_stdout, stderr) = serve.captured_output()?;
+    assert!(
+        stderr.contains("behavior-that-does-not-exist"),
+        "expected stderr to name the missing behavior id; got:\n{stderr}"
     );
     assert!(
-        message.contains("AgentBehavior") || message.contains("behavior"),
-        "expected error to mention AgentBehavior; got: {message}"
+        stderr.contains("AgentBehavior") || stderr.contains("behavior"),
+        "expected stderr to mention AgentBehavior; got:\n{stderr}"
     );
     Ok(())
 }

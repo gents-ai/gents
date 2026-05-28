@@ -51,7 +51,6 @@ struct ShimState {
     graphql: Arc<str>,
     agent_did: Arc<str>,
     behavior_id: Arc<str>,
-    model: Arc<str>,
     id_counter: Arc<AtomicU64>,
     timeout: Duration,
     poll_interval: Duration,
@@ -83,7 +82,6 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) behavior_id: Option<String>,
     pub(crate) bind_addr: std::net::IpAddr,
     pub(crate) port: u16,
-    pub(crate) model: String,
     pub(crate) timeout_secs: u64,
     pub(crate) poll_ms: u64,
 }
@@ -143,7 +141,6 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         graphql: Arc::from(args.graphql.clone()),
         agent_did: Arc::from(args.agent_did.clone()),
         behavior_id: Arc::from(bound_behavior_id),
-        model: Arc::from(args.model),
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),

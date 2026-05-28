@@ -52,6 +52,8 @@ pub(crate) enum Command {
     Server(ServeArgs),
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
+    #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
+    CodexAuthProbe(CodexAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
@@ -132,6 +134,23 @@ pub(crate) struct NativeFsRunnerArgs {
     pub(crate) base: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     pub(crate) self_test: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexAuthProbeArgs {
+    #[arg(
+        long,
+        env = "DEFRA_CODEX_HOME",
+        value_name = "CODEX_HOME",
+        help = "Codex home directory to read. Defaults to ~/.codex"
+    )]
+    pub(crate) codex_home: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = 20,
+        help = "Maximum number of model slugs to print"
+    )]
+    pub(crate) max_models: usize,
 }
 
 #[derive(clap::Args)]
@@ -343,11 +362,6 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
     pub(crate) codex_shim_port: u16,
-    #[arg(
-        long,
-        help = "Synthetic model id advertised to the Codex TUI. Defaults to the server default behavior model."
-    )]
-    pub(crate) codex_shim_model: Option<String>,
     #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
     pub(crate) codex_shim_behavior_id: Option<String>,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
@@ -556,6 +570,8 @@ pub(crate) enum BackendPresetArg {
     OpenAi,
     #[value(name = "openrouter")]
     OpenRouter,
+    #[value(name = "chatgpt-codex")]
+    ChatGptCodex,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -570,6 +586,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => "generic-openai-compatible",
             Self::OpenAi => "openai",
             Self::OpenRouter => "openrouter",
+            Self::ChatGptCodex => "chatgpt-codex",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -579,6 +596,7 @@ impl BackendPresetArg {
     pub(crate) fn provider_kind(self) -> BackendProviderKind {
         match self {
             Self::OpenRouter => BackendProviderKind::OpenRouter,
+            Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::Ollama
@@ -592,6 +610,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
+            Self::ChatGptCodex => Some(defra_agent::chatgpt_codex::default_backend_endpoint()),
             Self::Ollama => Some(DEFAULT_INIT_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -602,7 +621,11 @@ impl BackendPresetArg {
         match self {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
-            Self::GenericOpenAiCompatible | Self::Ollama | Self::Vllm | Self::LlamaCpp => None,
+            Self::GenericOpenAiCompatible
+            | Self::ChatGptCodex
+            | Self::Ollama
+            | Self::Vllm
+            | Self::LlamaCpp => None,
         }
     }
 }

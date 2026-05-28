@@ -168,15 +168,6 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         "degraded"
     };
-    let codex_shim_model = args.codex_shim_model.clone().unwrap_or_else(|| {
-        agent
-            .behaviors()
-            .iter()
-            .find(|behavior| behavior.behavior_id == default_behavior_id)
-            .or_else(|| agent.behaviors().first())
-            .map(|behavior| behavior.model_name.clone())
-            .unwrap_or_else(|| "defra-default".to_string())
-    });
     let background_execution_registry = agent.background_execution_registry();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -247,7 +238,6 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             behavior_id: args.codex_shim_behavior_id.clone(),
             bind_addr: args.codex_shim_bind_addr,
             port: args.codex_shim_port,
-            model: codex_shim_model.clone(),
             timeout_secs: args.codex_shim_timeout_secs,
             poll_ms: args.codex_shim_poll_ms,
         })
@@ -273,7 +263,6 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             "websocket": format!("ws://{}:{}/", display_host(args.codex_shim_bind_addr), args.codex_shim_port),
             "codex_home": home_dir.join("codex-ui"),
             "event_log": home_dir.join("codex-ui").join("log").join("codex-shim-events.jsonl"),
-            "model": codex_shim_model,
         })
     });
 
