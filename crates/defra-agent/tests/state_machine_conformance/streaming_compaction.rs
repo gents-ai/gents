@@ -182,6 +182,11 @@ async fn drive_streaming_response_interrupt_flow_case(
     }
 
     if case.partial_turn_materialized {
+        assert!(
+            post_response.materialized_message_sequence.is_some(),
+            "{}: interrupted flow must link AgentResponse to the materialized partial message",
+            case.name
+        );
         let messages = fetch_message_snapshots_for_session(&db.node, &session_id).await;
         assert!(
             messages.iter().any(|message| {

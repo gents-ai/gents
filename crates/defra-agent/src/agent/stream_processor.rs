@@ -169,13 +169,22 @@ impl<'a> StreamProcessor<'a> {
             return Ok(false);
         };
 
-        self.persistence_hook.apply_persistence_policy(
-            self.persistence_hook
-                .persist_message(&message)
-                .await
-                .map(|_| ()),
-            context,
-        )?;
+        let sequence = match self.persistence_hook.persist_message(&message).await {
+            Ok(sequence) => Some(sequence),
+            Err(error) => {
+                self.persistence_hook
+                    .apply_persistence_policy(Err(error), context)?;
+                None
+            }
+        };
+        if let Some(sequence) = sequence {
+            self.persistence_hook.apply_persistence_policy(
+                self.persistence_hook
+                    .mark_current_response_materialized(sequence)
+                    .await,
+                "mark interrupted assistant turn materialized",
+            )?;
+        }
         self.stream_writer.reset_tail(self.doc_id).await?;
 
         Ok(true)
