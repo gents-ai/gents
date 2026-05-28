@@ -5,14 +5,14 @@ use std::fs;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use uuid::Uuid;
 
 type ShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -877,9 +877,11 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
     .await?;
     let process_error = read_error_response(&mut ws, request_id(581)).await?;
     assert_eq!(process_error.code, -32601);
-    assert!(process_error
-        .message
-        .contains("managed-exec state machines"));
+    assert!(
+        process_error
+            .message
+            .contains("managed-exec state machines")
+    );
 
     fs::write(home_dir.join("alpha_notes.txt"), "alpha")?;
     fs::create_dir_all(home_dir.join("nested"))?;
@@ -1156,7 +1158,7 @@ async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<(
         read_typed_response(&mut ws, request_id(205)).await?;
     assert_eq!(second_steer.turn_id, turn_start.turn.id);
 
-    let (_second_steering_request_id, second_session_id, second_metadata) =
+    let (second_steering_request_id, second_session_id, second_metadata) =
         wait_for_request_metadata(&graphql, &agent_did, &second_steer_prompt).await?;
     assert_eq!(second_session_id, thread_id);
     assert_eq!(
@@ -1179,6 +1181,20 @@ async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<(
     )
     .await?;
     let _: codex::TurnInterruptResponse = read_typed_response(&mut ws, request_id(204)).await?;
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &steering_request_id,
+        &["interrupted"],
+        Duration::from_secs(15),
+    )
+    .await?;
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &second_steering_request_id,
+        &["interrupted"],
+        Duration::from_secs(15),
+    )
+    .await?;
 
     Ok(())
 }
@@ -2943,4 +2959,56 @@ fn server_notification_from_jsonrpc(
 ) -> Result<codex::ServerNotification> {
     serde_json::from_value(serde_json::to_value(notification)?)
         .context("decoding Codex server notification")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
+    let server_port = allocate_port()?;
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+
+    let _init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    // Point the shim at a behavior_id that doesn't exist. The startup
+    // precondition should reject it before the listener opens.
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-behavior-id",
+            "behavior-that-does-not-exist",
+        ],
+        &[],
+    )?;
+    let result = wait_for_port(shim_port, &mut serve);
+    let err = result.expect_err("expected server to exit because bound behavior is unknown");
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("behavior-that-does-not-exist"),
+        "expected error to name the missing behavior id; got: {message}"
+    );
+    assert!(
+        message.contains("AgentBehavior") || message.contains("behavior"),
+        "expected error to mention AgentBehavior; got: {message}"
+    );
+    Ok(())
 }

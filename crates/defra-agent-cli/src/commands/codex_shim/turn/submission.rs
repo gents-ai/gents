@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use super::super::ShimState;
-use crate::{create_agent_request, RequestSubmitOptions, SubmittedRequest};
+use crate::{RequestSubmitOptions, SubmittedRequest, create_agent_request};
 
 pub(super) async fn create_agent_request_with_retry(
     state: &ShimState,
@@ -18,7 +18,7 @@ pub(super) async fn create_agent_request_with_retry(
             state.agent_did.as_ref(),
             content,
             session_id,
-            state.behavior_id.as_deref(),
+            Some(state.behavior_id.as_ref()),
             options.clone(),
         )
         .await

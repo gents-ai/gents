@@ -5,9 +5,9 @@ use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::commands::codex_shim::ShimState;
 use crate::commands::codex_shim::protocol::absolute_path;
 use crate::commands::codex_shim::store::query_node_json;
-use crate::commands::codex_shim::ShimState;
 
 use super::ConversationRow;
 
@@ -269,11 +269,7 @@ pub(super) async fn load_conversation(
 }
 
 fn behavior_id(state: &ShimState) -> String {
-    state
-        .behavior_id
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{}:default", state.agent_did.as_ref()))
+    state.behavior_id.as_ref().to_string()
 }
 
 fn agent_name(state: &ShimState) -> String {
