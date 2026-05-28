@@ -335,6 +335,7 @@ jobs:
       - name: Verify signature
         env:
           REQUIRE_SPCTL_VAR: ${{ vars.MACOS_CODESIGN_SPCTL_REQUIRED }}
+          MACOS_APPLY_SE_ENTITLEMENTS: ${{ vars.MACOS_APPLY_SE_ENTITLEMENTS }}
         run: |
           set -euo pipefail
 
@@ -358,8 +359,17 @@ jobs:
 
             entitlements_output="$(codesign -d --entitlements - "${binary_path}" 2>&1)"
             printf '%s\n' "${entitlements_output}"
-            if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
-              echo "::error::Signed release artifact missing keychain-access-groups entitlement."
+            # Only require the keychain-access-groups entitlement when it was
+            # actually applied. By default it is intentionally omitted: as a
+            # restricted entitlement with no provisioning profile it makes AMFI
+            # kill the binary at launch. See the signing step's comment.
+            if [[ "${MACOS_APPLY_SE_ENTITLEMENTS:-false}" == "true" ]]; then
+              if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
+                echo "::error::MACOS_APPLY_SE_ENTITLEMENTS=true but signed artifact is missing keychain-access-groups entitlement."
+                exit 1
+              fi
+            elif grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
+              echo "::error::Signed artifact carries keychain-access-groups but MACOS_APPLY_SE_ENTITLEMENTS is not true; this binary would be AMFI-killed at launch."
               exit 1
             fi
 
