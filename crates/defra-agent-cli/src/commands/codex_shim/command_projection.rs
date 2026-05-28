@@ -10,6 +10,8 @@ use super::progress::{defra_exec_metadata, defra_tool_call_status, DefraToolCall
 pub(super) enum ToolProjectionStatus {
     Mcp(codex::McpToolCallStatus),
     Command(codex::CommandExecutionStatus),
+    DeferredFileChange,
+    FileChange(codex::PatchApplyStatus),
 }
 
 impl ToolProjectionStatus {
@@ -17,17 +19,38 @@ impl ToolProjectionStatus {
         match self {
             Self::Mcp(_) => codex::CommandExecutionStatus::InProgress,
             Self::Command(status) => status.clone(),
+            Self::DeferredFileChange | Self::FileChange(_) => {
+                codex::CommandExecutionStatus::InProgress
+            }
         }
     }
 }
 
 pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjectionStatus {
     let status = defra_tool_call_status(tool);
-    if should_project_as_command_execution(tool) {
+    if is_defra_file_change_tool(tool) {
+        if file_update_change(tool).is_none() {
+            ToolProjectionStatus::DeferredFileChange
+        } else {
+            ToolProjectionStatus::FileChange(patch_status_from_mcp_status(status))
+        }
+    } else if should_project_as_command_execution(tool) {
         ToolProjectionStatus::Command(command_status_from_mcp_status(status))
     } else {
         ToolProjectionStatus::Mcp(status)
     }
+}
+
+fn patch_status_from_mcp_status(status: codex::McpToolCallStatus) -> codex::PatchApplyStatus {
+    match status {
+        codex::McpToolCallStatus::InProgress => codex::PatchApplyStatus::InProgress,
+        codex::McpToolCallStatus::Completed => codex::PatchApplyStatus::Completed,
+        codex::McpToolCallStatus::Failed => codex::PatchApplyStatus::Failed,
+    }
+}
+
+fn is_defra_file_change_tool(tool: &DefraToolCallProgress) -> bool {
+    matches!(tool.tool_name.as_str(), "write_file" | "edit_file")
 }
 
 fn should_project_as_command_execution(tool: &DefraToolCallProgress) -> bool {
@@ -46,7 +69,7 @@ fn is_defra_background_tool(tool: &DefraToolCallProgress) -> bool {
 fn is_defra_fs_command_tool(tool: &DefraToolCallProgress) -> bool {
     matches!(
         tool.tool_name.as_str(),
-        "read_file" | "list_files" | "glob" | "grep" | "write_file" | "edit_file"
+        "read_file" | "list_files" | "glob" | "grep"
     )
 }
 
@@ -74,9 +97,132 @@ pub(super) fn update_running_background_tools(
                 codex::CommandExecutionStatus::InProgress,
             );
         }
-        _ => {
+        ToolProjectionStatus::Mcp(_)
+        | ToolProjectionStatus::Command(_)
+        | ToolProjectionStatus::DeferredFileChange
+        | ToolProjectionStatus::FileChange(_) => {
             running.remove(&tool.tool_call_key);
         }
+    }
+}
+
+pub(super) fn file_change_item(
+    tool: &DefraToolCallProgress,
+    status: codex::PatchApplyStatus,
+) -> Option<codex::ThreadItem> {
+    Some(codex::ThreadItem::FileChange {
+        id: tool.tool_call_key.clone(),
+        changes: vec![file_update_change(tool)?],
+        status,
+    })
+}
+
+fn file_update_change(tool: &DefraToolCallProgress) -> Option<codex::FileUpdateChange> {
+    let args = serde_json::from_str::<Value>(tool.args.trim()).ok()?;
+    let path = args.get("path")?.as_str()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    match tool.tool_name.as_str() {
+        "write_file" => {
+            let content = args.get("content")?.as_str()?.to_string();
+            let metadata = defra_fs_metadata(&tool.result);
+            if defra_tool_call_status(tool) == codex::McpToolCallStatus::InProgress
+                && metadata.is_none()
+            {
+                return None;
+            }
+            let created = metadata
+                .and_then(|metadata| metadata.get("created").and_then(Value::as_bool))
+                .unwrap_or(true);
+            let (kind, diff) = if created {
+                (codex::PatchChangeKind::Add, content)
+            } else {
+                (
+                    codex::PatchChangeKind::Update { move_path: None },
+                    additive_unified_diff(&content),
+                )
+            };
+            Some(codex::FileUpdateChange {
+                path: path.to_string(),
+                kind,
+                diff,
+            })
+        }
+        "edit_file" => {
+            let old_text = args.get("old_text")?.as_str()?;
+            let new_text = args.get("new_text")?.as_str()?;
+            Some(codex::FileUpdateChange {
+                path: path.to_string(),
+                kind: codex::PatchChangeKind::Update { move_path: None },
+                diff: replacement_unified_diff(old_text, new_text),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn defra_fs_metadata(result: &str) -> Option<Value> {
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(raw) = result
+        .lines()
+        .next()
+        .and_then(|line| line.trim().strip_prefix("defra_fs:"))
+    {
+        return serde_json::from_str(raw.trim()).ok();
+    }
+    serde_json::from_str(trimmed).ok()
+}
+
+fn additive_unified_diff(content: &str) -> String {
+    let new_lines = diff_lines(content);
+    let mut diff = format!("@@ -0,0 +{} @@\n", unified_range(1, new_lines.len()));
+    for line in new_lines {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff
+}
+
+fn replacement_unified_diff(old_text: &str, new_text: &str) -> String {
+    let old_lines = diff_lines(old_text);
+    let new_lines = diff_lines(new_text);
+    let mut diff = format!(
+        "@@ -{} +{} @@\n",
+        unified_range(1, old_lines.len()),
+        unified_range(1, new_lines.len())
+    );
+    for line in old_lines {
+        diff.push('-');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in new_lines {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff
+}
+
+fn diff_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.lines().collect()
+    }
+}
+
+fn unified_range(start: usize, count: usize) -> String {
+    match count {
+        0 => format!("{start},0"),
+        1 => start.to_string(),
+        _ => format!("{start},{count}"),
     }
 }
 
@@ -122,26 +268,10 @@ fn command_execution_display(tool: &DefraToolCallProgress) -> String {
     if let Some(command) = shell_command_from_tool_args(&tool.args) {
         return command;
     }
-    if let Some(display) = file_command_display_from_tool_args(tool) {
-        return display;
-    }
     if tool.args.trim().is_empty() {
         return format!("background_tool {}", tool.tool_name);
     }
     format!("{} {}", tool.tool_name, tool.args.trim())
-}
-
-fn file_command_display_from_tool_args(tool: &DefraToolCallProgress) -> Option<String> {
-    let value = serde_json::from_str::<Value>(tool.args.trim()).ok()?;
-    let path = value.get("path")?.as_str()?.trim();
-    if path.is_empty() {
-        return None;
-    }
-
-    match tool.tool_name.as_str() {
-        "write_file" | "edit_file" => Some(shell_join(&[tool.tool_name.clone(), path.to_string()])),
-        _ => None,
-    }
 }
 
 fn command_actions_for_tool(
@@ -177,9 +307,6 @@ fn command_actions_for_tool(
                 path: optional_path_arg(&args),
             }]
         }
-        "write_file" | "edit_file" => vec![codex::CommandAction::Unknown {
-            command: command.to_string(),
-        }],
         _ => Vec::new(),
     }
 }
@@ -480,38 +607,67 @@ mod tests {
     }
 
     #[test]
-    fn write_and_edit_tools_project_as_native_command_blocks() {
+    fn write_and_edit_tools_project_as_native_file_changes() {
         let write = test_tool(
             "write_file",
             "completed",
             r###"{"path":"README.md","content":"## Summary\n\nThe CodexShim projection"}"###,
+        )
+        .with_result(
+            r#"defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":true}"#,
         );
 
         assert_eq!(
             tool_projection_status(&write),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::Completed)
+            ToolProjectionStatus::FileChange(codex::PatchApplyStatus::Completed)
         );
 
-        let write_item = command_execution_item(
-            Path::new("/repo"),
-            &write,
-            codex::CommandExecutionStatus::Completed,
-        );
-        let codex::ThreadItem::CommandExecution {
-            command,
-            source,
-            command_actions,
-            ..
+        let write_item =
+            file_change_item(&write, codex::PatchApplyStatus::Completed).expect("file change item");
+        let codex::ThreadItem::FileChange {
+            changes, status, ..
         } = write_item
         else {
-            panic!("expected command execution item");
+            panic!("expected file change item");
         };
-        assert_eq!(command, "write_file README.md");
-        assert_eq!(source, codex::CommandExecutionSource::Agent);
+        assert_eq!(status, codex::PatchApplyStatus::Completed);
         assert!(matches!(
-            command_actions.as_slice(),
-            [codex::CommandAction::Unknown { command }] if command == "write_file README.md"
+            changes.as_slice(),
+            [codex::FileUpdateChange { path, kind: codex::PatchChangeKind::Add, diff }]
+                if path == "README.md" && diff == "## Summary\n\nThe CodexShim projection"
         ));
+
+        let overwrite = test_tool(
+            "write_file",
+            "completed",
+            r#"{"path":"README.md","content":"replacement\n"}"#,
+        )
+        .with_result(
+            r#"defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":false}"#,
+        );
+        let overwrite_item = file_change_item(&overwrite, codex::PatchApplyStatus::Completed)
+            .expect("file change item");
+        let codex::ThreadItem::FileChange { changes, .. } = overwrite_item else {
+            panic!("expected file change item");
+        };
+        assert!(matches!(
+            changes.as_slice(),
+            [codex::FileUpdateChange {
+                path,
+                kind: codex::PatchChangeKind::Update { move_path: None },
+                diff,
+            }] if path == "README.md" && diff.contains("+replacement")
+        ));
+
+        let running_write = test_tool(
+            "write_file",
+            "running",
+            r#"{"path":"README.md","content":"replacement\n"}"#,
+        );
+        assert_eq!(
+            tool_projection_status(&running_write),
+            ToolProjectionStatus::DeferredFileChange
+        );
 
         let edit = test_tool(
             "edit_file",
@@ -521,26 +677,21 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&edit),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
+            ToolProjectionStatus::FileChange(codex::PatchApplyStatus::InProgress)
         );
 
-        let edit_item = command_execution_item(
-            Path::new("/repo"),
-            &edit,
-            codex::CommandExecutionStatus::InProgress,
-        );
-        let codex::ThreadItem::CommandExecution {
-            command,
-            command_actions,
-            ..
-        } = edit_item
-        else {
-            panic!("expected command execution item");
+        let edit_item =
+            file_change_item(&edit, codex::PatchApplyStatus::Completed).expect("file change item");
+        let codex::ThreadItem::FileChange { changes, .. } = edit_item else {
+            panic!("expected file change item");
         };
-        assert_eq!(command, "edit_file src/lib.rs");
         assert!(matches!(
-            command_actions.as_slice(),
-            [codex::CommandAction::Unknown { command }] if command == "edit_file src/lib.rs"
+            changes.as_slice(),
+            [codex::FileUpdateChange {
+                path,
+                kind: codex::PatchChangeKind::Update { move_path: None },
+                diff,
+            }] if path == "src/lib.rs" && diff.contains("-old") && diff.contains("+new")
         ));
     }
 

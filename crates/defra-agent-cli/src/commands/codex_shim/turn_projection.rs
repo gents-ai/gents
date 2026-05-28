@@ -4,7 +4,7 @@ use anyhow::Result;
 use codex_app_server_protocol as codex;
 
 use super::command_projection::{
-    command_execution_item, command_output_payload, ToolProjectionStatus,
+    command_execution_item, command_output_payload, file_change_item, ToolProjectionStatus,
 };
 use super::progress::{defra_tool_item, DefraToolCallProgress};
 use super::protocol::{agent_message_item, now_millis, send_notification, turn_value};
@@ -217,6 +217,53 @@ impl<'a> TurnProjection<'a> {
         Ok(())
     }
 
+    async fn send_file_change_started(
+        &mut self,
+        outbound: &Outbound,
+        tool: &DefraToolCallProgress,
+    ) -> Result<()> {
+        let Some(item) = file_change_item(tool, codex::PatchApplyStatus::InProgress) else {
+            return Ok(());
+        };
+        self.finish_agent_message(outbound).await?;
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                item,
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                started_at_ms: now_millis(),
+            }),
+        )
+        .await
+    }
+
+    async fn send_file_change_completed(
+        &mut self,
+        outbound: &Outbound,
+        tool: &DefraToolCallProgress,
+        status: codex::PatchApplyStatus,
+    ) -> Result<()> {
+        let Some(item) = file_change_item(tool, status) else {
+            return Ok(());
+        };
+        self.finish_agent_message(outbound).await?;
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: now_millis(),
+            }),
+        )
+        .await?;
+        self.completed_items.push(item);
+        Ok(())
+    }
+
     pub(super) async fn send_tool_projection_update(
         &mut self,
         outbound: &Outbound,
@@ -279,6 +326,23 @@ impl<'a> TurnProjection<'a> {
             }
             (_, ToolProjectionStatus::Command(status)) => {
                 self.send_command_execution_completed(outbound, tool, status.clone())
+                    .await
+            }
+            (_, ToolProjectionStatus::DeferredFileChange) => Ok(()),
+            (None, ToolProjectionStatus::FileChange(status))
+            | (
+                Some(ToolProjectionStatus::DeferredFileChange),
+                ToolProjectionStatus::FileChange(status),
+            ) if *status != codex::PatchApplyStatus::InProgress => {
+                self.send_file_change_started(outbound, tool).await?;
+                self.send_file_change_completed(outbound, tool, status.clone())
+                    .await
+            }
+            (_, ToolProjectionStatus::FileChange(codex::PatchApplyStatus::InProgress)) => {
+                self.send_file_change_started(outbound, tool).await
+            }
+            (_, ToolProjectionStatus::FileChange(status)) => {
+                self.send_file_change_completed(outbound, tool, status.clone())
                     .await
             }
         }

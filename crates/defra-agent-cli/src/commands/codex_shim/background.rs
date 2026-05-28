@@ -104,6 +104,10 @@ pub(super) fn spawn_background_tool_watcher(
                         }
                         running.remove(&tool_key);
                     }
+                    ToolProjectionStatus::DeferredFileChange
+                    | ToolProjectionStatus::FileChange(_) => {
+                        running.remove(&tool_key);
+                    }
                 }
             }
 

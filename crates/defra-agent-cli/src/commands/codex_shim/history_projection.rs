@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::command_projection::{
-    command_execution_item, tool_projection_status, ToolProjectionStatus,
+    command_execution_item, file_change_item, tool_projection_status, ToolProjectionStatus,
 };
 use super::progress::{
     decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
@@ -468,7 +468,9 @@ fn append_request_items(
     }
 
     for tool in tools {
-        items.push(project_tool(record, &tool.progress));
+        if let Some(item) = project_tool(record, &tool.progress) {
+            items.push(item);
+        }
     }
 
     if let Some(response) = response {
@@ -481,10 +483,17 @@ fn append_request_items(
     }
 }
 
-fn project_tool(record: &CodexThreadRecord, tool: &DefraToolCallProgress) -> codex::ThreadItem {
+fn project_tool(
+    record: &CodexThreadRecord,
+    tool: &DefraToolCallProgress,
+) -> Option<codex::ThreadItem> {
     match tool_projection_status(tool) {
-        ToolProjectionStatus::Mcp(status) => defra_tool_item(tool, status),
-        ToolProjectionStatus::Command(status) => command_execution_item(&record.cwd, tool, status),
+        ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
+        ToolProjectionStatus::Command(status) => {
+            Some(command_execution_item(&record.cwd, tool, status))
+        }
+        ToolProjectionStatus::DeferredFileChange => None,
+        ToolProjectionStatus::FileChange(status) => file_change_item(tool, status),
     }
 }
 
