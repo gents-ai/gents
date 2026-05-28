@@ -63,6 +63,13 @@ pub(in crate::agent) async fn run_agent(
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
     );
+    // Promote reachable enabled backends to healthy before resolving which
+    // behaviors are runnable. A fresh store's backends start `probe_status=
+    // unknown`, and nothing else promotes them, so without this the runtime
+    // comes up with zero runnable behaviors until an operator manually runs
+    // `config backend set --probe-status healthy`.
+    backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
+
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
