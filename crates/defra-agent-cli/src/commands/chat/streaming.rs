@@ -1,11 +1,14 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::{hydrate_materialized_response_content, post_graphql, request_diagnostic_hint};
+use crate::{
+    hydrate_materialized_response_content, is_terminal_lifecycle_state, post_graphql,
+    request_diagnostic_hint,
+};
 
 use super::SubmittedRequest;
 
@@ -30,6 +33,17 @@ pub(super) struct ToolCallProgress {
 pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                request_id
+                lifecycle_state
+                failure_reason
+                interrupt_requested_at
+                valid_until
+            }}
             AgentResponse(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 order: {{ created_at: DESC }},
@@ -113,11 +127,23 @@ pub(super) async fn stream_turn_progress(
     let mut latest_reasoning = String::new();
     let mut latest_progress_seq = 0;
     let mut latest_error_message: Option<String> = None;
+    let mut latest_request_signature: Option<String> = None;
     let mut thinking_printed = false;
 
     loop {
         let query = chat_progress_query(&submitted.request_id, &submitted.session_id);
         let response = post_graphql(graphql, &query).await?;
+        let request_row = response
+            .pointer("/data/AgentRequest")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned();
+        let request_signature = serde_json::to_string(&request_row)
+            .context("serializing AgentRequest progress row for timeout tracking")?;
+        if latest_request_signature.as_deref() != Some(request_signature.as_str()) {
+            latest_request_signature = Some(request_signature);
+            last_progress_at = tokio::time::Instant::now();
+        }
 
         let tool_rows = response
             .pointer("/data/AgentToolCall")
@@ -150,7 +176,8 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
-        if let Some(progress) = response_row.as_ref().and_then(decode_chat_turn_progress) {
+        let progress = response_row.as_ref().and_then(decode_chat_turn_progress);
+        if let Some(progress) = progress.as_ref() {
             if progress.progress_seq > latest_progress_seq
                 || progress.content != latest_content
                 || progress.reasoning != latest_reasoning
@@ -171,10 +198,38 @@ pub(super) async fn stream_turn_progress(
             latest_error_message = progress.error_message.clone();
             latest_content = progress.content.clone();
             latest_reasoning = progress.reasoning.clone();
+        }
 
-            if matches!(progress.status.as_str(), "complete" | "error") {
-                let mut terminal_response = response_row.unwrap_or(Value::Null);
-                let should_wait_for_materialized_content = progress.status == "complete"
+        let lifecycle_state = request_row
+            .as_ref()
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let failure_reason = request_row
+            .as_ref()
+            .and_then(|row| row.get("failure_reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let response_status = progress
+            .as_ref()
+            .map(|progress| progress.status.as_str())
+            .unwrap_or("");
+        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
+        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
+
+        if terminal_by_request || terminal_by_response {
+            let had_response_row = response_row.is_some();
+            let mut terminal_response = response_row.unwrap_or_else(|| {
+                serde_json::json!({
+                    "request_id": submitted.request_id,
+                    "session_id": submitted.session_id,
+                    "status": null,
+                    "content": null,
+                    "error_message": failure_reason,
+                })
+            });
+            let should_wait_for_materialized_content =
+                matches!(response_status, "complete" | "completed")
                     && terminal_response
                         .get("content")
                         .and_then(Value::as_str)
@@ -184,54 +239,67 @@ pub(super) async fn stream_turn_progress(
                     && terminal_response
                         .get("materialized_message_sequence")
                         .is_some_and(|value| !value.is_null());
-                let hydrated =
-                    hydrate_materialized_response_content(graphql, &mut terminal_response).await?;
-                if should_wait_for_materialized_content && !hydrated {
-                    if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
-                            submitted.request_id,
-                            timeout_secs,
-                            request_diagnostic_hint(&submitted.request_id)
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                    continue;
+            let hydrated = if had_response_row {
+                hydrate_materialized_response_content(graphql, &mut terminal_response).await?
+            } else {
+                true
+            };
+            if should_wait_for_materialized_content && !hydrated {
+                if last_progress_at.elapsed() >= idle_timeout {
+                    anyhow::bail!(
+                        "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
+                        submitted.request_id,
+                        timeout_secs,
+                        request_diagnostic_hint(&submitted.request_id)
+                    );
                 }
+                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                continue;
+            }
 
-                let terminal_content = terminal_response
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if !terminal_content.trim().is_empty() {
-                    println!("{}", terminal_content);
+            let terminal_content = terminal_response
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !terminal_content.trim().is_empty() {
+                println!("{}", terminal_content);
+                io::stdout().flush()?;
+            }
+
+            let error_message = progress
+                .as_ref()
+                .and_then(|progress| progress.error_message.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    matches!(lifecycle_state, "failed" | "dead")
+                        .then_some(failure_reason.trim())
+                        .filter(|value| !value.is_empty())
+                });
+            if let Some(error_message) = error_message {
+                if !terminal_content.contains(error_message) {
+                    println!("[agent error] {error_message}");
+                    println!(
+                        "[inspect] defra-agent show response {}",
+                        submitted.request_id
+                    );
                     io::stdout().flush()?;
                 }
-                if progress.status == "error" {
-                    if let Some(error_message) = progress
-                        .error_message
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                    {
-                        if !terminal_content.contains(error_message) {
-                            println!("[agent error] {error_message}");
-                            println!(
-                                "[inspect] defra-agent show response {}",
-                                submitted.request_id
-                            );
-                            io::stdout().flush()?;
-                        }
-                    } else {
-                        println!(
-                            "[inspect] defra-agent show response {}",
-                            submitted.request_id
-                        );
-                        io::stdout().flush()?;
-                    }
-                }
-                return Ok(terminal_response);
+            } else if response_status == "error" || matches!(lifecycle_state, "failed" | "dead") {
+                println!(
+                    "[inspect] defra-agent show response {}",
+                    submitted.request_id
+                );
+                io::stdout().flush()?;
             }
+
+            if let Some(object) = terminal_response.as_object_mut() {
+                object.insert(
+                    "request".to_string(),
+                    request_row.unwrap_or(serde_json::Value::Null),
+                );
+            }
+            return Ok(terminal_response);
         }
 
         if last_progress_at.elapsed() >= idle_timeout {

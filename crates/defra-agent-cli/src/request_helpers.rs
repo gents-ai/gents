@@ -315,6 +315,8 @@ pub(crate) async fn create_agent_request(
 ///   - `interrupted` requests stamp `interrupted_at` before terminalizing the
 ///     response as `error`, so callers can observe a durable interrupt marker
 ///     even if the request lifecycle reaches `interrupted` first.
+///   - historical/background writers have used both `complete` and
+///     `completed`; both spellings are treated as terminal success.
 ///   - `dead`/`Stale` requests (TTL'd before ever claiming) may have no
 ///     `AgentResponse` row at all; in that case we synthesize one and rely on
 ///     the top-level `request` field for the terminal info.
@@ -389,7 +391,7 @@ pub(crate) async fn wait_for_terminal_response(
                 });
 
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "error");
+        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
         if terminal_by_request || terminal_by_response {
             // Build the return value: prefer the real response row when present
             // (interrupted / streaming-with-partial-content / complete / error).

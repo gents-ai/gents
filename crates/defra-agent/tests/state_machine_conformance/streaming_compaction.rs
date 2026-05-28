@@ -607,7 +607,7 @@ fn request_state_is_terminal(state: &str) -> bool {
 }
 
 fn response_status_is_terminal(status: &str) -> bool {
-    matches!(status, "complete" | "error")
+    matches!(status, "complete" | "completed" | "error")
 }
 
 fn inference_call_state_is_terminal(state: &str) -> bool {

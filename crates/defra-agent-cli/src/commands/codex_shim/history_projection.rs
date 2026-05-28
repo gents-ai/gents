@@ -499,6 +499,7 @@ fn turn_status(request: &RequestRow, response: Option<&ResponseRow>) -> codex::T
     if response_status == "interrupted" {
         codex::TurnStatus::Interrupted
     } else if response_status == "complete"
+        || response_status == "completed"
         || response_status == "error"
         || matches!(
             lifecycle_state.as_str(),
