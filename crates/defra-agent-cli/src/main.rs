@@ -129,7 +129,13 @@ Common flow:
 
 Codex flow:
   defra-agent server --codex-shim
-  CODEX_HOME=$HOME/.defra-agent/codex-ui codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+  codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+
+Codex keeps using its normal local ~/.codex config in this mode. The Defra shim state directory is server-side state and is only useful for debugging or an intentionally isolated client profile.
+
+For laptop-to-fleet use, bind the shim on a reachable interface:
+  defra-agent server --codex-shim --codex-shim-bind-addr <tailscale-ip-or-0.0.0.0>
+  codex --remote ws://<tailscale-host>:9292/
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.

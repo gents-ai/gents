@@ -358,7 +358,11 @@ pub(crate) struct ServeArgs {
         help = "Also run the experimental Codex TUI compatibility endpoint"
     )]
     pub(crate) codex_shim: bool,
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(
+        long,
+        default_value = "127.0.0.1",
+        help = "Address for the Codex shim to listen on. Use a Tailscale IP or 0.0.0.0 to allow remote Codex clients; default is loopback only"
+    )]
     pub(crate) codex_shim_bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
     pub(crate) codex_shim_port: u16,

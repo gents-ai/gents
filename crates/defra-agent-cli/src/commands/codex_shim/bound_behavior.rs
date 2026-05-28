@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::{
-    default_behavior_id_for_agent, load_agent_behavior, load_inference_profile,
-};
+use defra_agent::{default_behavior_id_for_agent, load_agent_behavior, load_inference_profile};
 
 pub(super) fn resolve_bound_behavior_id(
     override_behavior_id: Option<&str>,

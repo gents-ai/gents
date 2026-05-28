@@ -15,6 +15,7 @@ use super::super::progress::{
     defra_turn_progress_query, response_field_is_blank, terminal_error_message,
     terminal_turn_status,
 };
+use super::super::protocol::send_committed_user_message;
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
@@ -199,10 +200,14 @@ pub(super) async fn stream_defra_turn(
 
             let turn_status = terminal_turn_status(lifecycle_state, response_status);
             if turn_status == codex::TurnStatus::Completed {
-                if let Some(next_request_id) =
+                if let Some(next_request) =
                     next_steering_request_after(state, &current.session_id, &current.request_id)
                         .await?
                 {
+                    if next_request.is_pending() {
+                        tokio::time::sleep(state.poll_interval).await;
+                        continue;
+                    }
                     projection.finish_agent_message(outbound).await?;
                     spawn_background_tool_watcher(
                         connection.clone(),
@@ -214,7 +219,18 @@ pub(super) async fn stream_defra_turn(
                         projection.cwd.clone(),
                         std::mem::take(&mut running_background_tools),
                     );
-                    current.request_id = next_request_id;
+                    let next_input =
+                        steering_input_for_request(connection, state, &next_request.request_id)
+                            .await?;
+                    send_committed_user_message(
+                        outbound,
+                        state,
+                        projection.thread_id,
+                        projection.turn_id,
+                        &next_input,
+                    )
+                    .await?;
+                    current.request_id = next_request.request_id;
                     known_tool_calls.clear();
                     latest_content.clear();
                     latest_reasoning.clear();
@@ -298,4 +314,39 @@ async fn finish_interrupted_turn(
         running_background_tools,
     );
     Ok(())
+}
+
+async fn steering_input_for_request(
+    connection: &ConnectionState,
+    state: &ShimState,
+    request_id: &str,
+) -> Result<Vec<codex::UserInput>> {
+    if let Some(input) = connection.take_steering_input(request_id).await {
+        return Ok(input);
+    }
+
+    let request_id_escaped = defra_agent::graphql::escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id_escaped}" }} }},
+                limit: 1
+            ) {{
+                content
+            }}
+        }}"#
+    );
+    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let content = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(vec![codex::UserInput::Text {
+        text: content,
+        text_elements: Vec::new(),
+    }])
 }

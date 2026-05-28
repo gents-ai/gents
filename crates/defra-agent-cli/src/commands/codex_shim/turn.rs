@@ -234,20 +234,15 @@ pub(super) async fn steer_defra_turn(
         .await;
     }
 
+    connection
+        .remember_steering_input(submitted.request_id.clone(), params.input.clone())
+        .await;
     send_result(
         &connection.outbound,
         request_id,
         codex::TurnSteerResponse {
             turn_id: turn_id.clone(),
         },
-    )
-    .await?;
-    send_committed_user_message(
-        &connection.outbound,
-        state,
-        &params.thread_id,
-        &turn_id,
-        &params.input,
     )
     .await?;
     tracing::info!(

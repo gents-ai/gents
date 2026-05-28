@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 
 use super::protocol::now_millis;
 
+static TRACE_APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub(super) fn shim_event(default_path: &Path, message: impl AsRef<str>) {
     append_json(
         default_path,
@@ -17,6 +19,22 @@ pub(super) fn shim_event(default_path: &Path, message: impl AsRef<str>) {
             "event": message.as_ref(),
         }),
     );
+}
+
+pub(super) fn shim_event_fields(default_path: &Path, event: impl AsRef<str>, fields: Value) {
+    let mut value = json!({
+        "ts_ms": now_millis(),
+        "direction": "internal",
+        "event": event.as_ref(),
+    });
+    if let (Some(target), Some(fields)) = (value.as_object_mut(), fields.as_object()) {
+        for (key, field_value) in fields {
+            target.insert(key.clone(), field_value.clone());
+        }
+    } else {
+        value["detail"] = fields;
+    }
+    append_json(default_path, value);
 }
 
 pub(super) fn codex_notification(default_path: &Path, notification: &codex::ServerNotification) {
@@ -129,7 +147,12 @@ fn append_json(default_path: &Path, value: Value) {
     let path = std::env::var_os("DEFRA_CODEX_SHIM_TRACE")
         .map(PathBuf::from)
         .unwrap_or_else(|| default_path.to_path_buf());
+    let _guard = match TRACE_APPEND_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{}", value);
+        let _ = file.write_all(value.to_string().as_bytes());
+        let _ = file.write_all(b"\n");
     }
 }

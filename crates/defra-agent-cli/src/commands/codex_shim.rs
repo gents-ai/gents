@@ -2,21 +2,21 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
+use axum::Router;
 use codex_app_server_protocol as codex;
 use defra_agent::defra_node::EmbeddedNode;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
 mod background;

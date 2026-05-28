@@ -2,16 +2,29 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::super::store::query_node_json;
-use super::super::{ConnectionState, ShimState, TurnStreamControl};
+use super::super::{trace, ConnectionState, ShimState, TurnStreamControl};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ActiveCodexTurn {
     pub(super) turn_id: String,
+    pub(super) interrupt_request_id: String,
     pub(super) current_request_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NextSteeringRequest {
+    pub(super) request_id: String,
+    lifecycle_state: String,
+}
+
+impl NextSteeringRequest {
+    pub(super) fn is_pending(&self) -> bool {
+        self.lifecycle_state == "pending"
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +84,7 @@ pub(super) async fn next_steering_request_after(
     state: &ShimState,
     thread_id: &str,
     queued_after_request_id: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<NextSteeringRequest>> {
     let rows = load_thread_request_rows(state, thread_id).await?;
     Ok(rows
         .iter()
@@ -82,7 +95,35 @@ pub(super) async fn next_steering_request_after(
                 .cmp(&right.created_at)
                 .then_with(|| left.request_id.cmp(&right.request_id))
         })
-        .map(|row| row.request_id.clone()))
+        .map(|row| NextSteeringRequest {
+            request_id: row.request_id.clone(),
+            lifecycle_state: row.lifecycle_state.clone(),
+        }))
+}
+
+pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
+    state: &ShimState,
+    thread_id: &str,
+    turn_id: &str,
+    interrupt_request_id: &str,
+) -> Result<Vec<String>> {
+    let rows = load_thread_request_rows(state, thread_id).await?;
+    let by_id = rows
+        .iter()
+        .map(|row| (row.request_id.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let mut request_ids = Vec::new();
+    for row in rows.iter().filter(|row| {
+        row.request_id != interrupt_request_id
+            && row.lifecycle_state_is_active()
+            && steering_parent_id(row).is_some()
+    }) {
+        let (root, _) = codex_turn_root_and_depth(row, &by_id)?;
+        if root == turn_id {
+            request_ids.push(row.request_id.clone());
+        }
+    }
+    Ok(request_ids)
 }
 
 pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
@@ -92,11 +133,29 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     turn_id: &str,
 ) -> Result<()> {
     let Some(active) = load_active_codex_turn(state, thread_id).await? else {
-        cancel_stream_control(connection, thread_id, turn_id).await;
+        let stream_control_cancelled = cancel_stream_control(connection, thread_id, turn_id).await;
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_no_active_turn",
+            json!({
+                "thread_id": thread_id,
+                "requested_turn_id": turn_id,
+                "stream_control_cancelled": stream_control_cancelled,
+            }),
+        );
         return Ok(());
     };
 
     if active.turn_id != turn_id {
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_turn_id_mismatch",
+            json!({
+                "thread_id": thread_id,
+                "requested_turn_id": turn_id,
+                "active_turn_id": active.turn_id,
+            }),
+        );
         tracing::warn!(
             active_turn_id = %active.turn_id,
             requested_turn_id = %turn_id,
@@ -105,18 +164,98 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         );
     }
 
-    cancel_stream_control(connection, thread_id, &active.turn_id).await;
-    let node = state.node.clone();
-    let request_id = active.current_request_id.clone();
-    tokio::spawn(async move {
-        if let Err(error) = defra_agent::interrupt_request(node.as_ref(), &request_id).await {
-            tracing::warn!(%error, request_id, "Codex shim failed to forward DEFRA interrupt");
+    let stream_control_cancelled =
+        cancel_stream_control(connection, thread_id, &active.turn_id).await;
+    trace::shim_event_fields(
+        &state.trace_path,
+        "turn_interrupt_active_selected",
+        json!({
+            "thread_id": thread_id,
+            "requested_turn_id": turn_id,
+            "active_turn_id": active.turn_id,
+            "interrupt_request_id": active.interrupt_request_id,
+            "current_request_id": active.current_request_id,
+            "stream_control_cancelled": stream_control_cancelled,
+        }),
+    );
+    let request_id = active.interrupt_request_id.clone();
+    if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), &request_id).await {
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_latch_failed",
+            json!({
+                "thread_id": thread_id,
+                "turn_id": active.turn_id,
+                "request_id": request_id,
+                "error": error.to_string(),
+            }),
+        );
+        tracing::warn!(%error, request_id, "Codex shim failed to forward DEFRA interrupt");
+    } else {
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_latch_succeeded",
+            json!({
+                "thread_id": thread_id,
+                "turn_id": active.turn_id,
+                "request_id": request_id,
+            }),
+        );
+    }
+    let cleanup_request_ids = steering_request_ids_for_turn_interrupt_cleanup(
+        state,
+        thread_id,
+        &active.turn_id,
+        &active.interrupt_request_id,
+    )
+    .await?;
+    trace::shim_event_fields(
+        &state.trace_path,
+        "turn_interrupt_cleanup_candidates",
+        json!({
+            "thread_id": thread_id,
+            "turn_id": active.turn_id,
+            "request_ids": cleanup_request_ids,
+        }),
+    );
+    for request_id in cleanup_request_ids {
+        connection.take_steering_input(&request_id).await;
+        if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), &request_id).await {
+            trace::shim_event_fields(
+                &state.trace_path,
+                "turn_interrupt_cleanup_latch_failed",
+                json!({
+                    "thread_id": thread_id,
+                    "turn_id": active.turn_id,
+                    "request_id": request_id,
+                    "error": error.to_string(),
+                }),
+            );
+            tracing::warn!(
+                %error,
+                request_id,
+                "Codex shim failed to cancel queued DEFRA steering request after interrupt"
+            );
+        } else {
+            trace::shim_event_fields(
+                &state.trace_path,
+                "turn_interrupt_cleanup_latch_succeeded",
+                json!({
+                    "thread_id": thread_id,
+                    "turn_id": active.turn_id,
+                    "request_id": request_id,
+                }),
+            );
         }
-    });
+    }
     Ok(())
 }
 
-async fn cancel_stream_control(connection: &ConnectionState, thread_id: &str, turn_id: &str) {
+async fn cancel_stream_control(
+    connection: &ConnectionState,
+    thread_id: &str,
+    turn_id: &str,
+) -> bool {
     if let Some(control) = connection
         .turn_streams
         .lock()
@@ -124,6 +263,9 @@ async fn cancel_stream_control(connection: &ConnectionState, thread_id: &str, tu
         .remove(&stream_key(thread_id, turn_id))
     {
         let _ = control.cancel_tx.send(true);
+        true
+    } else {
+        false
     }
 }
 
@@ -219,8 +361,20 @@ fn active_codex_turn_from_rows(
     let Some((tail, root, _)) = candidates.pop() else {
         return Ok(None);
     };
+    let interrupt_request_id = candidates
+        .iter()
+        .filter(|(_, candidate_root, _)| candidate_root == &root)
+        .min_by(|(left, _, left_depth), (right, _, right_depth)| {
+            left_depth
+                .cmp(right_depth)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+                .then_with(|| left.request_id.cmp(&right.request_id))
+        })
+        .map(|(row, _, _)| row.request_id.clone())
+        .unwrap_or_else(|| tail.request_id.clone());
     Ok(Some(ActiveCodexTurn {
         turn_id: root,
+        interrupt_request_id,
         current_request_id: tail.request_id.clone(),
     }))
 }
@@ -319,6 +473,7 @@ mod tests {
             active,
             ActiveCodexTurn {
                 turn_id: "turn-1".to_string(),
+                interrupt_request_id: "turn-1".to_string(),
                 current_request_id: "steer-2".to_string(),
             }
         );
@@ -334,6 +489,21 @@ mod tests {
         let active = active_codex_turn_from_rows(&rows, None).unwrap().unwrap();
 
         assert_eq!(active.turn_id, "turn-1");
+        assert_eq!(active.interrupt_request_id, "steer-1");
+        assert_eq!(active.current_request_id, "steer-1");
+    }
+
+    #[test]
+    fn pending_steering_tail_does_not_become_interrupt_target() {
+        let rows = vec![
+            row("turn-1", "processing", None),
+            row("steer-1", "pending", Some("turn-1")),
+        ];
+
+        let active = active_codex_turn_from_rows(&rows, None).unwrap().unwrap();
+
+        assert_eq!(active.turn_id, "turn-1");
+        assert_eq!(active.interrupt_request_id, "turn-1");
         assert_eq!(active.current_request_id, "steer-1");
     }
 }

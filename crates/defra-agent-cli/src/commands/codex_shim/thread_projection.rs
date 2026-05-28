@@ -23,8 +23,8 @@ pub(super) use mutations::{
 
 pub(super) use storage::ensure_agent_session_pinning;
 use storage::{
-    ProjectionUpdate, ensure_agent_session, list_projection_rows, load_conversation,
-    load_projection, update_projection_loaded_cwd, upsert_projection,
+    ensure_agent_session, list_projection_rows, load_conversation, load_projection,
+    update_projection_loaded_cwd, upsert_projection, ProjectionUpdate,
 };
 
 #[allow(dead_code)]

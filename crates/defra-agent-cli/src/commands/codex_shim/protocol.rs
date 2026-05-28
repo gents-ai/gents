@@ -3,11 +3,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{json, Value};
 
-use super::{Outbound, ShimState, trace};
+use super::{trace, Outbound, ShimState};
 
 pub(super) fn client_request_from_jsonrpc(
     request: codex::JSONRPCRequest,
@@ -88,10 +88,7 @@ pub(super) fn initialize_result(state: &ShimState) -> Value {
     })
 }
 
-pub(super) fn model_summary(
-    profile: &defra_agent::InferenceProfile,
-    is_default: bool,
-) -> Value {
+pub(super) fn model_summary(profile: &defra_agent::InferenceProfile, is_default: bool) -> Value {
     let display_name = profile
         .display_name
         .clone()

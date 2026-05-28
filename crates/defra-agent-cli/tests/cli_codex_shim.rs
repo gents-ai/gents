@@ -5,14 +5,14 @@ use std::fs;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 type ShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -882,11 +882,9 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
     .await?;
     let process_error = read_error_response(&mut ws, request_id(581)).await?;
     assert_eq!(process_error.code, -32601);
-    assert!(
-        process_error
-            .message
-            .contains("managed-exec state machines")
-    );
+    assert!(process_error
+        .message
+        .contains("managed-exec state machines"));
 
     fs::write(home_dir.join("alpha_notes.txt"), "alpha")?;
     fs::create_dir_all(home_dir.join("nested"))?;
@@ -1937,19 +1935,155 @@ async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let client_codex_home = tempdir.path().join("existing-client-codex-home");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&client_codex_home)?;
+    fs::write(
+        client_codex_home.join("config.toml"),
+        "# Existing user Codex config should remain client-side.\n",
+    )?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let default_profile_id = format!("{agent_did}:default-profile");
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let expected_shim_home = home_dir.join(".defra-agent").join("codex-ui");
+    let (_stdout, stderr) = serve.captured_output()?;
+    assert!(
+        stderr.contains(&format!(
+            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{shim_port}/"
+        )),
+        "server guidance should use --remote without requiring CODEX_HOME; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("CODEX_HOME="),
+        "server guidance should not instruct users to replace their existing Codex home; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("No CODEX_HOME override is required"),
+        "server guidance should explain the client/server home split; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_shim_home.to_string_lossy().to_string()),
+        "server guidance should still identify the shim state dir; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains(&client_codex_home.to_string_lossy().to_string()),
+        "server guidance must not depend on or rewrite a user's local Codex home; stderr:\n{stderr}"
+    );
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    assert_eq!(
+        initialize.codex_home.as_path(),
+        expected_shim_home.as_path(),
+        "initialize codexHome is shim state, not the user's local Codex home"
+    );
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                model: Some("client-local-model-from-existing-codex-config".to_string()),
+                model_provider: Some("openai".to_string()),
+                approval_policy: Some(codex::AskForApproval::OnRequest),
+                sandbox: Some(codex::SandboxMode::ReadOnly),
+                cwd: None,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    assert_eq!(
+        thread_start.model, default_profile_id,
+        "Defra remote runtime should use the bound behavior profile, not the client Codex model"
+    );
+    assert_eq!(thread_start.model_provider, "defra");
+    assert_eq!(thread_start.approval_policy, codex::AskForApproval::Never);
+    let expected_server_cwd = home_dir
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", home_dir.display()))?;
+    assert_eq!(
+        thread_start.cwd.as_path(),
+        expected_server_cwd.as_path(),
+        "without a remote --cd override, the shim should keep its server-side cwd"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires stock codex CLI, expect, and the configured real OpenAI-compatible backend"]
-async fn stock_codex_remote_pty_smoke_uses_real_backend() -> Result<()> {
+async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_backend(
+) -> Result<()> {
     require_command("codex")?;
     require_command("expect")?;
     let prompt_token = "PONGPTY";
     let smoke = start_live_codex_shim().await?;
+    let client_codex_home = create_existing_client_codex_home(&smoke, "pty")?;
+    assert_ne!(client_codex_home, smoke.codex_home);
 
     let transcript = smoke.tempdir.path().join("codex-pty.log");
     let expect_script = smoke.tempdir.path().join("codex-pty-smoke.expect");
     write_expect_smoke(
         &expect_script,
         &transcript,
-        &smoke.codex_home,
+        &client_codex_home,
         smoke.shim_port,
         prompt_token,
     )?;
@@ -1986,7 +2120,8 @@ async fn stock_codex_remote_pty_smoke_uses_real_backend() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux, stock codex CLI, and the configured real OpenAI-compatible backend"]
-async fn stock_codex_remote_tmux_smoke_uses_real_backend() -> Result<()> {
+async fn stock_codex_remote_tmux_smoke_uses_existing_client_codex_home_with_real_backend(
+) -> Result<()> {
     require_command("codex")?;
     if which("tmux").is_none() {
         eprintln!("skipping tmux smoke: tmux is not installed");
@@ -1994,10 +2129,12 @@ async fn stock_codex_remote_tmux_smoke_uses_real_backend() -> Result<()> {
     }
     let prompt_token = "PONGTMUX";
     let smoke = start_live_codex_shim().await?;
+    let client_codex_home = create_existing_client_codex_home(&smoke, "tmux")?;
+    assert_ne!(client_codex_home, smoke.codex_home);
     let session = format!("defra-codex-smoke-{}", Uuid::new_v4().simple());
     let command = format!(
         "CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{} {}",
-        shell_quote_path(&smoke.codex_home),
+        shell_quote_path(&client_codex_home),
         smoke.shim_port,
         shell_quote(&format!(
             "Reply with exactly this token and no extra words: {prompt_token}"
@@ -2033,7 +2170,8 @@ async fn stock_codex_remote_tmux_smoke_uses_real_backend() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux, stock codex CLI, and the configured real OpenAI-compatible backend"]
-async fn stock_codex_remote_tmux_multiturn_uses_real_backend() -> Result<()> {
+async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_real_backend(
+) -> Result<()> {
     require_command("codex")?;
     if which("tmux").is_none() {
         eprintln!("skipping tmux multi-turn smoke: tmux is not installed");
@@ -2044,10 +2182,12 @@ async fn stock_codex_remote_tmux_multiturn_uses_real_backend() -> Result<()> {
     let first_prompt = multiturn_first_prompt(memory_token);
     let second_prompt = multiturn_second_prompt();
     let smoke = start_live_codex_shim().await?;
+    let client_codex_home = create_existing_client_codex_home(&smoke, "tmux-multiturn")?;
+    assert_ne!(client_codex_home, smoke.codex_home);
     let session = format!("defra-codex-multiturn-{}", Uuid::new_v4().simple());
     let command = format!(
         "CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{} {}",
-        shell_quote_path(&smoke.codex_home),
+        shell_quote_path(&client_codex_home),
         smoke.shim_port,
         shell_quote(&first_prompt),
     );
@@ -2121,6 +2261,24 @@ async fn start_live_codex_shim() -> Result<LiveCodexShim> {
     start_live_codex_shim_with_write_tools(false, None).await
 }
 
+fn create_existing_client_codex_home(
+    smoke: &LiveCodexShim,
+    label: &str,
+) -> Result<std::path::PathBuf> {
+    let codex_home = smoke
+        .tempdir
+        .path()
+        .join(format!("client-codex-home-{label}"));
+    fs::create_dir_all(&codex_home)
+        .with_context(|| format!("creating client Codex home {}", codex_home.display()))?;
+    fs::write(
+        codex_home.join("config.toml"),
+        "# Existing user Codex config should remain client-side.\n",
+    )
+    .with_context(|| format!("writing client Codex config in {}", codex_home.display()))?;
+    Ok(codex_home)
+}
+
 async fn start_live_codex_shim_with_write_tools(
     write_tools: bool,
     tool_root: Option<&std::path::Path>,
@@ -2161,8 +2319,6 @@ async fn start_live_codex_shim_with_write_tools(
             "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-model",
-            DEFAULT_MODEL_NAME,
             "--codex-shim-poll-ms",
             "250",
             "--codex-shim-timeout-secs",
@@ -2318,7 +2474,7 @@ fn workspace_root() -> Result<std::path::PathBuf> {
 fn write_expect_smoke(
     script: &std::path::Path,
     transcript: &std::path::Path,
-    codex_home: &std::path::Path,
+    client_codex_home: &std::path::Path,
     shim_port: u16,
     prompt_token: &str,
 ) -> Result<()> {
@@ -2377,7 +2533,7 @@ expect {{
 }}
 "#,
         transcript = tcl_brace(transcript),
-        codex_home = tcl_brace(codex_home),
+        codex_home = tcl_brace(client_codex_home),
         prompt = tcl_brace_str(&prompt),
         token_match_regex = tcl_brace_str(&token_match_regex),
     );
@@ -3104,7 +3260,8 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(
@@ -3135,13 +3292,19 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
         .iter()
         .find(|entry| entry.id == default_profile_id)
         .expect("default profile present");
-    assert!(default_entry.is_default, "default profile should be flagged as isDefault");
+    assert!(
+        default_entry.is_default,
+        "default profile should be flagged as isDefault"
+    );
     let extra_entry = model_list
         .data
         .iter()
         .find(|entry| entry.id == extra_profile_id)
         .expect("extra profile present");
-    assert!(!extra_entry.is_default, "non-default profile must not be flagged isDefault");
+    assert!(
+        !extra_entry.is_default,
+        "non-default profile must not be flagged isDefault"
+    );
     Ok(())
 }
 
@@ -3221,14 +3384,18 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(
         &mut ws,
         codex::ClientRequest::ConfigRead {
             request_id: request_id(2),
-            params: codex::ConfigReadParams { include_layers: false, cwd: None },
+            params: codex::ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            },
         },
     )
     .await?;
@@ -3310,7 +3477,8 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(
@@ -3409,7 +3577,8 @@ async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(
@@ -3529,7 +3698,8 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
     send_client_request(
         &mut ws,
@@ -3650,7 +3820,8 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse =
+        read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(

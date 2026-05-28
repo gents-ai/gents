@@ -5,9 +5,9 @@ use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::commands::codex_shim::ShimState;
 use crate::commands::codex_shim::protocol::absolute_path;
 use crate::commands::codex_shim::store::query_node_json;
+use crate::commands::codex_shim::ShimState;
 
 use super::ConversationRow;
 

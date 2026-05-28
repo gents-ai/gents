@@ -227,6 +227,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         },
     )?;
 
+    let mut codex_shim_output = None;
     let mut codex_shim_handle = if args.codex_shim {
         let bound = bind_codex_shim(CodexShimBindArgs {
             home: home_dir.clone(),
@@ -242,29 +243,40 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             poll_ms: args.codex_shim_poll_ms,
         })
         .await?;
+        let codex_shim_url = format!(
+            "ws://{}:{}/",
+            display_host(bound.addr().ip()),
+            bound.addr().port()
+        );
         eprintln!(
-            "Codex shim is running on ws://{}/ with CODEX_HOME={}",
-            bound.addr(),
-            bound.codex_home().display()
+            "Codex shim is running on {codex_shim_url} with state dir {}",
+            bound.codex_home().display(),
         );
         eprintln!("Codex shim event log: {}", bound.trace_path().display());
         eprintln!(
-            "Launch Codex with: CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://{}/",
-            bound.codex_home().display(),
-            bound.addr()
+            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}",
         );
+        eprintln!(
+            "No CODEX_HOME override is required; Codex keeps using its normal local config while Defra handles the remote runtime."
+        );
+        if args.codex_shim_bind_addr.is_loopback() {
+            eprintln!(
+                "For another device, restart with --codex-shim-bind-addr <tailscale-ip-or-0.0.0.0> and use that host in --remote."
+            );
+        }
+        codex_shim_output = Some(json!({
+            "websocket": codex_shim_url,
+            "launch_command": format!(
+                "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}"
+            ),
+            "shim_home": bound.codex_home().to_path_buf(),
+            "codex_home": bound.codex_home().to_path_buf(),
+            "event_log": bound.trace_path().to_path_buf(),
+        }));
         Some(bound.spawn())
     } else {
         None
     };
-
-    let codex_shim_output = args.codex_shim.then(|| {
-        json!({
-            "websocket": format!("ws://{}:{}/", display_host(args.codex_shim_bind_addr), args.codex_shim_port),
-            "codex_home": home_dir.join("codex-ui"),
-            "event_log": home_dir.join("codex-ui").join("log").join("codex-shim-events.jsonl"),
-        })
-    });
 
     let output = json!({
         "status": "serving",

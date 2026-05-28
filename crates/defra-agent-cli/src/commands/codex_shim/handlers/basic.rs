@@ -54,12 +54,10 @@ pub(super) async fn handle_basic_request(
             let profiles = list_inference_profile_records(state.node.as_ref())
                 .await
                 .context("listing InferenceProfile documents for Codex ModelList")?;
-            let current_profile_id = load_bound_inference_profile_id_for_state(
-                state.node.as_ref(),
-                &state.behavior_id,
-            )
-            .await
-            .context("resolving current inference profile for ModelList")?;
+            let current_profile_id =
+                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+                    .await
+                    .context("resolving current inference profile for ModelList")?;
             let entries: Vec<Value> = profiles
                 .into_iter()
                 .map(|(_doc_id, profile)| {
@@ -90,12 +88,10 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
-            let profile_id = load_bound_inference_profile_id_for_state(
-                state.node.as_ref(),
-                &state.behavior_id,
-            )
-            .await
-            .context("resolving current inference profile for ConfigRead")?;
+            let profile_id =
+                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+                    .await
+                    .context("resolving current inference profile for ConfigRead")?;
             send_typed_json_result::<codex::ConfigReadResponse>(
                 outbound,
                 request_id,
