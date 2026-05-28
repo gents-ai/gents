@@ -40,7 +40,7 @@ use crate::toolset::{
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
-use super::{non_empty, BackgroundExecution, DefraSessionHook, TranscriptTurnState};
+use super::{non_empty, DefraSessionHook, TranscriptTurnState};
 
 const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 

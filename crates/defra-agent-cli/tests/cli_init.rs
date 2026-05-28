@@ -564,6 +564,26 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         "write-capable local tools",
     )
     .await?;
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    backgroundable_tool_names
+                }}
+            }}"#,
+            escape_graphql_string(&tool_selection_id)
+        ),
+    )
+    .await?;
+    let tool_selection = first_graphql_row(&response, "ToolSelection")?;
+    assert_eq!(
+        tool_selection
+            .get("backgroundable_tool_names")
+            .and_then(Value::as_array)
+            .map(|values| { values.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
+        Some(vec!["bash_unrestricted"])
+    );
 
     Ok(())
 }

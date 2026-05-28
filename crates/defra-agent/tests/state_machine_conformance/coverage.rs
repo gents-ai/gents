@@ -147,7 +147,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         lean_contract_snapshot()
             .backend_health_admission_cases
             .len(),
-        5
+        7
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_case_count,
@@ -173,6 +173,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
+    assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
 }
 
 #[tokio::test]
@@ -639,6 +640,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ResponseTransitionCases".to_string(),
         ));
     }
+    if !lean_response_interrupt_flow_cases().is_empty() {
+        emitted.insert((
+            "streaming_response_interrupt_flow_cases".to_string(),
+            "ResponseInterruptFlowCases".to_string(),
+        ));
+    }
     if !lean_compaction_reducer_cases().is_empty() {
         emitted.insert((
             "compaction_reducer_cases".to_string(),
@@ -695,6 +702,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R4cBackgroundWorkCases".to_string(),
         ));
     }
+    if !lean_codex_shim_projection_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_projection_cases".to_string(),
+            "CodexShimProjectionCases".to_string(),
+        ));
+    }
     if !lean_r6_backgrounding_cases().is_empty() {
         emitted.insert((
             "r6_background_cases".to_string(),
@@ -748,12 +761,14 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",
+        "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",
         "mcp_health_cases",
         "identity_structural_cases",
         "identity_permission_cases",
         "identity_contracts",
         "r4c_background_work_cases",
+        "codex_shim_projection_cases",
         "r6_background_cases",
         "r5_cross_deployment_cases",
         "r6_background_theorem_witnesses",

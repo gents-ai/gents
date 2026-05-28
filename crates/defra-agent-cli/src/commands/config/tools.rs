@@ -33,7 +33,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         enable_meta_tools: Some(args.enable_meta_tools),
         allowed_mcp_service_ids: Some(args.allowed_mcp_service_ids.clone()),
         delegate_to: Some(args.delegate_to.clone()),
-        backgroundable_tool_names: Some(Vec::new()),
+        backgroundable_tool_names: Some(args.backgroundable_tool_names.clone()),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
@@ -54,6 +54,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "enable_meta_tools": args.enable_meta_tools,
         "allowed_mcp_service_ids": args.allowed_mcp_service_ids,
         "delegate_to": args.delegate_to,
+        "backgroundable_tool_names": args.backgroundable_tool_names,
     });
     print_json(&output)?;
     Ok(())

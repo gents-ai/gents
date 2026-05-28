@@ -12,13 +12,19 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 chrono.workspace = true
 clap.workspace = true
+codex-app-server-protocol.workspace = true
+codex-login.workspace = true
+codex-model-provider-info.workspace = true
+codex-utils-absolute-path.workspace = true
 defra-agent = { path = "../defra-agent" }
+defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
+futures-util = "0.3"
 query.workspace = true
 hostname.workspace = true
 opentelemetry.workspace = true
@@ -41,3 +47,4 @@ defra-agent-lean-contract.workspace = true
 identity.workspace = true
 regex = "1"
 tempfile = "3"
+tokio-tungstenite = "0.26.2"

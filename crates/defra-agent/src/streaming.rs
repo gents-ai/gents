@@ -84,6 +84,12 @@ pub struct DefraStreamWriter {
     buffers: Mutex<HashMap<String, StreamBuffer>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestFinalizeMode {
+    UpdateRequest,
+    ResponseOnly,
+}
+
 struct StreamBuffer {
     content: String,
     reasoning: String,
@@ -284,16 +290,43 @@ impl DefraStreamWriter {
         Ok(true)
     }
 
+    /// Complete the response-side interrupt edge without rewriting
+    /// `AgentRequest`, which is terminalized separately as `interrupted`.
+    pub async fn finalize_interrupted_response(&self, doc_id: &str) -> Result<StreamResult> {
+        self.finalize_inner(
+            doc_id,
+            StreamStatus::Error,
+            Some("interrupted"),
+            RequestFinalizeMode::ResponseOnly,
+        )
+        .await
+    }
+
     /// Mark an existing response row as interrupted. Writes `interrupted_at`
     /// to the doc; does NOT change `status`. Called by the daemon's interrupt
     /// flow, sequenced BEFORE the terminal `AgentRequest.lifecycle_state` write.
     pub async fn write_interrupted_at(&self, doc_id: &str, at: &str) -> Result<bool> {
+        let Some(current) = load_response_state(&self.node, doc_id).await? else {
+            return Ok(false);
+        };
+        if current.status != StreamStatus::Streaming.as_str()
+            || current
+                .interrupted_at
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Ok(false);
+        }
+
         let escaped_doc_id = escape_graphql_string(doc_id);
         let escaped_at = escape_graphql_string(at);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        status: {{ _eq: "streaming" }}
+                    }},
                     input: {{ interrupted_at: "{escaped_at}" }}
                 ) {{ _docID }}
             }}"#
@@ -305,6 +338,124 @@ impl DefraStreamWriter {
             .as_ref()
             .and_then(|d| d.get("update_AgentResponse"))
             .is_some_and(response_has_documents))
+    }
+
+    async fn finalize_inner(
+        &self,
+        doc_id: &str,
+        status: StreamStatus,
+        error_message: Option<&str>,
+        request_mode: RequestFinalizeMode,
+    ) -> Result<StreamResult> {
+        let existing = load_response_state(&self.node, doc_id).await?;
+        let snapshot = {
+            let buffers = self.buffers.lock().await;
+            buffers.get(doc_id).map(|buf| StreamBufferSnapshot {
+                content: buf.content.clone(),
+                reasoning: buf.reasoning.clone(),
+                token_count: buf.token_count,
+            })
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let mutation = build_finalize_mutation(
+            existing.as_ref(),
+            doc_id,
+            &status,
+            &now,
+            snapshot.as_ref(),
+            error_message,
+            request_mode,
+        );
+        let operation = if snapshot.is_some() {
+            "finalize_streaming_response"
+        } else {
+            "finalize_streaming_response_without_buffer"
+        };
+
+        let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
+            Ok(resp) => resp,
+            Err(error) => {
+                if let Some(snapshot) = snapshot.as_ref() {
+                    tracing::error!(
+                        doc_id = %doc_id,
+                        status = %status.as_str(),
+                        token_count = snapshot.token_count,
+                        lost_content_len = snapshot.content.len(),
+                        lost_reasoning_len = snapshot.reasoning.len(),
+                        error = %error,
+                        "failed to finalize streaming response after retries; leaving buffer in place for crash-recovery"
+                    );
+                } else {
+                    tracing::error!(
+                        doc_id = %doc_id,
+                        status = %status.as_str(),
+                        error = %error,
+                        "failed to finalize streaming response without in-memory buffer"
+                    );
+                }
+                return Err(error);
+            }
+        };
+
+        let persisted = if resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentResponse"))
+            .is_some_and(response_has_documents)
+        {
+            load_response_state(&self.node, doc_id).await?
+        } else {
+            match load_response_state(&self.node, doc_id).await? {
+                Some(existing) if existing.status == status.as_str() => {
+                    tracing::warn!(
+                        doc_id = %doc_id,
+                        status = %status.as_str(),
+                        "finalize became an idempotent no-op because response was already terminal"
+                    );
+                    Some(existing)
+                }
+                Some(existing) => {
+                    anyhow::bail!(
+                        "cannot finalize AgentResponse {} as {} because it is already {}",
+                        doc_id,
+                        status.as_str(),
+                        existing.status
+                    );
+                }
+                None => anyhow::bail!(
+                    "cannot finalize AgentResponse {} as {} because the response document is missing",
+                    doc_id,
+                    status.as_str()
+                ),
+            }
+        };
+
+        self.buffers.lock().await.remove(doc_id);
+
+        let content = persisted
+            .as_ref()
+            .map(|response| response.content.clone())
+            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.content.clone()))
+            .unwrap_or_default();
+        let token_count = persisted
+            .as_ref()
+            .map(|response| response.token_count)
+            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.token_count))
+            .unwrap_or_default();
+
+        tracing::info!(
+            doc_id = %doc_id,
+            status = %status.as_str(),
+            tokens = token_count,
+            "finalized streaming response"
+        );
+
+        Ok(StreamResult {
+            doc_id: doc_id.to_string(),
+            content,
+            status,
+            token_count,
+        })
     }
 }
 
@@ -424,108 +575,8 @@ impl StreamWriter for DefraStreamWriter {
     }
 
     async fn finalize(&self, doc_id: &str, status: StreamStatus) -> Result<StreamResult> {
-        let existing = load_response_state(&self.node, doc_id).await?;
-        let snapshot = {
-            let buffers = self.buffers.lock().await;
-            buffers.get(doc_id).map(|buf| StreamBufferSnapshot {
-                content: buf.content.clone(),
-                reasoning: buf.reasoning.clone(),
-                token_count: buf.token_count,
-            })
-        };
-        let now = chrono::Utc::now().to_rfc3339();
-        let mutation =
-            build_finalize_mutation(existing.as_ref(), doc_id, &status, &now, snapshot.as_ref());
-        let operation = if snapshot.is_some() {
-            "finalize_streaming_response"
-        } else {
-            "finalize_streaming_response_without_buffer"
-        };
-
-        let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
-            Ok(resp) => resp,
-            Err(error) => {
-                if let Some(snapshot) = snapshot.as_ref() {
-                    tracing::error!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        token_count = snapshot.token_count,
-                        lost_content_len = snapshot.content.len(),
-                        lost_reasoning_len = snapshot.reasoning.len(),
-                        error = %error,
-                        "failed to finalize streaming response after retries; leaving buffer in place for crash-recovery"
-                    );
-                } else {
-                    tracing::error!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        error = %error,
-                        "failed to finalize streaming response without in-memory buffer"
-                    );
-                }
-                return Err(error);
-            }
-        };
-
-        let persisted = if resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentResponse"))
-            .is_some_and(response_has_documents)
-        {
-            load_response_state(&self.node, doc_id).await?
-        } else {
-            match load_response_state(&self.node, doc_id).await? {
-                Some(existing) if existing.status == status.as_str() => {
-                    tracing::warn!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        "finalize became an idempotent no-op because response was already terminal"
-                    );
-                    Some(existing)
-                }
-                Some(existing) => {
-                    anyhow::bail!(
-                        "cannot finalize AgentResponse {} as {} because it is already {}",
-                        doc_id,
-                        status.as_str(),
-                        existing.status
-                    );
-                }
-                None => anyhow::bail!(
-                    "cannot finalize AgentResponse {} as {} because the response document is missing",
-                    doc_id,
-                    status.as_str()
-                ),
-            }
-        };
-
-        self.buffers.lock().await.remove(doc_id);
-
-        let content = persisted
-            .as_ref()
-            .map(|response| response.content.clone())
-            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.content.clone()))
-            .unwrap_or_default();
-        let token_count = persisted
-            .as_ref()
-            .map(|response| response.token_count)
-            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.token_count))
-            .unwrap_or_default();
-
-        tracing::info!(
-            doc_id = %doc_id,
-            status = %status.as_str(),
-            tokens = token_count,
-            "finalized streaming response"
-        );
-
-        Ok(StreamResult {
-            doc_id: doc_id.to_string(),
-            content,
-            status,
-            token_count,
-        })
+        self.finalize_inner(doc_id, status, None, RequestFinalizeMode::UpdateRequest)
+            .await
     }
 }
 
@@ -535,9 +586,18 @@ fn build_finalize_mutation(
     status: &StreamStatus,
     now: &str,
     snapshot: Option<&StreamBufferSnapshot>,
+    error_message: Option<&str>,
+    request_mode: RequestFinalizeMode,
 ) -> String {
-    let request_transition = existing
-        .map(|existing| build_request_terminal_update(&existing.request_id, status))
+    let request_transition = match request_mode {
+        RequestFinalizeMode::UpdateRequest => existing
+            .map(|existing| build_request_terminal_update(&existing.request_id, status))
+            .unwrap_or_default(),
+        RequestFinalizeMode::ResponseOnly => String::new(),
+    };
+    let error_message_input = error_message
+        .map(escape_graphql_string)
+        .map(|message| format!(r#"error_message: "{message}","#))
         .unwrap_or_default();
     // content / reasoning are always cleared on finalize because they
     // represent the live tail (issue #64). token_count is preserved as a
@@ -557,6 +617,7 @@ fn build_finalize_mutation(
                         content: "",
                         reasoning: "",
                         status: "{status}",
+                        {error_message_input}
                         token_count: {token_count},
                         completed_at: "{now}"
                     }}
@@ -577,6 +638,7 @@ fn build_finalize_mutation(
                         content: "",
                         reasoning: "",
                         status: "{status}",
+                        {error_message_input}
                         completed_at: "{now}"
                     }}
                 ) {{ _docID }}

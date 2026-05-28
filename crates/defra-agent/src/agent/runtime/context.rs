@@ -10,7 +10,7 @@ use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::BehaviorDaemon;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_agent;
-use crate::hook::BackgroundToolRegistry;
+use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
@@ -23,6 +23,7 @@ pub(super) struct RuntimeContext {
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) retry_policy: RetryPolicy,
     pub(super) hook_failure_policy: crate::hook::FailurePolicy,
+    pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
 }
 
@@ -150,6 +151,28 @@ impl RuntimeContext {
                 )
                 .await
             }
+            BackendProviderKind::ChatGptCodex => {
+                let client =
+                    crate::chatgpt_codex::build_responses_client(&behavior.backend_endpoint)
+                        .await
+                        .with_context(|| {
+                            format!(
+                            "building ChatGPT Codex completion client for behavior {} against {}",
+                            behavior.behavior_id, behavior.backend_endpoint
+                        )
+                        })?;
+                self.run_behavior_with_client(
+                    behavior,
+                    request_rx,
+                    shutdown,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    background_tool_registry,
+                    client,
+                )
+                .await
+            }
         }
     }
 
@@ -184,6 +207,7 @@ impl RuntimeContext {
             self.retry_policy.clone(),
             self.hook_failure_policy,
             background_tool_registry,
+            self.background_execution_registry.clone(),
             self.startup_barrier.clone(),
         );
         daemon.run(request_rx, shutdown).await

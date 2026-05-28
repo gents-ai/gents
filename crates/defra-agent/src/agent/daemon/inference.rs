@@ -1,4 +1,5 @@
 use std::future::IntoFuture;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -53,6 +54,19 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
     Ok(())
 }
 
+fn request_workspace_cwd(request: &crate::watcher::AgentRequest) -> Option<PathBuf> {
+    let metadata = request.metadata.as_deref()?.trim();
+    if metadata.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+    value
+        .pointer("/codex_shim/cwd")
+        .or_else(|| value.get("workspace_cwd"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+}
+
 async fn await_with_request_deadline<F, T>(
     deadline: RequestDeadline,
     future: F,
@@ -87,6 +101,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         request_token: &tokio_util::sync::CancellationToken,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
+        let workspace_cwd = request_workspace_cwd(request);
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
@@ -142,7 +157,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.hook_failure_policy,
                 )
                 .await?
-                .with_background_tool_registry(self.background_tool_registry.clone());
+                .with_background_tool_registry(self.background_tool_registry.clone())
+                .with_background_execution_registry(self.background_execution_registry.clone());
                 hook.set_active_request_id(Some(request.request_id.clone()))
                     .await;
                 hook.set_request_deadline_at(request_deadline).await;
@@ -242,9 +258,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
-                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace(
                                         request_deadline,
                                         request_token.clone(),
+                                        workspace_cwd.clone(),
                                         tokio::time::timeout(liveness_timeout, stream.next()),
                                     ),
                                     "waiting for inference stream item",

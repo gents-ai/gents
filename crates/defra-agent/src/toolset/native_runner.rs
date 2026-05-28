@@ -16,12 +16,14 @@ const RUNNER_ENV: &str = "DEFRA_NATIVE_FS_RUNNER";
 #[derive(Clone)]
 pub(super) struct NativeFsRunner {
     root: PathBuf,
+    base: PathBuf,
 }
 
 impl NativeFsRunner {
     pub(super) fn new(context: &ToolContext) -> Self {
         Self {
             root: context.root().to_path_buf(),
+            base: context.base().to_path_buf(),
         }
     }
 
@@ -35,7 +37,8 @@ impl NativeFsRunner {
         let cancellation_token = runtime
             .map(|runtime| runtime.cancellation_token)
             .unwrap_or_else(CancellationToken::new);
-        let runner = resolve_runner_command(&self.root)?;
+        let base = self.effective_base();
+        let runner = resolve_runner_command(&self.root, &base)?;
         let stdin = serde_json::to_vec(&request)
             .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
 
@@ -72,6 +75,13 @@ impl NativeFsRunner {
             .into()),
         }
     }
+
+    fn effective_base(&self) -> PathBuf {
+        let runtime_base = current_tool_runtime_context()
+            .and_then(|runtime| runtime.workspace_cwd)
+            .and_then(|base| resolve_base_dir(&self.root, &base).ok());
+        runtime_base.unwrap_or_else(|| self.base.clone())
+    }
 }
 
 struct RunnerCommand {
@@ -79,35 +89,76 @@ struct RunnerCommand {
     cwd: PathBuf,
 }
 
-fn resolve_runner_command(root: &Path) -> Result<RunnerCommand, ToolError> {
+fn resolve_runner_command(root: &Path, base: &Path) -> Result<RunnerCommand, ToolError> {
     if let Ok(path) = std::env::var(RUNNER_ENV) {
         if !path.trim().is_empty() {
             return Ok(RunnerCommand {
-                argv: vec![
-                    path,
-                    "--root".to_string(),
-                    root.to_string_lossy().into_owned(),
-                ],
-                cwd: root.to_path_buf(),
+                argv: runner_argv(path, root, base),
+                cwd: base.to_path_buf(),
             });
         }
     }
 
+    if let Some(candidate) = self_runner_binary() {
+        return Ok(RunnerCommand {
+            argv: self_runner_argv(candidate.to_string_lossy().into_owned(), root, base),
+            cwd: base.to_path_buf(),
+        });
+    }
+
     if let Some(candidate) = adjacent_runner_binary() {
         return Ok(RunnerCommand {
-            argv: vec![
-                candidate.to_string_lossy().into_owned(),
-                "--root".to_string(),
-                root.to_string_lossy().into_owned(),
-            ],
-            cwd: root.to_path_buf(),
+            argv: runner_argv(candidate.to_string_lossy().into_owned(), root, base),
+            cwd: base.to_path_buf(),
         });
     }
 
     Err(anyhow!(
-        "native filesystem runner binary not found; set {RUNNER_ENV} or install defra-native-fs-runner next to the defra-agent binary"
+        "native filesystem runner binary not found; set {RUNNER_ENV}, install defra-native-fs-runner next to the defra-agent binary, or run a defra-agent binary with the built-in native filesystem runner"
     )
     .into())
+}
+
+fn runner_argv(program: String, root: &Path, base: &Path) -> Vec<String> {
+    let mut argv = vec![
+        program,
+        "--root".to_string(),
+        root.to_string_lossy().into_owned(),
+    ];
+    if base != root {
+        argv.push("--base".to_string());
+        argv.push(base.to_string_lossy().into_owned());
+    }
+    argv
+}
+
+fn self_runner_argv(program: String, root: &Path, base: &Path) -> Vec<String> {
+    let mut argv = vec![
+        program,
+        "__native-fs-runner".to_string(),
+        "--root".to_string(),
+        root.to_string_lossy().into_owned(),
+    ];
+    if base != root {
+        argv.push("--base".to_string());
+        argv.push(base.to_string_lossy().into_owned());
+    }
+    argv
+}
+
+fn resolve_base_dir(root: &Path, base: &Path) -> Result<PathBuf, ToolError> {
+    let canonical = std::fs::canonicalize(base)
+        .with_context(|| format!("canonicalizing native filesystem base {}", base.display()))?;
+    if canonical.is_dir() && canonical.starts_with(root) {
+        Ok(canonical)
+    } else {
+        Err(anyhow!(
+            "native filesystem base {} is outside root {} or is not a directory",
+            canonical.display(),
+            root.display()
+        )
+        .into())
+    }
 }
 
 fn adjacent_runner_binary() -> Option<PathBuf> {
@@ -129,6 +180,16 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
     dirs.into_iter()
         .map(|dir| dir.join(exe_name))
         .find(|candidate| candidate.is_file())
+}
+
+fn self_runner_binary() -> Option<PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    let stem = current.file_stem()?.to_str()?;
+    if stem == "defra-agent" {
+        Some(current)
+    } else {
+        None
+    }
 }
 
 fn handle_exited(

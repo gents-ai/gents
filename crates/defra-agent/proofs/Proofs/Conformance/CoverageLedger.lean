@@ -198,6 +198,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "codex-shim"
+    , required := [Surface.api, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "command-policy"
     , required := [Surface.agentFacing]
     -- #286 ships the inline denial render in the desktop chat shell,
@@ -595,6 +599,11 @@ def caseCoverage : List CoverageEntry :=
       "defra_agent_desktop_tauri::bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "codex_shim_projection_cases"
+      "CodexShimProjectionCases"
+      "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
@@ -623,6 +632,11 @@ def caseCoverage : List CoverageEntry :=
       "streaming_response_cases"
       "ResponseTransitionCases"
       "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract")
+      "streaming-response" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "streaming_response_interrupt_flow_cases"
+      "ResponseInterruptFlowCases"
+      "state_machine_conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract")
       "streaming-response" [Surface.agentFacing]
   , tagged (consumerCoverage
       "streaming_response_cases"

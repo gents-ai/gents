@@ -10,6 +10,7 @@ pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
 pub(crate) mod background_tools;
+pub mod chatgpt_codex;
 pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
@@ -42,6 +43,7 @@ pub mod session;
 pub mod streaming;
 pub mod template;
 pub mod tool_call_lifecycle;
+pub mod tool_control;
 pub mod tool_surface;
 pub mod toolset;
 pub mod trace_export;
@@ -71,16 +73,18 @@ pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
-    load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
-    upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
-    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap,
-    ToolSelectionDocument,
+    list_inference_profile_records, load_agent_behavior, load_agent_principal,
+    load_inference_profile, load_tool_selection, upsert_agent_behavior, upsert_agent_principal,
+    upsert_inference_profile, upsert_tool_selection, AgentBehavior as AgentBehaviorDocument,
+    InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
     HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
 };
-pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
+pub use hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
+};
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -104,9 +108,10 @@ pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
     AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
-    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
-    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA,
-    TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
+    AGENT_TOOL_RESULT_SCHEMA, CODEX_THREAD_PROJECTION_SCHEMA, COMPACTION_ENTRY_SCHEMA,
+    INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA,
+    TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
+    TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
 pub use session::{fork, ForkError, ForkOutcome, ForkParams};
@@ -114,6 +119,7 @@ pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
 };
+pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
     ToolRuntimeContext, ToolSelection, ToolSurface,

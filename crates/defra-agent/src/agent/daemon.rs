@@ -32,6 +32,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
+    background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     startup_barrier: Arc<StartupBarrier>,
 }
 
@@ -50,6 +51,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
         background_tool_registry: crate::hook::BackgroundToolRegistry,
+        background_execution_registry: crate::hook::BackgroundExecutionRegistry,
         startup_barrier: Arc<StartupBarrier>,
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
@@ -75,6 +77,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             retry_policy,
             hook_failure_policy,
             background_tool_registry,
+            background_execution_registry,
             startup_barrier,
         }
     }

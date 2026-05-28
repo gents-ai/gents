@@ -193,6 +193,27 @@ pub(crate) struct LeanResponseTransitionCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanResponseInterruptFlowCase {
+    pub(crate) name: String,
+    pub(crate) group: String,
+    pub(crate) action: String,
+    pub(crate) pre_request_state: String,
+    pub(crate) post_request_state: String,
+    pub(crate) pre_response_status: String,
+    pub(crate) post_response_status: String,
+    pub(crate) pre_inference_call_state: String,
+    pub(crate) post_inference_call_state: String,
+    pub(crate) response_error_reason: String,
+    pub(crate) interrupted_at_required: bool,
+    pub(crate) completed_at_required: bool,
+    pub(crate) live_tail_cleared: bool,
+    pub(crate) partial_turn_materialized: bool,
+    pub(crate) request_terminal: bool,
+    pub(crate) response_terminal: bool,
+    pub(crate) inference_call_terminal: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanCompactionReducerCase {
     pub(crate) name: String,
     pub(crate) group: String,

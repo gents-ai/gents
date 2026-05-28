@@ -22,9 +22,9 @@ use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
-    InferenceCallSummaryView, InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult,
-    NativeExecutorStatusView, RuntimeLivenessView, SubagentTreeView,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, InferenceCallSummaryView,
+    InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView,
+    RuntimeLivenessView, SubagentTreeView,
 };
 
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -297,7 +297,10 @@ fn subagent_tree_url(
 mod subagent_tree_url_tests {
     use super::*;
 
-    fn request(include_terminal: Option<bool>, max_depth: Option<u32>) -> DesktopListSubagentTreeRequest {
+    fn request(
+        include_terminal: Option<bool>,
+        max_depth: Option<u32>,
+    ) -> DesktopListSubagentTreeRequest {
         DesktopListSubagentTreeRequest {
             root_request_id: "req-root".to_string(),
             agent_did: None,
@@ -320,8 +323,8 @@ mod subagent_tree_url_tests {
 
     #[test]
     fn accepts_bare_host_and_defaults_scheme() {
-        let url = subagent_tree_url("127.0.0.1:9181", "req-root", &request(Some(true), Some(4)))
-            .unwrap();
+        let url =
+            subagent_tree_url("127.0.0.1:9181", "req-root", &request(Some(true), Some(4))).unwrap();
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.path(), "/subagents/tree");
         let query = url.query().unwrap();
@@ -379,14 +382,17 @@ pub(crate) async fn desktop_list_backends_with_health(
     };
 
     let node = core.node();
-    let backends = list_all_backends(node).await.map_err(|err| err.to_string())?;
+    let backends = list_all_backends(node)
+        .await
+        .map_err(|err| err.to_string())?;
 
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
         let recent_calls = fetch_recent_calls(node, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
-        let display_state = derive_display_state(backend.enabled, &backend.probe_status).to_string();
+        let display_state =
+            derive_display_state(backend.enabled, &backend.probe_status).to_string();
         views.push(BackendHealthView {
             backend_id: backend.backend_id,
             name: backend.name,

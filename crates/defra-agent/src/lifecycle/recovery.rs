@@ -51,7 +51,7 @@ async fn recover_stuck_requests(node: &EmbeddedNode, agent_did: &str) -> Result<
         let retry_count = row.get("retry_count").and_then(|v| v.as_i64()).unwrap_or(0);
         let response_status =
             lookup_response_status_by_request_id(node, agent_did, request_id).await?;
-        let next_status = if response_status.as_deref() == Some("complete") {
+        let next_status = if matches!(response_status.as_deref(), Some("complete" | "completed")) {
             "completed"
         } else {
             "error"

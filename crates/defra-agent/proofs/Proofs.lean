@@ -22,6 +22,7 @@ import Proofs.ManagedExec
 import Proofs.MCPHealth
 import Proofs.StreamingResponse
 import Proofs.Background
+import Proofs.CodexShim
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness

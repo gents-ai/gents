@@ -13,8 +13,8 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 50;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
-pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 300;
-pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 900;
+pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
+pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 1_800;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// Runtime configuration for one loaded behavior executor.

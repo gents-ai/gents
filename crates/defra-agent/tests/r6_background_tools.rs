@@ -515,3 +515,51 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
 }
+
+#[tokio::test]
+async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
+    let (_db, hook, _session_id, _request_id) =
+        setup_hook("r6-background-cancel-missing", registry(Vec::new(), &[])).await;
+
+    let cancelled = skip_reason_json(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "cancel_tool",
+            None,
+            "meta-cancel-missing",
+            r#"{"tool_call_id":"missing-background-handle"}"#,
+        )
+        .await,
+    );
+
+    assert_eq!(cancelled["ok"], false);
+    assert_eq!(cancelled["tool_name"], "cancel_tool");
+    assert!(cancelled["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing-background-handle"));
+}
+
+#[tokio::test]
+async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
+    let (_db, hook, _session_id, _request_id) =
+        setup_hook("r6-background-wait-missing", registry(Vec::new(), &[])).await;
+
+    let waited = skip_reason_json(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "wait_tool",
+            None,
+            "meta-wait-missing",
+            r#"{"tool_call_id":"missing-background-handle"}"#,
+        )
+        .await,
+    );
+
+    assert_eq!(waited["ok"], false);
+    assert_eq!(waited["tool_name"], "wait_tool");
+    assert!(waited["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing-background-handle"));
+}

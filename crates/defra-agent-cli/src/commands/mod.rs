@@ -1,11 +1,14 @@
 // Subcommand handler implementations. Populated by Phases B4-B7.
 pub(crate) mod background;
 pub(crate) mod chat;
+pub(crate) mod codex_auth_probe;
+pub(crate) mod codex_shim;
 pub(crate) mod config;
 pub(crate) mod diagnose;
 pub(crate) mod fleet;
 pub(crate) mod init;
 pub(crate) mod mcp;
+pub(crate) mod native_fs_runner;
 pub(crate) mod p2p;
 pub(crate) mod provision;
 pub(crate) mod request;

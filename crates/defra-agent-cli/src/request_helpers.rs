@@ -186,8 +186,11 @@ pub(crate) async fn hydrate_materialized_response_content(
         }
     }
 
-    Ok(!response_field_is_blank(response, "content")
-        || !response_field_is_blank(response, "reasoning"))
+    // A terminal response can legitimately materialize to no visible text,
+    // for example after a final assistant message that only closes a tool
+    // loop. The waiter only needs to know that the referenced message row
+    // exists; visible content is optional.
+    Ok(true)
 }
 
 pub(crate) async fn create_agent_request(
@@ -309,9 +312,11 @@ pub(crate) async fn create_agent_request(
 ///     `error`).
 ///
 /// Returning is intentionally lenient on partial data:
-///   - `interrupted` requests stamp `interrupted_at` on the response but leave
-///     response `status = "streaming"`; the returned JSON still carries that
-///     partial content so callers can render it.
+///   - `interrupted` requests stamp `interrupted_at` before terminalizing the
+///     response as `error`, so callers can observe a durable interrupt marker
+///     even if the request lifecycle reaches `interrupted` first.
+///   - historical/background writers have used both `complete` and
+///     `completed`; both spellings are treated as terminal success.
 ///   - `dead`/`Stale` requests (TTL'd before ever claiming) may have no
 ///     `AgentResponse` row at all; in that case we synthesize one and rely on
 ///     the top-level `request` field for the terminal info.
@@ -386,7 +391,7 @@ pub(crate) async fn wait_for_terminal_response(
                 });
 
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "error");
+        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
         if terminal_by_request || terminal_by_response {
             // Build the return value: prefer the real response row when present
             // (interrupted / streaming-with-partial-content / complete / error).

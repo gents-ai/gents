@@ -116,12 +116,9 @@ impl DefraSessionHook {
         lifecycle.start_running().await?;
 
         let cancellation_token = tokio_util::sync::CancellationToken::new();
-        self.background_executions.lock().await.insert(
-            background_tool_call_id.clone(),
-            super::BackgroundExecution {
-                cancellation_token: cancellation_token.clone(),
-            },
-        );
+        self.background_executions
+            .insert(background_tool_call_id.clone(), cancellation_token.clone())
+            .await;
 
         let node = self.node.clone();
         let executions = self.background_executions.clone();
@@ -129,16 +126,20 @@ impl DefraSessionHook {
         let execution_session_id = session_id.clone();
         let execution_request_id = request_id.clone();
         let execution_tool_name = target_tool_name.clone();
+        let workspace_cwd = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .and_then(|runtime| runtime.workspace_cwd);
         tokio::spawn(async move {
-            let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
-                Some(deadline_at),
-                cancellation_token.clone(),
-                async {
-                    let tool = target_tool.lock().await;
-                    tool.call(target_args).await
-                },
-            )
-            .await;
+            let result =
+                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace(
+                    Some(deadline_at),
+                    cancellation_token.clone(),
+                    workspace_cwd,
+                    async {
+                        let tool = target_tool.lock().await;
+                        tool.call(target_args).await
+                    },
+                )
+                .await;
 
             match result {
                 Ok(output) => match classify_managed_tool_result(&output) {
@@ -252,7 +253,7 @@ impl DefraSessionHook {
                 }
             }
 
-            executions.lock().await.remove(&execution_call_id);
+            executions.remove(&execution_call_id).await;
         });
 
         Ok(ToolCallHookAction::skip(json_string(json!({
@@ -301,9 +302,21 @@ impl DefraSessionHook {
             ));
         }
 
-        let result = self
+        let result = match self
             .await_background_tool(&request_id, background_tool_call_id, parent_deadline_at)
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        WAIT_TOOL_NAME,
+                        "/tool_call_id",
+                        format!("{error:#}"),
+                    ),
+                ));
+            }
+        };
         Ok(ToolCallHookAction::skip(result))
     }
 
@@ -454,9 +467,21 @@ impl DefraSessionHook {
             ));
         }
 
-        let lifecycle = self
+        let lifecycle = match self
             .load_authorized_background_tool(&request_id, background_tool_call_id)
-            .await?;
+            .await
+        {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        CANCEL_TOOL_NAME,
+                        "/tool_call_id",
+                        format!("{error:#}"),
+                    ),
+                ));
+            }
+        };
         if lifecycle.is_terminal() {
             return self
                 .background_tool_envelope(lifecycle, "explicit_cancel")

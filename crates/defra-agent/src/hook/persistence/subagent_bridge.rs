@@ -887,15 +887,9 @@ impl DefraSessionHook {
         mut lifecycle: ToolCallLifecycle,
         cause: CancelCause,
     ) -> anyhow::Result<()> {
-        if let Some(execution) = self
-            .background_executions
-            .lock()
-            .await
-            .get(lifecycle.tool_call_id())
-            .cloned()
-        {
-            execution.cancellation_token.cancel();
-        }
+        self.background_executions
+            .cancel(lifecycle.tool_call_id())
+            .await;
         if lifecycle.is_running() {
             lifecycle.cancel_during_run(cause).await?;
         }

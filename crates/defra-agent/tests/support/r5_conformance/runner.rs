@@ -452,9 +452,15 @@ async fn export_doc(
         other => bail!("unsupported replicate collection {other}"),
     };
     let fields = match collection {
-        "AgentRequest" => "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at",
-        "AgentToolCall" => "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since",
-        "AgentResponse" => "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at",
+        "AgentRequest" => {
+            "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
+        }
+        "AgentToolCall" => {
+            "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
+        }
+        "AgentResponse" => {
+            "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
+        }
         "AgentMessage" => "message_key session_id sequence role content timestamp",
         _ => unreachable!(),
     };

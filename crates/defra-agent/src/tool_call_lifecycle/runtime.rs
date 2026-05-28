@@ -7,6 +7,7 @@
 //! can map to `timedOut` / `cancelled` terminal states.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -29,21 +30,43 @@ pub(crate) enum ManagedToolTerminal {
 struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
 }
 
 #[derive(Clone)]
 pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
+    pub(crate) workspace_cwd: Option<PathBuf>,
 }
 
 tokio::task_local! {
     static TOOL_RUNTIME_SCOPE: ToolRuntimeScope;
 }
 
+#[cfg(test)]
 pub(crate) async fn scope_request_tool_execution<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    let workspace_cwd = current_tool_runtime_context().and_then(|scope| scope.workspace_cwd);
+    scope_request_tool_execution_with_workspace(
+        deadline_at,
+        cancellation_token,
+        workspace_cwd,
+        future,
+    )
+    .await
+}
+
+pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
     future: F,
 ) -> T
 where
@@ -54,6 +77,7 @@ where
             ToolRuntimeScope {
                 deadline_at,
                 cancellation_token,
+                workspace_cwd,
             },
             future,
         )
@@ -71,6 +95,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
         .map(|scope| CurrentToolRuntimeContext {
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
+            workspace_cwd: scope.workspace_cwd,
         })
 }
 

@@ -51,7 +51,9 @@ Work like a strong command-line operator:
 - summarize exactly what changed and why
 - avoid broad or risky operations unless the user clearly wants them
 
-You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome."#;
+You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
+
+For long-running commands such as builds, test suites, installs, servers, and log tails, prefer background_tool with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_background_tools, read_tool_output, wait_tool, or cancel_tool to inspect, finish, or stop backgrounded work."#;
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -542,12 +544,19 @@ fn standard_tool_selection(
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Some(Vec::new()),
         delegate_to: Some(Vec::new()),
-        backgroundable_tool_names: Some(Vec::new()),
+        backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_ceiling)),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+    }
+}
+
+fn default_backgroundable_tool_names(tool_ceiling: ToolCeilingArg) -> Vec<String> {
+    match tool_ceiling {
+        ToolCeilingArg::Readwrite => vec!["bash_unrestricted".to_string()],
+        ToolCeilingArg::Readonly | ToolCeilingArg::MetaOnly => Vec::new(),
     }
 }
 

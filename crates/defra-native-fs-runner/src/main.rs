@@ -21,11 +21,13 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let mut root = None;
+    let mut base = None;
     let mut self_test = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--self-test" => self_test = true,
             "--root" => root = args.next().map(PathBuf::from),
+            "--base" => base = args.next().map(PathBuf::from),
             other => anyhow::bail!("unknown argument {other:?}"),
         }
     }
@@ -43,7 +45,7 @@ fn run() -> anyhow::Result<()> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
     let request: NativeFsRunnerRequest = serde_json::from_str(&input)?;
-    match defra_native_fs_runner::execute_request(root, request) {
+    match defra_native_fs_runner::execute_request_with_base(root, base, request) {
         Ok(output) => {
             serde_json::to_writer(
                 std::io::stdout(),

@@ -12,6 +12,7 @@ mod tests;
 pub(crate) use output::ManagedExecOutcome;
 pub(crate) use process::{active_executor_snapshots, run_managed_exec, ManagedExecRequest};
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedExecState {
     PendingSpawn,
@@ -23,6 +24,7 @@ pub(crate) enum ManagedExecState {
     ReapFailed,
 }
 
+#[cfg(test)]
 impl ManagedExecState {
     pub(crate) const ALL: [Self; 7] = [
         Self::PendingSpawn,

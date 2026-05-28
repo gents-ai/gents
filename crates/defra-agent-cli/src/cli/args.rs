@@ -45,12 +45,17 @@ pub(crate) enum Command {
     Reset(ResetArgs),
     #[command(
         name = "server",
+        alias = "serve",
         about = "Run the local defra-agent runtime from an initialized home",
         after_help = SERVER_AFTER_HELP
     )]
     Server(ServeArgs),
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
+    #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
+    CodexAuthProbe(CodexAuthProbeArgs),
+    #[command(name = "__native-fs-runner", hide = true)]
+    NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
     P2p {
         #[command(subcommand)]
@@ -119,6 +124,33 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+}
+
+#[derive(clap::Args)]
+pub(crate) struct NativeFsRunnerArgs {
+    #[arg(long, value_name = "ROOT")]
+    pub(crate) root: Option<PathBuf>,
+    #[arg(long, value_name = "BASE")]
+    pub(crate) base: Option<PathBuf>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) self_test: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexAuthProbeArgs {
+    #[arg(
+        long,
+        env = "DEFRA_CODEX_HOME",
+        value_name = "CODEX_HOME",
+        help = "Codex home directory to read. Defaults to ~/.codex"
+    )]
+    pub(crate) codex_home: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = 20,
+        help = "Maximum number of model slugs to print"
+    )]
+    pub(crate) max_models: usize,
 }
 
 #[derive(clap::Args)]
@@ -320,6 +352,26 @@ pub(crate) struct ServeArgs {
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
     pub(crate) tool_root: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Also run the experimental Codex TUI compatibility endpoint"
+    )]
+    pub(crate) codex_shim: bool,
+    #[arg(
+        long,
+        default_value = "127.0.0.1",
+        help = "Address for the Codex shim to listen on. Use a specific trusted private/Tailscale IP for remote Codex clients; default is loopback only"
+    )]
+    pub(crate) codex_shim_bind_addr: IpAddr,
+    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
+    pub(crate) codex_shim_port: u16,
+    #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
+    pub(crate) codex_shim_behavior_id: Option<String>,
+    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
+    pub(crate) codex_shim_timeout_secs: u64,
+    #[arg(long, default_value_t = 250)]
+    pub(crate) codex_shim_poll_ms: u64,
     #[arg(long)]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
@@ -355,7 +407,7 @@ pub(crate) struct ChatArgs {
     pub(crate) output_format: ChatOutputFormat,
     #[arg(long = "output-file", help = "Write the final response to a file")]
     pub(crate) output_file: Option<PathBuf>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -522,6 +574,8 @@ pub(crate) enum BackendPresetArg {
     OpenAi,
     #[value(name = "openrouter")]
     OpenRouter,
+    #[value(name = "chatgpt-codex")]
+    ChatGptCodex,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -536,6 +590,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => "generic-openai-compatible",
             Self::OpenAi => "openai",
             Self::OpenRouter => "openrouter",
+            Self::ChatGptCodex => "chatgpt-codex",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -545,6 +600,7 @@ impl BackendPresetArg {
     pub(crate) fn provider_kind(self) -> BackendProviderKind {
         match self {
             Self::OpenRouter => BackendProviderKind::OpenRouter,
+            Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::Ollama
@@ -558,6 +614,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
+            Self::ChatGptCodex => Some(defra_agent::chatgpt_codex::default_backend_endpoint()),
             Self::Ollama => Some(DEFAULT_INIT_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -568,7 +625,11 @@ impl BackendPresetArg {
         match self {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
-            Self::GenericOpenAiCompatible | Self::Ollama | Self::Vllm | Self::LlamaCpp => None,
+            Self::GenericOpenAiCompatible
+            | Self::ChatGptCodex
+            | Self::Ollama
+            | Self::Vllm
+            | Self::LlamaCpp => None,
         }
     }
 }
@@ -750,6 +811,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[arg(long = "delegate-to")]
     pub(crate) delegate_to: Vec<String>,
+    #[arg(
+        long = "backgroundable-tool-name",
+        help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"
+    )]
+    pub(crate) backgroundable_tool_names: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -1214,7 +1280,7 @@ pub(crate) struct RequestSubmitArgs {
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     pub(crate) no_wait: bool,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -1269,7 +1335,7 @@ pub(crate) struct RequestResendArgs {
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = true)]
     pub(crate) no_wait: bool,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
@@ -1443,7 +1509,7 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
