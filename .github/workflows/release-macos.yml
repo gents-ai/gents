@@ -239,6 +239,7 @@ jobs:
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
           TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
           TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
+          MACOS_APPLY_SE_ENTITLEMENTS: ${{ vars.MACOS_APPLY_SE_ENTITLEMENTS }}
         run: |
           set -euo pipefail
 
@@ -262,22 +263,52 @@ jobs:
             echo "::error::Could not extract Apple Team ID from SIGNING_IDENTITY_NAME '${signing_identity}'."
             exit 1
           fi
-          sed "s/__APPLE_TEAM_ID__/${apple_team_id}/g" release/entitlements.plist > "${entitlements_path}"
-          plutil -lint "${entitlements_path}"
+
+          # The release/entitlements.plist requests `keychain-access-groups`, a
+          # RESTRICTED entitlement. On a Developer-ID, hardened-runtime binary
+          # distributed outside the App Store, a restricted entitlement with no
+          # embedded provisioning profile makes AMFI SIGKILL the process at launch
+          # (exit 137, no output) — which made every released binary un-launchable
+          # on macOS. Until a provisioning-profile path exists for Secure Enclave
+          # identities, sign the standard release WITHOUT the entitlement so the
+          # binary launches; it notarizes fine with hardened runtime alone. Opt in
+          # only when the repo var MACOS_APPLY_SE_ENTITLEMENTS is "true" (and a
+          # provisioning profile is in place).
+          apply_entitlements="${MACOS_APPLY_SE_ENTITLEMENTS:-false}"
+          if [[ "${apply_entitlements}" == "true" ]]; then
+            sed "s/__APPLE_TEAM_ID__/${apple_team_id}/g" release/entitlements.plist > "${entitlements_path}"
+            plutil -lint "${entitlements_path}"
+            echo "Signing WITH keychain-access-groups entitlement (MACOS_APPLY_SE_ENTITLEMENTS=true)."
+          else
+            entitlements_path=""
+            echo "Signing without the keychain-access-groups entitlement (default); see release-macos.yml for the Secure Enclave caveat."
+          fi
 
           security unlock-keychain -p "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" "${keychain_path}"
           echo "Signing with native macOS identity from ${keychain_path}."
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
-            codesign \
-              --force \
-              --sign "${signing_identity}" \
-              --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
-              --options runtime \
-              --entitlements "${entitlements_path}" \
-              "${timestamp_arg}" \
-              "${binary_path}"
+            # Avoid empty-array expansion under `set -u` (unsafe on bash 3.2);
+            # branch on whether an entitlements file was rendered instead.
+            if [[ -n "${entitlements_path}" ]]; then
+              codesign \
+                --force \
+                --sign "${signing_identity}" \
+                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+                --options runtime \
+                --entitlements "${entitlements_path}" \
+                "${timestamp_arg}" \
+                "${binary_path}"
+            else
+              codesign \
+                --force \
+                --sign "${signing_identity}" \
+                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+                --options runtime \
+                "${timestamp_arg}" \
+                "${binary_path}"
+            fi
           }
 
           codesign --remove-signature "${binary_path}" 2>/dev/null || true

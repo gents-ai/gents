@@ -96,6 +96,19 @@ impl InferenceBackend {
         self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
     }
 
+    /// Effective API key for an outbound call: the raw `api_key` if set,
+    /// otherwise the value of `api_key_env_var` from the environment.
+    pub fn resolved_api_key(&self) -> Option<String> {
+        if let Some(key) = self.api_key.as_ref() {
+            return Some(key.clone());
+        }
+        self.api_key_env_var
+            .as_ref()
+            .and_then(|var| std::env::var(var).ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
     /// Operator-UI rollup of `(enabled, probe_status)` into a single label.
     /// `available` is the only state in which `is_available()` is true; the
     /// other states split the unavailable cases for operator visibility.
@@ -287,6 +300,105 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
         .unwrap_or_default();
 
     Ok(backends)
+}
+
+/// Persist a backend's `probe_status` by `backend_id`.
+pub async fn set_backend_probe_status(
+    node: &EmbeddedNode,
+    backend_id: &str,
+    probe_status: &str,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{}" }} }},
+                input: {{ probe_status: "{}" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(backend_id),
+        escape_graphql_string(probe_status),
+    );
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "update InferenceBackend probe_status for {backend_id} failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
+/// Probe each enabled backend that is not already healthy and promote the
+/// reachable ones to `healthy`.
+///
+/// A fresh store's backends start at `probe_status=unknown`, and nothing else
+/// promotes them — so without this a brand-new deploy has zero runnable
+/// behaviors until an operator runs `config backend set --probe-status healthy`
+/// by hand. Run this once at startup, before the runtime resolves which
+/// behaviors are runnable.
+///
+/// Probe failures are intentionally non-destructive: the backend is left at its
+/// current status (typically `unknown`) and logged, so a transiently-unreachable
+/// backend degrades rather than being marked `unhealthy` and flapping. Recurring
+/// re-probing and unhealthy demotion are a separate concern (the admission path
+/// handles live request failures).
+pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
+    let backends = match list_enabled_backends(node).await {
+        Ok(backends) => backends,
+        Err(error) => {
+            tracing::warn!(error = %error, "startup backend probe: could not list backends");
+            return;
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(error = %error, "startup backend probe: could not build HTTP client");
+            return;
+        }
+    };
+
+    for backend in backends {
+        if backend.probe_status == HEALTHY_PROBE_STATUS {
+            continue;
+        }
+        let api_key = backend.resolved_api_key();
+        match crate::backend_provider::discover_models(
+            &client,
+            backend.provider_kind,
+            &backend.endpoint,
+            api_key.as_deref(),
+        )
+        .await
+        {
+            Ok(_) => {
+                match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
+                    .await
+                {
+                    Ok(()) => tracing::info!(
+                        backend_id = %backend.backend_id,
+                        endpoint = %backend.endpoint,
+                        "startup backend probe: promoted to healthy"
+                    ),
+                    Err(error) => tracing::warn!(
+                        backend_id = %backend.backend_id,
+                        error = %error,
+                        "startup backend probe: reachable but failed to persist healthy status"
+                    ),
+                }
+            }
+            Err(error) => tracing::warn!(
+                backend_id = %backend.backend_id,
+                endpoint = %backend.endpoint,
+                error = %error,
+                "startup backend probe: unreachable, leaving probe_status unchanged"
+            ),
+        }
+    }
 }
 
 #[cfg(test)]

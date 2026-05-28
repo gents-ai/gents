@@ -63,6 +63,13 @@ pub(in crate::agent) async fn run_agent(
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
     );
+    // Promote reachable enabled backends to healthy before resolving which
+    // behaviors are runnable. A fresh store's backends start `probe_status=
+    // unknown`, and nothing else promotes them, so without this the runtime
+    // comes up with zero runnable behaviors until an operator manually runs
+    // `config backend set --probe-status healthy`.
+    backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
+
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -467,6 +474,14 @@ fn is_degraded_startup_unavailable_reason(reason: &str) -> bool {
             && reason.contains(" probe_status="))
         || reason.contains("did not advertise model")
         || reason.contains("startup readiness probe")
+        // A behavior with no backend binding is unconfigured, not structurally
+        // invalid. Starting degraded (with /healthz reporting the reason and a
+        // zero runnable count) lets an operator inspect and finish configuration
+        // — applying a manifest, attaching a backend — over a live endpoint.
+        // Treating it as fatal instead crash-loops the runtime, which is how a
+        // fresh-store bootstrap (where ensure_agent_principal seeds a backendless
+        // default behavior) became unstartable.
+        || reason.contains("has no backend binding")
 }
 
 async fn validate_startup_snapshot(
@@ -640,4 +655,39 @@ async fn resolve_document_snapshot_with_tools(
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::agent::resolve_document_runtime_snapshot(node, resolve_context).await
+}
+
+#[cfg(test)]
+mod degraded_reason_tests {
+    use super::is_degraded_startup_unavailable_reason;
+
+    #[test]
+    fn unprobed_backend_is_degraded() {
+        assert!(is_degraded_startup_unavailable_reason(
+            "behavior 'default' backend workstation-1 is unavailable (enabled=true probe_status=unknown)"
+        ));
+    }
+
+    #[test]
+    fn disabled_behavior_is_degraded() {
+        assert!(is_degraded_startup_unavailable_reason(
+            "behavior 'x' is disabled"
+        ));
+    }
+
+    #[test]
+    fn no_backend_binding_is_degraded() {
+        // A backendless behavior (e.g. the seeded bootstrap default before a
+        // backend is configured) must not be fatal at startup.
+        assert!(is_degraded_startup_unavailable_reason(
+            "behavior did:key:zABC:default has no backend binding"
+        ));
+    }
+
+    #[test]
+    fn unknown_structural_reason_is_blocking() {
+        assert!(!is_degraded_startup_unavailable_reason(
+            "behavior 'default' references missing tool selection 'gone'"
+        ));
+    }
 }

@@ -194,3 +194,43 @@ fn display_state_matches_every_lean_backend_health_admission_case() {
         }
     }
 }
+
+fn backend_with_keys(api_key: Option<&str>, env_var: Option<&str>) -> InferenceBackend {
+    InferenceBackend {
+        backend_id: "test".into(),
+        name: "Test".into(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        endpoint: "http://localhost:8000/v1".into(),
+        api_key: api_key.map(ToOwned::to_owned),
+        api_key_env_var: env_var.map(ToOwned::to_owned),
+        max_concurrent: 1,
+        max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+        enabled: true,
+        models: Vec::new(),
+        probe_status: "unknown".into(),
+    }
+}
+
+#[test]
+fn resolved_api_key_prefers_raw_key() {
+    let backend = backend_with_keys(Some("raw-key"), Some("BACKEND_REGISTRY_TEST_KEY_UNUSED"));
+    assert_eq!(backend.resolved_api_key().as_deref(), Some("raw-key"));
+}
+
+#[test]
+fn resolved_api_key_falls_back_to_env() {
+    let var = "BACKEND_REGISTRY_TEST_KEY_FALLBACK";
+    std::env::set_var(var, "env-key");
+    let backend = backend_with_keys(None, Some(var));
+    assert_eq!(backend.resolved_api_key().as_deref(), Some("env-key"));
+    std::env::remove_var(var);
+}
+
+#[test]
+fn resolved_api_key_none_when_unset() {
+    let backend = backend_with_keys(None, None);
+    assert_eq!(backend.resolved_api_key(), None);
+    // Env var named but unset in the environment.
+    let backend = backend_with_keys(None, Some("BACKEND_REGISTRY_TEST_KEY_MISSING"));
+    assert_eq!(backend.resolved_api_key(), None);
+}
