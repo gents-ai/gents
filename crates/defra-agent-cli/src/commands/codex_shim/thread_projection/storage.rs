@@ -89,6 +89,9 @@ pub(super) async fn ensure_agent_session(state: &ShimState, session_id: &str) ->
     let behavior_id = behavior_id(state);
     let escaped_agent_name = escape_graphql_string(&agent_name);
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
+    // agent_name + behavior_id are write-once-at-create. The pin lives on the
+    // AgentSession; reopening a session under a different shim binding must
+    // not silently rebind it.
     let mutation = format!(
         r#"mutation {{
             upsert_AgentSession(
@@ -101,8 +104,6 @@ pub(super) async fn ensure_agent_session(state: &ShimState, session_id: &str) ->
                     status: "active"
                 }},
                 update: {{
-                    agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
                     status: "active"
                 }}
             ) {{ _docID }}
