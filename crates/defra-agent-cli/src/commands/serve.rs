@@ -261,7 +261,11 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         );
         if args.codex_shim_bind_addr.is_loopback() {
             eprintln!(
-                "For another device, restart with --codex-shim-bind-addr <tailscale-ip-or-0.0.0.0> and use that host in --remote."
+                "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
+            );
+        } else {
+            eprintln!(
+                "Codex shim has no transport authentication; only expose this address on a trusted private network."
             );
         }
         codex_shim_output = Some(json!({

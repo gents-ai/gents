@@ -119,6 +119,13 @@ impl BoundCodexShim {
 }
 
 pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCodexShim> {
+    if args.bind_addr.is_unspecified() {
+        anyhow::bail!(
+            "refusing to bind unauthenticated Codex shim on {}; bind loopback or a specific trusted private/Tailscale IP instead",
+            args.bind_addr
+        );
+    }
+
     let codex_home = args.home.join("codex-ui");
     let codex_log_dir = codex_home.join("log");
     fs::create_dir_all(&codex_log_dir)

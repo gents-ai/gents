@@ -361,7 +361,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value = "127.0.0.1",
-        help = "Address for the Codex shim to listen on. Use a Tailscale IP or 0.0.0.0 to allow remote Codex clients; default is loopback only"
+        help = "Address for the Codex shim to listen on. Use a specific trusted private/Tailscale IP for remote Codex clients; default is loopback only"
     )]
     pub(crate) codex_shim_bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
