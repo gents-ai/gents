@@ -101,7 +101,12 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     )
     .await?;
     let config: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(2)).await?;
-    assert_eq!(config.config.model.as_deref(), Some(model_name.as_str()));
+    let expected_default_profile_id = format!("{agent_did}:default-profile");
+    assert_eq!(
+        config.config.model.as_deref(),
+        Some(expected_default_profile_id.as_str()),
+        "ConfigRead.model should be the bound behavior's inference_profile_id"
+    );
 
     send_client_request(
         &mut ws,
@@ -3121,5 +3126,101 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
         .find(|entry| entry.id == extra_profile_id)
         .expect("extra profile present");
     assert!(!extra_entry.is_default, "non-default profile must not be flagged isDefault");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let default_behavior_id = format!("{agent_did}:default");
+    let alt_profile_id = format!("alt-profile-{}", Uuid::new_v4().simple());
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let create_alt = format!(
+        r#"mutation {{
+            create_InferenceProfile(input: {{
+                profile_id: "{alt_profile_id}",
+                display_name: "Alt Profile",
+                context_window: 4096
+            }}) {{ _docID }}
+        }}"#
+    );
+    graphql_query(&graphql, &create_alt).await?;
+
+    let switch_behavior = format!(
+        r#"mutation {{
+            update_AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
+                input: {{ inference_profile_id: "{alt_profile_id}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    graphql_query(&graphql, &switch_behavior).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ConfigRead {
+            request_id: request_id(2),
+            params: codex::ConfigReadParams { include_layers: false, cwd: None },
+        },
+    )
+    .await?;
+    let config: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(2)).await?;
+    assert_eq!(
+        config.config.model.as_deref(),
+        Some(alt_profile_id.as_str()),
+        "ConfigRead should reflect the doc-mutated inference_profile_id"
+    );
     Ok(())
 }

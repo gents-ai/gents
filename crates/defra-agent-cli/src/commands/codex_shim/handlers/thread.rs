@@ -9,6 +9,7 @@ use super::super::history_projection::{
 use super::super::protocol::{
     effective_cwd, send_error, send_notification, send_result, send_typed_json_result,
 };
+use super::super::bound_behavior::load_bound_inference_profile_id_for_state;
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
     get_codex_thread_goal, list_codex_threads, load_codex_thread, loaded_codex_thread_ids,
@@ -18,7 +19,7 @@ use super::super::thread_projection::{
     thread_start_response_json,
 };
 use super::super::thread_routes;
-use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
+use super::super::{ConnectionState, JSONRPC_INVALID_PARAMS, Outbound, ShimState};
 
 pub(super) async fn handle_thread_request(
     connection: &ConnectionState,
@@ -38,10 +39,16 @@ pub(super) async fn handle_thread_request(
                 .lock()
                 .await
                 .insert(thread_id.clone(), cwd.clone());
+            let bound_profile_id = load_bound_inference_profile_id_for_state(
+                state.node.as_ref(),
+                &state.behavior_id,
+            )
+            .await
+            .context("resolving bound inference profile for ThreadStart")?;
             send_typed_json_result::<codex::ThreadStartResponse>(
                 outbound,
                 request_id,
-                thread_start_response_json(state, &record),
+                thread_start_response_json(&record, &bound_profile_id),
             )
             .await
         }
@@ -55,10 +62,16 @@ pub(super) async fn handle_thread_request(
                 .lock()
                 .await
                 .insert(record.session_id.clone(), record.cwd.clone());
+            let bound_profile_id = load_bound_inference_profile_id_for_state(
+                state.node.as_ref(),
+                &state.behavior_id,
+            )
+            .await
+            .context("resolving bound inference profile for ThreadResume")?;
             send_typed_json_result::<codex::ThreadResumeResponse>(
                 outbound,
                 request_id,
-                thread_resume_response_json(state, &record),
+                thread_resume_response_json(&record, &bound_profile_id),
             )
             .await
         }
@@ -306,27 +319,27 @@ pub(super) async fn handle_thread_request(
         }
         codex::ClientRequest::GetConversationSummary {
             request_id, params, ..
-        } => match params {
-            codex::GetConversationSummaryParams::ThreadId { conversation_id } => {
-                let thread_id = conversation_id.to_string();
-                let Some(record) = load_codex_thread(state, &thread_id).await? else {
-                    return send_error(
+        } => {
+            match params {
+                codex::GetConversationSummaryParams::ThreadId { conversation_id } => {
+                    let thread_id = conversation_id.to_string();
+                    let Some(record) = load_codex_thread(state, &thread_id).await? else {
+                        return send_error(
+                            outbound,
+                            request_id,
+                            JSONRPC_INVALID_PARAMS,
+                            format!("unknown Codex thread `{thread_id}`"),
+                        )
+                        .await;
+                    };
+                    send_typed_json_result::<codex::GetConversationSummaryResponse>(
                         outbound,
                         request_id,
-                        JSONRPC_INVALID_PARAMS,
-                        format!("unknown Codex thread `{thread_id}`"),
+                        conversation_summary_json(state, &record),
                     )
-                    .await;
-                };
-                send_typed_json_result::<codex::GetConversationSummaryResponse>(
-                    outbound,
-                    request_id,
-                    conversation_summary_json(state, &record),
-                )
-                .await
-            }
-            codex::GetConversationSummaryParams::RolloutPath { rollout_path } => {
-                send_error(
+                    .await
+                }
+                codex::GetConversationSummaryParams::RolloutPath { rollout_path } => send_error(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
@@ -335,9 +348,9 @@ pub(super) async fn handle_thread_request(
                         rollout_path.display()
                     ),
                 )
-                .await
+                .await,
             }
-        },
+        }
         other => unreachable!(
             "non-thread Codex request routed to thread handler: {}",
             other.method()

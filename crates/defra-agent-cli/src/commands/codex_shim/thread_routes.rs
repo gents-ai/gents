@@ -3,16 +3,18 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::session::{fork, ForkError, ForkParams};
-use serde_json::{json, Value};
+use defra_agent::session::{ForkError, ForkParams, fork};
+use serde_json::{Value, json};
 
+use super::bound_behavior::load_bound_inference_profile_id_for_state;
 use super::history_projection::load_thread_turns;
 use super::store::query_node_json;
 use super::thread_projection::{
-    codex_thread_json, codex_thread_json_with_turns, list_codex_threads_by_archived,
-    load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
+    CodexThreadRecord, codex_thread_json, codex_thread_json_with_turns,
+    list_codex_threads_by_archived, load_codex_thread, store_forked_codex_thread,
+    thread_response_json,
 };
-use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
+use super::{JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS, ShimState};
 
 #[derive(Debug)]
 pub(super) struct ThreadRouteError {
@@ -71,7 +73,11 @@ pub(super) async fn fork_thread_response(
             .map_err(internal_error)?
     };
     let thread = codex_thread_json_with_turns(&record, turns);
-    let response = thread_response_json(state, &record, thread);
+    let bound_profile_id =
+        load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+            .await
+            .map_err(internal_error)?;
+    let response = thread_response_json(&record, thread, &bound_profile_id);
     Ok((record, response))
 }
 

@@ -86,12 +86,18 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
+            let profile_id = load_bound_inference_profile_id_for_state(
+                state.node.as_ref(),
+                &state.behavior_id,
+            )
+            .await
+            .context("resolving current inference profile for ConfigRead")?;
             send_typed_json_result::<codex::ConfigReadResponse>(
                 outbound,
                 request_id,
                 json!({
                     "config": {
-                        "model": state.model.as_ref(),
+                        "model": profile_id,
                         "model_provider": "defra",
                         "approval_policy": "never",
                         "sandbox_mode": "danger-full-access"

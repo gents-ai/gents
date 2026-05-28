@@ -1,8 +1,7 @@
 use codex_app_server_protocol as codex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::codex_shim::protocol::{absolute_path, thread_json};
-use crate::commands::codex_shim::ShimState;
 
 use super::CodexThreadRecord;
 
@@ -66,20 +65,20 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
 }
 
 pub(in crate::commands::codex_shim) fn thread_start_response_json(
-    state: &ShimState,
     record: &CodexThreadRecord,
+    bound_profile_id: &str,
 ) -> Value {
-    thread_response_json(state, record, codex_thread_json(record, false))
+    thread_response_json(record, codex_thread_json(record, false), bound_profile_id)
 }
 
 pub(in crate::commands::codex_shim) fn thread_response_json(
-    state: &ShimState,
     record: &CodexThreadRecord,
     thread: Value,
+    bound_profile_id: &str,
 ) -> Value {
     json!({
         "thread": thread,
-        "model": state.model.as_ref(),
+        "model": bound_profile_id,
         "modelProvider": "defra",
         "serviceTier": null,
         "cwd": absolute_path(&record.cwd),
@@ -94,10 +93,10 @@ pub(in crate::commands::codex_shim) fn thread_response_json(
 }
 
 pub(in crate::commands::codex_shim) fn thread_resume_response_json(
-    state: &ShimState,
     record: &CodexThreadRecord,
+    bound_profile_id: &str,
 ) -> Value {
-    thread_start_response_json(state, record)
+    thread_start_response_json(record, bound_profile_id)
 }
 
 fn codex_git_info_json(raw: &str) -> Option<Value> {
