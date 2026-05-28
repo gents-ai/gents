@@ -14,5 +14,7 @@ Installed:
 
 Use:
   defra-agent server --codex-shim
-  CODEX_HOME="\$HOME/.defra-agent/codex-ui" codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+  codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
+
+Codex keeps using its normal local config in this mode; Defra owns the remote runtime.
 EOF
