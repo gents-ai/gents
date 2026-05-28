@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
 mod background;
+mod bound_behavior;
 mod command_projection;
 mod compat;
 mod handlers;
@@ -64,6 +65,7 @@ struct ConnectionState {
     turn_streams: Arc<Mutex<BTreeMap<String, TurnStreamControl>>>,
     thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
+    pending_steering_inputs: Arc<Mutex<BTreeMap<String, Vec<codex::UserInput>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +186,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
         thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+        pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
     while let Some(message) = receiver.next().await {
@@ -224,6 +227,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
     }
 
     connection.fuzzy_file_search_sessions.lock().await.clear();
+    connection.pending_steering_inputs.lock().await.clear();
     writer.abort();
 }
 
@@ -235,5 +239,18 @@ impl ShimState {
     fn next_id(&self, prefix: &str) -> String {
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}-{id}")
+    }
+}
+
+impl ConnectionState {
+    async fn remember_steering_input(&self, request_id: String, input: Vec<codex::UserInput>) {
+        self.pending_steering_inputs
+            .lock()
+            .await
+            .insert(request_id, input);
+    }
+
+    async fn take_steering_input(&self, request_id: &str) -> Option<Vec<codex::UserInput>> {
+        self.pending_steering_inputs.lock().await.remove(request_id)
     }
 }
