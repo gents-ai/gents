@@ -12,11 +12,11 @@ use super::super::protocol::{
 use super::super::bound_behavior::load_bound_inference_profile_id_for_state;
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
-    get_codex_thread_goal, list_codex_threads, load_codex_thread, loaded_codex_thread_ids,
-    resume_codex_thread, set_codex_thread_archived, set_codex_thread_git_info,
-    set_codex_thread_goal, set_codex_thread_loaded, set_codex_thread_memory_mode,
-    set_codex_thread_name, set_codex_thread_settings, thread_resume_response_json,
-    thread_start_response_json,
+    ensure_agent_session_pinning, get_codex_thread_goal, list_codex_threads, load_codex_thread,
+    loaded_codex_thread_ids, resume_codex_thread, set_codex_thread_archived,
+    set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
+    set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
+    thread_resume_response_json, thread_start_response_json,
 };
 use super::super::thread_routes;
 use super::super::{ConnectionState, JSONRPC_INVALID_PARAMS, Outbound, ShimState};
@@ -55,6 +55,15 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadResume {
             request_id, params, ..
         } => {
+            if let Err(err) = ensure_agent_session_pinning(state, &params.thread_id).await {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    err.to_string(),
+                )
+                .await;
+            }
             let record =
                 resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?;
             connection

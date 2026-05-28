@@ -21,9 +21,10 @@ pub(super) use mutations::{
     set_codex_thread_settings,
 };
 
+pub(super) use storage::ensure_agent_session_pinning;
 use storage::{
-    ensure_agent_session, list_projection_rows, load_conversation, load_projection,
-    update_projection_loaded_cwd, upsert_projection, ProjectionUpdate,
+    ProjectionUpdate, ensure_agent_session, list_projection_rows, load_conversation,
+    load_projection, update_projection_loaded_cwd, upsert_projection,
 };
 
 #[allow(dead_code)]

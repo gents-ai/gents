@@ -113,6 +113,43 @@ pub(super) async fn ensure_agent_session(state: &ShimState, session_id: &str) ->
     Ok(())
 }
 
+/// Verify the existing AgentSession (if any) is pinned to the shim's current
+/// bound behavior. If a session was created under a different binding,
+/// resuming it under the current shim is rejected so we don't silently
+/// reroute its turns.
+pub(in crate::commands::codex_shim) async fn ensure_agent_session_pinning(
+    state: &ShimState,
+    session_id: &str,
+) -> Result<()> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentSession(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                limit: 1
+            ) {{
+                behavior_id
+            }}
+        }}"#
+    );
+    let response = query_node_json(&state.node, &query).await?;
+    let stored_behavior_id = response
+        .pointer("/data/AgentSession/0/behavior_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let bound_behavior_id = state.behavior_id.as_ref();
+    if let Some(stored) = stored_behavior_id {
+        if stored != bound_behavior_id {
+            anyhow::bail!(
+                "session {session_id:?} is pinned to behavior {stored:?}, but the shim \
+                 is bound to {bound_behavior_id:?}. Restart the server with \
+                 --codex-shim-behavior-id {stored} to resume this session."
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn upsert_projection(
     state: &ShimState,
     update: &ProjectionUpdate<'_>,
