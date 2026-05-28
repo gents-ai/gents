@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
-use serde_json::json;
+use defra_agent::list_inference_profile_records;
+use serde_json::{json, Value};
 
+use super::super::bound_behavior::load_bound_inference_profile_id_for_state;
 use super::super::protocol::{
     absolute_path, empty_rate_limits, initialize_result, model_summary, send_result,
     send_typed_json_result,
@@ -45,11 +47,27 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ModelList { request_id, .. } => {
+            let profiles = list_inference_profile_records(state.node.as_ref())
+                .await
+                .context("listing InferenceProfile documents for Codex ModelList")?;
+            let current_profile_id = load_bound_inference_profile_id_for_state(
+                state.node.as_ref(),
+                &state.behavior_id,
+            )
+            .await
+            .context("resolving current inference profile for ModelList")?;
+            let entries: Vec<Value> = profiles
+                .into_iter()
+                .map(|(_doc_id, profile)| {
+                    let is_default = profile.profile_id == current_profile_id;
+                    model_summary(&profile, is_default)
+                })
+                .collect();
             send_typed_json_result::<codex::ModelListResponse>(
                 outbound,
                 request_id,
                 json!({
-                    "data": [model_summary(state)],
+                    "data": entries,
                     "nextCursor": null
                 }),
             )

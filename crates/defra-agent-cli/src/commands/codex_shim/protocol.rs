@@ -3,11 +3,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
-use super::{trace, Outbound, ShimState};
+use super::{Outbound, ShimState, trace};
 
 pub(super) fn client_request_from_jsonrpc(
     request: codex::JSONRPCRequest,
@@ -88,15 +88,23 @@ pub(super) fn initialize_result(state: &ShimState) -> Value {
     })
 }
 
-pub(super) fn model_summary(state: &ShimState) -> Value {
+pub(super) fn model_summary(
+    profile: &defra_agent::InferenceProfile,
+    is_default: bool,
+) -> Value {
+    let display_name = profile
+        .display_name
+        .clone()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| profile.profile_id.clone());
     json!({
-        "id": state.model.as_ref(),
-        "model": state.model.as_ref(),
+        "id": profile.profile_id,
+        "model": profile.profile_id,
         "upgrade": null,
         "upgradeInfo": null,
         "availabilityNux": null,
-        "displayName": "DEFRA default",
-        "description": "Synthetic model exposed by defra-agent codex-shim",
+        "displayName": display_name,
+        "description": describe_profile(profile),
         "hidden": false,
         "supportedReasoningEfforts": [],
         "defaultReasoningEffort": "medium",
@@ -105,8 +113,26 @@ pub(super) fn model_summary(state: &ShimState) -> Value {
         "additionalSpeedTiers": [],
         "serviceTiers": [],
         "defaultServiceTier": null,
-        "isDefault": true
+        "isDefault": is_default,
     })
+}
+
+fn describe_profile(profile: &defra_agent::InferenceProfile) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(ctx) = profile.context_window {
+        parts.push(format!("ctx {ctx}"));
+    }
+    if let Some(max) = profile.max_output_tokens {
+        parts.push(format!("max {max}"));
+    }
+    if let Some(temp) = profile.temperature {
+        parts.push(format!("temp {temp:.2}"));
+    }
+    if parts.is_empty() {
+        "DEFRA inference profile".to_string()
+    } else {
+        parts.join(" · ")
+    }
 }
 
 pub(super) fn thread_json(

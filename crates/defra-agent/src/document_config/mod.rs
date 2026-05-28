@@ -21,12 +21,12 @@ pub use behavior::{
 };
 
 pub use inference_profile::{
-    default_inference_profile_id_for_behavior, load_inference_profile, upsert_inference_profile,
-    InferenceProfile,
+    default_inference_profile_id_for_behavior, list_inference_profile_records,
+    load_inference_profile, upsert_inference_profile, InferenceProfile,
 };
 #[allow(unused_imports)]
 pub(crate) use inference_profile::{
-    list_inference_profile_records, load_inference_profile_by_doc_id, load_inference_profile_record,
+    load_inference_profile_by_doc_id, load_inference_profile_record,
 };
 
 pub use tool_selection::default_tool_selection_id_for_behavior;

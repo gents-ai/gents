@@ -12,6 +12,7 @@ pub mod background_completion;
 pub(crate) mod background_tools;
 pub mod collection;
 pub mod compaction;
+pub mod chatgpt_codex;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod desired_fields;
@@ -72,8 +73,9 @@ pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
-    load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
-    upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    list_inference_profile_records, load_agent_behavior, load_agent_principal,
+    load_inference_profile, load_tool_selection, upsert_agent_behavior, upsert_agent_principal,
+    upsert_inference_profile, upsert_tool_selection,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap,
     ToolSelectionDocument,
 };
