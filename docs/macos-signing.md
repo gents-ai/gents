@@ -31,13 +31,20 @@ The macOS release workflow:
 
 - runs on a self-hosted Mac Studio runner labeled `self-hosted`, `macOS`,
   `ARM64`, and `studio`;
+- caps Cargo build fan-out with `CARGO_BUILD_JOBS` and uses disk-backed
+  `sccache` to reduce repeated Rust compilation on memory-constrained Studio
+  runners;
 - builds `defra-agent-cli` in release mode, producing `target/release/defra-agent`;
 - unlocks the runner's persistent signing keychain;
 - makes that keychain visible to non-interactive `codesign` jobs;
 - smoke-signs a test binary before the Rust build starts;
 - signs with `--identifier org.sourcenetwork.defra-agent`;
+- submits the signed CLI to Apple's notary service;
 - verifies with `codesign --verify --strict --verbose=2`;
 - prints the designated requirement with `codesign -d -r-`;
+- prints `spctl --assess --type execute` diagnostics;
+- runs `defra-agent version` so a signed-but-not-launchable binary fails before
+  packaging;
 - packages `defra-agent-aarch64-apple-darwin.tar.gz`;
 - writes a `.sha256` checksum file;
 - uploads both files as workflow artifacts;
@@ -61,6 +68,9 @@ Set these repository or environment secrets before running the release workflow:
 PRIVATE_REPO_PAT
 MACOS_CODESIGN_IDENTITY
 MACOS_CODESIGN_KEYCHAIN_PASSWORD
+MACOS_NOTARY_API_KEY
+MACOS_NOTARY_ISSUER_ID
+MACOS_NOTARY_KEY_ID
 ```
 
 `PRIVATE_REPO_PAT` is the same private dependency fetch token used by CI. The
@@ -74,34 +84,46 @@ that output.
 `MACOS_CODESIGN_KEYCHAIN_PASSWORD` must unlock the persistent signing keychain on
 each Studio runner.
 
+`MACOS_NOTARY_API_KEY` must contain the App Store Connect `.p8` key contents.
+`MACOS_NOTARY_KEY_ID` and `MACOS_NOTARY_ISSUER_ID` are passed to
+`xcrun notarytool submit --key-id ... --issuer ...`.
+
 The workflow also honors optional repository variables:
 
 ```text
+CARGO_BUILD_JOBS=4
+SCCACHE_CACHE_SIZE=60G
+SCCACHE_DIR=/Users/admin/.cache/sccache
 MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/defra-agent-signing.keychain-db
-MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled|none
-MACOS_CODESIGN_SPCTL_REQUIRED=true|false
+MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled
 ```
+
+`CARGO_BUILD_JOBS` defaults to `4` to keep Rust compilation from exhausting the
+non-model memory headroom on shared Studio hosts. `SCCACHE_DIR` defaults to a
+disk-backed cache under `/Users/admin/.cache/sccache`; do not point it at a
+memory-backed volume.
 
 `MACOS_CODESIGN_KEYCHAIN_PATH` defaults to
 `$HOME/Library/Keychains/defra-agent-signing.keychain-db`.
 
-Use `enabled` for Developer ID release signing when timestamping must succeed.
-Use `none` for self-signed or internal identities that cannot use Apple's
-timestamp service. The default `auto` mode tries `--timestamp` first and retries
-with `--timestamp=none` if timestamping is unavailable.
+Signed release artifacts must use a timestamped Developer ID signature because
+the workflow notarizes them. The default `auto` mode uses `--timestamp` and
+fails if timestamping is unavailable. `none` is rejected for signed releases and
+is only meaningful for unsigned manual dry-run builds where signing is skipped.
 
-`spctl` assessment is non-blocking by default because self-signed identities do
-not pass Gatekeeper assessment. Set `MACOS_CODESIGN_SPCTL_REQUIRED=true` only for
-Developer ID releases where Gatekeeper assessment is expected to pass.
+Raw command-line binaries are not a stapler-supported file format, and
+`spctl --assess --type execute` can reject them with "the code is valid but does
+not seem to be an app". The workflow still notarizes a zip containing the signed
+binary, prints `spctl` diagnostics, and gates the release on an executable
+launch smoke. Offline stapling would require changing the release artifact to a
+signed flat package, disk image, or app bundle.
 
 ## Studio signing keychain
 
-Preferred production path: use an Apple Developer ID Application certificate
-owned by Source Network.
-
-Internal path: use a stable self-signed code-signing certificate that is kept and
-reused for all steward releases. Replacing the certificate changes the
-designated requirement and may require another keychain approval/migration.
+Production path: use an Apple Developer ID Application certificate owned by
+Source Network. Tagged release artifacts must be notarized, so self-signed
+identities are no longer a valid release path. Use `dry_run_unsigned` only for
+manual build validation artifacts that will not be deployed.
 
 Each self-hosted Studio runner must have the signing identity installed in a
 persistent keychain that CI can unlock over SSH and from the GitHub Actions
@@ -130,24 +152,25 @@ scripts/enable-defra-agent-runner-session.sh
 To create or rotate the identity on a Studio:
 
 1. Open Keychain Access.
-2. For Developer ID, import the Apple-issued certificate and private key into the
-   login keychain.
-3. For an internal identity, use Certificate Assistant to create a self-signed
-   code-signing certificate in the login keychain.
-4. In Keychain Access, export the signing identity as a `.p12` file and set an
+2. Import the Apple-issued Developer ID Application certificate and private key
+   into the login keychain.
+3. In Keychain Access, export the signing identity as a `.p12` file and set an
    export password.
-5. Create or unlock the persistent CI signing keychain.
-6. Import the `.p12` into that keychain.
-7. Allow `codesign` and `security` to use the private key from non-interactive
+4. Create or unlock the persistent CI signing keychain.
+5. Import the `.p12` into that keychain.
+6. Allow `codesign` and `security` to use the private key from non-interactive
    runner jobs.
-8. Store the keychain password in `MACOS_CODESIGN_KEYCHAIN_PASSWORD`.
-9. Find the identity value:
+7. Store the keychain password in `MACOS_CODESIGN_KEYCHAIN_PASSWORD`.
+8. Find the identity value:
 
 ```sh
 security find-identity -v -p codesigning
 ```
 
-10. Store the identity name or SHA-1 hash in `MACOS_CODESIGN_IDENTITY`.
+9. Store the identity name or SHA-1 hash in `MACOS_CODESIGN_IDENTITY`.
+10. Create or rotate an App Store Connect API key with notarization access and
+    store it in `MACOS_NOTARY_API_KEY`, `MACOS_NOTARY_KEY_ID`, and
+    `MACOS_NOTARY_ISSUER_ID`.
 
 The exported `.p12` is only needed for runner provisioning or certificate
 rotation. The release workflow does not import a `.p12` at runtime; tagged
@@ -163,16 +186,9 @@ tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
 codesign --verify --strict --verbose=2 defra-agent-aarch64-apple-darwin/defra-agent
 codesign -d -r- defra-agent-aarch64-apple-darwin/defra-agent
 codesign -d -vvv defra-agent-aarch64-apple-darwin/defra-agent
+spctl --assess --type execute --verbose=4 defra-agent-aarch64-apple-darwin/defra-agent || true
+./defra-agent-aarch64-apple-darwin/defra-agent version
 ```
-
-For Developer ID artifacts, Gatekeeper assessment should also pass:
-
-```sh
-spctl --assess --type execute --verbose=4 defra-agent-aarch64-apple-darwin/defra-agent
-```
-
-For self-signed/internal artifacts, `spctl` can fail even when the binary is
-properly signed for stable keychain identity.
 
 ## Rollout note
 
