@@ -42,7 +42,7 @@ The macOS release workflow:
 - submits the signed CLI to Apple's notary service;
 - verifies with `codesign --verify --strict --verbose=2`;
 - prints the designated requirement with `codesign -d -r-`;
-- verifies notarization acceptance with `spctl --assess --type execute`;
+- prints `spctl --assess --type execute` diagnostics;
 - runs `defra-agent version` so a signed-but-not-launchable binary fails before
   packaging;
 - packages `defra-agent-aarch64-apple-darwin.tar.gz`;
@@ -111,11 +111,12 @@ the workflow notarizes them. The default `auto` mode uses `--timestamp` and
 fails if timestamping is unavailable. `none` is rejected for signed releases and
 is only meaningful for unsigned manual dry-run builds where signing is skipped.
 
-Raw command-line binaries are not a stapler-supported file format, so the
-workflow notarizes a zip containing the signed binary and then gates the release
-with `spctl --assess --type execute` plus an executable launch smoke. Offline
-stapling would require changing the release artifact to a signed flat package,
-disk image, or app bundle.
+Raw command-line binaries are not a stapler-supported file format, and
+`spctl --assess --type execute` can reject them with "the code is valid but does
+not seem to be an app". The workflow still notarizes a zip containing the signed
+binary, prints `spctl` diagnostics, and gates the release on an executable
+launch smoke. Offline stapling would require changing the release artifact to a
+signed flat package, disk image, or app bundle.
 
 ## Studio signing keychain
 
@@ -185,7 +186,7 @@ tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
 codesign --verify --strict --verbose=2 defra-agent-aarch64-apple-darwin/defra-agent
 codesign -d -r- defra-agent-aarch64-apple-darwin/defra-agent
 codesign -d -vvv defra-agent-aarch64-apple-darwin/defra-agent
-spctl --assess --type execute --verbose=4 defra-agent-aarch64-apple-darwin/defra-agent
+spctl --assess --type execute --verbose=4 defra-agent-aarch64-apple-darwin/defra-agent || true
 ./defra-agent-aarch64-apple-darwin/defra-agent version
 ```
 
