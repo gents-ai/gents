@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       codesign_timestamp:
-        description: Timestamp mode for codesign. Auto retries with --timestamp=none if timestamping is unavailable.
+        description: Timestamp mode for codesign. Signed releases notarize, so timestamping must succeed unless dry_run_unsigned is true.
         required: true
         type: choice
         default: auto
@@ -29,11 +29,15 @@ permissions:
   contents: write
 
 env:
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
   MACOS_CODESIGN_IDENTIFIER: org.sourcenetwork.defra-agent
   TARGET_TRIPLE: aarch64-apple-darwin
 
@@ -41,7 +45,7 @@ jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -90,15 +94,24 @@ jobs:
           echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
           "${protoc_path}" --version
 
+      - name: Prepare disk-backed Rust build cache
+        run: .github/scripts/setup-rust-build-cache.sh
+
       - name: Validate release signing mode
         env:
           DRY_RUN_UNSIGNED_INPUT: ${{ inputs.dry_run_unsigned }}
+          TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
+          TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
         run: |
           set -euo pipefail
 
           dry_run_unsigned="${DRY_RUN_UNSIGNED_INPUT:-false}"
+          timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
           is_release_tag=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             is_release_tag=true
@@ -121,9 +134,12 @@ jobs:
           missing=()
           [[ -n "${MACOS_CODESIGN_IDENTITY}" ]] || missing+=("MACOS_CODESIGN_IDENTITY")
           [[ -n "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" ]] || missing+=("MACOS_CODESIGN_KEYCHAIN_PASSWORD")
+          [[ -n "${MACOS_NOTARY_API_KEY}" ]] || missing+=("MACOS_NOTARY_API_KEY")
+          [[ -n "${MACOS_NOTARY_ISSUER_ID}" ]] || missing+=("MACOS_NOTARY_ISSUER_ID")
+          [[ -n "${MACOS_NOTARY_KEY_ID}" ]] || missing+=("MACOS_NOTARY_KEY_ID")
 
           if [[ "${signing_enabled}" == "true" && "${#missing[@]}" -gt 0 ]]; then
-            printf "::error::Missing required macOS signing secret(s): %s\n" "${missing[*]}"
+            printf "::error::Missing required macOS release secret(s): %s\n" "${missing[*]}"
             exit 1
           fi
 
@@ -131,7 +147,21 @@ jobs:
             printf "::warning::Signing is disabled for this manual dry-run. Missing secret(s): %s\n" "${missing[*]}"
           fi
 
+          case "${timestamp_mode}" in
+            auto|enabled|none)
+              ;;
+            *)
+              echo "::error::Unsupported timestamp mode '${timestamp_mode}'. Use auto, enabled, or none."
+              exit 1
+              ;;
+          esac
+          if [[ "${signing_enabled}" == "true" && "${timestamp_mode}" == "none" ]]; then
+            echo "::error::Signed macOS releases must use a timestamped Developer ID signature for notarization."
+            exit 1
+          fi
+
           echo "SIGNING_ENABLED=${signing_enabled}" >> "${GITHUB_ENV}"
+          echo "RELEASE_CODESIGN_TIMESTAMP_MODE=${timestamp_mode}" >> "${GITHUB_ENV}"
 
       - name: Preflight native signing keychain
         env:
@@ -237,8 +267,6 @@ jobs:
       - name: Sign binary with native macOS identity
         env:
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
-          TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
-          TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
           MACOS_APPLY_SE_ENTITLEMENTS: ${{ vars.MACOS_APPLY_SE_ENTITLEMENTS }}
         run: |
           set -euo pipefail
@@ -251,7 +279,7 @@ jobs:
           binary_path="target/release/defra-agent"
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
-          timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
+          timestamp_mode="${RELEASE_CODESIGN_TIMESTAMP_MODE:-auto}"
           apple_team_id="$(sed -nE 's/^.*\(([A-Za-z0-9]+)\)$/\1/p' <<< "${signing_identity}" | tail -n 1)"
           entitlements_path="${RUNNER_TEMP}/entitlements.rendered.plist"
 
@@ -315,16 +343,14 @@ jobs:
 
           case "${timestamp_mode}" in
             auto)
-              if ! sign_with_timestamp_arg "--timestamp"; then
-                echo "::warning::codesign with timestamp failed; retrying with --timestamp=none for this signed artifact."
-                sign_with_timestamp_arg "--timestamp=none"
-              fi
+              sign_with_timestamp_arg "--timestamp"
               ;;
             enabled)
               sign_with_timestamp_arg "--timestamp"
               ;;
             none)
-              sign_with_timestamp_arg "--timestamp=none"
+              echo "::error::Signed macOS releases must use --timestamp so notarization can succeed."
+              exit 1
               ;;
             *)
               echo "::error::Unsupported timestamp mode '${timestamp_mode}'. Use auto, enabled, or none."
@@ -332,9 +358,48 @@ jobs:
               ;;
           esac
 
+      - name: Notarize signed binary
+        env:
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SIGNING_ENABLED}" != "true" ]]; then
+            echo "Skipping notarization for unsigned manual dry-run."
+            exit 0
+          fi
+
+          binary_path="target/release/defra-agent"
+          notary_dir="${RUNNER_TEMP}/defra-agent-notary"
+          staging_dir="${notary_dir}/payload"
+          notary_zip="${notary_dir}/defra-agent-notary.zip"
+          notary_key_path="${notary_dir}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
+
+          rm -rf "${notary_dir}"
+          mkdir -p "${staging_dir}"
+          cp "${binary_path}" "${staging_dir}/defra-agent"
+          chmod 0755 "${staging_dir}/defra-agent"
+          printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${notary_key_path}"
+          chmod 0600 "${notary_key_path}"
+
+          (
+            cd "${staging_dir}"
+            /usr/bin/ditto -c -k --keepParent defra-agent "${notary_zip}"
+          )
+
+          xcrun notarytool submit "${notary_zip}" \
+            --key "${notary_key_path}" \
+            --key-id "${MACOS_NOTARY_KEY_ID}" \
+            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
+            --wait
+
+          # Raw CLI binaries are not a stapler-supported file format. The
+          # Verify step gates the notarized binary with spctl and a launch smoke.
+
       - name: Verify signature
         env:
-          REQUIRE_SPCTL_VAR: ${{ vars.MACOS_CODESIGN_SPCTL_REQUIRED }}
           MACOS_APPLY_SE_ENTITLEMENTS: ${{ vars.MACOS_APPLY_SE_ENTITLEMENTS }}
         run: |
           set -euo pipefail
@@ -373,16 +438,17 @@ jobs:
               exit 1
             fi
 
-            spctl_required="${REQUIRE_SPCTL_VAR:-false}"
-            if [[ "${spctl_required}" == "true" ]]; then
-              spctl --assess --type execute --verbose=4 "${binary_path}"
-            else
-              spctl --assess --type execute --verbose=4 "${binary_path}" || \
-                echo "::warning::spctl assessment failed or is not applicable. This does not fail internal/self-signed signing."
-            fi
+            spctl --assess --type execute --verbose=4 "${binary_path}"
           else
             codesign -dv "${binary_path}" || true
             echo "::warning::Unsigned manual dry-run artifact. Do not deploy this binary to steward agents."
+          fi
+
+          version_output="$("${binary_path}" version)"
+          printf '%s\n' "${version_output}"
+          if [[ -z "${version_output}" ]]; then
+            echo "::error::defra-agent version produced no output."
+            exit 1
           fi
 
       - name: Package artifact
@@ -474,3 +540,7 @@ jobs:
               security default-keychain -s "${default_keychain}" || true
             fi
           fi
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh

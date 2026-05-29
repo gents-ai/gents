@@ -11,11 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
 
 jobs:
   rust-and-cli:
@@ -77,6 +81,9 @@ jobs:
           echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
           "${protoc_path}" --version
 
+      - name: Prepare disk-backed Rust build cache
+        run: .github/scripts/setup-rust-build-cache.sh
+
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -108,6 +115,10 @@ jobs:
         run: |
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:
     runs-on: [self-hosted, macOS, ARM64, studio]
