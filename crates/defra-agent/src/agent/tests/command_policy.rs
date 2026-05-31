@@ -1,0 +1,60 @@
+use crate::agent::tool_selection_from_document;
+use crate::document_config::ToolSelectionDocument;
+use crate::toolset::CommandExecutionMode;
+
+fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
+    ToolSelectionDocument {
+        selection_id: "tools".to_string(),
+        agent_did: "did:key:zAgent".to_string(),
+        display_name: Some("Tools".to_string()),
+        enable_file_tools: Some(false),
+        file_tools_mode: Some("Off".to_string()),
+        file_tool_root: None,
+        enable_bash: Some(true),
+        bash_mode: Some(bash_mode.to_string()),
+        command_execution_policy: None,
+        command_allowed_argv_prefixes: Some(Vec::new()),
+        command_forbidden_argv_prefixes: Some(Vec::new()),
+        command_network_mode: None,
+        cli_tool_names: Some(Vec::new()),
+        enable_meta_tools: Some(false),
+        allowed_mcp_service_ids: Some(Vec::new()),
+        delegate_to: Some(Vec::new()),
+        backgroundable_tool_names: Some(Vec::new()),
+        subagent_targets: Some(Vec::new()),
+        subagent_spawn_enabled: Some(false),
+        subagent_steering_enabled: Some(false),
+        subagent_background_enabled: Some(false),
+        cross_deployment_spawn_timeout_seconds: None,
+    }
+}
+
+#[test]
+fn unrestricted_bash_mode_defaults_to_unrestricted_command_policy() {
+    let selection = tool_selection_from_document(&tool_selection_doc("Unrestricted")).unwrap();
+
+    assert_eq!(
+        selection.command_policy.unwrap().mode,
+        CommandExecutionMode::Unrestricted
+    );
+}
+
+#[test]
+fn unrestricted_bash_mode_can_request_workspace_write_command_policy() {
+    let mut doc = tool_selection_doc("Unrestricted");
+    doc.command_execution_policy = Some("workspace_write".to_string());
+
+    let selection = tool_selection_from_document(&doc).unwrap();
+
+    assert_eq!(
+        selection.command_policy.unwrap().mode,
+        CommandExecutionMode::WorkspaceWrite
+    );
+}
+
+#[test]
+fn readonly_bash_mode_uses_builder_default_policy() {
+    let selection = tool_selection_from_document(&tool_selection_doc("ReadOnly")).unwrap();
+
+    assert!(selection.command_policy.is_none());
+}

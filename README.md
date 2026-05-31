@@ -81,8 +81,10 @@ $AGENT init --write-tools
 
 With `--write-tools`, the same tool root also caps write/edit and write-capable
 bash access. On macOS, the default write-capable bash policy uses
-`sandbox-exec` to contain writes to that root. An explicit `unrestricted`
-command execution policy is unsandboxed.
+`sandbox-exec` to contain writes to that root. Custom tool selections with
+`bash_mode: Unrestricted` default to the unsandboxed command policy unless they
+explicitly request `workspace_write`. See [macOS Bash Sandbox Policies](docs/macos-bash-sandbox.md)
+for the policy tiers and the host-diagnostics configuration path.
 
 If you want to wipe and recreate the configured agent home from scratch:
 

@@ -6,7 +6,8 @@ use rig::tool::Tool;
 
 use super::args::BashArgs;
 use super::shared::{
-    run_command, validate_command_policy, CommandExecutionPolicy, ToolContext, ToolError,
+    run_command, validate_command_policy, CommandExecutionMode, CommandExecutionPolicy,
+    ToolContext, ToolError,
 };
 
 #[derive(Clone)]
@@ -145,10 +146,20 @@ impl Tool for UnrestrictedBashTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let policy_description = match self.policy.mode {
+            CommandExecutionMode::ReadOnly => "read-only policy",
+            CommandExecutionMode::WorkspaceWrite => {
+                "workspace_write policy; macOS uses sandbox-exec to contain writes to the tool root"
+            }
+            CommandExecutionMode::Unrestricted => {
+                "unrestricted policy; commands run without the macOS seatbelt sandbox"
+            }
+        };
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run a write-capable command under the configured writable root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. On macOS the default policy uses sandbox-exec to contain writes to that root; an explicit unrestricted command policy is unsandboxed. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
-                .to_string(),
+            description: format!(
+                "Run a write-capable command under the configured writable root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Current command policy: {policy_description}. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Returns compact text with first-line defra_exec metadata. Set raw_json=true for structured JSON."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
