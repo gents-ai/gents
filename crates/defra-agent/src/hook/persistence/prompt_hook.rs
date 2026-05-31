@@ -392,8 +392,12 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     )
                 })?;
 
-            if let Some(failure_class) = classify_runtime_failure(result) {
-                lc.fail(&truncated.text, failure_class).await?;
+            if let Some(failure) = classify_runtime_failure(result) {
+                if let Some(denial) = failure.command_denial.as_ref() {
+                    lc.fail_with_command_denial(&truncated.text, denial).await?;
+                } else {
+                    lc.fail(&truncated.text, failure.failure_class).await?;
+                }
             } else {
                 lc.complete(&truncated.text).await?;
             }

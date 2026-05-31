@@ -15,6 +15,14 @@ type AgentToolCall @branchable {
     selected_service_id: String
     selected_tool_name: String
     tool_failure_class: String
+    denial_reason: String
+    denied_argv: [String]
+    denied_command: String
+    denied_argument: String
+    denied_subcommand: String
+    denied_prefix: [String]
+    policy_mode: String
+    policy_network: String
     latency_ms: Int
     await_mode: String
     cancel_policy: String

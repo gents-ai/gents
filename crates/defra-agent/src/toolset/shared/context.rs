@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::toolset::CommandPolicyDenial;
+
 #[derive(Clone)]
 pub(crate) struct ToolContext {
     root: Arc<PathBuf>,
@@ -10,29 +12,52 @@ pub(crate) struct ToolContext {
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolError(pub(crate) anyhow::Error);
+pub(crate) enum ToolError {
+    Other(anyhow::Error),
+    PolicyDenial(CommandPolicyDenial),
+}
+
+impl ToolError {
+    pub(crate) fn policy_denial(denial: CommandPolicyDenial) -> Self {
+        Self::PolicyDenial(denial)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn command_policy_denial(&self) -> Option<&CommandPolicyDenial> {
+        match self {
+            Self::PolicyDenial(denial) => Some(denial),
+            Self::Other(_) => None,
+        }
+    }
+}
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        match self {
+            Self::Other(error) => write!(f, "{error:#}"),
+            Self::PolicyDenial(denial) => write!(f, "{}", denial.tool_error_payload()),
+        }
     }
 }
 
 impl std::error::Error for ToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
+        match self {
+            Self::Other(error) => Some(error.root_cause()),
+            Self::PolicyDenial(_) => None,
+        }
     }
 }
 
 impl From<anyhow::Error> for ToolError {
     fn from(error: anyhow::Error) -> Self {
-        Self(error)
+        Self::Other(error)
     }
 }
 
 impl From<std::io::Error> for ToolError {
     fn from(error: std::io::Error) -> Self {
-        Self(error.into())
+        Self::Other(error.into())
     }
 }
 

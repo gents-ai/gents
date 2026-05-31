@@ -93,6 +93,7 @@ inductive FailureClass where
   | serviceUnavailable
   | transport
   | toolReturnedError
+  | policyDenied
   | external
   deriving DecidableEq, Repr
 
@@ -103,6 +104,7 @@ def toDefraDB : FailureClass → String
   | .serviceUnavailable => "serviceUnavailable"
   | .transport => "transport"
   | .toolReturnedError => "toolReturnedError"
+  | .policyDenied => "policyDenied"
   | .external => "external"
 
 def all : List FailureClass :=
@@ -110,6 +112,7 @@ def all : List FailureClass :=
   , .serviceUnavailable
   , .transport
   , .toolReturnedError
+  , .policyDenied
   , .external
   ]
 

@@ -31,7 +31,25 @@ pub(crate) struct ToolCallView {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub denial: Option<CommandDenialView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommandDenialView {
+    pub category: String,
+    pub category_label: String,
+    pub rule_id: String,
+    pub reason_line: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub denied_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub denied_argument: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub denied_subcommand: Option<String>,
+    pub diagnostic: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +75,8 @@ pub(crate) struct RenderedToolCallView {
     pub status_kind: String,
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub denial: Option<CommandDenialView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
 }

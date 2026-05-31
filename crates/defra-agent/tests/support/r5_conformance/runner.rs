@@ -456,7 +456,7 @@ async fn export_doc(
             "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
         }
         "AgentToolCall" => {
-            "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
+            "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
         }
         "AgentResponse" => {
             "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
@@ -1085,6 +1085,12 @@ fn optional_tool_fields(row: &serde_json::Value) -> String {
     for field in [
         "completed_at",
         "tool_failure_class",
+        "denial_reason",
+        "denied_command",
+        "denied_argument",
+        "denied_subcommand",
+        "policy_mode",
+        "policy_network",
         "cancel_cause",
         "unclaimed_deadline_at",
         "cancel_cascade_intent_at",
@@ -1092,6 +1098,11 @@ fn optional_tool_fields(row: &serde_json::Value) -> String {
     ] {
         if let Some(value) = opt_str_field(row, field) {
             fields.push(format!(r#"{field}: "{}""#, escape_graphql_string(value)));
+        }
+    }
+    for field in ["denied_argv", "denied_prefix"] {
+        if let Some(value) = opt_string_array_field(row, field) {
+            fields.push(format!("{field}: {}", string_array_literal(&value)));
         }
     }
     if let Some(value) = row.get("latency_ms").and_then(|v| v.as_i64()) {
@@ -1120,6 +1131,25 @@ fn opt_str_field<'a>(row: &'a serde_json::Value, field: &str) -> Option<&'a str>
     row.get(field)
         .and_then(|v| v.as_str())
         .filter(|v| !v.is_empty())
+}
+
+fn opt_string_array_field(row: &serde_json::Value, field: &str) -> Option<Vec<String>> {
+    Some(
+        row.get(field)?
+            .as_array()?
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+    )
+}
+
+fn string_array_literal(values: &[String]) -> String {
+    let values = values
+        .iter()
+        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{values}]")
 }
 
 fn status_for_lifecycle(state: &str) -> &str {

@@ -407,14 +407,76 @@ pub(super) fn classify_runtime_error(err: &str) -> crate::tool_call_lifecycle::F
     }
 }
 
-pub(super) fn classify_runtime_failure(
-    result: &str,
-) -> Option<crate::tool_call_lifecycle::FailureClass> {
+pub(super) struct RuntimeFailure {
+    pub(super) failure_class: crate::tool_call_lifecycle::FailureClass,
+    pub(super) command_denial: Option<CommandPolicyDenial>,
+}
+
+pub(super) fn classify_runtime_failure(result: &str) -> Option<RuntimeFailure> {
     if result.starts_with("JsonError:") {
-        return Some(crate::tool_call_lifecycle::FailureClass::ArgumentInvalid);
+        return Some(RuntimeFailure {
+            failure_class: crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
+            command_denial: None,
+        });
     }
     if result.starts_with("ToolCallError:") {
-        return Some(classify_runtime_error(result));
+        if let Some(denial) = parse_command_policy_denial(result) {
+            return Some(RuntimeFailure {
+                failure_class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                command_denial: Some(denial),
+            });
+        }
+        return Some(RuntimeFailure {
+            failure_class: classify_runtime_error(result),
+            command_denial: None,
+        });
     }
     None
+}
+
+fn parse_command_policy_denial(result: &str) -> Option<CommandPolicyDenial> {
+    let payload = strip_error_prefixes(result);
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if value
+        .get("failure_class")
+        .and_then(serde_json::Value::as_str)
+        != Some("policyDenied")
+    {
+        return None;
+    }
+    CommandPolicyDenial::from_payload_value(&value)
+}
+
+fn strip_error_prefixes(mut value: &str) -> &str {
+    loop {
+        let stripped = value
+            .strip_prefix("ToolCallError:")
+            .or_else(|| value.strip_prefix("error:"))
+            .or_else(|| value.strip_prefix("Error:"))
+            .or_else(|| value.strip_prefix("ERROR:"));
+        let Some(stripped) = stripped else {
+            return value.trim();
+        };
+        value = stripped.trim();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_failure_extracts_structured_command_policy_denial() {
+        let result = r#"ToolCallError: {"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"git subcommand is not allowed by the read-only bash tool: commit"}"#;
+
+        let failure = classify_runtime_failure(result).expect("runtime failure");
+        let denial = failure.command_denial.expect("command denial");
+
+        assert_eq!(failure.failure_class, FailureClass::PolicyDenied);
+        assert_eq!(denial.to_contract(), "readOnlySubcommandNotAllowlisted");
+        assert_eq!(denial.reason.denied_command(), Some("git"));
+        assert_eq!(denial.reason.denied_subcommand(), Some("commit"));
+        assert_eq!(denial.policy_mode, "read_only");
+        assert_eq!(denial.policy_network, "inherit");
+    }
 }

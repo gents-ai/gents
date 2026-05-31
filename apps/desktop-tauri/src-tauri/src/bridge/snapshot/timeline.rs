@@ -52,6 +52,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         status: tool.status.clone(),
         args: parse_tool_detail_value(tool.args.as_deref()),
         result: parse_tool_detail_value(tool.result.as_deref()),
+        denial: tool.denial.clone(),
         cancel_cause: tool.cancel_cause.clone(),
     }
 }

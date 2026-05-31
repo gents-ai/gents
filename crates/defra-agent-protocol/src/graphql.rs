@@ -651,6 +651,14 @@ pub fn session_shape_query(session_id: &str) -> String {
                 selected_service_id
                 selected_tool_name
                 tool_failure_class
+                denial_reason
+                denied_argv
+                denied_command
+                denied_argument
+                denied_subcommand
+                denied_prefix
+                policy_mode
+                policy_network
                 cancel_cause
                 latency_ms
             }}

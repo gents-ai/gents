@@ -12,6 +12,7 @@ mod bash_tools;
 mod cancellable;
 mod cli_tool;
 mod delegate;
+mod denial;
 mod file_tools;
 mod native_runner;
 mod shared;
@@ -32,6 +33,7 @@ use subagent::{
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
+pub(crate) use denial::{CommandPolicyDenial, DenialReason};
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 

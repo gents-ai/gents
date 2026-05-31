@@ -1,4 +1,5 @@
 import type { DerivedCancelCauseView } from "./operations";
+import type { CommandDenialView } from "../commandDenial";
 
 export type MessageView = {
   messageKey: string;
@@ -30,6 +31,7 @@ export type RenderedToolCallView = {
   statusKind: string;
   args?: ToolDetailValueView | null;
   result?: ToolDetailValueView | null;
+  denial?: CommandDenialView | null;
   cancelCause?: DerivedCancelCauseView | null;
 };
 

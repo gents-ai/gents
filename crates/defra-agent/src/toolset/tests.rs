@@ -16,7 +16,7 @@ use super::file_tools::{
 use super::shared::{
     build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
     validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    ToolContext,
+    ToolContext, ToolError,
 };
 use super::*;
 use crate::ensure_schemas;
@@ -928,7 +928,7 @@ fn generated_command_policy_cases_match_rust_validation() {
                 result.err()
             ),
             "deny" => {
-                let error = result.unwrap_err().to_string();
+                let error = result.unwrap_err();
                 assert_command_denial_matches(case, &error);
             }
             other => panic!(
@@ -1153,162 +1153,51 @@ fn rust_command_network_mode(value: &str) -> CommandNetworkMode {
         .unwrap_or_else(|error| panic!("unknown Lean command network mode {value:?}: {error}"))
 }
 
-fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &str) {
-    match case.denial_reason.as_deref() {
-        Some("forbiddenPrefix") => {
-            let matched = case
-                .matched_prefix
-                .as_ref()
-                .unwrap_or_else(|| panic!("Lean case {} missing matched_prefix", case.name));
-            assert!(
-                error.ends_with(&format!("prefix: {}", matched.join(" "))),
-                "Lean CommandPolicy case {} expected forbidden prefix {:?}, got Rust error: {error}",
-                case.name,
-                matched
-            );
-        }
-        Some("allowedPrefixRequired") => {
-            let argv = case
-                .denied_argv
-                .as_ref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_argv", case.name));
-            assert!(
-                error.ends_with(&format!("prefixes: {}", argv.join(" "))),
-                "Lean CommandPolicy case {} expected allowed-prefix denial for {:?}, got Rust error: {error}",
-                case.name,
-                argv
-            );
-        }
-        Some("readOnlyCommandNotAllowlisted") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            assert!(
-                error.contains("not allowed by the read-only bash tool") && error.contains(command),
-                "Lean CommandPolicy case {} expected read-only allowlist denial for {command:?}, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some("readOnlyArgumentNotAllowed") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            let argument = case
-                .denied_argument
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_argument", case.name));
-            assert_read_only_argument_denial_matches(&case.name, command, argument, error);
-        }
-        Some("readOnlySubcommandRequired") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            assert!(
-                error.contains(command) && (error.contains("requires") || error.contains("approved")),
-                "Lean CommandPolicy case {} expected required-subcommand denial for {command:?}, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some("readOnlySubcommandNotAllowlisted") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            let subcommand = case
-                .denied_subcommand
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_subcommand", case.name));
-            assert!(
-                error.contains(command) && error.contains(subcommand) && error.contains("not allowed"),
-                "Lean CommandPolicy case {} expected read-only subcommand denial for {command:?} {subcommand:?}, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some("readOnlyUrlRequired") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            assert!(
-                error.contains(command) && error.contains("requires an http:// or https:// URL"),
-                "Lean CommandPolicy case {} expected read-only URL requirement denial for {command:?}, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some("disabledNetworkUnenforceable") => {
-            assert!(
-                error.contains("command_network_mode=disabled cannot be enforced"),
-                "Lean CommandPolicy case {} expected disabled-network unenforceable denial, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some("disabledNetworkCommand") => {
-            let command = case
-                .denied_command
-                .as_deref()
-                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
-            assert!(
-                error.contains(command) && error.contains("command_network_mode=disabled"),
-                "Lean CommandPolicy case {} expected disabled-network command denial for {command:?}, got Rust error: {error}",
-                case.name
-            );
-        }
-        Some(other) => panic!(
-            "Lean CommandPolicy case {} emitted unsupported denial reason {other:?}",
+fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &ToolError) {
+    let denial = error.command_policy_denial().unwrap_or_else(|| {
+        panic!(
+            "Lean CommandPolicy case {} denied with unstructured Rust error: {error}",
             case.name
-        ),
-        None => panic!(
-            "Lean CommandPolicy case {} denied without a denial reason; Rust error: {error}",
-            case.name
-        ),
-    }
-}
-
-fn assert_read_only_argument_denial_matches(
-    case_name: &str,
-    command: &str,
-    argument: &str,
-    error: &str,
-) {
-    match command {
-        "sed" => assert!(
-            error.contains("sed in-place edits are not allowed"),
-            "Lean CommandPolicy case {case_name} expected sed in-place denial for {argument:?}, got Rust error: {error}"
-        ),
-        "find" => assert!(
-            error.contains("find arguments that can write or execute are not allowed"),
-            "Lean CommandPolicy case {case_name} expected find write/exec denial for {argument:?}, got Rust error: {error}"
-        ),
-        "sudo" if argument.ends_with("launchctl") => assert!(
-            error.contains("sudo launchctl must use the absolute /bin/launchctl path"),
-            "Lean CommandPolicy case {case_name} expected sudo launchctl path denial for {argument:?}, got Rust error: {error}"
-        ),
-        "git" if argument == "-c" || argument == "-C" || argument.starts_with("--config-env") => {
-            assert!(
-                error.contains("git global options")
-                    && error.contains("not allowed")
-                    && error.contains("config"),
-                "Lean CommandPolicy case {case_name} expected git config/global-option denial for {argument:?}, got Rust error: {error}"
-            );
-        }
-        "git" => assert!(
-            error.contains("git")
-                && error.contains(argument)
-                && (error.contains("not allowed") || error.contains("not read-only")),
-            "Lean CommandPolicy case {case_name} expected git argument denial for {argument:?}, got Rust error: {error}"
-        ),
-        "rg" | "curl" => assert!(
-            error.contains(command) && error.contains(argument) && error.contains("not allowed"),
-            "Lean CommandPolicy case {case_name} expected {command} argument denial for {argument:?}, got Rust error: {error}"
-        ),
-        other => assert!(
-            error.contains(other) && error.contains("not allowed"),
-            "Lean CommandPolicy case {case_name} expected read-only argument denial for {other:?} {argument:?}, got Rust error: {error}"
-        ),
-    }
+        )
+    });
+    assert_eq!(
+        Some(denial.to_contract()),
+        case.denial_reason.as_deref(),
+        "Lean CommandPolicy case {} emitted a different denial reason",
+        case.name
+    );
+    assert_eq!(
+        denial.reason.matched_prefix(),
+        case.matched_prefix.as_deref(),
+        "Lean CommandPolicy case {} matched_prefix drifted",
+        case.name
+    );
+    assert_eq!(
+        denial.reason.denied_argv(),
+        case.denied_argv.as_deref(),
+        "Lean CommandPolicy case {} denied_argv drifted",
+        case.name
+    );
+    assert_eq!(
+        denial.reason.denied_command(),
+        case.denied_command.as_deref(),
+        "Lean CommandPolicy case {} denied_command drifted",
+        case.name
+    );
+    assert_eq!(
+        denial.reason.denied_argument(),
+        case.denied_argument.as_deref(),
+        "Lean CommandPolicy case {} denied_argument drifted",
+        case.name
+    );
+    assert_eq!(
+        denial.reason.denied_subcommand(),
+        case.denied_subcommand.as_deref(),
+        "Lean CommandPolicy case {} denied_subcommand drifted",
+        case.name
+    );
+    assert_eq!(denial.policy_mode, case.mode);
+    assert_eq!(denial.policy_network, case.network_mode);
 }
 
 #[test]

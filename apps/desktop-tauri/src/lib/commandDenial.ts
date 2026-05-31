@@ -1,25 +1,9 @@
 /*
- * Command-policy denial detection from a persisted AgentToolCall.result.
+ * Command-policy denial presentation helpers and legacy result parsing.
  *
- * FIXME(#329): this module performs sentinel-string parsing of
- * the error messages produced by `bail!()` in
- * crates/defra-agent/src/toolset/shared/command.rs:209-241. The Rust
- * validator does not currently persist structured denial reasons on the
- * AgentToolCall row — the Lean DenialReason taxonomy
- * (crates/defra-agent/proofs/Proofs/CommandPolicy/Types.lean:65-117)
- * exists but isn't materialized in production yet.
- *
- * When the runtime is enriched to persist structured fields
- * (`denial_reason`, `denied_argv`, `denied_command`, `denied_argument`,
- * `denied_subcommand`, `denied_prefix`, `policy_mode`, `policy_network`),
- * this regex-based parser should be retired and replaced with a direct
- * read of those fields from the snapshot. The follow-up issue documents
- * the full Path A scope (DenialReason Rust enum mirroring Lean,
- * ToolError::PolicyDenial variant, validator refactor, schema
- * extension, persistence threading, FailureClass::PolicyDenied).
- *
- * Until then: this module is the bridge between today's stringly-typed
- * persistence and the structured UI the panel-286 prototype proposed.
+ * Runtime snapshots now carry structured DenialReason fields on
+ * AgentToolCall. The regex parser below is intentionally kept only as a
+ * compatibility fallback for rows written before those fields existed.
  *
  * Sentinel coverage matches the bail! messages in command.rs at the time
  * this branch was authored. If a new bail!  string is introduced or an

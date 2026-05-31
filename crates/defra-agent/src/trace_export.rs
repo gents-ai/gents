@@ -565,6 +565,7 @@ fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
         "serviceUnavailable" => Some(ToolFailureClass::ServiceUnavailable),
         "transport" => Some(ToolFailureClass::Transport),
         "toolReturnedError" => Some(ToolFailureClass::ToolReturnedError),
+        "policyDenied" => Some(ToolFailureClass::PolicyDenied),
         "external" => Some(ToolFailureClass::External),
         // Legacy snake_case strings — rebucketed to 5-variant spec.
         "service_unavailable"
@@ -736,7 +737,7 @@ fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> 
         // Transport errors are retriable by definition.
         ToolFailureClass::Transport => Some(true),
         // ToolReturnedError is non-retriable at the tool-call level.
-        ToolFailureClass::ToolReturnedError => Some(false),
+        ToolFailureClass::ToolReturnedError | ToolFailureClass::PolicyDenied => Some(false),
     }
 }
 

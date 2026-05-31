@@ -2,7 +2,11 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { CommandDenialToolItem } from "../src/components/commandDenial";
-import { parseCommandDenial, type DenialRuleId } from "../src/lib/commandDenial";
+import {
+  parseCommandDenial,
+  type CommandDenialView,
+  type DenialRuleId,
+} from "../src/lib/commandDenial";
 import { MessageList } from "../src/components/Transcript";
 import type { RenderedTimelineItem, RenderedToolCallView } from "../src/lib/types";
 
@@ -178,7 +182,10 @@ describe("parseCommandDenial", () => {
 // integration with Transcript.tsx::ToolGroups is exercised.
 // ---------------------------------------------------------------------
 
-function deniedToolView(text: string): RenderedToolCallView {
+function deniedToolView(
+  text: string,
+  denial?: CommandDenialView,
+): RenderedToolCallView {
   return {
     itemKey: "tool-1",
     toolName: "bash_read_only · sed",
@@ -186,6 +193,7 @@ function deniedToolView(text: string): RenderedToolCallView {
     statusKind: "error",
     args: null,
     result: { rawText: text, fields: [] },
+    denial,
   };
 }
 
@@ -228,6 +236,30 @@ describe("Transcript ToolGroups integration", () => {
     expect(
       container.querySelector("[data-rule-id]")?.getAttribute("data-rule-id"),
     ).toBe("readOnlyArgumentNotAllowed");
+  });
+
+  it("prefers structured denial fields over legacy result parsing", () => {
+    const structured: CommandDenialView = {
+      category: "forbidden-prefix",
+      categoryLabel: "Forbidden prefix",
+      ruleId: "forbiddenPrefix",
+      reasonLine: "argv begins with a forbidden prefix configured on this behavior.",
+      deniedCommand: "git",
+      diagnostic: "structured diagnostic",
+    };
+    const items: RenderedTimelineItem[] = [
+      {
+        kind: "toolGroup",
+        itemKey: "group-structured",
+        tools: [deniedToolView("exit code 1: generic failure", structured)],
+      },
+    ];
+
+    const { container } = render(<MessageList timelineItems={items} />);
+    expect(container.querySelector(".tool-item-denied")).not.toBeNull();
+    expect(
+      container.querySelector("[data-rule-id]")?.getAttribute("data-rule-id"),
+    ).toBe("forbiddenPrefix");
   });
 
   it("falls back to the default render when the result isn't a denial", () => {

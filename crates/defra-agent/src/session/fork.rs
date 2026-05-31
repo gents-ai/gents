@@ -369,6 +369,8 @@ async fn copy_tool_calls(
             ) {{
                 message_sequence tool_name tool_call_id args result status lifecycle_state
                 started_at completed_at selected_service_id selected_tool_name tool_failure_class
+                denial_reason denied_argv denied_command denied_argument denied_subcommand
+                denied_prefix policy_mode policy_network
                 cancel_cause latency_ms
             }}
         }}"#
@@ -408,6 +410,14 @@ async fn copy_tool_calls(
         let selected_service_id = row.get("selected_service_id").and_then(|v| v.as_str());
         let selected_tool_name = row.get("selected_tool_name").and_then(|v| v.as_str());
         let tool_failure_class = row.get("tool_failure_class").and_then(|v| v.as_str());
+        let denial_reason = row.get("denial_reason").and_then(|v| v.as_str());
+        let denied_argv = row.get("denied_argv").and_then(json_string_array);
+        let denied_command = row.get("denied_command").and_then(|v| v.as_str());
+        let denied_argument = row.get("denied_argument").and_then(|v| v.as_str());
+        let denied_subcommand = row.get("denied_subcommand").and_then(|v| v.as_str());
+        let denied_prefix = row.get("denied_prefix").and_then(json_string_array);
+        let policy_mode = row.get("policy_mode").and_then(|v| v.as_str());
+        let policy_network = row.get("policy_network").and_then(|v| v.as_str());
         let cancel_cause = row.get("cancel_cause").and_then(|v| v.as_str());
         let latency_ms = row.get("latency_ms").and_then(json_i64);
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
@@ -428,6 +438,14 @@ async fn copy_tool_calls(
                     selected_service_id: {selected_service_id},
                     selected_tool_name: {selected_tool_name},
                     tool_failure_class: {tool_failure_class},
+                    denial_reason: {denial_reason},
+                    denied_argv: {denied_argv},
+                    denied_command: {denied_command},
+                    denied_argument: {denied_argument},
+                    denied_subcommand: {denied_subcommand},
+                    denied_prefix: {denied_prefix},
+                    policy_mode: {policy_mode},
+                    policy_network: {policy_network},
                     cancel_cause: {cancel_cause},
                     latency_ms: {latency_ms}
                 }}) {{ _docID }}
@@ -442,6 +460,14 @@ async fn copy_tool_calls(
             selected_service_id = nullable_string_literal(selected_service_id),
             selected_tool_name = nullable_string_literal(selected_tool_name),
             tool_failure_class = nullable_string_literal(tool_failure_class),
+            denial_reason = nullable_string_literal(denial_reason),
+            denied_argv = nullable_string_array_literal(denied_argv.as_deref()),
+            denied_command = nullable_string_literal(denied_command),
+            denied_argument = nullable_string_literal(denied_argument),
+            denied_subcommand = nullable_string_literal(denied_subcommand),
+            denied_prefix = nullable_string_array_literal(denied_prefix.as_deref()),
+            policy_mode = nullable_string_literal(policy_mode),
+            policy_network = nullable_string_literal(policy_network),
             cancel_cause = nullable_string_literal(cancel_cause),
             latency_ms = nullable_i64_literal(latency_ms),
         ));
@@ -679,6 +705,19 @@ fn nullable_string_literal(value: Option<&str>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+fn nullable_string_array_literal(value: Option<&[String]>) -> String {
+    value
+        .map(|values| {
+            let values = values
+                .iter()
+                .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{values}]")
+        })
+        .unwrap_or_else(|| "null".to_string())
+}
+
 fn nullable_i64_literal(value: Option<i64>) -> String {
     value
         .map(|value| value.to_string())
@@ -689,4 +728,14 @@ fn json_i64(value: &serde_json::Value) -> Option<i64> {
     value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+}
+
+fn json_string_array(value: &serde_json::Value) -> Option<Vec<String>> {
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+    )
 }
