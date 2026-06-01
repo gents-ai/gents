@@ -229,6 +229,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "lan_ip",
                 "mcp_port",
                 "mcp_path",
+                "send_agent_did",
             ],
         )?;
     }

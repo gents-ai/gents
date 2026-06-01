@@ -610,6 +610,8 @@ pub struct ToolServiceRegistryRow {
     #[serde(default)]
     pub mcp_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub send_agent_did: bool,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub tools: Vec<ToolServiceEntry>,
     #[serde(default)]
     pub status: Option<String>,
@@ -765,5 +767,30 @@ mod tests {
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");
         assert_eq!(row, round);
+    }
+
+    #[test]
+    fn tool_service_registry_defaults_send_agent_did_to_false() {
+        let json = r#"{
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "mcp_port": 9201,
+            "mcp_path": "/mcp"
+        }"#;
+        let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
+        assert!(!row.send_agent_did);
+    }
+
+    #[test]
+    fn tool_service_registry_treats_null_send_agent_did_as_false() {
+        let json = r#"{
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "mcp_port": 9201,
+            "mcp_path": "/mcp",
+            "send_agent_did": null
+        }"#;
+        let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
+        assert!(!row.send_agent_did);
     }
 }

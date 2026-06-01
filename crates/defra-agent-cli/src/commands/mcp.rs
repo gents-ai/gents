@@ -82,6 +82,7 @@ async fn load_mcp_services(
                 lan_ip
                 mcp_port
                 mcp_path
+                send_agent_did
                 updated_at
             }}
         }}"#

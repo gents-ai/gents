@@ -38,9 +38,11 @@ pub async fn run_openai_oneshot_with_tools(
 ) -> Result<OneshotRunResult> {
     ensure_schemas(node.as_ref()).await?;
     crate::migration::ensure_tool_call_migrations(node.clone()).await?;
+    crate::migration::ensure_tool_service_registry_migrations(node.clone()).await?;
 
     let api_key = behavior.completion_client_api_key()?;
-    let tool_runtime = ToolRuntimeContext::oneshot(node.clone());
+    let tool_runtime =
+        ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
     let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface);
     let preamble = prompt_builder.preamble().to_string();

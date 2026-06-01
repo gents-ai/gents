@@ -68,6 +68,7 @@ impl Tool for DiscoverToolsTool {
     lan_ip
     mcp_port
     mcp_path
+    send_agent_did
   }
 }"#;
 
@@ -144,6 +145,10 @@ impl Tool for DiscoverToolsTool {
                 .get("mcp_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("/mcp");
+            let send_agent_did = svc
+                .get("send_agent_did")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let endpoint = if svc_port > 0 {
                 Ok(resolve_mcp_url(
                     svc_hostname,
@@ -158,7 +163,16 @@ impl Tool for DiscoverToolsTool {
                 Err(anyhow!("no mcp_port"))
             };
             let tool_names: Vec<(String, String)> = if let Ok(ep) = &endpoint {
-                match self.ctx.mcp_pool.list_tools(sid, ep).await {
+                match self
+                    .ctx
+                    .mcp_pool
+                    .list_tools_with_agent_did(
+                        sid,
+                        ep,
+                        send_agent_did.then_some(self.ctx.agent_did.as_str()),
+                    )
+                    .await
+                {
                     Ok(list) => list
                         .tools
                         .iter()
@@ -276,6 +290,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
+            agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
         });
 

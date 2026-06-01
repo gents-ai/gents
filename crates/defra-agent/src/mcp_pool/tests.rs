@@ -1,6 +1,9 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_tool_retry_case, lean_tool_retry_cases,
@@ -155,13 +158,14 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
     let connect_attempts_for_fn = Arc::clone(&connect_attempts);
     let list_calls_for_fn = Arc::clone(&list_calls);
 
-    let pool = McpPool::new_with_connector(move |_service_id, endpoint| {
+    let pool = McpPool::new_with_connector(move |_service_id, endpoint, agent_did_header| {
         let connect_attempts = Arc::clone(&connect_attempts_for_fn);
         let list_calls = Arc::clone(&list_calls_for_fn);
         async move {
             let attempt = connect_attempts.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(McpConnection {
                 endpoint,
+                agent_did_header,
                 list_tools_fn: Box::new(move || {
                     let list_calls = Arc::clone(&list_calls);
                     Box::pin(async move {
@@ -214,6 +218,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
             service_id.clone(),
             McpConnection {
                 endpoint: endpoint.to_string(),
+                agent_did_header: None,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(move |_params| {
                     let calls = Arc::clone(&calls_for_fn);
@@ -247,4 +252,189 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
         pool.inner.read().await.contains_key(&service_id),
         "a failed call_tool must not evict and reconnect without idempotency evidence"
     );
+}
+
+#[tokio::test]
+async fn streamable_http_default_does_not_send_agent_did_header() {
+    let (endpoint, requests) = spawn_header_capture_mcp_server().await;
+    let pool = McpPool::new();
+
+    pool.list_tools("default-service", &endpoint)
+        .await
+        .expect("mock MCP server should list tools");
+
+    let requests = requests.lock().expect("captures lock");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method == "tools/list"),
+        "expected a tools/list request, got {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.agent_did_header.is_none()),
+        "default MCP calls must not send {AGENT_DID_HEADER}: {requests:?}"
+    );
+}
+
+#[tokio::test]
+async fn streamable_http_opt_in_sends_agent_did_header() {
+    let (endpoint, requests) = spawn_header_capture_mcp_server().await;
+    let pool = McpPool::new();
+    let agent_did = "did:key:zIdentityAwareAgent";
+
+    pool.list_tools_with_agent_did("identity-service", &endpoint, Some(agent_did))
+        .await
+        .expect("mock MCP server should list tools");
+
+    let requests = requests.lock().expect("captures lock");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method == "tools/list"),
+        "expected a tools/list request, got {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.agent_did_header.as_deref() == Some(agent_did)),
+        "opt-in MCP calls must send {AGENT_DID_HEADER}: {requests:?}"
+    );
+}
+
+#[derive(Debug)]
+struct CapturedMcpHttpRequest {
+    method: String,
+    agent_did_header: Option<String>,
+}
+
+async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcpHttpRequest>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock MCP server");
+    let addr = listener.local_addr().expect("mock MCP server address");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captures = Arc::clone(&requests);
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let captures = Arc::clone(&captures);
+            tokio::spawn(async move {
+                let Ok(request) = read_mcp_http_request(&mut stream).await else {
+                    return;
+                };
+                let response = mcp_http_response(&request.method, request.id);
+                captures
+                    .lock()
+                    .expect("captures lock")
+                    .push(CapturedMcpHttpRequest {
+                        method: request.method,
+                        agent_did_header: request.agent_did_header,
+                    });
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    (format!("http://{addr}/mcp"), requests)
+}
+
+struct ParsedMcpHttpRequest {
+    method: String,
+    id: Option<serde_json::Value>,
+    agent_did_header: Option<String>,
+}
+
+async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedMcpHttpRequest> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let header_end = loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = find_bytes(&buf, b"\r\n\r\n") {
+            break pos;
+        }
+    };
+
+    let headers = String::from_utf8_lossy(&buf[..header_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    let agent_did_header = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case(AGENT_DID_HEADER)
+            .then(|| value.trim().to_string())
+    });
+
+    let body_start = header_end + b"\r\n\r\n".len();
+    while buf.len() < body_start + content_length {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let body = &buf[body_start..body_start + content_length];
+    let body: serde_json::Value =
+        serde_json::from_slice(body).unwrap_or_else(|_| serde_json::json!({}));
+    let method = body
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let id = body.get("id").cloned();
+
+    Ok(ParsedMcpHttpRequest {
+        method,
+        id,
+        agent_did_header,
+    })
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn mcp_http_response(method: &str, id: Option<serde_json::Value>) -> String {
+    if method == "notifications/initialized" {
+        return "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string();
+    }
+
+    let id = id.unwrap_or_else(|| serde_json::json!(0));
+    let result = match method {
+        "initialize" => serde_json::json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "header-capture-mcp", "version": "0.1.0" }
+        }),
+        "tools/list" => serde_json::json!({ "tools": [] }),
+        _ => serde_json::json!({}),
+    };
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    })
+    .to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
 }

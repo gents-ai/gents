@@ -15,6 +15,7 @@ pub struct MetaToolContext {
     pub health: ServiceHealthMap,
     pub local_hostname: String,
     pub local_subnet: Option<String>,
+    pub agent_did: String,
     pub allowed_mcp_service_ids: Vec<String>,
 }
 
@@ -227,6 +228,21 @@ struct RegistryServiceEntry {
     mcp_port: Option<u16>,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     mcp_path: String,
+    #[serde(default, deserialize_with = "crate::registry::null_as_default")]
+    send_agent_did: bool,
+}
+
+pub(super) struct ResolvedMcpService {
+    pub(super) endpoint: String,
+    pub(super) send_agent_did: bool,
+}
+
+impl ResolvedMcpService {
+    pub(super) fn outbound_agent_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
+        self.send_agent_did
+            .then_some(ctx.agent_did.as_str())
+            .filter(|agent_did| !agent_did.trim().is_empty())
+    }
 }
 
 pub(super) fn lookup_service_query(service_id: &str) -> String {
@@ -249,6 +265,7 @@ pub(super) fn lookup_service_query(service_id: &str) -> String {
     lan_ip
     mcp_port
     mcp_path
+    send_agent_did
   }}
 }}"#
     )
@@ -257,7 +274,7 @@ pub(super) fn lookup_service_query(service_id: &str) -> String {
 pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<ResolvedMcpService> {
     let resp = ctx.node.execute(&lookup_service_query(service_id)).await;
     if resp.has_errors() {
         anyhow::bail!("lookup_service({service_id}): {:?}", resp.errors);
@@ -295,7 +312,10 @@ pub(super) async fn lookup_service(
         ctx.local_subnet.as_deref(),
     );
 
-    Ok(endpoint)
+    Ok(ResolvedMcpService {
+        endpoint,
+        send_agent_did: entry.send_agent_did,
+    })
 }
 
 pub(super) fn extract_text(result: &rmcp::model::CallToolResult) -> String {
@@ -387,6 +407,7 @@ mod registry_parsing_tests {
             "lan_ip": null,
             "mcp_port": 9201,
             "mcp_path": null,
+            "send_agent_did": null,
         });
 
         let entry: RegistryServiceEntry =
@@ -397,5 +418,6 @@ mod registry_parsing_tests {
         assert_eq!(entry.lan_ip, "");
         assert_eq!(entry.mcp_port, Some(9201));
         assert!(entry.mcp_path.is_empty() || entry.mcp_path == "/mcp");
+        assert!(!entry.send_agent_did);
     }
 }

@@ -1641,6 +1641,7 @@ mod lean_apply_write_boundary_tests {
             lan_ip: None,
             mcp_port: None,
             mcp_path: None,
+            send_agent_did: false,
         }
     }
 

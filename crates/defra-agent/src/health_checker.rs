@@ -319,6 +319,8 @@ pub struct McpHealthCheckService {
     pub mcp_port: Option<u16>,
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     pub mcp_path: String,
+    #[serde(default, deserialize_with = "crate::registry::null_as_default")]
+    pub send_agent_did: bool,
     pub updated_at: Option<String>,
 }
 
@@ -402,6 +404,7 @@ async fn run_health_check(
     lan_ip
     mcp_port
     mcp_path
+    send_agent_did
     updated_at
   }
 }"#;
@@ -529,7 +532,14 @@ pub async fn run_health_check_cycle(
 
         match tokio::time::timeout(
             options.probe_timeout,
-            mcp_pool.list_tools(&service_id, &endpoint),
+            mcp_pool.list_tools_with_agent_did(
+                &service_id,
+                &endpoint,
+                persistence
+                    .as_ref()
+                    .filter(|_| service.send_agent_did)
+                    .map(|p| p.agent_did),
+            ),
         )
         .await
         {
@@ -939,6 +949,7 @@ mod registry_parsing_tests {
             "lan_ip": null,
             "mcp_port": 9201,
             "mcp_path": null,
+            "send_agent_did": null,
             "updated_at": null,
         });
 
@@ -950,6 +961,7 @@ mod registry_parsing_tests {
         assert_eq!(entry.tailscale_ip, "");
         assert_eq!(entry.lan_ip, "");
         assert_eq!(entry.mcp_port, Some(9201));
+        assert!(!entry.send_agent_did);
     }
 
     #[test]
@@ -1036,6 +1048,7 @@ mod tests {
             lan_ip: String::new(),
             mcp_port: Some(9201),
             mcp_path: "/mcp".to_string(),
+            send_agent_did: false,
             updated_at: Some(updated_at.to_rfc3339()),
         }
     }
