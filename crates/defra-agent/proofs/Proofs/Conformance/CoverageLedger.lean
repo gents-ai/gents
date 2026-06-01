@@ -187,8 +187,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "transcript"
-    , required := [Surface.agentFacing]
-    , deferred := [(Surface.operatorUi, "#284")]
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "streaming-response"
     , required := [Surface.agentFacing, Surface.operatorUi]
@@ -608,6 +608,11 @@ def caseCoverage : List CoverageEntry :=
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
       "transcript" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "transcript_cases"
+      "TranscriptConformanceCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases")
+      "transcript" [Surface.operatorUi]
   , tagged (consumerCoverage
       "identity_structural_cases"
       "IdentityStructuralCases"
