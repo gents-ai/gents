@@ -28,10 +28,16 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner_arch: X64
+            runner_label: workstation-1
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+            runner_arch: ARM64
+            runner_label: spark
+    runs-on:
+      - self-hosted
+      - Linux
+      - ${{ matrix.runner_arch }}
+      - ${{ matrix.runner_label }}
 
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
