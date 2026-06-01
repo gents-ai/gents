@@ -40,6 +40,7 @@ jobs:
       - ${{ matrix.runner_label }}
 
     env:
+      GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
       TARGET_TRIPLE: ${{ matrix.target }}
 
     steps:
@@ -159,3 +160,4 @@ jobs:
         run: |
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          rm -f "${GIT_CONFIG_GLOBAL}"
