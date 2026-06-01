@@ -148,6 +148,32 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
 }
 
 #[test]
+fn readonly_ceiling_clamps_unrestricted_bash_policy() {
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            file_tools: FileToolMode::ReadWrite,
+            file_tool_root: None,
+            bash: BashMode::Unrestricted,
+            command_policy: Some(
+                crate::toolset::CommandExecutionPolicy::write_capable()
+                    .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
+            ),
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
+            delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
+        },
+        &ToolCeiling::readonly(),
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert_eq!(config.host_tools(), &crate::toolset::ToolSet::readonly());
+}
+
+#[test]
 fn selection_without_root_inherits_operator_root() {
     let operator_root = temp_root("defra-agent-operator-root");
 

@@ -111,6 +111,23 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-invalid-config"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-invalid-config",
+        "http://127.0.0.1:9/v1",
+    )
+    .await;
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
+        .await
+        .unwrap()
+        .expect("default behavior document");
+    default_behavior.tool_selection_id = Some("missing-tool-selection".to_string());
+    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
+        .await
+        .unwrap();
+
     let agent = crate::DefraAgent::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
@@ -123,6 +140,14 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     .unwrap();
     assert!(agent.behaviors().is_empty());
     assert_eq!(agent.unavailable_behaviors().len(), 1);
+    let unavailable_reason = agent
+        .unavailable_behaviors()
+        .get(&default_behavior_id)
+        .expect("default behavior should be unavailable");
+    assert!(
+        unavailable_reason.contains("references missing tool selection missing-tool-selection"),
+        "unexpected unavailable reason: {unavailable_reason}"
+    );
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let error = agent
@@ -135,7 +160,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         "unexpected startup error: {error_text}"
     );
     assert!(
-        error_text.contains("has no backend binding"),
+        error_text.contains("references missing tool selection missing-tool-selection"),
         "unexpected startup error: {error_text}"
     );
 
@@ -148,7 +173,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     assert_eq!(status.last_reconcile_result, "error");
     assert!(status
         .last_reconcile_error
-        .contains("has no backend binding"));
+        .contains("references missing tool selection missing-tool-selection"));
 }
 
 #[tokio::test]
@@ -242,12 +267,11 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-backend-recovers"));
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),
         "backend-recovers",
-        mock_endpoint.endpoint(),
+        "http://127.0.0.1:9/v1",
         1,
         "unknown",
     )
