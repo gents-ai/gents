@@ -96,6 +96,7 @@ impl ToolSurface {
                 runtime.health_map.clone(),
                 runtime.local_hostname.clone(),
                 runtime.local_subnet.clone(),
+                runtime.agent_did.clone(),
                 self.allowed_mcp_service_ids.clone(),
             ));
         }

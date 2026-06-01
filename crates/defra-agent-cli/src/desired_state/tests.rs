@@ -128,6 +128,7 @@ fn desired_tool_service_registry_normalizes_address_storage_fields() {
     assert_eq!(service.tailscale_ip.as_deref(), Some("100.64.0.10"));
     assert_eq!(service.lan_ip.as_deref(), Some(""));
     assert_eq!(service.mcp_path.as_deref(), Some("/mcp"));
+    assert!(!service.send_agent_did);
 }
 
 #[test]
@@ -146,6 +147,36 @@ fn live_tool_service_registry_preserves_null_storage_for_diff() {
     assert_eq!(service.tailscale_ip, None);
     assert_eq!(service.lan_ip, None);
     assert_eq!(service.mcp_path, None);
+    assert!(!service.send_agent_did);
+}
+
+#[test]
+fn tool_service_registry_round_trip_preserves_send_agent_did() {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    manifest
+        .tool_service_registries
+        .push(DesiredToolServiceRegistry {
+            service_id: "identity-aware-mcp".to_string(),
+            display_name: Some("Identity-aware MCP".to_string()),
+            description: None,
+            hostname: Some("studio-1".to_string()),
+            tailscale_ip: Some(String::new()),
+            lan_ip: Some(String::new()),
+            mcp_port: Some(9201),
+            mcp_path: Some("/mcp".to_string()),
+            send_agent_did: true,
+        });
+
+    let bundle =
+        export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
+    assert_eq!(
+        bundle.as_bundle().tool_service_registries[0]["send_agent_did"],
+        json!(true)
+    );
+
+    let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
+        .expect("manifest should parse back from bundle");
+    assert!(round_tripped.tool_service_registries[0].send_agent_did);
 }
 
 #[test]

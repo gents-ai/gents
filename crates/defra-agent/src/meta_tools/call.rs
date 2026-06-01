@@ -89,9 +89,10 @@ impl Tool for CallToolTool {
             .await
             .context("call_tool")?;
 
-        let endpoint = lookup_service(&self.ctx, &args.service_id)
+        let service = lookup_service(&self.ctx, &args.service_id)
             .await
             .context("call_tool")?;
+        let outbound_agent_did = service.outbound_agent_did(&self.ctx);
 
         let timeout_secs = if matches!(health.as_ref().map(|h| h.status), Some(HealthStatus::Stale))
         {
@@ -103,9 +104,10 @@ impl Tool for CallToolTool {
         if let Some(error) = self
             .preflight_arguments(
                 &args.service_id,
-                &endpoint,
+                &service.endpoint,
                 &args.tool_name,
                 argument_object,
+                outbound_agent_did,
             )
             .await
         {
@@ -114,9 +116,13 @@ impl Tool for CallToolTool {
 
         let result = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            self.ctx
-                .mcp_pool
-                .call_tool(&args.service_id, &endpoint, &args.tool_name, arguments),
+            self.ctx.mcp_pool.call_tool_with_agent_did(
+                &args.service_id,
+                &service.endpoint,
+                &args.tool_name,
+                arguments,
+                outbound_agent_did,
+            ),
         )
         .await
         .map_err(|_| {
@@ -159,10 +165,13 @@ impl CallToolTool {
         endpoint: &str,
         tool_name: &str,
         arguments: &Map<String, Value>,
+        agent_did: Option<&str>,
     ) -> Option<StructuredToolError> {
         let list_result = match tokio::time::timeout(
             Duration::from_secs(30),
-            self.ctx.mcp_pool.list_tools(service_id, endpoint),
+            self.ctx
+                .mcp_pool
+                .list_tools_with_agent_did(service_id, endpoint, agent_did),
         )
         .await
         {
@@ -473,6 +482,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
+            agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
         });
 

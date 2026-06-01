@@ -55,13 +55,22 @@ pub(in crate::agent) async fn run_agent(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    if let Err(error) =
+        crate::migration::ensure_tool_service_registry_migrations(agent.node.clone())
+            .await
+            .context("ensure ToolServiceRegistry migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
     let health_map = ServiceHealthMap::new();
-    let tool_runtime = ToolRuntimeContext::new(
+    let tool_runtime = ToolRuntimeContext::new_with_agent_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
         health_map.clone(),
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
+        agent.agent_did().to_string(),
     );
     // Promote reachable enabled backends to healthy before resolving which
     // behaviors are runnable. A fresh store's backends start `probe_status=

@@ -87,8 +87,8 @@ impl Tool for DescribeToolTool {
             .to_result_text());
         }
 
-        let endpoint = match lookup_service(&self.ctx, &args.service_id).await {
-            Ok(endpoint) => endpoint,
+        let service = match lookup_service(&self.ctx, &args.service_id).await {
+            Ok(service) => service,
             Err(error) => {
                 return Ok(StructuredToolError::service_unavailable(
                     &args.service_id,
@@ -106,7 +106,11 @@ impl Tool for DescribeToolTool {
         let list_result = match self
             .ctx
             .mcp_pool
-            .list_tools(&args.service_id, &endpoint)
+            .list_tools_with_agent_did(
+                &args.service_id,
+                &service.endpoint,
+                service.outbound_agent_did(&self.ctx),
+            )
             .await
         {
             Ok(result) => result,
@@ -946,6 +950,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
+            agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
         });
 
@@ -978,6 +983,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
+            agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: Vec::new(),
         });
 

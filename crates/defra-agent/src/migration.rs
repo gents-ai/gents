@@ -86,6 +86,10 @@ const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
 
+const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":2}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -524,6 +528,34 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
     tracing::info!(
         version = %next.version_id,
         "PeerPairingDesired patched with agent_did field"
+    );
+    Ok(())
+}
+
+pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("ToolServiceRegistry")
+        .context("get ToolServiceRegistry collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "send_agent_did") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "ToolServiceRegistry",
+            ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH,
+        )
+        .await
+        .context("patch_collection ToolServiceRegistry send_agent_did")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version ToolServiceRegistry send_agent_did")?;
+    tracing::info!(
+        version = %next.version_id,
+        "ToolServiceRegistry patched with send_agent_did field"
     );
     Ok(())
 }

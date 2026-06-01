@@ -25,6 +25,7 @@ pub fn build_meta_tools(
     health: ServiceHealthMap,
     local_hostname: String,
     local_subnet: Option<String>,
+    agent_did: String,
     allowed_mcp_service_ids: Vec<String>,
 ) -> Vec<Box<dyn rig::tool::ToolDyn>> {
     let ctx = MetaToolContext {
@@ -33,6 +34,7 @@ pub fn build_meta_tools(
         health,
         local_hostname,
         local_subnet,
+        agent_did,
         allowed_mcp_service_ids,
     };
     vec![

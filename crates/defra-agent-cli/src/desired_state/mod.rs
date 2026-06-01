@@ -205,6 +205,7 @@ pub(crate) struct DesiredToolServiceRegistry {
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
     pub(crate) mcp_path: Option<String>,
+    pub(crate) send_agent_did: bool,
 }
 
 impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
@@ -223,6 +224,8 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
             lan_ip: Option<String>,
             mcp_port: Option<i64>,
             mcp_path: Option<String>,
+            #[serde(default)]
+            send_agent_did: bool,
         }
 
         let wire = Wire::deserialize(deserializer)?;
@@ -235,6 +238,7 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
             lan_ip: Some(validate::normalize_tool_service_string(wire.lan_ip)),
             mcp_port: wire.mcp_port,
             mcp_path: Some(validate::normalize_tool_service_mcp_path(wire.mcp_path)),
+            send_agent_did: wire.send_agent_did,
         })
     }
 }

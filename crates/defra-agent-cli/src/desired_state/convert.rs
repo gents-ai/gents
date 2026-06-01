@@ -30,6 +30,10 @@ pub(crate) fn tool_service_registry_from_live_value(
         lan_ip: optional_string_from_value("lan_ip", object.get("lan_ip"))?,
         mcp_port: optional_i64_from_value("mcp_port", object.get("mcp_port"))?,
         mcp_path: optional_string_from_value("mcp_path", object.get("mcp_path"))?,
+        send_agent_did: object
+            .get("send_agent_did")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 

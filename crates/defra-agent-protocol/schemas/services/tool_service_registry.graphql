@@ -7,6 +7,7 @@ type ToolServiceRegistry {
     lan_ip: String
     mcp_port: Int
     mcp_path: String
+    send_agent_did: Boolean
     status: String @index
     version: String
     updated_at: DateTime @index(direction: DESC)
