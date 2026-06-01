@@ -78,14 +78,11 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
         </span>
       </div>
       {tools.map((tool) => {
-        // Command-policy denials get the inline amber render when the
-        // error string matches a known sentinel (see lib/commandDenial.ts).
-        // When the runtime is enriched to persist structured DenialReason
-        // fields, this branch should read those fields directly instead
-        // of parsing the result string.
+        // Prefer structured DenialReason fields persisted on AgentToolCall.
+        // The parser remains as a compatibility fallback for older rows.
         const denial =
           (tool.statusKind ?? "").toLowerCase() === "error"
-            ? parseCommandDenial(tool.result?.rawText)
+            ? (tool.denial ?? parseCommandDenial(tool.result?.rawText))
             : null;
         if (denial) {
           return (

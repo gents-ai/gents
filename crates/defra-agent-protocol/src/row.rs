@@ -324,6 +324,22 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
+    pub denial_reason: Option<String>,
+    #[serde(default)]
+    pub denied_argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub denied_command: Option<String>,
+    #[serde(default)]
+    pub denied_argument: Option<String>,
+    #[serde(default)]
+    pub denied_subcommand: Option<String>,
+    #[serde(default)]
+    pub denied_prefix: Option<Vec<String>>,
+    #[serde(default)]
+    pub policy_mode: Option<String>,
+    #[serde(default)]
+    pub policy_network: Option<String>,
+    #[serde(default)]
     pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,

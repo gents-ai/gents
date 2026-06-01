@@ -34,7 +34,7 @@ const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id 
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
 const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
@@ -623,7 +623,7 @@ query DesktopRemoteSnapshot {
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
-  AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms }
+  AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }

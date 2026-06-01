@@ -51,10 +51,10 @@ impl ToolDyn for CliTool {
         Box::pin(async move {
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
             validate_argv_policy(&config, &args.argv)
-                .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError(error))))?;
+                .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError::from(error))))?;
             let output = run_cli_command(&config, &args.argv)
                 .await
-                .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError(error))))?;
+                .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError::from(error))))?;
             serde_json::to_string(&output).map_err(ToolError::JsonError)
         })
     }

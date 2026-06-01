@@ -66,6 +66,18 @@ const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
 ]"#;
 
 #[allow(dead_code)]
+const ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":21}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":21}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":11}}
+]"#;
+
+#[allow(dead_code)]
 const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
 ]"#;
@@ -177,6 +189,52 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
         field_patches.push(
             r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cause","Kind":11}}"#,
         );
+    }
+    for (field, kind) in [
+        ("denial_reason", 11),
+        ("denied_argv", 21),
+        ("denied_command", 11),
+        ("denied_argument", 11),
+        ("denied_subcommand", 11),
+        ("denied_prefix", 21),
+        ("policy_mode", 11),
+        ("policy_network", 11),
+    ] {
+        if !collection_has_field(collection, field) {
+            field_patches.push(match kind {
+                21 => match field {
+                    "denied_argv" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":21}}"#
+                    }
+                    "denied_prefix" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":21}}"#
+                    }
+                    _ => unreachable!("unexpected AgentToolCall array field {field}"),
+                },
+                11 => match field {
+                    "denial_reason" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}}"#
+                    }
+                    "denied_command" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":11}}"#
+                    }
+                    "denied_argument" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":11}}"#
+                    }
+                    "denied_subcommand" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":11}}"#
+                    }
+                    "policy_mode" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":11}}"#
+                    }
+                    "policy_network" => {
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":11}}"#
+                    }
+                    _ => unreachable!("unexpected AgentToolCall string field {field}"),
+                },
+                _ => unreachable!("unexpected AgentToolCall command-denial field kind {kind}"),
+            });
+        }
     }
 
     if field_patches.is_empty() {
@@ -515,6 +573,18 @@ mod patch_kind_tests {
     }
 
     #[test]
+    fn agent_tool_call_command_denial_string_arrays_use_nillable_string_array_kind() {
+        for (name, kind) in field_kinds(ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH) {
+            if name == "denied_argv" || name == "denied_prefix" {
+                assert_eq!(
+                    kind, NILLABLE_STRING_ARRAY_KIND,
+                    "{name} must be NillableStringArray (21), got {kind}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn no_patch_uses_the_unassigned_kind_17() {
         // 17 is unassigned in defradb.rs's FieldKind enum; the SDL builder treats
         // it as a named-type reference and fails with "no type found. Kind: 17".
@@ -525,6 +595,7 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_SUBAGENT_PATCH,
             ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH,
             ADD_AGENT_TOOL_CALL_R5_PATCH,
+            ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {

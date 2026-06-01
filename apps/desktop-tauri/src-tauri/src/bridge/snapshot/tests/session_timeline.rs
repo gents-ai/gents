@@ -193,6 +193,14 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             selected_service_id: None,
             selected_tool_name: None,
             tool_failure_class: None,
+            denial_reason: None,
+            denied_argv: None,
+            denied_command: None,
+            denied_argument: None,
+            denied_subcommand: None,
+            denied_prefix: None,
+            policy_mode: None,
+            policy_network: None,
             cancel_cause: None,
             latency_ms: None,
         }],
@@ -504,6 +512,14 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             selected_service_id: None,
             selected_tool_name: None,
             tool_failure_class: None,
+            denial_reason: None,
+            denied_argv: None,
+            denied_command: None,
+            denied_argument: None,
+            denied_subcommand: None,
+            denied_prefix: None,
+            policy_mode: None,
+            policy_network: None,
             cancel_cause: None,
             latency_ms: None,
         }],
@@ -540,4 +556,68 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             .map(|field| field.value.as_str()),
         Some("12")
     );
+}
+
+#[test]
+fn structured_command_policy_denial_projects_to_rendered_tool() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![AgentSessionRow {
+            session_id: "session-denial".to_string(),
+            agent_name: Some("Amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            started: None,
+            ended: None,
+            status: Some("active".to_string()),
+        }],
+        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+            tool_call_key: "tool-denial".to_string(),
+            session_id: Some("session-denial".to_string()),
+            request_id: None,
+            message_sequence: Some(1),
+            tool_name: Some("bash".to_string()),
+            tool_call_id: Some("call-denial".to_string()),
+            args: Some("{\"command\":\"git\",\"args\":[\"commit\"]}".to_string()),
+            result: Some("structured policy denial payload".to_string()),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("failed".to_string()),
+            cancel_policy: None,
+            started_at: None,
+            deadline_at: None,
+            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: Some("policyDenied".to_string()),
+            denial_reason: Some("readOnlySubcommandNotAllowlisted".to_string()),
+            denied_argv: None,
+            denied_command: Some("git".to_string()),
+            denied_argument: None,
+            denied_subcommand: Some("commit".to_string()),
+            denied_prefix: None,
+            policy_mode: Some("read_only".to_string()),
+            policy_network: Some("inherit".to_string()),
+            cancel_cause: None,
+            latency_ms: Some(12),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-denial", None).expect("snapshot");
+    let tool = snapshot
+        .timeline_items
+        .iter()
+        .find_map(|item| match item {
+            RenderedTimelineItem::ToolGroup { tools, .. } => tools.first(),
+            _ => None,
+        })
+        .expect("rendered tool");
+    let denial = tool.denial.as_ref().expect("structured denial");
+
+    assert_eq!(tool.status.as_deref(), Some("completed"));
+    assert_eq!(tool.status_kind, "error");
+    assert_eq!(denial.rule_id, "readOnlySubcommandNotAllowlisted");
+    assert_eq!(denial.category, "read-only-guard");
+    assert_eq!(denial.denied_command.as_deref(), Some("git"));
+    assert_eq!(denial.denied_subcommand.as_deref(), Some("commit"));
+    assert_eq!(denial.diagnostic, "structured policy denial payload");
 }

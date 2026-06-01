@@ -146,6 +146,24 @@ impl ToolCallLifecycle {
 
     /// Running → Failed. For tool errors during execution. Sets failure_class.
     pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
+        self.fail_with_details(result, failure, None).await
+    }
+
+    pub(crate) async fn fail_with_command_denial(
+        &mut self,
+        result: &str,
+        denial: &CommandPolicyDenial,
+    ) -> Result<()> {
+        self.fail_with_details(result, FailureClass::PolicyDenied, Some(denial))
+            .await
+    }
+
+    async fn fail_with_details(
+        &mut self,
+        result: &str,
+        failure: super::FailureClass,
+        command_denial: Option<&CommandPolicyDenial>,
+    ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
@@ -169,6 +187,7 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let command_denial_fields = command_denial_fields_fragment(command_denial);
 
         let mutation = format!(
             r#"mutation {{
@@ -182,6 +201,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         tool_failure_class: "{failure_class_str}",
+                        {command_denial_fields}
                         latency_ms: {latency_ms}
                         {unclaimed_deadline_clear}
                     }}
@@ -201,6 +221,25 @@ impl ToolCallLifecycle {
     /// Pending → Failed. Used when the dispatcher cannot start the call
     /// (MCP service unreachable, argument parse failure pre-spawn).
     pub async fn spawn_failed(&mut self, failure: super::FailureClass, reason: &str) -> Result<()> {
+        self.spawn_failed_with_details(failure, reason, None).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn spawn_failed_with_command_denial(
+        &mut self,
+        reason: &str,
+        denial: &CommandPolicyDenial,
+    ) -> Result<()> {
+        self.spawn_failed_with_details(FailureClass::PolicyDenied, reason, Some(denial))
+            .await
+    }
+
+    async fn spawn_failed_with_details(
+        &mut self,
+        failure: super::FailureClass,
+        reason: &str,
+        command_denial: Option<&CommandPolicyDenial>,
+    ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "spawn_failed")?;
 
         // Pending means the row hasn't been created yet. We create it
@@ -217,6 +256,7 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
         let failure_class_str = failure.as_str();
+        let command_denial_fields = command_denial_fields_fragment(command_denial);
 
         let mutation = format!(
             r#"mutation {{
@@ -235,6 +275,7 @@ impl ToolCallLifecycle {
                     deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
                     tool_failure_class: "{failure_class_str}",
+                    {command_denial_fields}
                     latency_ms: 0
                 }}) {{ _docID }}
             }}"#

@@ -67,6 +67,7 @@ fn rust_failure_class(value: &str) -> ToolFailureClass {
         "serviceUnavailable" => ToolFailureClass::ServiceUnavailable,
         "transport" => ToolFailureClass::Transport,
         "toolReturnedError" => ToolFailureClass::ToolReturnedError,
+        "policyDenied" => ToolFailureClass::PolicyDenied,
         "external" => ToolFailureClass::External,
         other => panic!("unknown Lean tool failure class {other:?}"),
     }

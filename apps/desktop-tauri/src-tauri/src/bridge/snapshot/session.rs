@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use defra_agent_protocol::row::AgentRequestRow;
+use defra_agent_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use defra_agent_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
 use super::super::cause_derivation::{
@@ -8,11 +8,81 @@ use super::super::cause_derivation::{
     ToolCallEvidence,
 };
 use super::super::types::{
-    normalize_optional, turn_state_label, DerivedCancelCauseView, DesktopSessionSnapshot,
-    MessageView, PendingTurnView, ResponseView, ToolCallView, ToolResultView,
+    normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
+    DesktopSessionSnapshot, MessageView, PendingTurnView, ResponseView, ToolCallView,
+    ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
 use super::{request_matches_agent, source_matches_agent};
+
+fn command_denial_from_row(row: &AgentToolCallRow) -> Option<CommandDenialView> {
+    let rule_id = normalize_optional(row.denial_reason.as_deref())?;
+    let (category, category_label, reason_line) = command_denial_presentation(&rule_id);
+    let denied_command = normalize_optional(row.denied_command.as_deref())
+        .or_else(|| first_token(row.denied_prefix.as_deref()))
+        .or_else(|| first_token(row.denied_argv.as_deref()));
+
+    Some(CommandDenialView {
+        category: category.to_string(),
+        category_label: category_label.to_string(),
+        rule_id,
+        reason_line: reason_line.to_string(),
+        denied_command,
+        denied_argument: normalize_optional(row.denied_argument.as_deref()),
+        denied_subcommand: normalize_optional(row.denied_subcommand.as_deref()),
+        diagnostic: normalize_optional(row.result.as_deref()).unwrap_or_default(),
+    })
+}
+
+fn first_token(value: Option<&[String]>) -> Option<String> {
+    value
+        .and_then(|items| items.first().cloned())
+        .and_then(|value| normalize_optional(Some(value.as_str())))
+}
+
+fn command_denial_presentation(rule_id: &str) -> (&'static str, &'static str, &'static str) {
+    match rule_id {
+        "forbiddenPrefix" => (
+            "forbidden-prefix",
+            "Forbidden prefix",
+            "argv begins with a forbidden prefix configured on this behavior.",
+        ),
+        "allowedPrefixRequired" => (
+            "allowed-prefix-required",
+            "Allowed prefix required",
+            "Policy requires argv to match one of the configured allowed prefixes; this argv matches none.",
+        ),
+        "disabledNetworkUnenforceable" => (
+            "network-denied",
+            "Network access denied",
+            "Network mode is disabled, but the unrestricted bash tool can't enforce it - failing closed.",
+        ),
+        "disabledNetworkCommand" => (
+            "network-denied",
+            "Network access denied",
+            "This command is denied because the behavior has network mode disabled.",
+        ),
+        "workspaceWriteSandboxUnavailable" => (
+            "sandbox-violation",
+            "Sandbox violation",
+            "workspace_write needs an enforced sandbox before the command can run.",
+        ),
+        "readOnlyCommandNotAllowlisted"
+        | "readOnlyArgumentNotAllowed"
+        | "readOnlySubcommandRequired"
+        | "readOnlySubcommandNotAllowlisted"
+        | "readOnlyUrlRequired" => (
+            "read-only-guard",
+            "Read-only guard",
+            "The read-only bash policy blocked this command.",
+        ),
+        _ => (
+            "policy-config",
+            "Policy configuration",
+            "The command was denied by the configured command execution policy.",
+        ),
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn build_session_snapshot_from_store(
@@ -258,8 +328,10 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 args: normalize_optional(row.args.as_deref()),
                 result: normalize_optional(row.result.as_deref()),
                 status: normalize_optional(row.status.as_deref()),
+                lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),
                 started_at: normalize_optional(row.started_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
+                denial: command_denial_from_row(&row),
                 cancel_cause,
             }
         })

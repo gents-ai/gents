@@ -203,18 +203,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "command-policy"
-    , required := [Surface.agentFacing]
-    -- #286 ships the inline denial render in the desktop chat shell,
-    -- but the render is currently bound by regex-parsing the
-    -- AgentToolCall.result bail!-string in
-    -- apps/desktop-tauri/src/lib/commandDenial.ts. The runtime does
-    -- not yet emit structured DenialReason fields, so there is no
-    -- Lean-emitted case set the operator-UI consumer can bind to.
-    -- The slot stays deferred until Path A (#329) lands: structured
-    -- DenialReason on AgentToolCall + a Lean
-    -- CommandPolicyOperatorUiCases that the desktop consumer can
-    -- bind.
-    , deferred := [(Surface.operatorUi, "#329")]
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
     }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
@@ -548,6 +538,11 @@ def caseCoverage : List CoverageEntry :=
       "CommandPolicyEnv"
       "toolset::tests::generated_command_env_cases_match_rust_filtering")
       "command-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "command_policy_cases"
+      "CommandPolicyOperatorUi"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_timeline::structured_command_policy_denial_projects_to_rendered_tool")
+      "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
       "queue_deadline_cases"
       "QueueDeadlineConformanceCases"

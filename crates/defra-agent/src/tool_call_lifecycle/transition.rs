@@ -16,6 +16,7 @@ use defra_node::QueryResponse;
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
+use crate::toolset::CommandPolicyDenial;
 
 use super::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, CascadeIntent, ChildTerminal,
@@ -165,6 +166,49 @@ impl ToolCallLifecycle {
             })
             .unwrap_or_default()
     }
+}
+
+fn command_denial_fields_fragment(denial: Option<&CommandPolicyDenial>) -> String {
+    let Some(denial) = denial else {
+        return String::new();
+    };
+    format!(
+        r#"denial_reason: {denial_reason},
+                        denied_argv: {denied_argv},
+                        denied_command: {denied_command},
+                        denied_argument: {denied_argument},
+                        denied_subcommand: {denied_subcommand},
+                        denied_prefix: {denied_prefix},
+                        policy_mode: {policy_mode},
+                        policy_network: {policy_network},"#,
+        denial_reason = optional_string_literal(Some(denial.to_contract())),
+        denied_argv = optional_string_array_literal(denial.reason.denied_argv()),
+        denied_command = optional_string_literal(denial.reason.denied_command()),
+        denied_argument = optional_string_literal(denial.reason.denied_argument()),
+        denied_subcommand = optional_string_literal(denial.reason.denied_subcommand()),
+        denied_prefix = optional_string_array_literal(denial.reason.matched_prefix()),
+        policy_mode = optional_string_literal(Some(denial.policy_mode.as_str())),
+        policy_network = optional_string_literal(Some(denial.policy_network.as_str())),
+    )
+}
+
+fn optional_string_literal(value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_string_array_literal(values: Option<&[String]>) -> String {
+    values
+        .map(|values| {
+            let values = values
+                .iter()
+                .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{values}]")
+        })
+        .unwrap_or_else(|| "null".to_string())
 }
 
 mod bridge;

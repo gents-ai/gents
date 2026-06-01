@@ -83,15 +83,17 @@ pub enum FailureClass {
     ServiceUnavailable,
     Transport,
     ToolReturnedError,
+    PolicyDenied,
     External,
 }
 
 impl FailureClass {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ArgumentInvalid,
         Self::ServiceUnavailable,
         Self::Transport,
         Self::ToolReturnedError,
+        Self::PolicyDenied,
         Self::External,
     ];
 
@@ -101,6 +103,7 @@ impl FailureClass {
             Self::ServiceUnavailable => "serviceUnavailable",
             Self::Transport => "transport",
             Self::ToolReturnedError => "toolReturnedError",
+            Self::PolicyDenied => "policyDenied",
             Self::External => "external",
         }
     }
@@ -111,6 +114,7 @@ impl FailureClass {
             "serviceUnavailable" => Some(Self::ServiceUnavailable),
             "transport" => Some(Self::Transport),
             "toolReturnedError" => Some(Self::ToolReturnedError),
+            "policyDenied" => Some(Self::PolicyDenied),
             "external" => Some(Self::External),
             _ => None,
         }
@@ -497,8 +501,8 @@ mod tests {
     }
 
     #[test]
-    fn failure_class_all_lists_five_variants() {
-        assert_eq!(FailureClass::ALL.len(), 5);
+    fn failure_class_all_lists_six_variants() {
+        assert_eq!(FailureClass::ALL.len(), 6);
     }
 
     #[test]

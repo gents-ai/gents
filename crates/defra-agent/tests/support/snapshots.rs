@@ -523,6 +523,22 @@ pub struct ToolCallSnapshot {
     #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
+    pub denial_reason: Option<String>,
+    #[serde(default)]
+    pub denied_argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub denied_command: Option<String>,
+    #[serde(default)]
+    pub denied_argument: Option<String>,
+    #[serde(default)]
+    pub denied_subcommand: Option<String>,
+    #[serde(default)]
+    pub denied_prefix: Option<Vec<String>>,
+    #[serde(default)]
+    pub policy_mode: Option<String>,
+    #[serde(default)]
+    pub policy_network: Option<String>,
+    #[serde(default)]
     pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
@@ -541,7 +557,9 @@ pub async fn fetch_tool_call_snapshots_for_session(
             ) {{
                 tool_call_key request_id session_id message_sequence tool_name tool_call_id
                 args result status lifecycle_state started_at deadline_at completed_at
-                selected_service_id selected_tool_name tool_failure_class cancel_cause latency_ms
+                selected_service_id selected_tool_name tool_failure_class
+                denial_reason denied_argv denied_command denied_argument denied_subcommand
+                denied_prefix policy_mode policy_network cancel_cause latency_ms
             }}
         }}"#
     );

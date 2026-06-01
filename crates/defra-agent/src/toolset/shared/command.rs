@@ -3,11 +3,12 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tokio::process::Command;
 
-use super::context::ToolContext;
+use super::context::{ToolContext, ToolError};
+use crate::toolset::{CommandPolicyDenial, DenialReason};
 
 const OUTPUT_META_PREFIX: &str = "defra_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -39,6 +40,14 @@ impl CommandExecutionMode {
             other => bail!("unknown command execution policy mode {other}"),
         }
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::WorkspaceWrite => "workspace_write",
+            Self::Unrestricted => "unrestricted",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -56,6 +65,14 @@ impl CommandNetworkMode {
             "disabled" | "Disabled" | "off" | "Off" => Ok(Self::Disabled),
             "enabled" | "Enabled" | "on" | "On" => Ok(Self::Enabled),
             other => bail!("unknown command network mode {other}"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Disabled => "disabled",
+            Self::Enabled => "enabled",
         }
     }
 
@@ -127,7 +144,7 @@ pub(crate) async fn run_command(
     timeout: Duration,
     policy: &CommandExecutionPolicy,
     raw_json: bool,
-) -> Result<String> {
+) -> std::result::Result<String, ToolError> {
     let cwd = context.resolve_existing_dir(cwd)?;
     let argv = std::iter::once(command_name.to_string())
         .chain(args.iter().cloned())
@@ -193,7 +210,7 @@ pub(crate) async fn run_command(
         stderr: stderr.content,
     };
 
-    render_command_output(&output, raw_json)
+    render_command_output(&output, raw_json).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -201,7 +218,7 @@ pub(crate) fn validate_read_only_command(
     command: &str,
     args: &[String],
     allowlist: &[String],
-) -> Result<()> {
+) -> std::result::Result<(), ToolError> {
     let policy = CommandExecutionPolicy::read_only(allowlist.to_vec());
     validate_command_policy(command, args, &policy)
 }
@@ -210,31 +227,33 @@ pub(crate) fn validate_command_policy(
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> Result<()> {
+) -> std::result::Result<(), ToolError> {
     let argv = std::iter::once(command.to_string())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
 
     if let Some(prefix) = first_matching_prefix(&argv, &policy.forbidden_argv_prefixes) {
-        bail!(
-            "command is forbidden by command execution policy prefix: {}",
-            shell_join(prefix)
-        );
+        return Err(policy_denial(
+            policy,
+            DenialReason::ForbiddenPrefix {
+                matched: prefix.clone(),
+            },
+        ));
     }
 
     if !policy.allowed_argv_prefixes.is_empty()
         && first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_none()
     {
-        bail!(
-            "command is not allowed by command execution policy prefixes: {}",
-            shell_join(&argv)
-        );
+        return Err(policy_denial(
+            policy,
+            DenialReason::AllowedPrefixRequired { argv },
+        ));
     }
 
     validate_network_mode(command, args, policy)?;
 
     if matches!(policy.mode, CommandExecutionMode::ReadOnly) {
-        validate_read_only_command_inner(command, args, &policy.read_only_allowlist)?;
+        validate_read_only_command_inner(command, args, &policy.read_only_allowlist, policy)?;
     }
 
     Ok(())
@@ -279,7 +298,8 @@ fn validate_read_only_command_inner(
     command: &str,
     args: &[String],
     allowlist: &[String],
-) -> Result<()> {
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     let command_key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_string());
     if !allowlist.iter().any(|allowed| {
         allowed == command
@@ -287,22 +307,27 @@ fn validate_read_only_command_inner(
                 .as_deref()
                 .is_some_and(|allowed_key| allowed_key == command_key)
     }) {
-        bail!("command is not allowed by the read-only bash tool: {command}");
+        return Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlyCommandNotAllowlisted {
+                command: command_key,
+            },
+        ));
     }
 
     match command_key.as_str() {
         "sed" => {
-            if args.iter().any(|arg| {
-                arg == "-i"
-                    || arg == "--in-place"
+            if let Some(argument) = args.iter().find(|arg| {
+                arg.as_str() == "-i"
+                    || arg.as_str() == "--in-place"
                     || arg.starts_with("-i")
                     || arg.starts_with("--in-place=")
             }) {
-                bail!("sed in-place edits are not allowed");
+                return Err(read_only_argument_denial(policy, "sed", argument));
             }
         }
         "find" => {
-            if args.iter().any(|arg| {
+            if let Some(argument) = args.iter().find(|arg| {
                 matches!(
                     arg.as_str(),
                     "-delete"
@@ -316,15 +341,15 @@ fn validate_read_only_command_inner(
                         | "-fls"
                 )
             }) {
-                bail!("find arguments that can write or execute are not allowed");
+                return Err(read_only_argument_denial(policy, "find", argument));
             }
         }
-        "git" => validate_git_args(args)?,
-        "rg" => validate_ripgrep_args(args)?,
-        "launchctl" => validate_launchctl_args(args)?,
-        "tailscale" => validate_tailscale_args(args)?,
-        "curl" => validate_curl_args(args)?,
-        "sudo" => validate_sudo_args(args)?,
+        "git" => validate_git_args(args, policy)?,
+        "rg" => validate_ripgrep_args(args, policy)?,
+        "launchctl" => validate_launchctl_args(args, policy)?,
+        "tailscale" => validate_tailscale_args(args, policy)?,
+        "curl" => validate_curl_args(args, policy)?,
+        "sudo" => validate_sudo_args(args, policy)?,
         _ => {}
     }
 
@@ -365,6 +390,28 @@ fn first_matching_prefix<'a>(
     })
 }
 
+fn policy_denial(policy: &CommandExecutionPolicy, reason: DenialReason) -> ToolError {
+    ToolError::policy_denial(CommandPolicyDenial::new(
+        reason,
+        policy.mode,
+        policy.network_mode,
+    ))
+}
+
+fn read_only_argument_denial(
+    policy: &CommandExecutionPolicy,
+    command: &str,
+    argument: &str,
+) -> ToolError {
+    policy_denial(
+        policy,
+        DenialReason::ReadOnlyArgumentNotAllowed {
+            command: command.to_string(),
+            argument: argument.to_string(),
+        },
+    )
+}
+
 fn executable_name_lookup_key(raw: &str) -> Option<String> {
     Path::new(raw)
         .file_name()
@@ -381,34 +428,50 @@ fn validate_network_mode(
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> Result<()> {
+) -> std::result::Result<(), ToolError> {
     if !matches!(policy.network_mode, CommandNetworkMode::Disabled) {
         return Ok(());
     }
 
     match policy.mode {
         CommandExecutionMode::WorkspaceWrite => Ok(()),
-        CommandExecutionMode::Unrestricted => {
-            bail!("command_network_mode=disabled cannot be enforced for unrestricted bash")
+        CommandExecutionMode::Unrestricted => Err(policy_denial(
+            policy,
+            DenialReason::DisabledNetworkUnenforceable,
+        )),
+        CommandExecutionMode::ReadOnly => {
+            validate_read_only_network_disabled(command, args, policy)
         }
-        CommandExecutionMode::ReadOnly => validate_read_only_network_disabled(command, args),
     }
 }
 
-fn validate_read_only_network_disabled(command: &str, args: &[String]) -> Result<()> {
+fn validate_read_only_network_disabled(
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     let command_key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_string());
     match command_key.as_str() {
-        "curl" => bail!("curl is not allowed when command_network_mode=disabled"),
+        "curl" => Err(policy_denial(
+            policy,
+            DenialReason::DisabledNetworkCommand {
+                command: "curl".to_string(),
+            },
+        )),
         "tailscale" => match args.first().map(String::as_str) {
-            Some("ping" | "netcheck") => {
-                bail!("tailscale network probes are not allowed when command_network_mode=disabled")
-            }
+            Some("ping" | "netcheck") => Err(policy_denial(
+                policy,
+                DenialReason::DisabledNetworkCommand {
+                    command: "tailscale".to_string(),
+                },
+            )),
             _ => Ok(()),
         },
         _ => Ok(()),
     }
 }
 
+#[cfg(test)]
 pub(in crate::toolset) fn select_sandbox_for_policy(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
@@ -444,8 +507,8 @@ fn sandboxed_command_for_policy(
     command_name: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> Result<(String, Vec<String>, &'static str)> {
-    let sandbox = select_sandbox_for_policy(policy.mode, workspace_write_sandbox_enforced())?;
+) -> std::result::Result<(String, Vec<String>, &'static str), ToolError> {
+    let sandbox = select_sandbox_for_execution(policy)?;
     match policy.mode {
         CommandExecutionMode::ReadOnly => Ok((command_name.to_string(), args.to_vec(), sandbox)),
         CommandExecutionMode::Unrestricted => {
@@ -457,7 +520,24 @@ fn sandboxed_command_for_policy(
             args,
             policy.network_mode,
             sandbox,
-        ),
+        )
+        .map_err(Into::into),
+    }
+}
+
+fn select_sandbox_for_execution(
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<&'static str, ToolError> {
+    match policy.mode {
+        CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
+        CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
+        CommandExecutionMode::WorkspaceWrite if workspace_write_sandbox_enforced() => {
+            Ok("macos_seatbelt")
+        }
+        CommandExecutionMode::WorkspaceWrite => Err(policy_denial(
+            policy,
+            DenialReason::WorkspaceWriteSandboxUnavailable,
+        )),
     }
 }
 
@@ -518,31 +598,60 @@ fn macos_workspace_write_policy(network_mode: CommandNetworkMode) -> String {
     )
 }
 
-fn validate_launchctl_args(args: &[String]) -> Result<()> {
-    let subcommand = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| anyhow!("launchctl requires a read-only subcommand"))?;
+fn validate_launchctl_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    let subcommand = args.first().map(String::as_str).ok_or_else(|| {
+        policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandRequired {
+                command: "launchctl".to_string(),
+            },
+        )
+    })?;
 
     match subcommand {
         "list" | "print" | "print-disabled" | "blame" => Ok(()),
-        other => bail!("launchctl subcommand is not allowed by the read-only bash tool: {other}"),
+        other => Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandNotAllowlisted {
+                command: "launchctl".to_string(),
+                subcommand: other.to_string(),
+            },
+        )),
     }
 }
 
-fn validate_tailscale_args(args: &[String]) -> Result<()> {
-    let subcommand = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| anyhow!("tailscale requires a read-only subcommand"))?;
+fn validate_tailscale_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    let subcommand = args.first().map(String::as_str).ok_or_else(|| {
+        policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandRequired {
+                command: "tailscale".to_string(),
+            },
+        )
+    })?;
 
     match subcommand {
         "status" | "ip" | "netcheck" | "version" | "ping" => Ok(()),
-        other => bail!("tailscale subcommand is not allowed by the read-only bash tool: {other}"),
+        other => Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandNotAllowlisted {
+                command: "tailscale".to_string(),
+                subcommand: other.to_string(),
+            },
+        )),
     }
 }
 
-fn validate_curl_args(args: &[String]) -> Result<()> {
+fn validate_curl_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     let mut has_http_url = false;
     for arg in args {
         if arg.starts_with("http://") || arg.starts_with("https://") {
@@ -583,58 +692,92 @@ fn validate_curl_args(args: &[String]) -> Result<()> {
             || arg.starts_with("-K")
             || arg.starts_with("--config=");
         if mutating {
-            bail!("curl argument is not allowed by the read-only bash tool: {arg}");
+            return Err(read_only_argument_denial(policy, "curl", arg));
         }
     }
 
     if !has_http_url {
-        bail!("curl requires an http:// or https:// URL in the read-only bash tool");
+        return Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlyUrlRequired {
+                command: "curl".to_string(),
+            },
+        ));
     }
 
     Ok(())
 }
 
-fn validate_sudo_args(args: &[String]) -> Result<()> {
-    let command = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| anyhow!("sudo requires an approved command"))?;
+fn validate_sudo_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    let command = args.first().map(String::as_str).ok_or_else(|| {
+        policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandRequired {
+                command: "sudo".to_string(),
+            },
+        )
+    })?;
     let command_name = Path::new(command)
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(command);
 
     match command_name {
-        "launchctl" if command == "/bin/launchctl" => validate_launchctl_args(&args[1..]),
-        "launchctl" => {
-            bail!("sudo launchctl must use the absolute /bin/launchctl path")
-        }
-        other => bail!("sudo command is not allowed by the read-only bash tool: {other}"),
+        "launchctl" if command == "/bin/launchctl" => validate_launchctl_args(&args[1..], policy),
+        "launchctl" => Err(read_only_argument_denial(policy, "sudo", command)),
+        other => Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandNotAllowlisted {
+                command: "sudo".to_string(),
+                subcommand: other.to_string(),
+            },
+        )),
     }
 }
 
-fn validate_git_args(args: &[String]) -> Result<()> {
-    if args
+fn validate_git_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    if let Some(argument) = args
         .iter()
         .map(String::as_str)
-        .any(git_global_option_requires_denial)
+        .find(|arg| git_global_option_requires_denial(arg))
     {
-        bail!("git global options that redirect config or helper lookup are not allowed");
+        return Err(read_only_argument_denial(policy, "git", argument));
     }
 
-    let (subcommand_idx, subcommand) =
-        find_git_subcommand(args).ok_or_else(|| anyhow!("git requires a read-only subcommand"))?;
+    let (subcommand_idx, subcommand) = find_git_subcommand(args).ok_or_else(|| {
+        policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandRequired {
+                command: "git".to_string(),
+            },
+        )
+    })?;
     let subcommand_args = &args[subcommand_idx + 1..];
-    validate_git_read_only_flags(subcommand_args)?;
+    validate_git_read_only_flags(subcommand_args, policy)?;
 
     match subcommand {
         "status" | "diff" | "show" | "log" | "ls-files" | "grep" | "rev-parse" => Ok(()),
-        "branch" => validate_git_branch_args(subcommand_args),
-        other => bail!("git subcommand is not allowed by the read-only bash tool: {other}"),
+        "branch" => validate_git_branch_args(subcommand_args, policy),
+        other => Err(policy_denial(
+            policy,
+            DenialReason::ReadOnlySubcommandNotAllowlisted {
+                command: "git".to_string(),
+                subcommand: other.to_string(),
+            },
+        )),
     }
 }
 
-fn validate_ripgrep_args(args: &[String]) -> Result<()> {
+fn validate_ripgrep_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     const UNSAFE_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
     const UNSAFE_WITHOUT_ARGS: &[&str] = &["--search-zip", "-z"];
     for arg in args {
@@ -643,7 +786,7 @@ fn validate_ripgrep_args(args: &[String]) -> Result<()> {
                 .iter()
                 .any(|option| arg == option || arg.starts_with(&format!("{option}=")))
         {
-            bail!("rg argument is not allowed by the read-only bash tool: {arg}");
+            return Err(read_only_argument_denial(policy, "rg", arg));
         }
     }
     Ok(())
@@ -698,7 +841,10 @@ fn find_git_subcommand(args: &[String]) -> Option<(usize, &str)> {
     None
 }
 
-fn validate_git_read_only_flags(args: &[String]) -> Result<()> {
+fn validate_git_read_only_flags(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     const UNSAFE_GIT_FLAGS: &[&str] = &[
         "--output",
         "--ext-diff",
@@ -711,13 +857,16 @@ fn validate_git_read_only_flags(args: &[String]) -> Result<()> {
             || arg.starts_with("--output=")
             || arg.starts_with("--exec=")
         {
-            bail!("git argument is not allowed by the read-only bash tool: {arg}");
+            return Err(read_only_argument_denial(policy, "git", arg));
         }
     }
     Ok(())
 }
 
-fn validate_git_branch_args(args: &[String]) -> Result<()> {
+fn validate_git_branch_args(
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     if args.is_empty() {
         return Ok(());
     }
@@ -727,7 +876,7 @@ fn validate_git_branch_args(args: &[String]) -> Result<()> {
             "--list" | "-l" | "--show-current" | "-a" | "--all" | "-r" | "--remotes" | "-v"
             | "-vv" | "--verbose" => {}
             _ if arg.starts_with("--format=") => {}
-            _ => bail!("git branch argument is not read-only: {arg}"),
+            _ => return Err(read_only_argument_denial(policy, "git", arg)),
         }
     }
     Ok(())
