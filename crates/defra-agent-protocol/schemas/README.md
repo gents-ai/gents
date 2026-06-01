@@ -197,7 +197,10 @@ Some boundaries are deliberate:
   `command_allowed_argv_prefixes` and `command_forbidden_argv_prefixes` refine
   argv-level allow/deny behavior; `command_network_mode` is an optional network
   policy hint. Runtime enforcement still depends on the selected bash mode and
-  host platform.
+  host platform. On macOS, `workspace_write` uses the seatbelt sandbox and only
+  permits same-sandbox process introspection; `unrestricted` is unsandboxed and
+  is the policy to use for host-diagnostics stewards that need `ps` or broad
+  `lsof`.
 - backend credentials may currently be stored either directly in
   `InferenceBackend.api_key` or indirectly via `InferenceBackend.api_key_env_var`.
 - backend capability metadata is not stored in `InferenceBackend`; provider

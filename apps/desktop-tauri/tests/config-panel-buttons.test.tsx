@@ -256,6 +256,51 @@ describe("config panel action buttons", () => {
     );
   });
 
+  it("normalizes command policy choices when saving tool selections", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{
+          ...toolSelection,
+          commandExecutionPolicy: "ReadOnly",
+          commandNetworkMode: "Disabled",
+        }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-command-execution-policy")).toHaveValue(
+      "read_only",
+    );
+    expect(screen.getByTestId("tool-command-network-mode")).toHaveValue("disabled");
+    fireEvent.change(screen.getByTestId("tool-command-execution-policy"), {
+      target: { value: "unrestricted" },
+    });
+    fireEvent.change(screen.getByTestId("tool-command-network-mode"), {
+      target: { value: "enabled" },
+    });
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandExecutionPolicy: "unrestricted",
+          commandNetworkMode: "enabled",
+        }),
+      ),
+    );
+  });
+
   it("applies the server tool ceiling when saving tool selections", async () => {
     const onSaveToolSelectionConfig = vi.fn<
       [(request: ToolSelectionSaveRequest) => Promise<unknown>]

@@ -803,6 +803,20 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_bash: bool,
     #[arg(long)]
     pub(crate) bash_mode: Option<String>,
+    #[arg(
+        long,
+        help = "Command policy for bash: read_only, workspace_write, managed_write, or unrestricted"
+    )]
+    pub(crate) command_execution_policy: Option<String>,
+    #[arg(
+        long,
+        help = "Network policy hint for bash commands: inherit, disabled, or enabled"
+    )]
+    pub(crate) command_network_mode: Option<String>,
+    #[arg(long = "command-allowed-argv-prefix")]
+    pub(crate) command_allowed_argv_prefixes: Vec<String>,
+    #[arg(long = "command-forbidden-argv-prefix")]
+    pub(crate) command_forbidden_argv_prefixes: Vec<String>,
     #[arg(long = "cli-tool-name")]
     pub(crate) cli_tool_names: Vec<String>,
     #[arg(long, default_value_t = true)]

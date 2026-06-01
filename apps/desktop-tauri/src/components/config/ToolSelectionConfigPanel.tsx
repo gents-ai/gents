@@ -15,6 +15,19 @@ import {
   parseOptionalInt,
 } from "./formUtils";
 
+const COMMAND_POLICY_OPTIONS = [
+  { value: "", label: "Default for bash mode" },
+  { value: "read_only", label: "Read only" },
+  { value: "workspace_write", label: "Workspace write" },
+  { value: "unrestricted", label: "Unrestricted" },
+] as const;
+
+const COMMAND_NETWORK_OPTIONS = [
+  { value: "", label: "Inherit" },
+  { value: "disabled", label: "Disabled" },
+  { value: "enabled", label: "Enabled" },
+] as const;
+
 export type ToolSelectionConfigPanelProps = {
   deployment: DeploymentView;
   selectedToolSelectionId: string | null;
@@ -163,14 +176,16 @@ export function ToolSelectionConfigEditor({
         ? "Unrestricted"
         : (toolSelection?.bashMode ?? "ReadOnly"),
     );
-    setCommandExecutionPolicy(toolSelection?.commandExecutionPolicy ?? "");
+    setCommandExecutionPolicy(
+      normalizeCommandExecutionPolicy(toolSelection?.commandExecutionPolicy),
+    );
     setCommandAllowedArgvPrefixes(
       (toolSelection?.commandAllowedArgvPrefixes ?? []).join("\n"),
     );
     setCommandForbiddenArgvPrefixes(
       (toolSelection?.commandForbiddenArgvPrefixes ?? []).join("\n"),
     );
-    setCommandNetworkMode(toolSelection?.commandNetworkMode ?? "");
+    setCommandNetworkMode(normalizeCommandNetworkMode(toolSelection?.commandNetworkMode));
     setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
     setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
     const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
@@ -372,19 +387,31 @@ export function ToolSelectionConfigEditor({
       <div className="grid-2">
         <label className="field">
           <span>Command policy</span>
-          <input
+          <select
             data-testid="tool-command-execution-policy"
             onChange={(event) => setCommandExecutionPolicy(event.currentTarget.value)}
             value={commandExecutionPolicy}
-          />
+          >
+            {COMMAND_POLICY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>Command network mode</span>
-          <input
+          <select
             data-testid="tool-command-network-mode"
             onChange={(event) => setCommandNetworkMode(event.currentTarget.value)}
             value={commandNetworkMode}
-          />
+          >
+            {COMMAND_NETWORK_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
       <div className="grid-2">
@@ -563,6 +590,41 @@ function normalizeToolCeiling(value?: string | null) {
       return "Readonly";
     default:
       return "Unknown";
+  }
+}
+
+function normalizeCommandExecutionPolicy(value?: string | null) {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "":
+      return "";
+    case "readonly":
+    case "read_only":
+      return "read_only";
+    case "managedwrite":
+    case "managed_write":
+    case "workspacewrite":
+    case "workspace_write":
+      return "workspace_write";
+    case "unrestricted":
+      return "unrestricted";
+    default:
+      return "";
+  }
+}
+
+function normalizeCommandNetworkMode(value?: string | null) {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "":
+    case "inherit":
+      return "";
+    case "off":
+    case "disabled":
+      return "disabled";
+    case "on":
+    case "enabled":
+      return "enabled";
+    default:
+      return "";
   }
 }
 
