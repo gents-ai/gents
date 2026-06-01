@@ -569,6 +569,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &format!(
             r#"{{
                 ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    command_execution_policy
                     backgroundable_tool_names
                 }}
             }}"#,
@@ -577,6 +578,17 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     )
     .await?;
     let tool_selection = first_graphql_row(&response, "ToolSelection")?;
+    let expected_command_policy = if cfg!(target_os = "macos") {
+        Some("workspace_write")
+    } else {
+        Some("unrestricted")
+    };
+    assert_eq!(
+        tool_selection
+            .get("command_execution_policy")
+            .and_then(Value::as_str),
+        expected_command_policy
+    );
     assert_eq!(
         tool_selection
             .get("backgroundable_tool_names")

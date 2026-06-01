@@ -536,7 +536,7 @@ fn standard_tool_selection(
         file_tool_root: None,
         enable_bash: Some(true),
         bash_mode: Some(bash_mode.to_string()),
-        command_execution_policy: None,
+        command_execution_policy: default_command_execution_policy_for_init(tool_ceiling),
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
         command_network_mode: None,
@@ -550,6 +550,16 @@ fn standard_tool_selection(
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+    }
+}
+
+fn default_command_execution_policy_for_init(tool_ceiling: ToolCeilingArg) -> Option<String> {
+    match tool_ceiling {
+        ToolCeilingArg::Readwrite if cfg!(target_os = "macos") => {
+            Some("workspace_write".to_string())
+        }
+        ToolCeilingArg::Readwrite => Some("unrestricted".to_string()),
+        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => None,
     }
 }
 

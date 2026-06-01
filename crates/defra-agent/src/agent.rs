@@ -401,7 +401,14 @@ fn command_policy_from_document(
             .as_ref()
             .is_some_and(|prefixes| !prefixes.is_empty());
     if !has_policy {
-        return Ok(None);
+        return if matches!(bash, BashMode::Unrestricted) {
+            Ok(Some(
+                CommandExecutionPolicy::write_capable()
+                    .with_mode(CommandExecutionMode::Unrestricted),
+            ))
+        } else {
+            Ok(None)
+        };
     }
 
     let requested_mode = selection
@@ -413,13 +420,7 @@ fn command_policy_from_document(
     let mode = match bash {
         BashMode::Off => CommandExecutionMode::ReadOnly,
         BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
-        BashMode::Unrestricted => requested_mode.unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                CommandExecutionMode::WorkspaceWrite
-            } else {
-                CommandExecutionMode::Unrestricted
-            }
-        }),
+        BashMode::Unrestricted => requested_mode.unwrap_or(CommandExecutionMode::Unrestricted),
     };
 
     let allowed = parse_argv_prefixes(

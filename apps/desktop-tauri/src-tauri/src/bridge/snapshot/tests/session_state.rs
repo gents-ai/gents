@@ -5,8 +5,15 @@ mod lean_vocab_test;
 
 use lean_vocab_test::{
     lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
-    lean_response_transition_cases, LeanClientShellCase, LeanResponseTransitionCase,
+    lean_response_transition_cases, lean_transcript_cases, LeanClientShellCase,
+    LeanResponseTransitionCase, LeanTranscriptCase,
 };
+use rig::completion::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
+use rig::one_or_many::OneOrMany;
+use serde_json::json;
 
 #[test]
 fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observed() {
@@ -458,6 +465,102 @@ fn session_snapshot_streaming_response_overlay_consumes_generated_transition_cas
                 case.name
             );
         }
+    }
+}
+
+#[test]
+fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
+    let cases = lean_transcript_cases();
+    assert_eq!(
+        cases.len(),
+        6,
+        "desktop transcript rendering should consume every generated Lean transcript case"
+    );
+
+    for case in cases {
+        let store = transcript_contract_store(case);
+        let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+            .unwrap_or_else(|| panic!("case {} should produce a session snapshot", case.name));
+
+        assert_eq!(
+            snapshot.messages.len(),
+            case.post_message_count,
+            "case {} should expose the Lean durable message count to the desktop renderer",
+            case.name
+        );
+        assert_eq!(
+            snapshot.tool_calls.len(),
+            case.post_tool_call_count,
+            "case {} should expose the Lean durable tool-call count to the desktop renderer",
+            case.name
+        );
+
+        let hidden_tool_result_rows = snapshot
+            .messages
+            .iter()
+            .filter(|message| message.has_tool_results)
+            .count();
+        assert_eq!(
+            hidden_tool_result_rows,
+            transcript_contract_tool_result_rows(case),
+            "case {} should keep Lean tool-result transcript rows out of chat-message rendering",
+            case.name
+        );
+
+        let rendered_tool_groups = snapshot
+            .timeline_items
+            .iter()
+            .filter_map(|item| match item {
+                RenderedTimelineItem::ToolGroup {
+                    message_sequence,
+                    tools,
+                    ..
+                } => Some((*message_sequence, tools)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let rendered_tool_count = rendered_tool_groups
+            .iter()
+            .map(|(_, tools)| tools.len())
+            .sum::<usize>();
+        assert_eq!(
+            rendered_tool_count, case.post_tool_call_count,
+            "case {} should render every Lean tool-call row in transcript tool groups",
+            case.name
+        );
+
+        if case.post_tool_call_count > 0 {
+            assert_eq!(
+                rendered_tool_groups.len(),
+                1,
+                "case {} should render one grouped tool-call block",
+                case.name
+            );
+            assert_eq!(
+                rendered_tool_groups[0].0,
+                transcript_contract_tool_group_sequence(case),
+                "case {} should attach rendered tools to the Lean assistant sequence",
+                case.name
+            );
+        }
+
+        let rendered_kinds = snapshot
+            .timeline_items
+            .iter()
+            .map(|item| match item {
+                RenderedTimelineItem::UserMessage { .. } => "user",
+                RenderedTimelineItem::AssistantMessage { .. } => "assistant",
+                RenderedTimelineItem::ToolGroup { .. } => "tools",
+                RenderedTimelineItem::PendingUserTurn { .. } => "pending",
+                RenderedTimelineItem::LiveAssistant { .. } => "live",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered_kinds,
+            transcript_contract_rendered_kinds(case),
+            "case {} transcript timeline shape should follow the Lean post-state",
+            case.name
+        );
     }
 }
 
@@ -959,6 +1062,237 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         tool_cancel_cause.source, "parentCascade",
         "cascade-cancelled tool call source should be 'parentCascade'"
     );
+}
+
+fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
+    ClientStore::from_rows(ClientStoreRows {
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:contract-agent".to_string()),
+            behavior_id: Some("contract-behavior".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: transcript_contract_request_content(case),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: transcript_contract_messages(case),
+        tool_calls: transcript_contract_tool_calls(case),
+        ..ClientStoreRows::default()
+    })
+}
+
+fn transcript_contract_messages(case: &LeanTranscriptCase) -> Vec<AgentMessageRow> {
+    match case.name.as_str() {
+        "ordering_user_assistant_tool_result"
+        | "dedupe_duplicate_reuses_sequence"
+        | "completed_tool_pair_closed" => vec![
+            transcript_message_row(
+                "msg-user",
+                1,
+                "user",
+                user_message_json(&format!("{} prompt", case.name)),
+            ),
+            transcript_message_row(
+                "msg-assistant-tool",
+                case.assistant_sequence,
+                "assistant",
+                transcript_assistant_tool_call_message_json(&transcript_contract_result_id(case)),
+            ),
+            transcript_message_row(
+                "msg-tool-result",
+                case.result_sequence,
+                "user",
+                transcript_tool_result_message_json(
+                    &transcript_contract_result_id(case),
+                    &format!("payload-{}", case.payload_hash),
+                ),
+            ),
+        ],
+        "distinct_result_ids_append_distinct_rows" => vec![
+            transcript_message_row(
+                "msg-seed-result",
+                1,
+                "user",
+                transcript_tool_result_message_json(
+                    "result-10",
+                    &format!("payload-{}", case.payload_hash),
+                ),
+            ),
+            transcript_message_row(
+                "msg-distinct-result",
+                case.result_sequence,
+                "user",
+                transcript_tool_result_message_json(
+                    &transcript_contract_result_id(case),
+                    &format!("payload-{}", case.payload_hash),
+                ),
+            ),
+        ],
+        "explicit_drain_terminalizes_ownership" => vec![transcript_message_row(
+            "msg-drain-assistant-tool",
+            case.assistant_sequence,
+            "assistant",
+            transcript_assistant_tool_call_message_json("result-drain"),
+        )],
+        "drop_abandon_not_strong_drain" => Vec::new(),
+        other => panic!("unsupported Lean transcript case {other:?}"),
+    }
+}
+
+fn transcript_contract_request_content(case: &LeanTranscriptCase) -> Option<String> {
+    matches!(
+        case.name.as_str(),
+        "ordering_user_assistant_tool_result"
+            | "dedupe_duplicate_reuses_sequence"
+            | "completed_tool_pair_closed"
+    )
+    .then(|| format!("{} prompt", case.name))
+}
+
+fn transcript_contract_tool_calls(
+    case: &LeanTranscriptCase,
+) -> Vec<defra_agent_protocol::row::AgentToolCallRow> {
+    let lifecycle_state = transcript_contract_tool_lifecycle(case);
+    (0..case.post_tool_call_count)
+        .map(|index| defra_agent_protocol::row::AgentToolCallRow {
+            tool_call_key: format!("tool-{}-{index}", case.name),
+            session_id: Some("session-1".to_string()),
+            request_id: Some("req-1".to_string()),
+            message_sequence: transcript_contract_tool_group_sequence(case),
+            tool_name: Some("read".to_string()),
+            tool_call_id: Some(transcript_contract_result_id(case)),
+            args: Some(r#"{"file_path":"/tmp/transcript-contract.txt"}"#.to_string()),
+            result: (lifecycle_state == "completed")
+                .then(|| format!("payload-{}", case.payload_hash)),
+            status: Some(lifecycle_state.to_string()),
+            lifecycle_state: Some(lifecycle_state.to_string()),
+            cancel_policy: None,
+            started_at: Some("2026-04-21T12:00:01Z".to_string()),
+            deadline_at: None,
+            completed_at: (lifecycle_state != "running")
+                .then(|| "2026-04-21T12:00:05Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            denial_reason: None,
+            denied_argv: None,
+            denied_command: None,
+            denied_argument: None,
+            denied_subcommand: None,
+            denied_prefix: None,
+            policy_mode: None,
+            policy_network: None,
+            cancel_cause: None,
+            latency_ms: None,
+        })
+        .collect()
+}
+
+fn transcript_message_row(
+    message_key: &str,
+    sequence: usize,
+    role: &str,
+    content: String,
+) -> AgentMessageRow {
+    AgentMessageRow {
+        message_key: message_key.to_string(),
+        session_id: Some("session-1".to_string()),
+        sequence: Some(sequence as i64),
+        role: Some(role.to_string()),
+        content: Some(content),
+        timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+    }
+}
+
+fn transcript_assistant_tool_call_message_json(model_call_id: &str) -> String {
+    serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+            id: model_call_id.to_string(),
+            call_id: Some(model_call_id.to_string()),
+            function: ToolFunction {
+                name: "read".to_string(),
+                arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
+            },
+            signature: None,
+            additional_params: None,
+        })),
+    })
+    .expect("serialize assistant tool-call message")
+}
+
+fn transcript_tool_result_message_json(result_id: &str, text: &str) -> String {
+    serde_json::to_string(&Message::User {
+        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            id: result_id.to_string(),
+            call_id: Some(result_id.to_string()),
+            content: OneOrMany::one(ToolResultContent::Text(Text {
+                text: text.to_string(),
+            })),
+        })),
+    })
+    .expect("serialize tool-result message")
+}
+
+fn transcript_contract_result_id(case: &LeanTranscriptCase) -> String {
+    if case.logical_result_id == 0 {
+        format!("result-{}", case.name)
+    } else {
+        format!("result-{}", case.logical_result_id)
+    }
+}
+
+fn transcript_contract_tool_lifecycle(case: &LeanTranscriptCase) -> &'static str {
+    match case.action.as_str() {
+        "cancel_fail_or_timeout_in_flight" => "cancelled",
+        "abandon_hook_ownership" => "running",
+        _ if case.expected_pair_closed => "completed",
+        _ => "running",
+    }
+}
+
+fn transcript_contract_tool_group_sequence(case: &LeanTranscriptCase) -> Option<i64> {
+    (case.assistant_sequence > 0).then_some(case.assistant_sequence as i64)
+}
+
+fn transcript_contract_tool_result_rows(case: &LeanTranscriptCase) -> usize {
+    match case.name.as_str() {
+        "ordering_user_assistant_tool_result"
+        | "dedupe_duplicate_reuses_sequence"
+        | "completed_tool_pair_closed" => 1,
+        "distinct_result_ids_append_distinct_rows" => 2,
+        "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => 0,
+        other => panic!("unsupported Lean transcript case {other:?}"),
+    }
+}
+
+fn transcript_contract_rendered_kinds(case: &LeanTranscriptCase) -> Vec<&'static str> {
+    match case.name.as_str() {
+        "ordering_user_assistant_tool_result"
+        | "dedupe_duplicate_reuses_sequence"
+        | "completed_tool_pair_closed" => vec!["user", "tools"],
+        "distinct_result_ids_append_distinct_rows" => Vec::new(),
+        "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => {
+            vec!["tools"]
+        }
+        other => panic!("unsupported Lean transcript case {other:?}"),
+    }
 }
 
 fn contract_session_id(id: usize) -> String {

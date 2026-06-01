@@ -138,8 +138,8 @@ export async function createToolSelection({
   await driver.setChecked("tool-enable-meta-tools", true);
   await driver.setChecked(`tool-allowed-mcp-service-${ids.toolServiceId}`, true);
   await driver.replaceInput("tool-file-tool-root", fileToolRoot);
-  await driver.replaceInput("tool-command-execution-policy", "ReadOnly");
-  await driver.replaceInput("tool-command-network-mode", "Disabled");
+  await driver.selectOption("tool-command-execution-policy", "read_only");
+  await driver.selectOption("tool-command-network-mode", "disabled");
   await driver.replaceTextarea("tool-command-allowed-argv-prefixes", "rg");
   await driver.replaceTextarea("tool-command-forbidden-argv-prefixes", "rm -rf");
   await driver.replaceTextarea("tool-cli-tool-names", "rg");
@@ -156,10 +156,10 @@ export async function createToolSelection({
     );
     expect(selection?.allowedMcpServiceIds).toContain(ids.toolServiceId);
     expect(selection?.fileToolRoot).toBe(fileToolRoot);
-    expect(selection?.commandExecutionPolicy).toBe("ReadOnly");
+    expect(selection?.commandExecutionPolicy).toBe("read_only");
     expect(selection?.commandAllowedArgvPrefixes).toContain("rg");
     expect(selection?.commandForbiddenArgvPrefixes).toContain("rm -rf");
-    expect(selection?.commandNetworkMode).toBe("Disabled");
+    expect(selection?.commandNetworkMode).toBe("disabled");
     expect(selection?.backgroundableToolNames).toContain("bash");
     expect(selection?.subagentTargets).toContain(ids.behaviorId);
     expect(selection?.subagentSpawnEnabled).toBe(true);
