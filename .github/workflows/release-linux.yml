@@ -62,6 +62,8 @@ jobs:
           git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Install native build dependencies
         run: |
