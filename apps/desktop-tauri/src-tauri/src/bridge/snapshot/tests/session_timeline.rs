@@ -578,7 +578,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
             tool_call_id: Some("call-denial".to_string()),
             args: Some("{\"command\":\"git\",\"args\":[\"commit\"]}".to_string()),
             result: Some("structured policy denial payload".to_string()),
-            status: Some("failed".to_string()),
+            status: Some("completed".to_string()),
             lifecycle_state: Some("failed".to_string()),
             cancel_policy: None,
             started_at: None,
@@ -613,6 +613,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         .expect("rendered tool");
     let denial = tool.denial.as_ref().expect("structured denial");
 
+    assert_eq!(tool.status.as_deref(), Some("completed"));
     assert_eq!(tool.status_kind, "error");
     assert_eq!(denial.rule_id, "readOnlySubcommandNotAllowlisted");
     assert_eq!(denial.category, "read-only-guard");

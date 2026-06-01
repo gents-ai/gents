@@ -328,6 +328,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 args: normalize_optional(row.args.as_deref()),
                 result: normalize_optional(row.result.as_deref()),
                 status: normalize_optional(row.status.as_deref()),
+                lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),
                 started_at: normalize_optional(row.started_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
                 denial: command_denial_from_row(&row),

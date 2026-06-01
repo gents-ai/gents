@@ -28,6 +28,7 @@ pub(crate) struct ToolCallView {
     pub args: Option<String>,
     pub result: Option<String>,
     pub status: Option<String>,
+    pub lifecycle_state: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

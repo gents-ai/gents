@@ -48,7 +48,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
     RenderedToolCallView {
         item_key: tool.tool_call_key.clone(),
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
-        status_kind: tool_status_kind(tool.status.as_deref()),
+        status_kind: tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())),
         status: tool.status.clone(),
         args: parse_tool_detail_value(tool.args.as_deref()),
         result: parse_tool_detail_value(tool.result.as_deref()),
