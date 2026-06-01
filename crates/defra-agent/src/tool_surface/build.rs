@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::toolset::{CommandExecutionPolicy, ToolSet, ToolSetBuilder};
+use crate::toolset::{
+    default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy, ToolSet,
+    ToolSetBuilder,
+};
 
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
 
@@ -76,6 +79,7 @@ pub(super) fn build_host_tools(
         builder = builder.write_file(root.clone()).edit_file(root);
     }
 
+    let command_policy = constrain_command_policy_to_effective_bash(command_policy, bash);
     match bash {
         BashMode::Off => {}
         BashMode::ReadOnly => {
@@ -112,6 +116,27 @@ pub(super) fn build_host_tools(
     }
 
     Ok(builder.build())
+}
+
+fn constrain_command_policy_to_effective_bash(
+    command_policy: Option<CommandExecutionPolicy>,
+    bash: BashMode,
+) -> Option<CommandExecutionPolicy> {
+    match (command_policy, bash) {
+        (_, BashMode::Off) | (None, _) => None,
+        (Some(policy), BashMode::Unrestricted) => Some(policy),
+        (Some(policy), BashMode::ReadOnly)
+            if matches!(policy.mode, CommandExecutionMode::ReadOnly) =>
+        {
+            Some(policy)
+        }
+        (Some(policy), BashMode::ReadOnly) => Some(
+            default_read_only_command_policy()
+                .with_allowed_argv_prefixes(policy.allowed_argv_prefixes)
+                .with_forbidden_argv_prefixes(policy.forbidden_argv_prefixes)
+                .with_network_mode(policy.network_mode),
+        ),
+    }
 }
 
 pub(super) fn resolve_effective_tool_root(

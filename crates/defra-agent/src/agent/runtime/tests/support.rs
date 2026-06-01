@@ -141,6 +141,7 @@ pub(super) struct MockModelEndpoint {
     pub(super) port: u16,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) chat_requests: Arc<AtomicUsize>,
+    pub(super) chat_requests_changed: Arc<tokio::sync::Notify>,
     pub(super) handle: Option<JoinHandle<()>>,
 }
 
@@ -161,6 +162,8 @@ impl MockModelEndpoint {
         let stop_for_thread = stop.clone();
         let chat_requests = Arc::new(AtomicUsize::new(0));
         let chat_requests_for_thread = chat_requests.clone();
+        let chat_requests_changed = Arc::new(tokio::sync::Notify::new());
+        let chat_requests_changed_for_thread = chat_requests_changed.clone();
         let model_name = model_name.to_string();
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
@@ -175,6 +178,7 @@ impl MockModelEndpoint {
                         };
                         if request.method == "POST" && request.path == "/v1/chat/completions" {
                             chat_requests_for_thread.fetch_add(1, Ordering::SeqCst);
+                            chat_requests_changed_for_thread.notify_waiters();
                             if blocking_chat {
                                 while !stop_for_thread.load(Ordering::Relaxed) {
                                     thread::sleep(Duration::from_millis(25));
@@ -207,6 +211,7 @@ impl MockModelEndpoint {
             port,
             stop,
             chat_requests,
+            chat_requests_changed,
             handle: Some(handle),
         })
     }
@@ -466,15 +471,19 @@ pub(super) async fn create_agent_request_for_behavior(
 pub(super) async fn wait_for_chat_request_count(endpoint: &MockModelEndpoint, expected: usize) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
+        let notified = endpoint.chat_requests_changed.notified();
         let actual = endpoint.chat_request_count();
         if actual >= expected {
             return;
         }
+        let now = tokio::time::Instant::now();
         assert!(
-            tokio::time::Instant::now() < deadline,
+            now < deadline,
             "timed out waiting for {expected} chat request(s), observed {actual}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout_at(deadline, notified)
+            .await
+            .unwrap_or(());
     }
 }
 
