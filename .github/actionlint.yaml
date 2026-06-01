@@ -5,3 +5,7 @@ self-hosted-runner:
     - studio
     - studio-1
     - studio-2
+    - Linux
+    - X64
+    - spark
+    - workstation-1

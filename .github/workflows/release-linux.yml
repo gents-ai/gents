@@ -1,0 +1,165 @@
+name: Release Linux defra-agent
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build-package:
+    name: Build and package ${{ matrix.target }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner_arch: X64
+            runner_label: workstation-1
+          - target: aarch64-unknown-linux-gnu
+            runner_arch: ARM64
+            runner_label: spark
+    runs-on:
+      - self-hosted
+      - Linux
+      - ${{ matrix.runner_arch }}
+      - ${{ matrix.runner_label }}
+
+    env:
+      GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
+      TARGET_TRIPLE: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Rewrite Git SSH dependencies to HTTPS
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
+            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
+            exit 1
+          fi
+          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install native build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libssl-dev \
+            pkg-config \
+            protobuf-compiler
+          protoc --version
+
+      - name: Build release binary
+        run: |
+          set -euo pipefail
+          rustc -Vv
+          host_triple="$(rustc -Vv | awk '/^host:/ { print $2 }')"
+          if [[ "${host_triple}" != "${TARGET_TRIPLE}" ]]; then
+            echo "::error::Expected native ${TARGET_TRIPLE} runner, got ${host_triple}."
+            exit 1
+          fi
+          cargo build -p defra-agent-cli --release
+          file target/release/defra-agent
+
+      - name: Verify binary
+        run: |
+          set -euo pipefail
+          binary_path="target/release/defra-agent"
+          version_output="$("${binary_path}" version)"
+          printf '%s\n' "${version_output}"
+          if [[ -z "${version_output}" ]]; then
+            echo "::error::defra-agent version produced no output."
+            exit 1
+          fi
+
+      - name: Package artifact
+        id: package
+        run: |
+          set -euo pipefail
+
+          artifact_basename="defra-agent-${TARGET_TRIPLE}"
+          package_parent="${RUNNER_TEMP}/package"
+          package_root="${package_parent}/${artifact_basename}"
+          dist_dir="${RUNNER_TEMP}/dist"
+          tarball="${dist_dir}/${artifact_basename}.tar.gz"
+          checksum_file="${tarball}.sha256"
+
+          rm -rf "${package_parent}" "${dist_dir}"
+          mkdir -p "${package_root}" "${dist_dir}"
+          cp target/release/defra-agent "${package_root}/defra-agent"
+          chmod 0755 "${package_root}/defra-agent"
+
+          tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
+          (
+            cd "${dist_dir}"
+            sha256sum "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
+          )
+
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
+          ls -lh "${dist_dir}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_basename }}
+          path: |
+            ${{ steps.package.outputs.tarball }}
+            ${{ steps.package.outputs.checksum_file }}
+          if-no-files-found: error
+
+      - name: Attach artifacts to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "defra-agent release artifacts." \
+              || gh release view "${GITHUB_REF_NAME}" >/dev/null
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${CHECKSUM_FILE}" --clobber
+
+      - name: Cleanup git auth
+        if: always()
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          rm -f "${GIT_CONFIG_GLOBAL}"
