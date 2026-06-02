@@ -5,6 +5,12 @@ struct BackgroundedRow {
     lifecycle_state: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct StoredToolCallResult {
+    pub tool_name: String,
+    pub result: String,
+}
+
 pub(super) async fn count_live_backgrounded_rows(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
@@ -146,11 +152,146 @@ pub(super) async fn running_subagent_bridge_ids(
         .collect())
 }
 
+pub(super) async fn load_stored_tool_call_result(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> anyhow::Result<StoredToolCallResult> {
+    let escaped_session_id = crate::graphql::escape_graphql_string(session_id);
+    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
+                limit: 1
+            ) {{
+                tool_name
+                result
+            }}
+        }}"#
+    );
+
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "loading stored tool call result for session_id={session_id} tool_call_id={tool_call_id} failed: {:?}",
+            response.errors
+        );
+    }
+
+    let mut rows: Vec<StoredToolCallResult> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+
+    rows.pop().ok_or_else(|| {
+        anyhow::anyhow!(
+            "loading stored tool call result: no AgentToolCall for session_id={session_id} tool_call_id={tool_call_id}"
+        )
+    })
+}
+
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
     match tool_name {
         "bash" | "shell" | "command" => TruncationMode::Tail,
         _ => TruncationMode::Head,
     }
+}
+
+pub(super) fn model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
+    if !is_read_file_tool(tool_name) {
+        return raw_result.to_string();
+    }
+
+    project_read_file_observation(raw_result).unwrap_or_else(|| raw_result.to_string())
+}
+
+fn is_read_file_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "read_file" | "read" | "cat")
+}
+
+fn project_read_file_observation(raw_result: &str) -> Option<String> {
+    project_read_file_json_observation(raw_result)
+        .or_else(|| project_read_file_compact_observation(raw_result))
+}
+
+fn project_read_file_compact_observation(raw_result: &str) -> Option<String> {
+    let (first_line, body) = raw_result.split_once('\n')?;
+    let metadata = first_line.strip_prefix("defra_fs: ")?;
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    if metadata.get("tool").and_then(|value| value.as_str()) != Some("read_file") {
+        return None;
+    }
+    let content = body.strip_prefix("content:\n").unwrap_or(body);
+    Some(render_read_file_observation(&metadata, content))
+}
+
+fn project_read_file_json_observation(raw_result: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw_result.trim()).ok()?;
+    let content = value.get("content").and_then(|value| value.as_str())?;
+    if !looks_like_read_file_wrapper(&value) {
+        return None;
+    }
+    Some(render_read_file_observation(&value, content))
+}
+
+fn looks_like_read_file_wrapper(value: &serde_json::Value) -> bool {
+    if value.get("tool").and_then(|value| value.as_str()) == Some("read_file") {
+        return true;
+    }
+
+    value.get("ok").is_some()
+        && value.get("status").is_some()
+        && value.get("path").is_some()
+        && value.get("start_line").is_some()
+        && value.get("end_line").is_some()
+}
+
+fn render_read_file_observation(metadata: &serde_json::Value, content: &str) -> String {
+    let path = metadata
+        .get("path")
+        .and_then(|value| value.as_str())
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or("file");
+    let truncated = metadata
+        .get("truncated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    let mut provenance = format!("Read {path}");
+    if let (Some(start), Some(end)) = (
+        json_usize(metadata, "start_line"),
+        json_usize(metadata, "end_line"),
+    ) {
+        provenance.push_str(&format!(" (lines {start}-{end}"));
+        if let Some(total) = json_usize(metadata, "total_count") {
+            provenance.push_str(&format!(" of {total}"));
+        }
+        if truncated {
+            provenance.push_str(", truncated");
+        }
+        provenance.push(')');
+    } else if truncated {
+        provenance.push_str(" (truncated)");
+    }
+    provenance.push(':');
+
+    let content = content.trim_end();
+    if content.is_empty() {
+        provenance
+    } else {
+        format!("{provenance}\n{content}")
+    }
+}
+
+fn json_usize(value: &serde_json::Value, key: &str) -> Option<usize> {
+    value
+        .get(key)
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 pub(super) fn render_tool_result_text(tool_result: &ToolResult) -> String {
@@ -464,6 +605,43 @@ fn strip_error_prefixes(mut value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_file_compact_output_projects_to_model_observation() {
+        let raw = concat!(
+            r#"defra_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
+            "\ncontent:\nL2: beta\nL3: gamma\n"
+        );
+
+        assert_eq!(
+            model_observation_for_tool_result("read_file", raw),
+            "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
+        );
+    }
+
+    #[test]
+    fn read_file_raw_json_output_projects_to_model_observation() {
+        let raw = r#"{"ok":true,"status":"success","tool":"read_file","path":"src/main.rs","returned_count":1,"total_count":9,"truncated":true,"start_line":4,"end_line":4,"content":"L4: fn main() {}"}"#;
+
+        assert_eq!(
+            model_observation_for_tool_result("read_file", raw),
+            "Read src/main.rs (lines 4-4 of 9, truncated):\nL4: fn main() {}"
+        );
+    }
+
+    #[test]
+    fn read_file_projection_does_not_parse_plain_file_json() {
+        let raw = r#"{"path":"data.json","content":"not a wrapper"}"#;
+
+        assert_eq!(model_observation_for_tool_result("read_file", raw), raw);
+    }
+
+    #[test]
+    fn non_read_tool_result_is_unchanged_for_model() {
+        let raw = r#"{"ok":true,"content":"still structured"}"#;
+
+        assert_eq!(model_observation_for_tool_result("grep", raw), raw);
+    }
 
     #[test]
     fn runtime_failure_extracts_structured_command_policy_denial() {

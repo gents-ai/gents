@@ -1001,6 +1001,131 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
 }
 
 #[tokio::test]
+async fn read_file_result_persists_raw_output_but_models_compact_observation() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-read-file-model-observation-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(
+            &hook,
+            &user_text_message("Read notes.txt"),
+            &[]
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let tool_args = r#"{"path":"notes.txt","start_line":2,"end_line":3}"#;
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "read_file",
+            Some("call-read".to_string()),
+            "internal-read",
+            tool_args,
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let raw_read_output = concat!(
+        r#"defra_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
+        "\ncontent:\nL2: beta\nL3: gamma"
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_result(
+            &hook,
+            "read_file",
+            Some("call-read".to_string()),
+            "internal-read",
+            tool_args,
+            raw_read_output,
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+            id: "internal-read".to_string(),
+            call_id: Some("call-read".to_string()),
+            function: ToolFunction {
+                name: "read_file".to_string(),
+                arguments: json!({
+                    "path": "notes.txt",
+                    "start_line": 2,
+                    "end_line": 3,
+                }),
+            },
+            signature: None,
+            additional_params: None,
+        })),
+    })
+    .await
+    .unwrap();
+
+    hook.persist_stream_tool_result_message(
+        &ToolResult {
+            id: "internal-read".to_string(),
+            call_id: Some("call-read".to_string()),
+            content: OneOrMany::one(ToolResultContent::Text(Text {
+                text: "ephemeral stream payload".to_string(),
+            })),
+        },
+        "internal-read",
+    )
+    .await
+    .unwrap();
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+
+    let Message::User { content } = &history[2] else {
+        panic!("expected tool result message");
+    };
+    let UserContent::ToolResult(tool_result) = content.first_ref() else {
+        panic!("expected tool result content");
+    };
+    assert_eq!(tool_result.call_id.as_deref(), Some("call-read"));
+    let ToolResultContent::Text(Text { text }) = tool_result.content.first_ref() else {
+        panic!("expected text tool result content");
+    };
+    assert_eq!(
+        text,
+        "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
+    );
+    assert!(!text.contains("defra_fs"));
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-read").await;
+    assert_eq!(
+        row.get("result").and_then(|value| value.as_str()),
+        Some(raw_read_output)
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-hook-tool-result-message-dedupe-{}",
