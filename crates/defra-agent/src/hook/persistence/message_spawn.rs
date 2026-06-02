@@ -136,16 +136,18 @@ impl DefraSessionHook {
 
         let raw_stream_result = render_tool_result_text(tool_result);
         let prefer_stream_payload = is_subagent_tool_result_payload(&raw_stream_result);
-        let stored_result =
-            match session::load_tool_call_result(&self.node, &session_id, internal_call_id).await {
-                Ok(stored) if !stored.is_empty() && !prefer_stream_payload => stored,
-                Ok(_) => {
+        let (tool_name, stored_result) =
+            match load_stored_tool_call_result(&self.node, &session_id, internal_call_id).await {
+                Ok(stored) if !stored.result.is_empty() && !prefer_stream_payload => {
+                    (stored.tool_name, stored.result)
+                }
+                Ok(stored) => {
                     let (text, _, _) = truncate_text(
                         &raw_stream_result,
                         TruncationMode::Head,
                         &self.truncation_limits,
                     );
-                    text
+                    (stored.tool_name, text)
                 }
                 Err(e) => {
                     if is_missing_tool_call_result(&e) {
@@ -166,15 +168,16 @@ impl DefraSessionHook {
                         TruncationMode::Head,
                         &self.truncation_limits,
                     );
-                    text
+                    ("unknown".to_string(), text)
                 }
             };
+        let model_observation = model_observation_for_tool_result(&tool_name, &stored_result);
 
         let persisted_result = ToolResult {
             id: tool_result.id.clone(),
             call_id: tool_result.call_id.clone(),
             content: OneOrMany::one(ToolResultContent::Text(Text {
-                text: stored_result,
+                text: model_observation,
             })),
         };
 
