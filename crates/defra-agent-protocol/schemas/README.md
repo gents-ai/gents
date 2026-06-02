@@ -196,11 +196,14 @@ Some boundaries are deliberate:
   accepts `read_only`, `workspace_write`/`managed_write`, or `unrestricted`;
   `command_allowed_argv_prefixes` and `command_forbidden_argv_prefixes` refine
   argv-level allow/deny behavior; `command_network_mode` is an optional network
-  policy hint. Runtime enforcement still depends on the selected bash mode and
-  host platform. On macOS, `workspace_write` uses the seatbelt sandbox and only
-  permits same-sandbox process introspection; `unrestricted` is unsandboxed and
-  is the policy to use for host-diagnostics stewards that need `ps` or broad
-  `lsof`.
+  policy hint. In `read_only` mode, an allowed argv prefix can authorize an
+  operator-configured diagnostic command outside the built-in read-only
+  allowlist. When the allowed-prefix list is non-empty, it remains a global argv
+  gate for all commands. Runtime enforcement still depends on the selected bash
+  mode and host platform. On macOS, `workspace_write` uses the seatbelt sandbox
+  and only permits same-sandbox process introspection; `unrestricted` is
+  unsandboxed and is the policy to use for host-diagnostics stewards that need
+  `ps` or broad `lsof`.
 - backend credentials may currently be stored either directly in
   `InferenceBackend.api_key` or indirectly via `InferenceBackend.api_key_env_var`.
 - backend capability metadata is not stored in `InferenceBackend`; provider

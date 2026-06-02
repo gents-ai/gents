@@ -169,6 +169,32 @@ def commandPolicyOrderingCases : List CommandPolicyCase :=
         [])
       (commandRequest "curl" "curl" ["https://example.com"])
   , validationCase
+      "allowed_prefix_authorizes_read_only_diagnostic_command"
+      "read_only_configured_prefix"
+      (commandPolicy
+        .readOnly
+        [["spctl", "--assess", "--type", "execute"]]
+        []
+        .inherit
+        defaultReadOnlyAllowlist)
+      (commandRequest
+        "spctl"
+        "spctl"
+        ["--assess", "--type", "execute", "/Applications/Defra Agent.app"])
+  , validationCase
+      "forbidden_prefix_overrides_configured_read_only_diagnostic"
+      "read_only_configured_prefix"
+      (commandPolicy
+        .readOnly
+        [["spctl", "--assess"]]
+        [["spctl", "--assess", "--raw"]]
+        .inherit
+        defaultReadOnlyAllowlist)
+      (commandRequest
+        "spctl"
+        "spctl"
+        ["--assess", "--raw", "/Applications/Defra Agent.app"])
+  , validationCase
       "read_only_allowlisted_lookup_basename_allows"
       "read_only_allowlist"
       (commandPolicy .readOnly [] [] .inherit ["cat"])

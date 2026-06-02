@@ -40,20 +40,24 @@ theorem readOnly_validator_rejects_unallowlisted
     (request : CommandRequest)
     (hunallowlisted :
       commandAllowlisted request.lookupCommand allowlist = false) :
-    validateReadOnlyCommand allowlist request =
+    validateReadOnlyCommand allowlist false request =
       .deny (.readOnlyCommandNotAllowlisted request.lookupCommand) := by
   simp [validateReadOnlyCommand, hunallowlisted]
 
-theorem readOnly_validator_allows_only_allowlisted
+theorem readOnly_validator_allows_only_allowlisted_or_configured_prefix
     (allowlist : List String)
+    (allowedPrefixMatched : Bool)
     (request : CommandRequest)
-    (hallow : validateReadOnlyCommand allowlist request = .allow) :
-    commandAllowlisted request.lookupCommand allowlist = true := by
+    (hallow : validateReadOnlyCommand allowlist allowedPrefixMatched request = .allow) :
+    commandAllowlisted request.lookupCommand allowlist = true
+      ∨ allowedPrefixMatched = true := by
   cases hlisted : commandAllowlisted request.lookupCommand allowlist with
+  | true => exact Or.inl rfl
   | false =>
-      simp [validateReadOnlyCommand, hlisted] at hallow
-  | true =>
-      rfl
+      cases hprefix : allowedPrefixMatched with
+      | true => exact Or.inr rfl
+      | false =>
+          simp [validateReadOnlyCommand, hlisted, hprefix] at hallow
 
 theorem disabled_network_unrestricted_fails_closed
     (request : CommandRequest) :
