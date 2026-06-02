@@ -52,6 +52,24 @@ structure ProjectionObservation where
   localInterruptAcked : Bool
   deriving DecidableEq, Repr
 
+/-- Response statuses that make the Codex-facing turn effectively terminal even
+when the request row has not replicated to a terminal lifecycle state yet. -/
+def responseStatusTerminal : Option ResponseStatus → Prop
+  | some .complete => True
+  | some .error => True
+  | some .streaming => False
+  | none => False
+
+/-- Terminality observed at the Codex shim boundary.
+
+The local interrupt acknowledgement is part of the effective terminal condition:
+the shim must clear the active Codex turn as soon as it has accepted the local
+interrupt, even while the core request row is settling asynchronously. -/
+def turnEffectivelyTerminal (obs : ProjectionObservation) : Prop :=
+  isTerminal obs.requestState ∨
+  obs.localInterruptAcked = true ∨
+  responseStatusTerminal obs.responseStatus
+
 /-- Project a live DEFRA observation to the Codex-facing turn phase.
 
 For non-terminal request states, the response may be newer than the request row
@@ -155,6 +173,37 @@ theorem terminal_request_projects_terminal
          s = .dead ∨ s = .interrupted) :
     TurnPhase.terminal (projectRequestState s) := by
   rcases h with h | h | h | h | h <;> subst s <;> trivial
+
+/-- Terminal coherence for the Codex shim projection.
+
+The projected turn is terminal exactly when the request is terminal, the shim has
+locally acknowledged an interrupt, or the response has already reached a terminal
+status under replication lag. -/
+theorem codex_turn_terminates_precisely
+    (obs : ProjectionObservation) :
+    TurnPhase.terminal (projectObservation obs) ↔
+      turnEffectivelyTerminal obs := by
+  obtain ⟨requestState, responseStatus, localInterruptAcked⟩ := obs
+  cases localInterruptAcked <;> cases requestState
+  all_goals
+    cases responseStatus with
+    | none =>
+        simp [ projectObservation
+             , turnEffectivelyTerminal
+             , responseStatusTerminal
+             , TurnPhase.terminal
+             , HasTerminal.isTerminal
+             , RequestState.instHasTerminal
+             ]
+    | some status =>
+        cases status <;>
+          simp [ projectObservation
+               , turnEffectivelyTerminal
+               , responseStatusTerminal
+               , TurnPhase.terminal
+               , HasTerminal.isTerminal
+               , RequestState.instHasTerminal
+               ]
 
 /-- Core request transitions never move the Codex projection backwards. -/
 theorem request_transition_projection_monotonic

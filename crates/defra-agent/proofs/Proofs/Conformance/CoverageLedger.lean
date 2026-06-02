@@ -599,6 +599,11 @@ def caseCoverage : List CoverageEntry :=
       "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "codex_shim_turn_lifecycle_cases"
+      "CodexShimTurnLifecycleCases"
+      "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract")

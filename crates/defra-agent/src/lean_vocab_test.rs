@@ -62,6 +62,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
@@ -441,6 +443,10 @@ pub(crate) fn lean_codex_shim_projection_case(
         .iter()
         .find(|case| case.witness == witness)
         .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
+}
+
+pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {
+    &lean_contract_snapshot().codex_shim_turn_lifecycle_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
