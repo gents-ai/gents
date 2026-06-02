@@ -172,6 +172,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 19);
+    assert_eq!(lean_recovery_equivalence_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
 }
@@ -632,6 +633,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoverySweepCases".to_string(),
         ));
     }
+    if !lean_recovery_equivalence_cases().is_empty() {
+        emitted.insert((
+            "recovery_equivalence_cases".to_string(),
+            "RecoveryEquivalenceCases".to_string(),
+        ));
+    }
     if !lean_transcript_cases().is_empty() {
         emitted.insert((
             "transcript_cases".to_string(),
@@ -768,6 +775,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "live_overlay_cases",
         "queue_deadline_cases",
         "recovery_sweep_cases",
+        "recovery_equivalence_cases",
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",

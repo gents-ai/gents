@@ -43,8 +43,23 @@ def inferenceCallRecover (row : InferenceCallRecoveryRow) : InferenceCallRecover
   | .staleRunning => { row with call := { row.call with state := .failed } }
   | .interruptedParent => { row with call := { row.call with state := .cancelled } }
 
+def inferenceCallUninterruptedTerminalize
+    (row : InferenceCallRecoveryRow) : InferenceCallRecoveryRow :=
+  match row.cause with
+  | .staleQueued => { row with call := { row.call with state := .cancelled } }
+  | .staleRunning => { row with call := { row.call with state := .failed } }
+  | .interruptedParent => { row with call := { row.call with state := .cancelled } }
+
 def inferenceCallRecoveryMeasure (row : InferenceCallRecoveryRow) : Nat :=
   if inferenceCallRecoveryStale row then 1 else 0
+
+theorem inferenceCallRecover_matches_uninterrupted :
+    ∀ row, inferenceCallRecoveryStale row →
+      inferenceCallRecover row = inferenceCallUninterruptedTerminalize row := by
+  intro row _h_stale
+  rcases row with ⟨call, cause⟩
+  cases cause <;>
+    simp [inferenceCallRecover, inferenceCallUninterruptedTerminalize]
 
 theorem inferenceCallRecovery_stale_positive :
     ∀ row, inferenceCallRecoveryStale row → inferenceCallRecoveryMeasure row > 0 := by
@@ -89,6 +104,12 @@ def inferenceCallRecoverySweep : RecoverySweep :=
   , h_stale_positive := inferenceCallRecovery_stale_positive
   , h_recover_terminal := inferenceCallRecover_terminal
   , h_recover_zero := inferenceCallRecover_zero
+  }
+
+def inferenceCallRecoveryEquivalence :
+    RecoveryEquivalence inferenceCallRecoverySweep :=
+  { uninterrupted := inferenceCallUninterruptedTerminalize
+  , h_recover_eq_uninterrupted := inferenceCallRecover_matches_uninterrupted
   }
 
 end Recovery

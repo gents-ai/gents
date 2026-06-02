@@ -554,6 +554,11 @@ def caseCoverage : List CoverageEntry :=
       "state_machine_conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "recovery_equivalence_cases"
+      "RecoveryEquivalenceCases"
+      "state_machine_conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
       "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")

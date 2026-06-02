@@ -385,6 +385,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_recovery_sweep_cases_drive_startup_recovery_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",

@@ -20,7 +20,7 @@ sweep. It belongs with #155 and the remaining #349 P2P checkbox.
 | Streaming response transitions | Atomic edge + composed interrupt flow | `Proofs/StreamingResponse/*`; `streaming_response_interrupt_flow_cases`; daemon consumer in `state_machine_conformance` | No new gap found |
 | Interrupt workflow | Composed workflow | Request terminalization, streaming response interrupt finalization, queued wakeup drain, and daemon interrupt-flow consumer | No new gap found |
 | Deadline workflow | Trace + boundary metadata | Queue deadline cases, request transition cases, managed-exec/native filesystem deadline tests | No new gap found |
-| Startup recovery | Trace + runtime sweep | `Proofs/Recovery/Sweeps/*` emits 19 cases consumed by `generated_recovery_sweep_cases_drive_startup_recovery_contract` | No new gap found for current startup sweep semantics |
+| Startup recovery | Trace + runtime sweep + equivalence theorem | `Proofs/Recovery/Sweeps/*` emits 19 cases consumed by `generated_recovery_sweep_cases_drive_startup_recovery_contract`; `recovery_equivalence_cases` pins restart recovery to the uninterrupted terminalization path | #349 gap 1 fixed in this sweep |
 | Tool cancel | Trace + runtime workflow | Tool call lifecycle contract, cancel cause vocabulary, cascade/detach integration tests | No new gap found for current single-deployment and bridge semantics |
 | Child-process cancel | Runtime workflow + managed-exec proof | `Proofs/ManagedExec/*`, native filesystem preemption boundary, managed-exec liveness cases | No new gap found |
 | Retry / manual reissue | Trace + runtime workflow | `Proofs/SessionRecovery.lean`; generated session recovery cases consumed by DB-backed reissue tests | No new gap found |
@@ -49,15 +49,18 @@ This branch adds:
   interruptible-state bits.
 - New generated CodexShim turn-lifecycle rows are registered in the coverage
   ledger and consumed by the existing `state_machine_conformance` CodexShim test.
+- `Recovery.RecoveryEquivalence.finite_stale_rows_converge_to_uninterrupted`:
+  finite stale startup-recovery rows converge exactly to the same row list as
+  the uninterrupted terminalization path for the same persisted facts.
+- Concrete request, response, tool-call, detached-bridge, and inference-call
+  recovery equivalence proofs are emitted as 19 generated
+  `recovery_equivalence_cases` and consumed by
+  `generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract`.
 
 ## Remaining Work
 
 Remaining formal work should stay on the dedicated tracking issues:
 
-- #349 gap 1: startup recovery sweep semantics are covered for the current
-  implemented recovery operations. A stronger "same as uninterrupted execution"
-  theorem for arbitrary in-flight tool results remains broader than the current
-  startup sweep model.
 - #349 gap 2: depth bounds, subagent source recovery, bridge cascade, and
   cross-deployment cases are covered by existing Lean/Rust consumers. A general
   arbitrary delegation graph termination/acyclicity proof remains open.

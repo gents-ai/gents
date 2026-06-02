@@ -51,8 +51,8 @@ use lean_vocab_test::{
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
     lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_response_interrupt_flow_cases,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
     lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
     lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
@@ -109,6 +109,11 @@ fn lean_executable_contracts_cover_initial_domains() {
 #[tokio::test]
 async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
+}
+
+#[test]
+fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract() {
+    recovery_sweeps::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract();
 }
 
 #[test]

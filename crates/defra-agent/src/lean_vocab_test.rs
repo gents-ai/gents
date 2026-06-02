@@ -59,6 +59,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     #[serde(default)]
+    pub(crate) recovery_equivalence_cases: Vec<LeanRecoveryEquivalenceCase>,
+    #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
@@ -417,6 +419,10 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_recovery_equivalence_cases() -> &'static [LeanRecoveryEquivalenceCase] {
+    &lean_contract_snapshot().recovery_equivalence_cases
 }
 
 pub(crate) fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {

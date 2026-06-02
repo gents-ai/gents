@@ -226,6 +226,23 @@ structure RecoverySweepCase where
   deadlineAuditRef : String
   deriving DecidableEq, Repr
 
+structure RecoveryEquivalenceCase where
+  name : String
+  sourceSweepCase : String
+  sweepId : String
+  collection : String
+  rustFunction : String
+  cadence : String
+  preState : String
+  recoveredState : String
+  uninterruptedState : String
+  equivalent : Bool
+  reexecutes : Bool
+  canHang : Bool
+  theoremName : String
+  aggregateTheoremName : String
+  deriving DecidableEq, Repr
+
 structure R6BackgroundingCase where
   name : String
   group : String
