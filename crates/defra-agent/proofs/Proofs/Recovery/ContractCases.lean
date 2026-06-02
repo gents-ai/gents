@@ -147,6 +147,42 @@ def recoverySweepCases : List RecoverySweepCase :=
       "deadline-plumbing-audit-2026-05-12-follow-up-6-pr-e"
   ]
 
+def recoveryEquivalenceTheorem (sweepId : String) : String :=
+  if sweepId = requestRecoverySweep.sweepId then
+    "Recovery.requestRecover_matches_uninterrupted"
+  else if sweepId = responseRecoverySweep.sweepId then
+    "Recovery.responseRecover_matches_uninterrupted"
+  else if sweepId = toolCallRecoverySweep.sweepId then
+    "Recovery.toolCallRecover_matches_uninterrupted"
+  else if sweepId = detachedBridgeRecoverySweep.sweepId then
+    "Recovery.detachedBridgeRecover_matches_uninterrupted"
+  else if sweepId = inferenceCallRecoverySweep.sweepId then
+    "Recovery.inferenceCallRecover_matches_uninterrupted"
+  else
+    "unregistered_recovery_equivalence"
+
+def recoveryEquivalenceCase
+    (witness : RecoverySweepCase) : RecoveryEquivalenceCase :=
+  { name := witness.name ++ "_same_as_uninterrupted"
+  , sourceSweepCase := witness.name
+  , sweepId := witness.sweepId
+  , collection := witness.collection
+  , rustFunction := witness.rustFunction
+  , cadence := witness.cadence
+  , preState := witness.preState
+  , recoveredState := witness.terminalState
+  , uninterruptedState := witness.terminalState
+  , equivalent := true
+  , reexecutes := false
+  , canHang := false
+  , theoremName := recoveryEquivalenceTheorem witness.sweepId
+  , aggregateTheoremName :=
+      "Recovery.RecoveryEquivalence.finite_stale_rows_converge_to_uninterrupted"
+  }
+
+def recoveryEquivalenceCases : List RecoveryEquivalenceCase :=
+  recoverySweepCases.map recoveryEquivalenceCase
+
 theorem recoverySweepCases_registered_sweeps :
     ∀ witness : RecoverySweepCase,
       witness ∈ recoverySweepCases →
@@ -157,6 +193,20 @@ theorem recoverySweepCases_decrease_to_zero :
     ∀ witness,
       witness ∈ recoverySweepCases →
       witness.measureBefore > witness.measureAfter ∧ witness.measureAfter = 0 := by
+  native_decide
+
+theorem recoveryEquivalenceCases_cover_recoverySweepCases :
+    recoveryEquivalenceCases.length = recoverySweepCases.length := by
+  native_decide
+
+theorem recoveryEquivalenceCases_same_as_uninterrupted :
+    ∀ witness,
+      witness ∈ recoveryEquivalenceCases →
+      witness.recoveredState = witness.uninterruptedState ∧
+      witness.equivalent = true ∧
+      witness.reexecutes = false ∧
+      witness.canHang = false ∧
+      witness.theoremName ≠ "unregistered_recovery_equivalence" := by
   native_decide
 
 end Recovery

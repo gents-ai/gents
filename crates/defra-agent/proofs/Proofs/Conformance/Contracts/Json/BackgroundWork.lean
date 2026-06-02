@@ -227,6 +227,27 @@ def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :
               ++ "}"))
     ++ "}"
 
+def subagentDelegationGraphCaseJson
+    (witness : SubagentDelegationGraphCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","
+    ++ "\"property\":" ++ jsonString witness.property ++ ","
+    ++ "\"witness_kind\":" ++ jsonString witness.witnessKind ++ ","
+    ++ "\"max_depth\":" ++ toString witness.maxDepth ++ ","
+    ++ "\"path_length\":" ++ toString witness.pathLength ++ ","
+    ++ "\"parent_depth\":" ++ toString witness.parentDepth ++ ","
+    ++ "\"terminal_depth\":" ++ toString witness.terminalDepth ++ ","
+    ++ "\"cascade_path\":" ++ boolString witness.cascadePath ++ ","
+    ++ "\"acyclic\":" ++ boolString witness.acyclic ++ ","
+    ++ "\"bounded\":" ++ boolString witness.bounded ++ ","
+    ++ "\"cascade_covered\":"
+      ++ boolString witness.cascadeCovered ++ ","
+    ++ "\"edge_theorem\":" ++ jsonString witness.edgeTheorem ++ ","
+    ++ "\"cascade_edge_theorem\":"
+      ++ jsonOptionalString witness.cascadeEdgeTheorem
+    ++ "}"
+
 def transcriptCaseJson (witness : TranscriptCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

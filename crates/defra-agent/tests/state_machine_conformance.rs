@@ -8,7 +8,7 @@ use defra_agent::event_delivery_contract::{
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use defra_agent::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
@@ -43,19 +43,20 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
-    lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
-    lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_queue_deadline_case,
-    lean_queue_deadline_cases, lean_r4c_background_work_case, lean_r4c_background_work_cases,
-    lean_r5_cross_deployment_cases, lean_r6_background_theorem_witness,
-    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
+    lean_command_sandbox_case, lean_compaction_reducer_cases, lean_contract_snapshot,
+    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
+    lean_inference_slot_accounting_case, lean_managed_exec_liveness_cases, lean_mcp_health_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
-    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -111,6 +112,11 @@ async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
 }
 
 #[test]
+fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract() {
+    recovery_sweeps::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract();
+}
+
+#[test]
 fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
     transcript_background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
 }
@@ -125,6 +131,11 @@ async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invari
 async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
     transcript_background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
         .await;
+}
+
+#[test]
+fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
+    transcript_background::generated_subagent_delegation_graph_cases_pin_gap2_contract();
 }
 
 #[tokio::test]

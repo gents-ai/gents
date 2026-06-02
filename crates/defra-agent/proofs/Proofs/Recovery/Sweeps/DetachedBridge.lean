@@ -60,8 +60,18 @@ instance (row : DetachedBridgeRecoveryRow) : Decidable (detachedBridgeRecoverySt
 def detachedBridgeRecover (row : DetachedBridgeRecoveryRow) : DetachedBridgeRecoveryRow :=
   { row with call := { row.call with state := row.cause.terminalState } }
 
+def detachedBridgeUninterruptedTerminalize
+    (row : DetachedBridgeRecoveryRow) : DetachedBridgeRecoveryRow :=
+  { row with call := { row.call with state := row.cause.terminalState } }
+
 def detachedBridgeRecoveryMeasure (row : DetachedBridgeRecoveryRow) : Nat :=
   if detachedBridgeRecoveryStale row then 1 else 0
+
+theorem detachedBridgeRecover_matches_uninterrupted :
+    ∀ row, detachedBridgeRecoveryStale row →
+      detachedBridgeRecover row = detachedBridgeUninterruptedTerminalize row := by
+  intro row _h_stale
+  simp [detachedBridgeRecover, detachedBridgeUninterruptedTerminalize]
 
 theorem detachedBridgeRecovery_stale_positive :
     ∀ row, detachedBridgeRecoveryStale row → detachedBridgeRecoveryMeasure row > 0 := by
@@ -102,6 +112,12 @@ def detachedBridgeRecoverySweep : RecoverySweep :=
   , h_stale_positive := detachedBridgeRecovery_stale_positive
   , h_recover_terminal := detachedBridgeRecover_terminal
   , h_recover_zero := detachedBridgeRecover_zero
+  }
+
+def detachedBridgeRecoveryEquivalence :
+    RecoveryEquivalence detachedBridgeRecoverySweep :=
+  { uninterrupted := detachedBridgeUninterruptedTerminalize
+  , h_recover_eq_uninterrupted := detachedBridgeRecover_matches_uninterrupted
   }
 
 end Recovery

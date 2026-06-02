@@ -96,10 +96,15 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"recovery_equivalence_cases\":"
+      ++ jsonArray
+        (Recovery.recoveryEquivalenceCases.map recoveryEquivalenceCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"codex_shim_projection_cases\":"
       ++ codexShimProjectionCasesJson ++ ","
+    ++ "\"codex_shim_turn_lifecycle_cases\":"
+      ++ codexShimTurnLifecycleCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
@@ -109,6 +114,9 @@ def snapshotJson : String :=
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
+    ++ "\"subagent_delegation_graph_cases\":"
+      ++ jsonArray
+        (subagentDelegationGraphCases.map subagentDelegationGraphCaseJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

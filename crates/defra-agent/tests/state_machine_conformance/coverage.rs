@@ -172,8 +172,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 19);
+    assert_eq!(lean_recovery_equivalence_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
+    assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
 }
 
 #[tokio::test]
@@ -632,6 +634,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoverySweepCases".to_string(),
         ));
     }
+    if !lean_recovery_equivalence_cases().is_empty() {
+        emitted.insert((
+            "recovery_equivalence_cases".to_string(),
+            "RecoveryEquivalenceCases".to_string(),
+        ));
+    }
     if !lean_transcript_cases().is_empty() {
         emitted.insert((
             "transcript_cases".to_string(),
@@ -712,6 +720,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimProjectionCases".to_string(),
         ));
     }
+    if !lean_codex_shim_turn_lifecycle_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_turn_lifecycle_cases".to_string(),
+            "CodexShimTurnLifecycleCases".to_string(),
+        ));
+    }
     if !lean_r6_backgrounding_cases().is_empty() {
         emitted.insert((
             "r6_background_cases".to_string(),
@@ -732,6 +746,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "r6_background_theorem_witnesses".to_string(),
             "CascadeCancelsChildTheoremWitness".to_string(),
+        ));
+    }
+    if !lean_subagent_delegation_graph_cases().is_empty() {
+        emitted.insert((
+            "subagent_delegation_graph_cases".to_string(),
+            "SubagentDelegationGraphCases".to_string(),
         ));
     }
     for hook in &snapshot.follow_up_hooks {
@@ -762,6 +782,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "live_overlay_cases",
         "queue_deadline_cases",
         "recovery_sweep_cases",
+        "recovery_equivalence_cases",
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",
@@ -773,9 +794,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "identity_contracts",
         "r4c_background_work_cases",
         "codex_shim_projection_cases",
+        "codex_shim_turn_lifecycle_cases",
         "r6_background_cases",
         "r5_cross_deployment_cases",
         "r6_background_theorem_witnesses",
+        "subagent_delegation_graph_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

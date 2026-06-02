@@ -59,13 +59,19 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     #[serde(default)]
+    pub(crate) recovery_equivalence_cases: Vec<LeanRecoveryEquivalenceCase>,
+    #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
+    #[serde(default)]
+    pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
     #[serde(default)]
@@ -417,6 +423,10 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
+pub(crate) fn lean_recovery_equivalence_cases() -> &'static [LeanRecoveryEquivalenceCase] {
+    &lean_contract_snapshot().recovery_equivalence_cases
+}
+
 pub(crate) fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {
     &lean_contract_snapshot().r4c_background_work_cases
 }
@@ -441,6 +451,10 @@ pub(crate) fn lean_codex_shim_projection_case(
         .iter()
         .find(|case| case.witness == witness)
         .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
+}
+
+pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {
+    &lean_contract_snapshot().codex_shim_turn_lifecycle_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
@@ -473,6 +487,10 @@ pub(crate) fn lean_r6_background_theorem_witness(
         .unwrap_or_else(|| {
             panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
         })
+}
+
+pub(crate) fn lean_subagent_delegation_graph_cases() -> &'static [LeanSubagentDelegationGraphCase] {
+    &lean_contract_snapshot().subagent_delegation_graph_cases
 }
 
 pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {

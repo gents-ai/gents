@@ -121,4 +121,24 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ jsonString witness.deadlineAuditRef
     ++ "}"
 
+def recoveryEquivalenceCaseJson (witness : RecoveryEquivalenceCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"source_sweep_case\":" ++ jsonString witness.sourceSweepCase ++ ","
+    ++ "\"sweep_id\":" ++ jsonString witness.sweepId ++ ","
+    ++ "\"collection\":" ++ jsonString witness.collection ++ ","
+    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
+    ++ "\"cadence\":" ++ jsonString witness.cadence ++ ","
+    ++ "\"pre_state\":" ++ jsonString witness.preState ++ ","
+    ++ "\"recovered_state\":" ++ jsonString witness.recoveredState ++ ","
+    ++ "\"uninterrupted_state\":"
+      ++ jsonString witness.uninterruptedState ++ ","
+    ++ "\"equivalent\":" ++ boolString witness.equivalent ++ ","
+    ++ "\"reexecutes\":" ++ boolString witness.reexecutes ++ ","
+    ++ "\"can_hang\":" ++ boolString witness.canHang ++ ","
+    ++ "\"theorem\":" ++ jsonString witness.theoremName ++ ","
+    ++ "\"aggregate_theorem\":"
+      ++ jsonString witness.aggregateTheoremName
+    ++ "}"
+
 end Conformance.Contracts

@@ -35,6 +35,16 @@ def terminal : TurnPhase → Prop
   | .notStarted => False
   | .inProgress => False
 
+/-- Lexicographic rank used for monotonic turn-lifecycle checks.
+Terminals are rank-equivalent because the adapter only needs to know that the
+turn is no longer active. -/
+def lexOrd : TurnPhase → Nat
+  | .notStarted => 0
+  | .inProgress => 1
+  | .completed => 2
+  | .failed => 2
+  | .interrupted => 2
+
 end TurnPhase
 
 inductive TurnAction where
@@ -83,5 +93,13 @@ theorem interrupt_step_is_terminal :
 theorem interrupted_is_terminal :
     TurnPhase.terminal .interrupted := by
   trivial
+
+/-- Valid Codex-facing turn lifecycle transitions never move backward. -/
+theorem turn_lifecycle_never_regresses
+    {pre post : TurnPhase}
+    {action : TurnAction}
+    (h : TurnTransition pre post action) :
+    TurnPhase.lexOrd post ≥ TurnPhase.lexOrd pre := by
+  cases h <;> simp [TurnPhase.lexOrd]
 
 end CodexShim

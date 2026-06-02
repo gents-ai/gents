@@ -1103,6 +1103,94 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     );
 }
 
+pub(super) fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
+    let cases = lean_subagent_delegation_graph_cases();
+    assert_eq!(
+        cases.len(),
+        3,
+        "Lean should emit termination, acyclicity, and cascade graph witnesses"
+    );
+
+    let by_property = cases
+        .iter()
+        .map(|case| (case.property.as_str(), case))
+        .collect::<HashMap<_, _>>();
+    for property in ["termination", "acyclicity", "cascade_cancel"] {
+        assert!(
+            by_property.contains_key(property),
+            "missing subagent delegation graph property {property}"
+        );
+    }
+
+    for case in cases {
+        assert_eq!(
+            case.max_depth,
+            usize::try_from(MAX_SUBAGENT_DEPTH).expect("MAX_SUBAGENT_DEPTH fits usize"),
+            "Lean maxSubagentDepth drifted from Rust MAX_SUBAGENT_DEPTH"
+        );
+        assert!(
+            case.path_length <= case.max_depth,
+            "case {} exceeds the generated depth bound",
+            case.name
+        );
+        assert!(case.acyclic, "case {} must assert acyclicity", case.name);
+        assert!(case.bounded, "case {} must assert bounded paths", case.name);
+        assert!(
+            !case.theorem_name.trim().is_empty(),
+            "case {} must cite a Lean theorem",
+            case.name
+        );
+        assert!(
+            case.edge_theorem.starts_with("Subagent.DelegationGraph."),
+            "case {} must cite a graph edge/path theorem",
+            case.name
+        );
+        if case.cascade_path {
+            assert!(
+                case.cascade_covered,
+                "cascade graph case {} must assert edge interrupt coverage",
+                case.name
+            );
+            assert_eq!(
+                case.cascade_edge_theorem.as_deref(),
+                Some("Subagent.BridgedState.cascade_cancels_child")
+            );
+        } else {
+            assert!(!case.cascade_covered);
+            assert!(case.cascade_edge_theorem.is_none());
+        }
+    }
+
+    let termination = by_property["termination"];
+    assert_eq!(
+        termination.theorem_name.as_str(),
+        "Subagent.DelegationGraph.delegation_path_length_bounded"
+    );
+    assert_eq!(
+        termination.witness_kind.as_str(),
+        "arbitrary_delegation_path"
+    );
+    assert_eq!(termination.parent_depth, 0);
+    assert_eq!(termination.terminal_depth, termination.max_depth);
+
+    let acyclicity = by_property["acyclicity"];
+    assert_eq!(
+        acyclicity.theorem_name.as_str(),
+        "Subagent.DelegationGraph.delegation_paths_acyclic"
+    );
+    assert_eq!(
+        acyclicity.edge_theorem.as_str(),
+        "Subagent.DelegationGraph.no_self_delegation_edge"
+    );
+
+    let cascade = by_property["cascade_cancel"];
+    assert_eq!(
+        cascade.theorem_name.as_str(),
+        "Subagent.DelegationGraph.cascade_cancel_covers_path"
+    );
+    assert_eq!(cascade.witness_kind.as_str(), "arbitrary_cascade_path");
+}
+
 pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     let cases = lean_r4c_background_work_cases();
     assert_eq!(cases.len(), 6);

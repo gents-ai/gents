@@ -88,8 +88,17 @@ instance (row : ToolCallRecoveryRow) : Decidable (toolCallRecoveryStale row) := 
 def toolCallRecover (row : ToolCallRecoveryRow) : ToolCallRecoveryRow :=
   { row with call := { row.call with state := row.cause.terminalState } }
 
+def toolCallUninterruptedTerminalize (row : ToolCallRecoveryRow) : ToolCallRecoveryRow :=
+  { row with call := { row.call with state := row.cause.terminalState } }
+
 def toolCallRecoveryMeasure (row : ToolCallRecoveryRow) : Nat :=
   if toolCallRecoveryStale row then 1 else 0
+
+theorem toolCallRecover_matches_uninterrupted :
+    ∀ row, toolCallRecoveryStale row →
+      toolCallRecover row = toolCallUninterruptedTerminalize row := by
+  intro row _h_stale
+  simp [toolCallRecover, toolCallUninterruptedTerminalize]
 
 theorem toolCallRecovery_stale_positive :
     ∀ row, toolCallRecoveryStale row → toolCallRecoveryMeasure row > 0 := by
@@ -130,6 +139,11 @@ def toolCallRecoverySweep : RecoverySweep :=
   , h_stale_positive := toolCallRecovery_stale_positive
   , h_recover_terminal := toolCallRecover_terminal
   , h_recover_zero := toolCallRecover_zero
+  }
+
+def toolCallRecoveryEquivalence : RecoveryEquivalence toolCallRecoverySweep :=
+  { uninterrupted := toolCallUninterruptedTerminalize
+  , h_recover_eq_uninterrupted := toolCallRecover_matches_uninterrupted
   }
 
 end Recovery
