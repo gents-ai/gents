@@ -1123,7 +1123,11 @@ pub(super) fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
     }
 
     for case in cases {
-        assert_eq!(case.max_depth, 3, "maxSubagentDepth drifted");
+        assert_eq!(
+            case.max_depth,
+            usize::try_from(MAX_SUBAGENT_DEPTH).expect("MAX_SUBAGENT_DEPTH fits usize"),
+            "Lean maxSubagentDepth drifted from Rust MAX_SUBAGENT_DEPTH"
+        );
         assert!(
             case.path_length <= case.max_depth,
             "case {} exceeds the generated depth bound",
