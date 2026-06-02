@@ -1,5 +1,9 @@
 use super::*;
 
+fn assistant_message_json(text: &str) -> String {
+    serde_json::to_string(&Message::assistant(text)).expect("serialize assistant")
+}
+
 fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
     ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
@@ -79,6 +83,84 @@ fn overlay_hidden_when_response_tail_is_empty() {
         .iter()
         .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
     assert!(!has_live, "overlay must be hidden when tail is empty");
+}
+
+#[test]
+fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
+    let mut rows = make_streaming_store_with_response_content("").to_rows();
+    rows.responses.clear();
+
+    let duplicate_user = rows.messages[0].clone();
+    rows.messages.push(duplicate_user);
+    rows.message_source_agent_dids = vec![None, Some("did:defra:amy".to_string())];
+
+    let assistant = AgentMessageRow {
+        message_key: "msg-2".to_string(),
+        session_id: Some("sess-1".to_string()),
+        sequence: Some(2),
+        role: Some("assistant".to_string()),
+        content: Some(assistant_message_json("hello back")),
+        timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+    };
+    rows.messages.push(assistant.clone());
+    rows.message_source_agent_dids.push(None);
+    rows.messages.push(assistant);
+    rows.message_source_agent_dids
+        .push(Some("did:defra:amy".to_string()));
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:defra:amy"),
+        "sess-1",
+        Some("req-1"),
+    )
+    .expect("session snapshot");
+
+    let kinds = snapshot
+        .timeline_items
+        .iter()
+        .map(|item| match item {
+            RenderedTimelineItem::UserMessage { .. } => "user",
+            RenderedTimelineItem::AssistantMessage { .. } => "assistant",
+            RenderedTimelineItem::ToolGroup { .. } => "tools",
+            RenderedTimelineItem::PendingUserTurn { .. } => "pending",
+            RenderedTimelineItem::LiveAssistant { .. } => "live",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, vec!["user", "assistant"]);
+}
+
+#[test]
+fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
+    let reply = "hello back";
+    let mut rows = make_streaming_store_with_response_content(reply).to_rows();
+    rows.messages.push(AgentMessageRow {
+        message_key: "msg-2".to_string(),
+        session_id: Some("sess-1".to_string()),
+        sequence: Some(2),
+        role: Some("assistant".to_string()),
+        content: Some(assistant_message_json(reply)),
+        timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+    });
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
+        .expect("session snapshot");
+
+    let assistant_items = snapshot
+        .timeline_items
+        .iter()
+        .filter(|item| matches!(item, RenderedTimelineItem::AssistantMessage { .. }))
+        .count();
+    let live_items = snapshot
+        .timeline_items
+        .iter()
+        .filter(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }))
+        .count();
+
+    assert_eq!(assistant_items, 1);
+    assert_eq!(live_items, 0, "matching live overlay must be suppressed");
 }
 
 #[test]

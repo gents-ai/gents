@@ -56,6 +56,7 @@ pub(crate) async fn save_tool_service_config(
             lan_ip: None,
             mcp_port: None,
             mcp_path: Some("/mcp".to_string()),
+            send_agent_did: false,
             tools: Vec::new(),
             status: Some("online".to_string()),
             version: None,
