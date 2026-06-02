@@ -272,6 +272,29 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
+    // Seed an AgentRequest (so the agent's session resolves) plus a
+    // CompactionEntry in that session, so the agent-scoped context budget has
+    // something to aggregate. This exercises the agent -> session -> compaction
+    // path end-to-end against the live schema.
+    for mutation in [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", status: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
+    ] {
+        let seed = client
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding self-view fixtures")?;
+        let seed_body: Value = seed.json().await.context("reading seed mutation response")?;
+        assert!(
+            seed_body.get("errors").is_none(),
+            "seed mutation returned errors: {seed_body}"
+        );
+    }
+
     // /self is an alias for /status and carries the behavior join + context budget.
     let self_response = client
         .get(format!("http://127.0.0.1:{port}/self"))
@@ -298,9 +321,18 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         }),
         "expected /self behavior joined with backend endpoint for model {model_name}: {self_view}"
     );
-    assert!(
-        self_view.get("context_budget").is_some(),
-        "expected /self to include context_budget: {self_view}"
+    let budget = self_view
+        .get("context_budget")
+        .unwrap_or_else(|| panic!("expected /self to include context_budget: {self_view}"));
+    assert_eq!(
+        budget.get("compaction_count").and_then(Value::as_i64),
+        Some(1),
+        "expected agent-scoped context_budget to count exactly the seeded compaction: {self_view}"
+    );
+    assert_eq!(
+        budget.get("latest_original_tokens").and_then(Value::as_i64),
+        Some(1234),
+        "expected context_budget latest tokens from the seeded compaction: {self_view}"
     );
 
     // /fleet reshapes per-agent_did runtime + request counts.

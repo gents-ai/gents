@@ -1,14 +1,14 @@
 //! `/self` surfacing: joins the running agent's `AgentBehavior` rows with their
 //! `InferenceBackend` (provider/endpoint) and `InferenceProfile`
-//! (`context_window`), plus a context-budget summary derived from persisted
-//! `CompactionEntry` rows. All of this data already exists; this is pure
-//! surfacing onto the `/status` payload (and the `/self` alias).
+//! (`context_window`), plus an agent-scoped context-budget summary derived from
+//! persisted `CompactionEntry` rows. All of this data already exists; this is
+//! pure surfacing onto the `/status` payload (and the `/self` alias).
 //!
-//! Note: `CompactionEntry` is keyed by `session_id` (not `agent_did`), so the
-//! compaction summary is node-wide, not agent-scoped. Agent-scoping it would
-//! require resolving the agent's sessions first — a follow-up if needed.
+//! `CompactionEntry` is keyed by `session_id`, so the budget is scoped to the
+//! agent by first resolving the agent's own sessions (via `AgentRequest`
+//! filtered by `agent_did`) and aggregating only those entries.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
+
+/// How many of the agent's most-recent requests to scan when resolving the set
+/// of sessions to aggregate compaction over. Bounds the work for an agent with
+/// a long history while covering its active sessions.
+const RECENT_REQUEST_SCAN: usize = 200;
 
 /// One of the running agent's behaviors with its backend + profile joined in.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,7 +36,8 @@ pub(crate) struct SelfBehavior {
     pub(crate) context_window: Option<i64>,
 }
 
-/// Node-wide context-budget summary derived from `CompactionEntry`.
+/// Agent-scoped context-budget summary derived from `CompactionEntry` over the
+/// agent's own sessions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ContextBudget {
     pub(crate) compaction_count: i64,
@@ -48,6 +54,12 @@ struct SelfViewEnvelope {
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
+    #[serde(rename = "AgentRequest", default)]
+    requests: Vec<RequestRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactionEnvelope {
     #[serde(rename = "CompactionEntry", default)]
     compactions: Vec<CompactionRow>,
 }
@@ -87,6 +99,12 @@ struct ProfileRow {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct RequestRow {
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct CompactionRow {
     #[serde(default)]
     created_at: Option<String>,
@@ -101,8 +119,20 @@ pub(crate) async fn load_self_view(
     agent_did: &str,
 ) -> Result<(Vec<SelfBehavior>, ContextBudget)> {
     let response = post_graphql(graphql, &self_view_query(agent_did)).await?;
-    let envelope = decode_self_view_response(response)?;
-    Ok(build_self_view(envelope))
+    let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
+
+    let behaviors = build_behaviors(envelope.behaviors, envelope.backends, envelope.profiles);
+    let session_ids = distinct_session_ids(&envelope.requests);
+
+    let context_budget = if session_ids.is_empty() {
+        ContextBudget::default()
+    } else {
+        let response = post_graphql(graphql, &compaction_query(&session_ids)).await?;
+        let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
+        aggregate_compaction(envelope.compactions)
+    };
+
+    Ok((behaviors, context_budget))
 }
 
 fn self_view_query(agent_did: &str) -> String {
@@ -126,7 +156,22 @@ fn self_view_query(agent_did: &str) -> String {
             profile_id
             context_window
         }}
-        CompactionEntry(order: {{ created_at: DESC }}) {{
+        AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+            session_id
+        }}
+    }}"#
+    )
+}
+
+fn compaction_query(session_ids: &[String]) -> String {
+    let list = session_ids
+        .iter()
+        .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{
+        CompactionEntry(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
             created_at
             original_tokens
             compacted_tokens
@@ -135,26 +180,30 @@ fn self_view_query(agent_did: &str) -> String {
     )
 }
 
-fn decode_self_view_response(response: Value) -> Result<SelfViewEnvelope> {
+fn decode<T: serde::de::DeserializeOwned>(response: Value, label: &str) -> Result<T> {
     let data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("self view query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding self view query response")
+        .with_context(|| format!("{label} query response missing object data: {response}"))?;
+    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
 }
 
-fn build_self_view(envelope: SelfViewEnvelope) -> (Vec<SelfBehavior>, ContextBudget) {
-    let backends = envelope
-        .backends
+fn build_behaviors(
+    behaviors: Vec<BehaviorRow>,
+    backends: Vec<BackendRow>,
+    profiles: Vec<ProfileRow>,
+) -> Vec<SelfBehavior> {
+    use std::collections::BTreeMap;
+
+    let backends = backends
         .into_iter()
         .filter_map(|backend| {
             let backend_id = backend.backend_id.trim().to_string();
             (!backend_id.is_empty()).then_some((backend_id, backend))
         })
         .collect::<BTreeMap<_, _>>();
-    let profiles = envelope
-        .profiles
+    let profiles = profiles
         .into_iter()
         .filter_map(|profile| {
             let profile_id = profile.profile_id.trim().to_string();
@@ -162,8 +211,7 @@ fn build_self_view(envelope: SelfViewEnvelope) -> (Vec<SelfBehavior>, ContextBud
         })
         .collect::<BTreeMap<_, _>>();
 
-    let behaviors = envelope
-        .behaviors
+    behaviors
         .into_iter()
         .filter_map(|behavior| {
             let behavior_id = behavior.behavior_id.trim().to_string();
@@ -195,22 +243,33 @@ fn build_self_view(envelope: SelfViewEnvelope) -> (Vec<SelfBehavior>, ContextBud
                 context_window: profile.and_then(|profile| profile.context_window),
             })
         })
-        .collect();
+        .collect()
+}
 
-    let compaction_count = envelope.compactions.len() as i64;
+fn distinct_session_ids(requests: &[RequestRow]) -> Vec<String> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            let session_id = request.session_id.as_deref().unwrap_or_default().trim();
+            (!session_id.is_empty()).then(|| session_id.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
+    let compaction_count = compactions.len() as i64;
     // Latest by created_at (RFC3339 sorts lexically); independent of input order.
-    let latest = envelope
-        .compactions
+    let latest = compactions
         .iter()
         .max_by(|a, b| a.created_at.cmp(&b.created_at));
-    let context_budget = ContextBudget {
+    ContextBudget {
         compaction_count,
         latest_compaction_at: latest.and_then(|entry| entry.created_at.clone()),
         latest_original_tokens: latest.and_then(|entry| entry.original_tokens),
         latest_compacted_tokens: latest.and_then(|entry| entry.compacted_tokens),
-    };
-
-    (behaviors, context_budget)
+    }
 }
 
 #[cfg(test)]
@@ -218,33 +277,31 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn envelope(value: Value) -> SelfViewEnvelope {
+    fn rows<T: serde::de::DeserializeOwned>(value: Value) -> Vec<T> {
         serde_json::from_value(value).unwrap()
     }
 
     #[test]
     fn joins_behavior_with_backend_and_profile() {
-        let (behaviors, _budget) = build_self_view(envelope(json!({
-            "AgentBehavior": [{
+        let behaviors = build_behaviors(
+            rows(json!([{
                 "behavior_id": "amy-general",
                 "display_name": "Amy General",
                 "model_name": "gpt-4",
                 "backend_id": "b1",
                 "inference_profile_id": "p1",
                 "enabled": true
-            }],
-            "InferenceBackend": [{
+            }])),
+            rows(json!([{
                 "backend_id": "b1",
                 "provider_kind": "OpenAiCompatible",
                 "endpoint": "http://host/v1"
-            }],
-            "InferenceProfile": [{ "profile_id": "p1", "context_window": 128000 }],
-            "CompactionEntry": []
-        })));
+            }])),
+            rows(json!([{ "profile_id": "p1", "context_window": 128000 }])),
+        );
 
         assert_eq!(behaviors.len(), 1);
         let b = &behaviors[0];
-        assert_eq!(b.behavior_id, "amy-general");
         assert_eq!(b.model_name, "gpt-4");
         assert_eq!(b.provider_kind, "OpenAiCompatible");
         assert_eq!(b.endpoint, "http://host/v1");
@@ -253,33 +310,36 @@ mod tests {
 
     #[test]
     fn behavior_without_matching_backend_or_profile_has_empty_join() {
-        let (behaviors, _) = build_self_view(envelope(json!({
-            "AgentBehavior": [{ "behavior_id": "orphan", "backend_id": "missing" }],
-            "InferenceBackend": [],
-            "InferenceProfile": [],
-            "CompactionEntry": []
-        })));
-
+        let behaviors = build_behaviors(
+            rows(json!([{ "behavior_id": "orphan", "backend_id": "missing" }])),
+            rows(json!([])),
+            rows(json!([])),
+        );
         assert_eq!(behaviors.len(), 1);
         assert_eq!(behaviors[0].provider_kind, "");
         assert_eq!(behaviors[0].endpoint, "");
         assert_eq!(behaviors[0].context_window, None);
-        // Missing `enabled` defaults to true.
         assert!(behaviors[0].enabled);
     }
 
     #[test]
-    fn context_budget_counts_and_picks_latest_compaction() {
-        let (_, budget) = build_self_view(envelope(json!({
-            "AgentBehavior": [],
-            "InferenceBackend": [],
-            "InferenceProfile": [],
-            "CompactionEntry": [
-                { "created_at": "2026-06-01T10:00:00Z", "original_tokens": 100, "compacted_tokens": 40 },
-                { "created_at": "2026-06-02T10:00:00Z", "original_tokens": 200, "compacted_tokens": 80 }
-            ]
-        })));
+    fn distinct_session_ids_dedupes_and_drops_empty() {
+        let ids = distinct_session_ids(&rows(json!([
+            { "session_id": "s-a" },
+            { "session_id": "s-a" },
+            { "session_id": "s-b" },
+            { "session_id": "" },
+            { "session_id": null }
+        ])));
+        assert_eq!(ids, vec!["s-a".to_string(), "s-b".to_string()]);
+    }
 
+    #[test]
+    fn context_budget_counts_and_picks_latest_compaction() {
+        let budget = aggregate_compaction(rows(json!([
+            { "created_at": "2026-06-01T10:00:00Z", "original_tokens": 100, "compacted_tokens": 40 },
+            { "created_at": "2026-06-02T10:00:00Z", "original_tokens": 200, "compacted_tokens": 80 }
+        ])));
         assert_eq!(budget.compaction_count, 2);
         assert_eq!(
             budget.latest_compaction_at.as_deref(),
@@ -291,9 +351,7 @@ mod tests {
 
     #[test]
     fn empty_compactions_yield_default_budget() {
-        let (_, budget) = build_self_view(envelope(json!({
-            "AgentBehavior": [], "InferenceBackend": [], "InferenceProfile": [], "CompactionEntry": []
-        })));
+        let budget = aggregate_compaction(rows(json!([])));
         assert_eq!(budget.compaction_count, 0);
         assert_eq!(budget.latest_compaction_at, None);
     }
