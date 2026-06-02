@@ -899,6 +899,57 @@ fn command_policy_applies_forbidden_and_allowed_prefixes() {
 }
 
 #[test]
+fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
+    let policy = CommandExecutionPolicy::read_only(default_read_only_commands())
+        .with_allowed_argv_prefixes(vec![vec![
+            "spctl".to_string(),
+            "--assess".to_string(),
+            "--type".to_string(),
+            "execute".to_string(),
+        ]]);
+
+    validate_command_policy(
+        "spctl",
+        &[
+            String::from("--assess"),
+            String::from("--type"),
+            String::from("execute"),
+            String::from("/Applications/Defra Agent.app"),
+        ],
+        &policy,
+    )
+    .unwrap();
+    assert!(validate_command_policy(
+        "spctl",
+        &[String::from("--assess"), String::from("--raw")],
+        &policy,
+    )
+    .is_err());
+}
+
+#[test]
+fn read_only_policy_forbidden_prefix_overrides_configured_diagnostic_prefix() {
+    let policy = CommandExecutionPolicy::read_only(default_read_only_commands())
+        .with_allowed_argv_prefixes(vec![vec!["spctl".to_string(), "--assess".to_string()]])
+        .with_forbidden_argv_prefixes(vec![vec![
+            "spctl".to_string(),
+            "--assess".to_string(),
+            "--raw".to_string(),
+        ]]);
+
+    assert!(validate_command_policy(
+        "spctl",
+        &[
+            String::from("--assess"),
+            String::from("--raw"),
+            String::from("/Applications/Defra Agent.app"),
+        ],
+        &policy,
+    )
+    .is_err());
+}
+
+#[test]
 fn generated_command_policy_cases_match_rust_validation() {
     for case in lean_command_policy_cases() {
         let mode = rust_command_execution_mode(&case.mode);

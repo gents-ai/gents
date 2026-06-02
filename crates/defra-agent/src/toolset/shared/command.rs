@@ -241,9 +241,9 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
-    if !policy.allowed_argv_prefixes.is_empty()
-        && first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_none()
-    {
+    let allowed_prefix_matched =
+        first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_some();
+    if !policy.allowed_argv_prefixes.is_empty() && !allowed_prefix_matched {
         return Err(policy_denial(
             policy,
             DenialReason::AllowedPrefixRequired { argv },
@@ -253,7 +253,13 @@ pub(crate) fn validate_command_policy(
     validate_network_mode(command, args, policy)?;
 
     if matches!(policy.mode, CommandExecutionMode::ReadOnly) {
-        validate_read_only_command_inner(command, args, &policy.read_only_allowlist, policy)?;
+        validate_read_only_command_inner(
+            command,
+            args,
+            &policy.read_only_allowlist,
+            allowed_prefix_matched,
+            policy,
+        )?;
     }
 
     Ok(())
@@ -298,15 +304,17 @@ fn validate_read_only_command_inner(
     command: &str,
     args: &[String],
     allowlist: &[String],
+    allowed_prefix_matched: bool,
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(), ToolError> {
     let command_key = executable_name_lookup_key(command).unwrap_or_else(|| command.to_string());
-    if !allowlist.iter().any(|allowed| {
+    let built_in_allowlisted = allowlist.iter().any(|allowed| {
         allowed == command
             || executable_name_lookup_key(allowed)
                 .as_deref()
                 .is_some_and(|allowed_key| allowed_key == command_key)
-    }) {
+    });
+    if !built_in_allowlisted && !allowed_prefix_matched {
         return Err(policy_denial(
             policy,
             DenialReason::ReadOnlyCommandNotAllowlisted {

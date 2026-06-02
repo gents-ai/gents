@@ -1318,6 +1318,19 @@ fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
         Some(&vec!["curl".to_string(), "https://example.com".to_string()])
     );
 
+    let configured =
+        lean_command_policy_case("allowed_prefix_authorizes_read_only_diagnostic_command");
+    assert_eq!(configured.category, "read_only_configured_prefix");
+    assert_eq!(configured.decision, "allow");
+
+    let configured_forbidden =
+        lean_command_policy_case("forbidden_prefix_overrides_configured_read_only_diagnostic");
+    assert_eq!(configured_forbidden.decision, "deny");
+    assert_eq!(
+        configured_forbidden.denial_reason.as_deref(),
+        Some("forbiddenPrefix")
+    );
+
     let curl = lean_command_policy_case("disabled_network_read_only_curl_denies_before_allowlist");
     assert_eq!(
         curl.denial_reason.as_deref(),

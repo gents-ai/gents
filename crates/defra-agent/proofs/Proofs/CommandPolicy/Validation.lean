@@ -298,8 +298,9 @@ def validateReadOnlyArgs (request : CommandRequest) : Decision :=
 /-- Validator used when the effective mode is `read_only`. -/
 def validateReadOnlyCommand
     (allowlist : List String)
+    (allowedPrefixMatched : Bool)
     (request : CommandRequest) : Decision :=
-  if commandAllowlisted request.lookupCommand allowlist then
+  if commandAllowlisted request.lookupCommand allowlist || allowedPrefixMatched then
     validateReadOnlyArgs request
   else
     .deny (.readOnlyCommandNotAllowlisted request.lookupCommand)
@@ -336,27 +337,36 @@ def validateNetworkMode
           else
             .allow
 
-/-- Validation once argv prefix checks have passed. -/
-def validateAfterPrefixes (policy : Policy) (request : CommandRequest) : Decision :=
+/-- Validation once argv prefix checks have passed. `allowedPrefixMatched`
+    lets read-only mode treat an operator-configured prefix as an explicit
+    diagnostic command authorization alongside the built-in allowlist. -/
+def validateAfterPrefixes
+    (policy : Policy)
+    (allowedPrefixMatched : Bool)
+    (request : CommandRequest) : Decision :=
   match validateNetworkMode policy.mode policy.networkMode request with
   | .deny reason => .deny reason
   | .allow =>
       match policy.mode with
-      | .readOnly => validateReadOnlyCommand policy.readOnlyAllowlist request
+      | .readOnly =>
+          validateReadOnlyCommand
+            policy.readOnlyAllowlist
+            allowedPrefixMatched
+            request
       | .workspaceWrite => .allow
       | .unrestricted => .allow
 
 /-- Policy validation order: forbidden prefixes, allowed-prefix list, network
-    gate, and finally the read-only allowlist. -/
+    gate, and finally the read-only allowlist or matched operator prefix. -/
 def validatePolicy (policy : Policy) (request : CommandRequest) : Decision :=
   match firstMatchingPrefix request.argv policy.forbiddenArgvPrefixes with
   | some matched => .deny (.forbiddenPrefix matched)
   | none =>
       match policy.allowedArgvPrefixes with
-      | [] => validateAfterPrefixes policy request
+      | [] => validateAfterPrefixes policy false request
       | _ :: _ =>
           match firstMatchingPrefix request.argv policy.allowedArgvPrefixes with
           | none => .deny (.allowedPrefixRequired request.argv)
-          | some _ => validateAfterPrefixes policy request
+          | some _ => validateAfterPrefixes policy true request
 
 end CommandPolicy

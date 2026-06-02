@@ -54,6 +54,44 @@ Manifest or direct DefraDB document:
 }
 ```
 
+## Read-Only Diagnostic Extensions
+
+Read-only bash has built-in host diagnostics for common steward commands such
+as `date`, `hostname`, `uptime`, `df`, `vm_stat`, `ps`, `lsof`, `curl`,
+`launchctl`, and `tailscale`.
+
+Operators can add another read-only diagnostic command family by configuring an
+allowed argv prefix on the tool selection. A matching allowed prefix authorizes
+that command for read-only bash without granting `bash_mode: Unrestricted`.
+The allowed-prefix list is still a global argv gate: when it is non-empty,
+include prefixes for every built-in read-only command shape the behavior should
+keep using. Forbidden prefixes still take precedence.
+
+```json
+{
+  "enable_bash": true,
+  "bash_mode": "ReadOnly",
+  "command_execution_policy": "read_only",
+  "command_allowed_argv_prefixes": [
+    "spctl --assess --type execute"
+  ],
+  "command_forbidden_argv_prefixes": [
+    "spctl --assess --raw"
+  ]
+}
+```
+
+The allowed prefix is an argv prefix, not a shell string. It can also be written
+as JSON when an argument contains spaces:
+
+```json
+{
+  "command_allowed_argv_prefixes": [
+    "[\"log\", \"show\", \"--last\", \"5m\"]"
+  ]
+}
+```
+
 ## macOS Seatbelt Profile
 
 The `workspace_write` policy uses a deny-by-default seatbelt profile with:
