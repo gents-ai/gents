@@ -231,7 +231,9 @@ pub(super) fn terminal_turn_status(
 ) -> codex::TurnStatus {
     match (lifecycle_state, response_status) {
         ("interrupted" | "superseded", _) => codex::TurnStatus::Interrupted,
-        ("failed" | "dead", _) | (_, "error") => codex::TurnStatus::Failed,
+        ("failed" | "dead", _) => codex::TurnStatus::Failed,
+        ("completed", _) => codex::TurnStatus::Completed,
+        (_, "error") => codex::TurnStatus::Failed,
         _ => codex::TurnStatus::Completed,
     }
 }
@@ -359,6 +361,26 @@ mod tests {
         assert_eq!(
             content_delta("\n\nAnswer", "Answer with context"),
             " with context"
+        );
+    }
+
+    #[test]
+    fn terminal_turn_status_matches_codex_projection_request_precedence() {
+        assert_eq!(
+            terminal_turn_status("completed", "error"),
+            codex::TurnStatus::Completed
+        );
+        assert_eq!(
+            terminal_turn_status("processing", "error"),
+            codex::TurnStatus::Failed
+        );
+        assert_eq!(
+            terminal_turn_status("failed", "complete"),
+            codex::TurnStatus::Failed
+        );
+        assert_eq!(
+            terminal_turn_status("superseded", "error"),
+            codex::TurnStatus::Interrupted
         );
     }
 

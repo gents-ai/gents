@@ -30,6 +30,10 @@ pub(super) struct ProjectionRow {
     pub(super) goal_json: String,
     #[serde(default = "empty_json_object")]
     pub(super) git_info_json: String,
+    #[serde(default)]
+    pub(super) created_at: Option<String>,
+    #[serde(default)]
+    pub(super) updated_at: Option<String>,
 }
 
 pub(super) struct ProjectionUpdate<'a> {
@@ -235,6 +239,7 @@ pub(super) async fn load_projection(
                 limit: 1
             ) {{
                 session_id cwd archived loaded memory_mode name settings_json goal_json git_info_json
+                created_at updated_at
             }}
         }}"#
     );
@@ -262,6 +267,7 @@ pub(super) async fn list_projection_rows(
                 order: {{ updated_at: DESC }}
             ) {{
                 session_id cwd archived loaded memory_mode name settings_json goal_json git_info_json
+                created_at updated_at
             }}
         }}"#
         ),

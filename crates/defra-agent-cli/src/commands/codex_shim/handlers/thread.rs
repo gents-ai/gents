@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use serde_json::json;
 
-use super::super::bound_behavior::load_bound_inference_profile_id_for_state;
+use super::super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::super::history_projection::{
     conversation_summary_json, load_thread_turns, thread_turn_items_list_response,
     thread_turns_list_response,
@@ -12,7 +12,7 @@ use super::super::protocol::{
 };
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
-    ensure_agent_session_pinning, get_codex_thread_goal, list_codex_threads, load_codex_thread,
+    ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
     loaded_codex_thread_ids, resume_codex_thread, set_codex_thread_archived,
     set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
@@ -39,14 +39,14 @@ pub(super) async fn handle_thread_request(
                 .lock()
                 .await
                 .insert(thread_id.clone(), cwd.clone());
-            let bound_profile_id =
-                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+            let bound_model_id =
+                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
-                    .context("resolving bound inference profile for ThreadStart")?;
+                    .context("resolving bound model selection for ThreadStart")?;
             send_typed_json_result::<codex::ThreadStartResponse>(
                 outbound,
                 request_id,
-                thread_start_response_json(&record, &bound_profile_id),
+                thread_start_response_json(&record, &bound_model_id),
             )
             .await
         }
@@ -69,34 +69,31 @@ pub(super) async fn handle_thread_request(
                 .lock()
                 .await
                 .insert(record.session_id.clone(), record.cwd.clone());
-            let bound_profile_id =
-                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+            let turns = if params.exclude_turns {
+                Vec::new()
+            } else {
+                load_thread_turns(state, &record).await?
+            };
+            let bound_model_id =
+                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
-                    .context("resolving bound inference profile for ThreadResume")?;
+                    .context("resolving bound model selection for ThreadResume")?;
             send_typed_json_result::<codex::ThreadResumeResponse>(
                 outbound,
                 request_id,
-                thread_resume_response_json(&record, &bound_profile_id),
+                thread_resume_response_json(&record, turns, &bound_model_id),
             )
             .await
         }
-        codex::ClientRequest::ThreadList { request_id, .. } => {
-            let threads: Vec<_> = list_codex_threads(state)
-                .await?
-                .into_iter()
-                .map(|record| codex_thread_json(&record, false))
-                .collect();
-            send_typed_json_result::<codex::ThreadListResponse>(
-                outbound,
-                request_id,
-                json!({
-                    "data": threads,
-                    "nextCursor": null,
-                    "backwardsCursor": null
-                }),
-            )
-            .await
-        }
+        codex::ClientRequest::ThreadList {
+            request_id, params, ..
+        } => match thread_routes::list_threads_response(state, params).await {
+            Ok(response) => {
+                send_typed_json_result::<codex::ThreadListResponse>(outbound, request_id, response)
+                    .await
+            }
+            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
+        },
         codex::ClientRequest::ThreadFork {
             request_id, params, ..
         } => match thread_routes::fork_thread_response(state, params).await {

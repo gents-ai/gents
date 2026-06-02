@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
+use codex_protocol::models::MessagePhase;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent_protocol::transcript::present_persisted_message;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -13,7 +15,7 @@ use super::progress::{
     decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
     DefraToolCallProgress,
 };
-use super::protocol::{absolute_path, agent_message_item, turn_value};
+use super::protocol::{absolute_path, agent_message_item_with_phase, turn_value};
 use super::store::{hydrate_materialized_response_content, query_node_json};
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
@@ -48,6 +50,8 @@ struct ResponseRow {
     status: String,
     #[serde(default)]
     error_message: Option<String>,
+    #[serde(default)]
+    materialized_message_sequence: Option<i64>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -156,7 +160,19 @@ pub(super) async fn load_thread_turns(
         tools_by_request.entry(request_id).or_default().push(tool);
     }
 
-    let turns = project_request_turns(record, requests, &responses_by_request, &tools_by_request)?;
+    let messages_by_sequence = messages
+        .iter()
+        .cloned()
+        .map(|message| (message.sequence, message))
+        .collect::<BTreeMap<_, _>>();
+
+    let turns = project_request_turns(
+        record,
+        requests,
+        &responses_by_request,
+        &tools_by_request,
+        &messages_by_sequence,
+    )?;
 
     if turns.is_empty() && !messages.is_empty() {
         return Ok(project_message_turns(messages));
@@ -182,22 +198,26 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
             );
             saw_assistant = false;
             current_id = Some(format!("defra-message-turn-{}", message.sequence));
-            current_items.push(codex::ThreadItem::UserMessage {
-                id: format!("defra-user-message-{}", message.sequence),
-                content: vec![codex::UserInput::Text {
-                    text: message.content,
-                    text_elements: Vec::new(),
-                }],
-            });
+            let presentation = present_persisted_message(&message.role, &message.content);
+            if !presentation.body_markdown.trim().is_empty() {
+                current_items.push(codex::ThreadItem::UserMessage {
+                    id: format!("defra-user-message-{}", message.sequence),
+                    content: vec![codex::UserInput::Text {
+                        text: presentation.body_markdown,
+                        text_elements: Vec::new(),
+                    }],
+                });
+            }
         } else if role.eq_ignore_ascii_case("assistant") {
             if current_id.is_none() {
                 current_id = Some(format!("defra-message-turn-{}", message.sequence));
             }
-            saw_assistant = true;
-            current_items.push(agent_message_item(
-                &format!("defra-agent-message-{}", message.sequence),
-                &message.content,
-            ));
+            saw_assistant |= append_assistant_message_items(
+                &mut current_items,
+                message.sequence,
+                &message,
+                true,
+            );
         }
     }
 
@@ -226,6 +246,7 @@ fn project_request_turns(
     requests: Vec<RequestRow>,
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+    messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) -> Result<Vec<codex::Turn>> {
     let requests = requests
         .into_iter()
@@ -257,6 +278,7 @@ fn project_request_turns(
             &group,
             responses_by_request,
             tools_by_request,
+            messages_by_sequence,
         ));
     }
     Ok(turns)
@@ -392,6 +414,7 @@ fn project_turn_group(
     requests: &[RequestRow],
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+    messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) -> codex::Turn {
     let Some(first_request) = requests.first() else {
         return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
@@ -406,7 +429,14 @@ fn project_turn_group(
             .get(&request.request_id)
             .cloned()
             .unwrap_or_default();
-        append_request_items(record, &mut items, request, response, tools);
+        append_request_items(
+            record,
+            &mut items,
+            request,
+            response,
+            tools,
+            messages_by_sequence,
+        );
     }
 
     let status = turn_status(tail_request, tail_response);
@@ -440,6 +470,7 @@ fn append_request_items(
     request: &RequestRow,
     response: Option<&ResponseRow>,
     mut tools: Vec<ToolRow>,
+    messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) {
     tools.sort_by(|left, right| {
         left.message_sequence
@@ -457,30 +488,85 @@ fn append_request_items(
         });
     }
 
-    if let Some(response) = response {
-        if !response.reasoning.trim().is_empty() {
-            items.push(codex::ThreadItem::Reasoning {
-                id: format!("defra-reasoning-{}", request.request_id),
-                summary: Vec::new(),
-                content: vec![response.reasoning.clone()],
-            });
-        }
-    }
-
+    let mut rendered_assistant_sequences = BTreeSet::<i64>::new();
     for tool in tools {
+        if let Some(message) = messages_by_sequence.get(&tool.message_sequence) {
+            if !rendered_assistant_sequences.contains(&tool.message_sequence)
+                && append_assistant_message_items(items, tool.message_sequence, message, false)
+            {
+                rendered_assistant_sequences.insert(tool.message_sequence);
+            }
+        }
         if let Some(item) = project_tool(record, &tool.progress) {
             items.push(item);
         }
     }
 
     if let Some(response) = response {
-        if !response.content.trim().is_empty() {
-            items.push(agent_message_item(
+        let rendered_materialized = response
+            .materialized_message_sequence
+            .and_then(|sequence| {
+                if rendered_assistant_sequences.contains(&sequence) {
+                    return Some(true);
+                }
+                let message = messages_by_sequence.get(&sequence)?;
+                append_assistant_message_items(items, sequence, message, true).then_some(true)
+            })
+            .unwrap_or(false);
+
+        if !rendered_materialized && !response.reasoning.trim().is_empty() {
+            items.push(codex::ThreadItem::Reasoning {
+                id: format!("defra-reasoning-{}", request.request_id),
+                summary: Vec::new(),
+                content: vec![response.reasoning.clone()],
+            });
+        }
+        if !rendered_materialized && !response.content.trim().is_empty() {
+            items.push(agent_message_item_with_phase(
                 &format!("defra-agent-{}", request.request_id),
                 &response.content,
+                Some(MessagePhase::FinalAnswer),
             ));
         }
     }
+}
+
+fn append_assistant_message_items(
+    items: &mut Vec<codex::ThreadItem>,
+    sequence: i64,
+    message: &MessageRow,
+    final_answer: bool,
+) -> bool {
+    if !message.role.trim().eq_ignore_ascii_case("assistant") {
+        return false;
+    }
+    let presentation = present_persisted_message(&message.role, &message.content);
+    let mut appended = false;
+    if let Some(reasoning) = presentation
+        .reasoning_markdown
+        .filter(|value| !value.trim().is_empty())
+    {
+        items.push(codex::ThreadItem::Reasoning {
+            id: format!("defra-reasoning-message-{sequence}"),
+            summary: Vec::new(),
+            content: vec![reasoning],
+        });
+        appended = true;
+    }
+    if !presentation.body_markdown.trim().is_empty() {
+        let phase = if final_answer && !presentation.has_tool_calls {
+            MessagePhase::FinalAnswer
+        } else {
+            MessagePhase::Commentary
+        };
+        items.push(agent_message_item_with_phase(
+            &format!("defra-agent-message-{sequence}"),
+            &presentation.body_markdown,
+            Some(phase),
+        ));
+        appended = true;
+    }
+    appended
 }
 
 fn project_tool(
@@ -696,4 +782,212 @@ fn codex_git_info_summary_json(raw: &str) -> Option<Value> {
             .or_else(|| object.get("origin_url"))
             .and_then(Value::as_str),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn completed_request_overrides_error_response_status() {
+        let request = RequestRow {
+            request_id: "request-1".to_string(),
+            content: "Inspect the repo".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            metadata: r#"{"codex_shim":{}}"#.to_string(),
+            execution_origin: "interactive".to_string(),
+        };
+        let response = ResponseRow {
+            request_id: request.request_id.clone(),
+            content: "Done".to_string(),
+            reasoning: String::new(),
+            status: "error".to_string(),
+            error_message: Some("stale response error".to_string()),
+            materialized_message_sequence: None,
+            created_at: None,
+            completed_at: None,
+            interrupted_at: None,
+        };
+
+        assert_eq!(
+            turn_status(&request, Some(&response)),
+            codex::TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn append_request_items_replays_assistant_text_around_tool_calls() {
+        let record = CodexThreadRecord {
+            session_id: "thread-1".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            archived: false,
+            loaded: true,
+            memory_mode: "enabled".to_string(),
+            name: String::new(),
+            settings_json: "{}".to_string(),
+            goal_json: "{}".to_string(),
+            git_info_json: "{}".to_string(),
+            projection_created_at: None,
+            projection_updated_at: None,
+            conversation: None,
+        };
+        let request = RequestRow {
+            request_id: "request-1".to_string(),
+            content: "Inspect the repo".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            metadata: r#"{"codex_shim":{}}"#.to_string(),
+            execution_origin: "interactive".to_string(),
+        };
+        let response = ResponseRow {
+            request_id: request.request_id.clone(),
+            content: String::new(),
+            reasoning: String::new(),
+            status: "complete".to_string(),
+            error_message: None,
+            materialized_message_sequence: Some(4),
+            created_at: None,
+            completed_at: None,
+            interrupted_at: None,
+        };
+        let first_tool = ToolRow {
+            request_id: request.request_id.clone(),
+            message_sequence: 2,
+            started_at: None,
+            progress: DefraToolCallProgress {
+                tool_call_key: "thread-1:call-1".to_string(),
+                tool_name: "list_files".to_string(),
+                status: "completed".to_string(),
+                lifecycle_state: Some("completed".to_string()),
+                await_mode: None,
+                child_request_id: None,
+                args: r#"{"path":"."}"#.to_string(),
+                result: "Cargo.toml\nsrc".to_string(),
+            },
+        };
+        let second_tool = ToolRow {
+            request_id: request.request_id.clone(),
+            message_sequence: 2,
+            started_at: Some("2026-06-02T00:00:01Z".to_string()),
+            progress: DefraToolCallProgress {
+                tool_call_key: "thread-1:call-2".to_string(),
+                tool_name: "read_file".to_string(),
+                status: "completed".to_string(),
+                lifecycle_state: Some("completed".to_string()),
+                await_mode: None,
+                child_request_id: None,
+                args: r#"{"path":"Cargo.toml"}"#.to_string(),
+                result: "[package]".to_string(),
+            },
+        };
+        let messages_by_sequence = BTreeMap::from([
+            (
+                2,
+                MessageRow {
+                    sequence: 2,
+                    role: "assistant".to_string(),
+                    content: r#"{"role":"assistant","id":null,"content":[{"id":"call-1","call_id":null,"function":{"name":"list_files","arguments":{"path":"."}},"signature":null,"additional_params":null},{"text":"Before the tool call."}]}"#.to_string(),
+                },
+            ),
+            (
+                4,
+                MessageRow {
+                    sequence: 4,
+                    role: "assistant".to_string(),
+                    content: r#"{"role":"assistant","id":null,"content":[{"text":"Final answer after tools."}]}"#.to_string(),
+                },
+            ),
+        ]);
+
+        let mut items = Vec::new();
+        append_request_items(
+            &record,
+            &mut items,
+            &request,
+            Some(&response),
+            vec![first_tool, second_tool],
+            &messages_by_sequence,
+        );
+
+        let agent_messages = items
+            .iter()
+            .filter_map(|item| match item {
+                codex::ThreadItem::AgentMessage { text, phase, .. } => {
+                    Some((text.as_str(), phase.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            agent_messages
+                .iter()
+                .any(|(text, _)| text.contains("Before the tool call.")),
+            "intermediate assistant text should be replayed; items={items:?}"
+        );
+        let intermediate_count = agent_messages
+            .iter()
+            .filter(|(text, _)| text.contains("Before the tool call."))
+            .count();
+        assert_eq!(
+            intermediate_count, 1,
+            "assistant text before sibling tool calls should only be replayed once; items={items:?}"
+        );
+        assert!(
+            agent_messages
+                .iter()
+                .any(|(text, phase)| text.contains("Before the tool call.")
+                    && *phase == Some(MessagePhase::Commentary)),
+            "intermediate assistant text should replay as commentary; items={items:?}"
+        );
+        assert!(
+            agent_messages
+                .iter()
+                .any(|(text, phase)| text.contains("Final answer after tools.")
+                    && *phase == Some(MessagePhase::FinalAnswer)),
+            "final materialized assistant text should be replayed; items={items:?}"
+        );
+    }
+
+    #[test]
+    fn project_message_turns_renders_structured_persisted_messages() {
+        let turns = project_message_turns(vec![
+            MessageRow {
+                sequence: 1,
+                role: "user".to_string(),
+                content: r#"{"role":"user","content":[{"type":"text","text":"Hello from stored user JSON."}]}"#
+                    .to_string(),
+            },
+            MessageRow {
+                sequence: 2,
+                role: "assistant".to_string(),
+                content: r#"{"role":"assistant","id":null,"content":[{"text":"Hello from stored assistant JSON."}]}"#
+                    .to_string(),
+            },
+        ]);
+
+        assert_eq!(turns.len(), 1);
+        let turn = &turns[0];
+        assert!(turn.items.iter().any(|item| matches!(
+            item,
+            codex::ThreadItem::UserMessage { content, .. }
+                if content.iter().any(|input| matches!(
+                    input,
+                    codex::UserInput::Text { text, .. }
+                        if text == "Hello from stored user JSON."
+                ))
+        )));
+        assert!(turn.items.iter().any(|item| matches!(
+            item,
+            codex::ThreadItem::AgentMessage { text, phase, .. }
+                if text == "Hello from stored assistant JSON."
+                    && *phase == Some(MessagePhase::FinalAnswer)
+        )));
+    }
 }

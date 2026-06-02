@@ -4405,6 +4405,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-login",
  "codex-model-provider-info",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "defra-agent",
  "defra-agent-lean-contract",

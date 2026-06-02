@@ -18,6 +18,7 @@ clap.workspace = true
 codex-app-server-protocol.workspace = true
 codex-login.workspace = true
 codex-model-provider-info.workspace = true
+codex-protocol.workspace = true
 codex-utils-absolute-path.workspace = true
 defra-agent = { path = "../defra-agent" }
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }

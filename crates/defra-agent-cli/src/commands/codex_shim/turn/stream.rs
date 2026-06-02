@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
+use codex_protocol::models::MessagePhase;
 use defra_agent::UpdateSubscriptionSource;
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -184,12 +185,17 @@ pub(super) async fn stream_defra_turn(
                 projection.append_agent_delta(outbound, &delta).await?;
             }
 
-            let error_message = terminal_error_message(
-                response_status,
-                latest_error_message.as_deref(),
-                lifecycle_state,
-                failure_reason,
-            );
+            let turn_status = terminal_turn_status(lifecycle_state, response_status);
+            let error_message = if turn_status == codex::TurnStatus::Failed {
+                terminal_error_message(
+                    response_status,
+                    latest_error_message.as_deref(),
+                    lifecycle_state,
+                    failure_reason,
+                )
+            } else {
+                None
+            };
             if let Some(error_message) = error_message.as_deref() {
                 if !projection.rendered_agent_text().contains(error_message) {
                     projection
@@ -197,8 +203,6 @@ pub(super) async fn stream_defra_turn(
                         .await?;
                 }
             }
-
-            let turn_status = terminal_turn_status(lifecycle_state, response_status);
             if turn_status == codex::TurnStatus::Completed {
                 if let Some(next_request) =
                     next_steering_request_after(state, &current.session_id, &current.request_id)
@@ -208,7 +212,9 @@ pub(super) async fn stream_defra_turn(
                         tokio::time::sleep(state.poll_interval).await;
                         continue;
                     }
-                    projection.finish_agent_message(outbound).await?;
+                    projection
+                        .finish_agent_message_with_phase(outbound, Some(MessagePhase::FinalAnswer))
+                        .await?;
                     spawn_background_tool_watcher(
                         connection.clone(),
                         state.clone(),
