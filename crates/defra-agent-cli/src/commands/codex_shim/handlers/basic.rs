@@ -1,15 +1,17 @@
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use defra_agent::{
-    list_inference_profile_records, load_agent_behavior, load_inference_profile,
-    AgentBehaviorDocument,
+    backend_registry::list_enabled_backends, load_agent_behavior, AgentBehaviorDocument,
+    InferenceBackend,
 };
 use serde_json::{json, Value};
 
-use super::super::bound_behavior::load_bound_inference_profile_id_for_state;
+use super::super::bound_behavior::{
+    load_bound_model_selection_id_for_state, model_selection_id, parse_model_selection_id,
+};
 use super::super::protocol::{
-    absolute_path, empty_rate_limits, initialize_result, model_summary, send_error, send_result,
-    send_typed_json_result,
+    absolute_path, backend_model_summary, empty_rate_limits, initialize_result, send_error,
+    send_result, send_typed_json_result,
 };
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
@@ -51,20 +53,13 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ModelList { request_id, .. } => {
-            let profiles = list_inference_profile_records(state.node.as_ref())
+            let behavior = load_bound_behavior(state)
                 .await
-                .context("listing InferenceProfile documents for Codex ModelList")?;
-            let current_profile_id =
-                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
-                    .await
-                    .context("resolving current inference profile for ModelList")?;
-            let entries: Vec<Value> = profiles
-                .into_iter()
-                .map(|(_doc_id, profile)| {
-                    let is_default = profile.profile_id == current_profile_id;
-                    model_summary(&profile, is_default)
-                })
-                .collect();
+                .context("loading bound AgentBehavior for ModelList")?;
+            let backends = available_model_backends(state)
+                .await
+                .context("listing available backend models for ModelList")?;
+            let entries = model_list_entries(&backends, &behavior);
             send_typed_json_result::<codex::ModelListResponse>(
                 outbound,
                 request_id,
@@ -88,16 +83,16 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
-            let profile_id =
-                load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+            let model_id =
+                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
-                    .context("resolving current inference profile for ConfigRead")?;
+                    .context("resolving current model selection for ConfigRead")?;
             send_typed_json_result::<codex::ConfigReadResponse>(
                 outbound,
                 request_id,
                 json!({
                     "config": {
-                        "model": profile_id,
+                        "model": model_id,
                         "model_provider": "defra",
                         "approval_policy": "never",
                         "sandbox_mode": "danger-full-access"
@@ -239,7 +234,7 @@ async fn apply_config_writes(
             // Other keys keep the existing no-op ack semantics.
             continue;
         }
-        let new_profile_id = match value.as_str() {
+        let new_model_id = match value.as_str() {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
                 return send_error(
@@ -251,23 +246,19 @@ async fn apply_config_writes(
                 .await;
             }
         };
-        if load_inference_profile(state.node.as_ref(), &new_profile_id)
-            .await
-            .context("looking up target InferenceProfile for ConfigValueWrite")?
-            .is_none()
-        {
-            return send_error(
-                outbound,
-                request_id,
-                JSONRPC_INVALID_PARAMS,
-                format!(
-                    "InferenceProfile {new_profile_id:?} not found; available ids \
-                     are visible via ModelList"
-                ),
-            )
-            .await;
-        }
-        apply_profile_to_bound_behavior(state, &new_profile_id).await?;
+        let selection = match resolve_model_selection(state, &new_model_id).await {
+            Ok(selection) => selection,
+            Err(err) => {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    err.to_string(),
+                )
+                .await;
+            }
+        };
+        apply_model_to_bound_behavior(state, &selection).await?;
     }
     send_typed_json_result::<codex::ConfigWriteResponse>(
         outbound,
@@ -282,16 +273,142 @@ async fn apply_config_writes(
     .await
 }
 
-async fn apply_profile_to_bound_behavior(state: &ShimState, profile_id: &str) -> Result<()> {
+struct ModelSelection {
+    backend_id: String,
+    model_name: String,
+}
+
+async fn load_bound_behavior(state: &ShimState) -> Result<AgentBehaviorDocument> {
     let behavior_id = state.behavior_id.as_ref();
-    let mut behavior: AgentBehaviorDocument = load_agent_behavior(state.node.as_ref(), behavior_id)
+    load_agent_behavior(state.node.as_ref(), behavior_id)
         .await
-        .context("loading bound AgentBehavior for profile mutation")?
-        .ok_or_else(|| anyhow::anyhow!("bound AgentBehavior {behavior_id:?} disappeared"))?;
-    behavior.inference_profile_id = Some(profile_id.to_string());
+        .context("loading bound AgentBehavior")?
+        .ok_or_else(|| anyhow::anyhow!("bound AgentBehavior {behavior_id:?} disappeared"))
+}
+
+async fn available_model_backends(state: &ShimState) -> Result<Vec<InferenceBackend>> {
+    let mut backends = list_enabled_backends(state.node.as_ref()).await?;
+    backends.retain(|backend| backend.is_available());
+    backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
+    Ok(backends)
+}
+
+fn model_list_entries(
+    backends: &[InferenceBackend],
+    behavior: &AgentBehaviorDocument,
+) -> Vec<Value> {
+    let current_backend_id = behavior
+        .backend_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let current_model_name = behavior
+        .model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut entries = backends
+        .iter()
+        .flat_map(|backend| {
+            backend
+                .models
+                .iter()
+                .map(move |model_name| (backend, model_name.trim()))
+        })
+        .filter(|(_, model_name)| !model_name.is_empty())
+        .map(|(backend, model_name)| {
+            let selection_id = model_selection_id(&backend.backend_id, model_name);
+            let is_default = current_backend_id == Some(backend.backend_id.as_str())
+                && current_model_name == Some(model_name);
+            backend_model_summary(backend, model_name, &selection_id, is_default)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.get("displayName")
+            .and_then(Value::as_str)
+            .cmp(&right.get("displayName").and_then(Value::as_str))
+            .then_with(|| {
+                left.get("id")
+                    .and_then(Value::as_str)
+                    .cmp(&right.get("id").and_then(Value::as_str))
+            })
+    });
+    entries
+}
+
+async fn resolve_model_selection(
+    state: &ShimState,
+    requested_model: &str,
+) -> Result<ModelSelection> {
+    let requested_model = requested_model.trim();
+    if requested_model.is_empty() {
+        anyhow::bail!("ConfigValueWrite for `model` requires a non-empty string");
+    }
+
+    let behavior = load_bound_behavior(state).await?;
+    let current_backend_id = behavior
+        .backend_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let backends = available_model_backends(state).await?;
+    let target = if let Some((backend_id, model_name)) = parse_model_selection_id(requested_model) {
+        backends
+            .iter()
+            .find(|backend| {
+                backend.backend_id == backend_id && backend_has_model(backend, model_name)
+            })
+            .map(|backend| (backend, model_name))
+    } else {
+        backends
+            .iter()
+            .find(|backend| {
+                current_backend_id == Some(backend.backend_id.as_str())
+                    && backend_has_model(backend, requested_model)
+            })
+            .or_else(|| {
+                backends
+                    .iter()
+                    .find(|backend| backend_has_model(backend, requested_model))
+            })
+            .map(|backend| (backend, requested_model))
+    };
+    let Some((backend, model_name)) = target else {
+        let available = backends
+            .iter()
+            .flat_map(|backend| backend.models.iter())
+            .map(|model| model.trim())
+            .filter(|model| !model.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "model {requested_model:?} not found in any available InferenceBackend; available models: [{available}]"
+        );
+    };
+
+    Ok(ModelSelection {
+        backend_id: backend.backend_id.clone(),
+        model_name: model_name.to_string(),
+    })
+}
+
+fn backend_has_model(backend: &InferenceBackend, model_name: &str) -> bool {
+    backend
+        .models
+        .iter()
+        .any(|model| model.trim() == model_name)
+}
+
+async fn apply_model_to_bound_behavior(
+    state: &ShimState,
+    selection: &ModelSelection,
+) -> Result<()> {
+    let mut behavior = load_bound_behavior(state).await?;
+    behavior.backend_id = Some(selection.backend_id.clone());
+    behavior.model_name = Some(selection.model_name.clone());
     let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
     write_agent_behavior_document(&access, &behavior)
         .await
-        .context("writing AgentBehavior with new inference_profile_id")?;
+        .context("writing AgentBehavior with selected backend model")?;
     Ok(())
 }

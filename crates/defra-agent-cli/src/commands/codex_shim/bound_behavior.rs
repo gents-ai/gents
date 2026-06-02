@@ -4,8 +4,10 @@ use anyhow::{anyhow, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, load_agent_principal,
-    load_inference_profile,
+    load_inference_profile, AgentBehaviorDocument,
 };
+
+pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
 
 /// Normalize an explicit `--codex-shim-behavior-id` override: trim whitespace and
 /// treat empty as unset.
@@ -74,11 +76,61 @@ pub(super) async fn load_bound_inference_profile_id(
     Ok(profile_id)
 }
 
-pub(super) async fn load_bound_inference_profile_id_for_state(
+pub(super) async fn load_bound_model_selection_id(
+    node: &EmbeddedNode,
+    behavior_id: &str,
+) -> Result<String> {
+    let behavior = load_agent_behavior(node, behavior_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow!(
+                "Codex shim is bound to behavior {behavior_id:?}, but no AgentBehavior \
+                 document with that behavior_id exists."
+            )
+        })?;
+    model_selection_id_for_behavior(behavior_id, &behavior)
+}
+
+pub(super) async fn load_bound_model_selection_id_for_state(
     node: &EmbeddedNode,
     behavior_id: &Arc<str>,
 ) -> Result<String> {
-    load_bound_inference_profile_id(node, behavior_id.as_ref()).await
+    load_bound_model_selection_id(node, behavior_id.as_ref()).await
+}
+
+pub(super) fn model_selection_id(backend_id: &str, model_name: &str) -> String {
+    format!("{backend_id}{MODEL_SELECTION_SEPARATOR}{model_name}")
+}
+
+pub(super) fn parse_model_selection_id(value: &str) -> Option<(&str, &str)> {
+    let (backend_id, model_name) = value.split_once(MODEL_SELECTION_SEPARATOR)?;
+    let backend_id = backend_id.trim();
+    let model_name = model_name.trim();
+    (!backend_id.is_empty() && !model_name.is_empty()).then_some((backend_id, model_name))
+}
+
+fn model_selection_id_for_behavior(
+    behavior_id: &str,
+    behavior: &AgentBehaviorDocument,
+) -> Result<String> {
+    let model_name = behavior
+        .model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "Codex shim is bound to behavior {behavior_id:?}, but that behavior has no \
+                 model_name set."
+            )
+        })?;
+    Ok(behavior
+        .backend_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|backend| !backend.is_empty())
+        .map(|backend_id| model_selection_id(backend_id, model_name))
+        .unwrap_or_else(|| model_name.to_string()))
 }
 
 #[cfg(test)]

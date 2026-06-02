@@ -3,6 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
+use codex_protocol::models::MessagePhase;
+use defra_agent::InferenceBackend;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -88,20 +90,26 @@ pub(super) fn initialize_result(state: &ShimState) -> Value {
     })
 }
 
-pub(super) fn model_summary(profile: &defra_agent::InferenceProfile, is_default: bool) -> Value {
-    let display_name = profile
-        .display_name
-        .clone()
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| profile.profile_id.clone());
+pub(super) fn backend_model_summary(
+    backend: &InferenceBackend,
+    model_name: &str,
+    selection_id: &str,
+    is_default: bool,
+) -> Value {
+    let backend_name = backend.name.trim();
+    let backend_label = if backend_name.is_empty() {
+        backend.backend_id.as_str()
+    } else {
+        backend_name
+    };
     json!({
-        "id": profile.profile_id,
-        "model": profile.profile_id,
+        "id": selection_id,
+        "model": selection_id,
         "upgrade": null,
         "upgradeInfo": null,
         "availabilityNux": null,
-        "displayName": display_name,
-        "description": describe_profile(profile),
+        "displayName": model_name,
+        "description": format!("DEFRA backend: {backend_label}"),
         "hidden": false,
         "supportedReasoningEfforts": [],
         "defaultReasoningEffort": "medium",
@@ -112,24 +120,6 @@ pub(super) fn model_summary(profile: &defra_agent::InferenceProfile, is_default:
         "defaultServiceTier": null,
         "isDefault": is_default,
     })
-}
-
-fn describe_profile(profile: &defra_agent::InferenceProfile) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(ctx) = profile.context_window {
-        parts.push(format!("ctx {ctx}"));
-    }
-    if let Some(max) = profile.max_output_tokens {
-        parts.push(format!("max {max}"));
-    }
-    if let Some(temp) = profile.temperature {
-        parts.push(format!("temp {temp:.2}"));
-    }
-    if parts.is_empty() {
-        "DEFRA inference profile".to_string()
-    } else {
-        parts.join(" · ")
-    }
 }
 
 pub(super) fn thread_json(
@@ -189,10 +179,18 @@ pub(super) fn turn_value(
 }
 
 pub(super) fn agent_message_item(item_id: &str, text: &str) -> codex::ThreadItem {
+    agent_message_item_with_phase(item_id, text, None)
+}
+
+pub(super) fn agent_message_item_with_phase(
+    item_id: &str,
+    text: &str,
+    phase: Option<MessagePhase>,
+) -> codex::ThreadItem {
     codex::ThreadItem::AgentMessage {
         id: item_id.to_string(),
         text: text.to_string(),
-        phase: None,
+        phase,
         memory_citation: None,
     }
 }

@@ -2,12 +2,15 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_app_server_protocol as codex;
+use codex_protocol::models::MessagePhase;
 
 use super::command_projection::{
     command_execution_item, command_output_payload, file_change_item, ToolProjectionStatus,
 };
 use super::progress::{defra_tool_item, DefraToolCallProgress};
-use super::protocol::{agent_message_item, now_millis, send_notification, turn_value};
+use super::protocol::{
+    agent_message_item, agent_message_item_with_phase, now_millis, send_notification, turn_value,
+};
 use super::{Outbound, ShimState};
 
 pub(super) struct TurnProjection<'a> {
@@ -93,7 +96,11 @@ impl<'a> TurnProjection<'a> {
         .await
     }
 
-    pub(super) async fn finish_agent_message(&mut self, outbound: &Outbound) -> Result<()> {
+    pub(super) async fn finish_agent_message_with_phase(
+        &mut self,
+        outbound: &Outbound,
+        phase: Option<MessagePhase>,
+    ) -> Result<()> {
         let Some(item_id) = self.active_agent_item_id.take() else {
             return Ok(());
         };
@@ -101,7 +108,7 @@ impl<'a> TurnProjection<'a> {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let completed_item = agent_message_item(&item_id, &text);
+        let completed_item = agent_message_item_with_phase(&item_id, &text, phase);
         send_notification(
             outbound,
             self.state,
@@ -122,7 +129,8 @@ impl<'a> TurnProjection<'a> {
         outbound: &Outbound,
         tool: &DefraToolCallProgress,
     ) -> Result<()> {
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         send_notification(
             outbound,
             self.state,
@@ -142,7 +150,8 @@ impl<'a> TurnProjection<'a> {
         tool: &DefraToolCallProgress,
         status: codex::McpToolCallStatus,
     ) -> Result<()> {
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         let completed_item = defra_tool_item(tool, status);
         send_notification(
             outbound,
@@ -165,7 +174,8 @@ impl<'a> TurnProjection<'a> {
         tool: &DefraToolCallProgress,
         status: codex::CommandExecutionStatus,
     ) -> Result<()> {
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         send_notification(
             outbound,
             self.state,
@@ -185,7 +195,8 @@ impl<'a> TurnProjection<'a> {
         tool: &DefraToolCallProgress,
         status: codex::CommandExecutionStatus,
     ) -> Result<()> {
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         if let Some(delta) = command_output_payload(tool) {
             send_notification(
                 outbound,
@@ -225,7 +236,8 @@ impl<'a> TurnProjection<'a> {
         let Some(item) = file_change_item(tool, codex::PatchApplyStatus::InProgress) else {
             return Ok(());
         };
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         send_notification(
             outbound,
             self.state,
@@ -248,7 +260,8 @@ impl<'a> TurnProjection<'a> {
         let Some(item) = file_change_item(tool, status) else {
             return Ok(());
         };
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
         send_notification(
             outbound,
             self.state,
@@ -354,7 +367,8 @@ impl<'a> TurnProjection<'a> {
         status: codex::TurnStatus,
         error_message: Option<String>,
     ) -> Result<()> {
-        self.finish_agent_message(outbound).await?;
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::FinalAnswer))
+            .await?;
         let turn_error = if status == codex::TurnStatus::Failed {
             Some(codex::TurnError {
                 message: error_message.unwrap_or_else(|| "DEFRA turn failed".to_string()),

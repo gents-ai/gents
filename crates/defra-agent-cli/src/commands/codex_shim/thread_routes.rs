@@ -6,8 +6,9 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::session::{fork, ForkError, ForkParams};
 use serde_json::{json, Value};
 
-use super::bound_behavior::load_bound_inference_profile_id_for_state;
+use super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::history_projection::load_thread_turns;
+use super::protocol::absolute_path;
 use super::store::query_node_json;
 use super::thread_projection::{
     codex_thread_json, codex_thread_json_with_turns, list_codex_threads_by_archived,
@@ -72,12 +73,77 @@ pub(super) async fn fork_thread_response(
             .map_err(internal_error)?
     };
     let thread = codex_thread_json_with_turns(&record, turns);
-    let bound_profile_id =
-        load_bound_inference_profile_id_for_state(state.node.as_ref(), &state.behavior_id)
+    let bound_model_id =
+        load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
             .await
             .map_err(internal_error)?;
-    let response = thread_response_json(&record, thread, &bound_profile_id);
+    let response = thread_response_json(&record, thread, &bound_model_id);
     Ok((record, response))
+}
+
+pub(super) async fn list_threads_response(
+    state: &ShimState,
+    params: codex::ThreadListParams,
+) -> std::result::Result<Value, ThreadRouteError> {
+    if !source_filter_allows_cli(params.source_kinds.as_deref())
+        || !model_provider_filter_allows_defra(params.model_providers.as_deref())
+    {
+        return Ok(json!({
+            "data": [],
+            "nextCursor": null,
+            "backwardsCursor": null
+        }));
+    }
+
+    let archived = params.archived.unwrap_or(false);
+    let mut records = list_codex_threads_by_archived(state, archived)
+        .await
+        .map_err(internal_error)?;
+    if let Some(cwd_filter) = params.cwd.as_ref() {
+        let allowed = cwd_filter_values(cwd_filter);
+        records.retain(|record| allowed.iter().any(|cwd| cwd_matches_record(cwd, record)));
+    }
+    if let Some(search_term) = params
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        records.retain(|record| record_snippet(record, search_term).is_some());
+    }
+
+    sort_thread_records(&mut records, params.sort_key, params.sort_direction);
+
+    let page_size = params.limit.unwrap_or(50).clamp(1, 200) as usize;
+    let start_index = params
+        .cursor
+        .as_deref()
+        .and_then(|cursor| {
+            records
+                .iter()
+                .position(|record| record.session_id == cursor)
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+    let remaining = records.len().saturating_sub(start_index);
+    let page_len = remaining.min(page_size);
+    let has_more = remaining > page_size;
+    let page = records.into_iter().skip(start_index).take(page_len);
+
+    let mut data = Vec::with_capacity(page_len);
+    let mut first_id = None::<String>;
+    let mut last_id = None::<String>;
+    for record in page {
+        first_id.get_or_insert_with(|| record.session_id.clone());
+        last_id = Some(record.session_id.clone());
+        data.push(codex_thread_json(&record, false));
+    }
+
+    Ok(json!({
+        "data": data,
+        "nextCursor": if has_more { last_id } else { None },
+        "backwardsCursor": first_id
+    }))
 }
 
 pub(super) async fn search_threads_response(
@@ -117,9 +183,7 @@ pub(super) async fn search_threads_response(
         }
     }
 
-    if params.sort_direction == Some(codex::SortDirection::Asc) {
-        matches.reverse();
-    }
+    sort_thread_matches(&mut matches, params.sort_key, params.sort_direction);
 
     let page_size = params.limit.unwrap_or(50).clamp(1, 200) as usize;
     let start_index = params
@@ -154,6 +218,80 @@ pub(super) async fn search_threads_response(
         "nextCursor": if has_more { last_id } else { None },
         "backwardsCursor": first_id
     }))
+}
+
+fn model_provider_filter_allows_defra(model_providers: Option<&[String]>) -> bool {
+    model_providers
+        .filter(|providers| !providers.is_empty())
+        .is_none_or(|providers| providers.iter().any(|provider| provider == "defra"))
+}
+
+fn cwd_filter_values(filter: &codex::ThreadListCwdFilter) -> Vec<&str> {
+    match filter {
+        codex::ThreadListCwdFilter::One(cwd) => vec![cwd.as_str()],
+        codex::ThreadListCwdFilter::Many(cwds) => cwds.iter().map(String::as_str).collect(),
+    }
+}
+
+fn cwd_matches_record(cwd: &str, record: &CodexThreadRecord) -> bool {
+    let cwd = cwd.trim();
+    !cwd.is_empty() && cwd == absolute_path(&record.cwd)
+}
+
+fn sort_thread_records(
+    records: &mut [CodexThreadRecord],
+    sort_key: Option<codex::ThreadSortKey>,
+    sort_direction: Option<codex::SortDirection>,
+) {
+    let sort_key = sort_key.unwrap_or(codex::ThreadSortKey::CreatedAt);
+    let sort_direction = sort_direction.unwrap_or(codex::SortDirection::Desc);
+    records.sort_by(|left, right| compare_thread_records(left, right, sort_key, sort_direction));
+}
+
+fn sort_thread_matches(
+    matches: &mut [(CodexThreadRecord, String)],
+    sort_key: Option<codex::ThreadSortKey>,
+    sort_direction: Option<codex::SortDirection>,
+) {
+    let sort_key = sort_key.unwrap_or(codex::ThreadSortKey::CreatedAt);
+    let sort_direction = sort_direction.unwrap_or(codex::SortDirection::Desc);
+    matches.sort_by(|(left, _), (right, _)| {
+        compare_thread_records(left, right, sort_key, sort_direction)
+    });
+}
+
+fn compare_thread_records(
+    left: &CodexThreadRecord,
+    right: &CodexThreadRecord,
+    sort_key: codex::ThreadSortKey,
+    sort_direction: codex::SortDirection,
+) -> std::cmp::Ordering {
+    let left_key = thread_sort_timestamp(left, sort_key);
+    let right_key = thread_sort_timestamp(right, sort_key);
+    let ordering = match sort_direction {
+        codex::SortDirection::Asc => left_key
+            .cmp(&right_key)
+            .then_with(|| left.session_id.cmp(&right.session_id)),
+        codex::SortDirection::Desc => right_key
+            .cmp(&left_key)
+            .then_with(|| right.session_id.cmp(&left.session_id)),
+    };
+    ordering
+}
+
+fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSortKey) -> String {
+    let conversation = record.conversation.as_ref();
+    match sort_key {
+        codex::ThreadSortKey::CreatedAt => conversation
+            .and_then(|conversation| conversation.created_at.clone())
+            .or_else(|| record.projection_created_at.clone()),
+        codex::ThreadSortKey::UpdatedAt => conversation
+            .and_then(|conversation| conversation.updated_at.clone())
+            .or_else(|| record.projection_updated_at.clone())
+            .or_else(|| conversation.and_then(|conversation| conversation.created_at.clone()))
+            .or_else(|| record.projection_created_at.clone()),
+    }
+    .unwrap_or_default()
 }
 
 async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> {

@@ -31,6 +31,12 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
     let object = thread
         .as_object_mut()
         .expect("thread_json returns an object");
+    if let Some(created_at) = thread_created_at(record) {
+        object.insert("createdAt".to_string(), json!(created_at));
+    }
+    if let Some(updated_at) = thread_updated_at(record) {
+        object.insert("updatedAt".to_string(), json!(updated_at));
+    }
     if !record.name.trim().is_empty() {
         object.insert("name".to_string(), Value::String(record.name.clone()));
     }
@@ -66,19 +72,19 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
 
 pub(in crate::commands::codex_shim) fn thread_start_response_json(
     record: &CodexThreadRecord,
-    bound_profile_id: &str,
+    bound_model_id: &str,
 ) -> Value {
-    thread_response_json(record, codex_thread_json(record, false), bound_profile_id)
+    thread_response_json(record, codex_thread_json(record, false), bound_model_id)
 }
 
 pub(in crate::commands::codex_shim) fn thread_response_json(
     record: &CodexThreadRecord,
     thread: Value,
-    bound_profile_id: &str,
+    bound_model_id: &str,
 ) -> Value {
     json!({
         "thread": thread,
-        "model": bound_profile_id,
+        "model": bound_model_id,
         "modelProvider": "defra",
         "serviceTier": null,
         "cwd": absolute_path(&record.cwd),
@@ -94,9 +100,14 @@ pub(in crate::commands::codex_shim) fn thread_response_json(
 
 pub(in crate::commands::codex_shim) fn thread_resume_response_json(
     record: &CodexThreadRecord,
-    bound_profile_id: &str,
+    turns: Vec<codex::Turn>,
+    bound_model_id: &str,
 ) -> Value {
-    thread_start_response_json(record, bound_profile_id)
+    thread_response_json(
+        record,
+        codex_thread_json_with_turns(record, turns),
+        bound_model_id,
+    )
 }
 
 fn codex_git_info_json(raw: &str) -> Option<Value> {
@@ -116,4 +127,35 @@ fn codex_git_info_json(raw: &str) -> Option<Value> {
         "branch": string_field("branch"),
         "originUrl": string_field("originUrl").or_else(|| string_field("origin_url")),
     }))
+}
+
+fn thread_created_at(record: &CodexThreadRecord) -> Option<i64> {
+    record
+        .conversation
+        .as_ref()
+        .and_then(|conversation| conversation.created_at.as_deref())
+        .or(record.projection_created_at.as_deref())
+        .and_then(parse_timestamp_seconds)
+}
+
+fn thread_updated_at(record: &CodexThreadRecord) -> Option<i64> {
+    record
+        .conversation
+        .as_ref()
+        .and_then(|conversation| conversation.updated_at.as_deref())
+        .or(record.projection_updated_at.as_deref())
+        .or_else(|| {
+            record
+                .conversation
+                .as_ref()
+                .and_then(|conversation| conversation.created_at.as_deref())
+        })
+        .or(record.projection_created_at.as_deref())
+        .and_then(parse_timestamp_seconds)
+}
+
+fn parse_timestamp_seconds(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|timestamp| timestamp.timestamp())
 }

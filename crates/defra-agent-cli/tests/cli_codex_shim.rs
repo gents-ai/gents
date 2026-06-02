@@ -18,6 +18,14 @@ use uuid::Uuid;
 type ShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const LIVE_CODEX_SHIM_TIMEOUT_SECS: &str = "900";
 
+fn defra_model_selection_id(backend_id: &str, model_name: &str) -> String {
+    format!("{backend_id}::{model_name}")
+}
+
+fn default_backend_id(agent_did: &str) -> String {
+    format!("{agent_did}:backend")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -42,6 +50,8 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let default_backend_id = default_backend_id(&agent_did);
+    let default_model_selection = defra_model_selection_id(&default_backend_id, &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -101,11 +111,10 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     )
     .await?;
     let config: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(2)).await?;
-    let expected_default_profile_id = format!("{agent_did}:default-profile");
     assert_eq!(
         config.config.model.as_deref(),
-        Some(expected_default_profile_id.as_str()),
-        "ConfigRead.model should be the bound behavior's inference_profile_id"
+        Some(default_model_selection.as_str()),
+        "ConfigRead.model should be the bound behavior's backend-qualified model selection"
     );
 
     send_client_request(
@@ -372,6 +381,62 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
 
     send_client_request(
         &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(48),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: Some(1),
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(vec!["defra".to_string()]),
+                source_kinds: Some(vec![codex::ThreadSourceKind::Cli]),
+                archived: Some(true),
+                cwd: Some(codex::ThreadListCwdFilter::One(
+                    home_dir.display().to_string(),
+                )),
+                use_state_db_only: true,
+                search_term: Some("DEFRA-backed Codex thread".to_string()),
+            },
+        },
+    )
+    .await?;
+    let archived_threads: codex::ThreadListResponse = read_typed_response(&mut ws, request_id(48))
+        .await
+        .context("reading archived thread/list response")?;
+    assert_eq!(archived_threads.data.len(), 1);
+    assert_eq!(archived_threads.data[0].id, thread_id);
+    assert_eq!(
+        archived_threads.backwards_cursor.as_deref(),
+        Some(thread_id.as_str())
+    );
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(49),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(vec!["openai".to_string()]),
+                source_kinds: Some(vec![codex::ThreadSourceKind::Cli]),
+                archived: Some(true),
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let wrong_provider_threads: codex::ThreadListResponse =
+        read_typed_response(&mut ws, request_id(49))
+            .await
+            .context("reading provider-filtered thread/list response")?;
+    assert!(wrong_provider_threads.data.is_empty());
+
+    send_client_request(
+        &mut ws,
         codex::ClientRequest::ThreadUnarchive {
             request_id: request_id(41),
             params: codex::ThreadUnarchiveParams {
@@ -444,6 +509,52 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(history_turn.status, codex::TurnStatus::Completed);
     assert_turn_has_user_text(history_turn, &prompt);
     assert_turn_has_agent_text(history_turn, &expected_reply);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadResume {
+            request_id: request_id(46),
+            params: codex::ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let resumed_history: codex::ThreadResumeResponse = read_typed_response(&mut ws, request_id(46))
+        .await
+        .context("reading history-bearing thread/resume response")?;
+    assert_eq!(resumed_history.thread.id, thread_id);
+    assert_eq!(resumed_history.thread.turns.len(), 1);
+    let resumed_turn = &resumed_history.thread.turns[0];
+    assert_eq!(resumed_turn.id, completed_turn.id);
+    assert_eq!(resumed_turn.items_view, codex::TurnItemsView::Full);
+    assert_eq!(resumed_turn.status, codex::TurnStatus::Completed);
+    assert_turn_has_user_text(resumed_turn, &prompt);
+    assert_turn_has_agent_text(resumed_turn, &expected_reply);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadResume {
+            request_id: request_id(47),
+            params: codex::ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                cwd: Some(home_dir.display().to_string()),
+                exclude_turns: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let metadata_resume: codex::ThreadResumeResponse = read_typed_response(&mut ws, request_id(47))
+        .await
+        .context("reading metadata-only thread/resume response")?;
+    assert_eq!(metadata_resume.thread.id, thread_id);
+    assert!(
+        metadata_resume.thread.turns.is_empty(),
+        "excludeTurns resume should not load persisted turns"
+    );
 
     send_client_request(
         &mut ws,
@@ -2058,7 +2169,8 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let default_profile_id = format!("{agent_did}:default-profile");
+    let expected_model_selection =
+        defra_model_selection_id(&default_backend_id(&agent_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -2146,8 +2258,8 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     let thread_start: codex::ThreadStartResponse =
         read_typed_response(&mut ws, request_id(2)).await?;
     assert_eq!(
-        thread_start.model, default_profile_id,
-        "Defra remote runtime should use the bound behavior profile, not the client Codex model"
+        thread_start.model, expected_model_selection,
+        "Defra remote runtime should use the bound behavior model, not the client Codex model"
     );
     assert_eq!(thread_start.model_provider, "defra");
     assert_eq!(thread_start.approval_policy, codex::AskForApproval::Never);
@@ -3358,7 +3470,7 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
+async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -3380,8 +3492,14 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let default_profile_id = format!("{agent_did}:default-profile");
-    let extra_profile_id = format!("extra-profile-{}", Uuid::new_v4().simple());
+    let default_backend_id = default_backend_id(&agent_did);
+    let default_model_selection = defra_model_selection_id(&default_backend_id, &model_name);
+    let extra_model_name = format!("mock-codex-shim-extra-model-{}", Uuid::new_v4().simple());
+    let extra_endpoint = MockChatEndpoint::start(&extra_model_name, "irrelevant")?;
+    let extra_backend_id = format!("extra-backend-{}", Uuid::new_v4().simple());
+    let extra_model_selection = defra_model_selection_id(&extra_backend_id, &extra_model_name);
+    let duplicate_backend_id = format!("duplicate-backend-{}", Uuid::new_v4().simple());
+    let duplicate_model_selection = defra_model_selection_id(&duplicate_backend_id, &model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -3395,18 +3513,35 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let create_extra = format!(
+    let create_extra_backend = format!(
         r#"mutation {{
-            create_InferenceProfile(input: {{
-                profile_id: "{extra_profile_id}",
-                display_name: "Extra Profile",
-                context_window: 8192,
-                max_output_tokens: 1024,
-                temperature: 0.5
+            create_InferenceBackend(input: {{
+                backend_id: "{extra_backend_id}",
+                name: "Extra Backend",
+                provider_kind: "OpenAiCompatible",
+                endpoint: "{}",
+                max_concurrent: 1,
+                max_queue_depth: 100,
+                enabled: true,
+                models: ["{extra_model_name}"],
+                probe_status: "healthy"
             }}) {{ _docID }}
-        }}"#
+            create_duplicate: create_InferenceBackend(input: {{
+                backend_id: "{duplicate_backend_id}",
+                name: "Duplicate Backend",
+                provider_kind: "OpenAiCompatible",
+                endpoint: "{}",
+                max_concurrent: 1,
+                max_queue_depth: 100,
+                enabled: true,
+                models: ["{model_name}"],
+                probe_status: "healthy"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(extra_endpoint.endpoint()),
+        escape_graphql_string(extra_endpoint.endpoint())
     );
-    graphql_query(&graphql, &create_extra).await?;
+    graphql_query(&graphql, &create_extra_backend).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
@@ -3447,30 +3582,46 @@ async fn codex_shim_model_list_enumerates_inference_profiles() -> Result<()> {
         .map(|entry| entry.id.as_str())
         .collect();
     assert!(
-        ids.contains(&default_profile_id.as_str()),
-        "expected default profile {default_profile_id} in model list; got {ids:?}"
+        ids.contains(&default_model_selection.as_str()),
+        "expected default model selection {default_model_selection} in model list; got {ids:?}"
     );
     assert!(
-        ids.contains(&extra_profile_id.as_str()),
-        "expected extra profile {extra_profile_id} in model list; got {ids:?}"
+        ids.contains(&extra_model_selection.as_str()),
+        "expected extra model selection {extra_model_selection} in model list; got {ids:?}"
+    );
+    assert!(
+        ids.contains(&duplicate_model_selection.as_str()),
+        "expected duplicate model selection {duplicate_model_selection} in model list; got {ids:?}"
     );
     let default_entry = model_list
         .data
         .iter()
-        .find(|entry| entry.id == default_profile_id)
-        .expect("default profile present");
+        .find(|entry| entry.id == default_model_selection)
+        .expect("default model present");
+    assert_eq!(default_entry.model, default_model_selection);
+    assert_eq!(default_entry.display_name, model_name);
     assert!(
         default_entry.is_default,
-        "default profile should be flagged as isDefault"
+        "default model should be flagged as isDefault"
     );
     let extra_entry = model_list
         .data
         .iter()
-        .find(|entry| entry.id == extra_profile_id)
-        .expect("extra profile present");
+        .find(|entry| entry.id == extra_model_selection)
+        .expect("extra model present");
     assert!(
         !extra_entry.is_default,
-        "non-default profile must not be flagged isDefault"
+        "non-default model must not be flagged isDefault"
+    );
+    let duplicate_entry = model_list
+        .data
+        .iter()
+        .find(|entry| entry.id == duplicate_model_selection)
+        .expect("duplicate backend model present");
+    assert_eq!(duplicate_entry.display_name, model_name);
+    assert!(
+        !duplicate_entry.is_default,
+        "duplicate backend model must not be flagged isDefault"
     );
     Ok(())
 }
@@ -3498,7 +3649,9 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let default_behavior_id = format!("{agent_did}:default");
-    let alt_profile_id = format!("alt-profile-{}", Uuid::new_v4().simple());
+    let default_backend_id = default_backend_id(&agent_did);
+    let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
+    let alt_model_selection = defra_model_selection_id(&default_backend_id, &alt_model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -3512,22 +3665,11 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let create_alt = format!(
-        r#"mutation {{
-            create_InferenceProfile(input: {{
-                profile_id: "{alt_profile_id}",
-                display_name: "Alt Profile",
-                context_window: 4096
-            }}) {{ _docID }}
-        }}"#
-    );
-    graphql_query(&graphql, &create_alt).await?;
-
     let switch_behavior = format!(
         r#"mutation {{
             update_AgentBehavior(
                 filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
-                input: {{ inference_profile_id: "{alt_profile_id}" }}
+                input: {{ model_name: "{alt_model_name}" }}
             ) {{ _docID }}
         }}"#
     );
@@ -3569,8 +3711,8 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let config: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(2)).await?;
     assert_eq!(
         config.config.model.as_deref(),
-        Some(alt_profile_id.as_str()),
-        "ConfigRead should reflect the doc-mutated inference_profile_id"
+        Some(alt_model_selection.as_str()),
+        "ConfigRead should reflect the doc-mutated backend-qualified model selection"
     );
     Ok(())
 }
@@ -3598,7 +3740,11 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let default_behavior_id = format!("{agent_did}:default");
-    let alt_profile_id = format!("alt-profile-{}", Uuid::new_v4().simple());
+    let original_profile_id = format!("{agent_did}:default-profile");
+    let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
+    let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
+    let alt_backend_id = format!("alt-backend-{}", Uuid::new_v4().simple());
+    let alt_model_selection = defra_model_selection_id(&alt_backend_id, &alt_model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -3612,19 +3758,23 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
-                create_InferenceProfile(input: {{
-                    profile_id: "{alt_profile_id}",
-                    display_name: "Alt Profile",
-                    context_window: 4096
-                }}) {{ _docID }}
-            }}"#
-        ),
-    )
-    .await?;
+    let create_alt_backend = format!(
+        r#"mutation {{
+            create_InferenceBackend(input: {{
+                backend_id: "{alt_backend_id}",
+                name: "Alt Backend",
+                provider_kind: "OpenAiCompatible",
+                endpoint: "{}",
+                max_concurrent: 1,
+                max_queue_depth: 100,
+                enabled: true,
+                models: ["{alt_model_name}"],
+                probe_status: "healthy"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(alt_endpoint.endpoint())
+    );
+    graphql_query(&graphql, &create_alt_backend).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
@@ -3654,7 +3804,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
             request_id: request_id(2),
             params: codex::ConfigValueWriteParams {
                 key_path: "model".to_string(),
-                value: serde_json::Value::String(alt_profile_id.clone()),
+                value: serde_json::Value::String(alt_model_selection),
                 merge_strategy: codex::MergeStrategy::Replace,
                 file_path: None,
                 expected_version: None,
@@ -3664,7 +3814,8 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     .await?;
     let _write: codex::ConfigWriteResponse = read_typed_response(&mut ws, request_id(2)).await?;
 
-    // Verify the AgentBehavior doc was updated.
+    // Verify the AgentBehavior doc was updated to the selected backend model
+    // while keeping the existing inference profile limits.
     let resp = graphql_query(
         &graphql,
         &format!(
@@ -3672,25 +3823,43 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
-                ) {{ inference_profile_id }}
+                ) {{ backend_id model_name inference_profile_id }}
             }}"#
         ),
     )
     .await?;
-    let stored = resp
+    let stored_backend = resp
+        .pointer("/data/AgentBehavior/0/backend_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    assert_eq!(
+        stored_backend, alt_backend_id,
+        "AgentBehavior.backend_id should reflect ConfigValueWrite"
+    );
+    let stored_model = resp
+        .pointer("/data/AgentBehavior/0/model_name")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    assert_eq!(
+        stored_model, alt_model_name,
+        "AgentBehavior.model_name should reflect ConfigValueWrite"
+    );
+    let stored_profile = resp
         .pointer("/data/AgentBehavior/0/inference_profile_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     assert_eq!(
-        stored, alt_profile_id,
-        "AgentBehavior.inference_profile_id should reflect ConfigValueWrite"
+        stored_profile, original_profile_id,
+        "AgentBehavior.inference_profile_id should remain unchanged by model selection"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
+async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -3712,6 +3881,7 @@ async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let default_behavior_id = format!("{agent_did}:default");
+    let original_backend_id = format!("{agent_did}:backend");
     let original_profile_id = format!("{agent_did}:default-profile");
 
     let shim_port = allocate_port()?;
@@ -3764,8 +3934,8 @@ async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
     .await?;
     let error = read_error_response(&mut ws, request_id(2)).await?;
     assert!(
-        error.message.contains("InferenceProfile") || error.message.contains("not found"),
-        "expected error to mention missing InferenceProfile; got: {}",
+        error.message.contains("model") && error.message.contains("not found"),
+        "expected error to mention missing model; got: {}",
         error.message
     );
 
@@ -3776,19 +3946,37 @@ async fn codex_shim_config_value_write_rejects_unknown_profile() -> Result<()> {
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
-                ) {{ inference_profile_id }}
+                ) {{ backend_id model_name inference_profile_id }}
             }}"#
         ),
     )
     .await?;
-    let stored = resp
+    let stored_backend = resp
+        .pointer("/data/AgentBehavior/0/backend_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    assert_eq!(
+        stored_backend, original_backend_id,
+        "behavior backend_id must remain unchanged after rejected write"
+    );
+    let stored_model = resp
+        .pointer("/data/AgentBehavior/0/model_name")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    assert_eq!(
+        stored_model, model_name,
+        "behavior model_name must remain unchanged after rejected write"
+    );
+    let stored_profile = resp
         .pointer("/data/AgentBehavior/0/inference_profile_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     assert_eq!(
-        stored, original_profile_id,
-        "behavior doc must remain unchanged after rejected write"
+        stored_profile, original_profile_id,
+        "behavior inference_profile_id must remain unchanged after rejected write"
     );
     Ok(())
 }

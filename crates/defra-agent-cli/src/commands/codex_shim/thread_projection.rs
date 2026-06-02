@@ -39,6 +39,8 @@ pub(super) struct CodexThreadRecord {
     pub(super) settings_json: String,
     pub(super) goal_json: String,
     pub(super) git_info_json: String,
+    pub(super) projection_created_at: Option<String>,
+    pub(super) projection_updated_at: Option<String>,
     pub(super) conversation: Option<ConversationRow>,
 }
 
@@ -138,6 +140,8 @@ pub(super) async fn load_codex_thread(
             settings_json: projection.settings_json,
             goal_json: projection.goal_json,
             git_info_json: projection.git_info_json,
+            projection_created_at: projection.created_at,
+            projection_updated_at: projection.updated_at,
             conversation,
         })),
         (Some(conversation), None) => {
@@ -156,14 +160,12 @@ pub(super) async fn load_codex_thread(
                 settings_json: "{}".to_string(),
                 goal_json: "{}".to_string(),
                 git_info_json: "{}".to_string(),
+                projection_created_at: None,
+                projection_updated_at: None,
                 conversation: Some(conversation),
             }))
         }
     }
-}
-
-pub(super) async fn list_codex_threads(state: &ShimState) -> Result<Vec<CodexThreadRecord>> {
-    list_codex_threads_by_archived(state, false).await
 }
 
 pub(super) async fn list_codex_threads_by_archived(
@@ -184,6 +186,8 @@ pub(super) async fn list_codex_threads_by_archived(
             settings_json: projection.settings_json,
             goal_json: projection.goal_json,
             git_info_json: projection.git_info_json,
+            projection_created_at: projection.created_at,
+            projection_updated_at: projection.updated_at,
             conversation,
         });
     }
