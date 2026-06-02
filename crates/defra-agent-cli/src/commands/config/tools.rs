@@ -48,6 +48,8 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+        enable_defra_query: Some(args.enable_defra_query),
+        defra_query_collections: Some(args.defra_query_collections.clone()),
     };
     let doc_id = write_tool_selection_document(&access, &selection).await?;
     let output = json!({
@@ -68,6 +70,8 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "allowed_mcp_service_ids": args.allowed_mcp_service_ids,
         "delegate_to": args.delegate_to,
         "backgroundable_tool_names": args.backgroundable_tool_names,
+        "enable_defra_query": args.enable_defra_query,
+        "defra_query_collections": args.defra_query_collections,
     });
     print_json(&output)?;
     Ok(())

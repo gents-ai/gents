@@ -13,6 +13,42 @@ pub const DEFAULT_LIMIT: u32 = 50;
 /// Hard ceiling on `limit` to keep a single read bounded.
 pub const MAX_LIMIT: u32 = 1000;
 
+/// Sensitive `(collection, field)` pairs that `defra_query` must never expose,
+/// regardless of the configured collection scope. Selecting or filtering on one
+/// of these is rejected — this is an always-on guard against leaking
+/// credentials (e.g. inference backend API keys) through the read surface.
+const RESTRICTED_FIELDS: &[(&str, &str)] = &[
+    ("InferenceBackend", "api_key"),
+    ("InferenceBackend", "api_key_env_var"),
+];
+
+fn is_restricted_field(collection: &str, field: &str) -> bool {
+    RESTRICTED_FIELDS
+        .iter()
+        .any(|(c, f)| *c == collection && *f == field)
+}
+
+/// Recursively collect the field-reference keys in a DefraDB filter object —
+/// object keys that are not operators (operators start with `_`, e.g. `_eq`,
+/// `_and`). Used to block filtering on restricted fields (which would otherwise
+/// allow probing a secret value with boolean/`_like` predicates).
+fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                if !key.starts_with('_') {
+                    out.push(key.clone());
+                }
+                collect_filter_field_keys(nested, out);
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_filter_field_keys(item, out)),
+        _ => {}
+    }
+}
+
 /// The structured query contract: `{collection, filter, fields, limit}`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DefraQueryParams {
@@ -81,12 +117,28 @@ pub(crate) fn build_query(params: &DefraQueryParams, scope: &CollectionScope) ->
     }
     for field in &params.fields {
         validate_identifier(field).map_err(|e| anyhow!("invalid field name: {e}"))?;
+        if is_restricted_field(&params.collection, field) {
+            bail!(
+                "field {field:?} on {:?} is restricted and cannot be queried",
+                params.collection
+            );
+        }
     }
 
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
     let mut args = Vec::new();
     if let Some(filter) = params.filter.as_ref().filter(|f| !f.is_null()) {
+        let mut filter_fields = Vec::new();
+        collect_filter_field_keys(filter, &mut filter_fields);
+        for field in &filter_fields {
+            if is_restricted_field(&params.collection, field) {
+                bail!(
+                    "field {field:?} on {:?} is restricted and cannot be used in a filter",
+                    params.collection
+                );
+            }
+        }
         let rendered = render_filter(filter)?;
         if rendered != "{}" {
             args.push(format!("filter: {rendered}"));
@@ -193,5 +245,43 @@ mod tests {
     fn allows_any_collection_when_unrestricted() {
         let scope = CollectionScope::all();
         assert!(build_query(&params("AnythingGoes", &["x"]), &scope).is_ok());
+    }
+
+    #[test]
+    fn rejects_selecting_a_restricted_secret_field() {
+        let err = build_query(
+            &params("InferenceBackend", &["backend_id", "api_key"]),
+            &CollectionScope::all(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("restricted"), "{err}");
+    }
+
+    #[test]
+    fn allows_non_secret_fields_on_a_sensitive_collection() {
+        assert!(build_query(
+            &params(
+                "InferenceBackend",
+                &["backend_id", "endpoint", "provider_kind"]
+            ),
+            &CollectionScope::all()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_filtering_on_a_restricted_secret_field() {
+        let mut p = params("InferenceBackend", &["backend_id"]);
+        p.filter = Some(json!({ "api_key": { "_like": "sk-%" } }));
+        let err = build_query(&p, &CollectionScope::all()).unwrap_err();
+        assert!(err.to_string().contains("restricted"), "{err}");
+    }
+
+    #[test]
+    fn rejects_restricted_field_nested_in_filter_composition() {
+        let mut p = params("InferenceBackend", &["backend_id"]);
+        p.filter = Some(json!({ "_or": [{ "api_key_env_var": { "_eq": "X" } }] }));
+        let err = build_query(&p, &CollectionScope::all()).unwrap_err();
+        assert!(err.to_string().contains("restricted"), "{err}");
     }
 }

@@ -60,6 +60,12 @@ pub struct ToolSelectionDocument {
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub enable_defra_query: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub defra_query_collections: Option<Vec<String>>,
 }
 
 impl ToolSelectionDocument {
@@ -135,6 +141,8 @@ pub(crate) async fn load_tool_selection_record(
                 subagent_steering_enabled
                 subagent_background_enabled
                 cross_deployment_spawn_timeout_seconds
+                enable_defra_query
+                defra_query_collections
             }}
         }}"#
     );
@@ -184,6 +192,8 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 subagent_steering_enabled
                 subagent_background_enabled
                 cross_deployment_spawn_timeout_seconds
+                enable_defra_query
+                defra_query_collections
             }}
         }}"#
     );
@@ -233,6 +243,8 @@ pub(crate) async fn list_tool_selection_records(
                 subagent_steering_enabled
                 subagent_background_enabled
                 cross_deployment_spawn_timeout_seconds
+                enable_defra_query
+                defra_query_collections
             }}
         }}"#
     );
@@ -276,6 +288,8 @@ pub(crate) async fn list_all_tool_selection_records(
                 subagent_steering_enabled
                 subagent_background_enabled
                 cross_deployment_spawn_timeout_seconds
+                enable_defra_query
+                defra_query_collections
             }
         }"#;
 
@@ -367,6 +381,14 @@ pub async fn upsert_tool_selection(
         selection
             .cross_deployment_spawn_timeout_seconds
             .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_defra_query",
+            selection.enable_defra_query,
+        ),
+        graphql_fields::graphql_string_list_field(
+            "defra_query_collections",
+            selection.defra_query_collections.as_deref(),
+        ),
     ]
     .into_iter()
     .flatten()
@@ -442,6 +464,14 @@ pub async fn upsert_tool_selection(
         selection
             .cross_deployment_spawn_timeout_seconds
             .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_defra_query",
+            selection.enable_defra_query,
+        ),
+        graphql_fields::graphql_string_list_field(
+            "defra_query_collections",
+            selection.defra_query_collections.as_deref(),
+        ),
     ]
     .into_iter()
     .flatten()

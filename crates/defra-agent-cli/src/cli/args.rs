@@ -830,6 +830,17 @@ pub(crate) struct ToolSelectionUpsertArgs {
         help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"
     )]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = true,
+        help = "Enable the read-only defra_query structured query tool"
+    )]
+    pub(crate) enable_defra_query: bool,
+    #[arg(
+        long = "defra-query-collection",
+        help = "Restrict defra_query to these collections (repeatable); omit for all collections"
+    )]
+    pub(crate) defra_query_collections: Vec<String>,
 }
 
 #[derive(Subcommand)]
