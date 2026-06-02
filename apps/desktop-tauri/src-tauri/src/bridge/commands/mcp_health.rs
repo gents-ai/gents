@@ -122,6 +122,7 @@ pub(crate) async fn probe_mcp_service(
             .mcp_port
             .and_then(|port| u16::try_from(port).ok()),
         mcp_path: registry_entry.mcp_path.unwrap_or_default(),
+        send_agent_did: registry_entry.send_agent_did,
         updated_at: registry_entry.updated_at,
     };
     let health_map = ServiceHealthMap::new();

@@ -74,6 +74,41 @@ pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
         .count()
 }
 
+fn message_presentation_key(
+    message: &MessageView,
+    role: &str,
+    content: &Option<String>,
+    reasoning: &Option<String>,
+) -> Option<(i64, String, Option<String>, Option<String>, bool, bool)> {
+    message.sequence.map(|sequence| {
+        (
+            sequence,
+            role.to_ascii_lowercase(),
+            content.clone(),
+            reasoning.clone(),
+            message.has_tool_calls,
+            message.has_tool_results,
+        )
+    })
+}
+
+fn overlay_matches_latest_assistant(
+    timeline: &[RenderedTimelineItem],
+    overlay_content: &Option<String>,
+    overlay_reasoning: &Option<String>,
+) -> bool {
+    for item in timeline.iter().rev() {
+        match item {
+            RenderedTimelineItem::AssistantMessage {
+                content, reasoning, ..
+            } => return content == overlay_content && reasoning == overlay_reasoning,
+            RenderedTimelineItem::ToolGroup { .. } => continue,
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub(super) fn build_rendered_timeline(
     messages: &[MessageView],
     tool_calls: &[ToolCallView],
@@ -105,6 +140,9 @@ pub(super) fn build_rendered_timeline(
         .collect::<Vec<_>>();
     timeline_messages.sort_by_key(|message| message.sequence.unwrap_or_default());
 
+    let mut seen_message_keys = std::collections::BTreeSet::new();
+    let mut seen_presentations = std::collections::BTreeSet::new();
+
     for message in timeline_messages {
         let role = message
             .display_role
@@ -113,6 +151,16 @@ pub(super) fn build_rendered_timeline(
             .unwrap_or("assistant");
         let normalized_content = normalize_optional(message.display_content.as_deref());
         let normalized_reasoning = normalize_optional(message.reasoning.as_deref());
+        if !seen_message_keys.insert(message.message_key.clone()) {
+            continue;
+        }
+        if let Some(presentation_key) =
+            message_presentation_key(&message, role, &normalized_content, &normalized_reasoning)
+        {
+            if !seen_presentations.insert(presentation_key) {
+                continue;
+            }
+        }
 
         match role {
             "user" => {
@@ -173,7 +221,9 @@ pub(super) fn build_rendered_timeline(
         active_response_overlay.and_then(|overlay| normalize_optional(overlay.content.as_deref()));
     let overlay_reasoning = active_response_overlay
         .and_then(|overlay| normalize_optional(overlay.reasoning.as_deref()));
-    if overlay_content.is_some() || overlay_reasoning.is_some() {
+    if (overlay_content.is_some() || overlay_reasoning.is_some())
+        && !overlay_matches_latest_assistant(&timeline, &overlay_content, &overlay_reasoning)
+    {
         timeline.push(RenderedTimelineItem::LiveAssistant {
             item_key: "live-assistant".to_string(),
             content: overlay_content,
