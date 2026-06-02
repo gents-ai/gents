@@ -761,6 +761,11 @@ pub(crate) enum ToolSelectionCommand {
 pub(crate) enum SkillCommand {
     #[command(name = "add", about = "Create or update a Skill document")]
     Add(SkillAddArgs),
+    #[command(
+        name = "import",
+        about = "Import a directory tree of Codex-format SKILL.md files as Skill documents"
+    )]
+    Import(SkillImportArgs),
     #[command(name = "list", about = "List Skill documents for an agent")]
     List(SkillListArgs),
     #[command(name = "show", about = "Show a single Skill document")]
@@ -803,6 +808,27 @@ pub(crate) struct SkillAddArgs {
     pub(crate) display_name: Option<String>,
     #[arg(long, default_value_t = true)]
     pub(crate) enabled: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillImportArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    /// Directory tree to scan for `SKILL.md` files (Codex skill layout:
+    /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
+    #[arg(value_name = "DIR")]
+    pub(crate) dir: PathBuf,
+    /// Scope applied to every imported skill: "principal" or "behavior".
+    #[arg(long, default_value = "behavior")]
+    pub(crate) scope: String,
+    /// Import skills as disabled.
+    #[arg(long)]
+    pub(crate) disabled: bool,
+    /// Parse and report what would be imported without writing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(clap::Args)]
