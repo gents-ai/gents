@@ -45,6 +45,11 @@ pub struct AgentBehavior {
     pub stream_batch_ms: u64,
     pub deadline_duration: Duration,
     pub sampling: SamplingConfig,
+    /// Effective skill set for this behavior (decision D5), resolved at
+    /// snapshot-build time. Their instructions compose into the prompt
+    /// preamble; their tool deps are intersected with the tool ceiling and
+    /// never widen it (decision D3). See `crate::skills`.
+    pub skills: Vec<crate::skills::Skill>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

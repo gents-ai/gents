@@ -97,14 +97,23 @@ impl LayeredPromptBuilder {
     pub fn new(behavior: &AgentBehavior, tool_surface: &ToolSurface) -> Self {
         let tool_names = tool_surface.tool_names();
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-        Self::for_behavior(
+        let mut builder = Self::for_behavior(
             &behavior.system_prompt,
             &behavior.behavior_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
             behavior.context_window,
             behavior.max_output_tokens,
-        )
+        );
+        // Compose the behavior's active skills (D5) into the cached preamble,
+        // with tool deps intersected against the resolved ceiling (D3). Skills
+        // never widen the tool surface — see `crate::skills`.
+        let ceiling: std::collections::BTreeSet<String> = tool_names.into_iter().collect();
+        if let Some(section) = crate::skills::compose_skill_preamble(&behavior.skills, &ceiling) {
+            builder.preamble.push_str("\n\n");
+            builder.preamble.push_str(&section);
+        }
+        builder
     }
 
     pub fn for_behavior(

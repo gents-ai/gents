@@ -553,6 +553,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     });
 
     let initial_behavior = Arc::new(AgentBehavior {
+        skills: Vec::new(),
         behavior_id: "general".to_string(),
         principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),
@@ -573,6 +574,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         sampling: crate::config::SamplingConfig::default(),
     });
     let updated_behavior = Arc::new(AgentBehavior {
+        skills: Vec::new(),
         behavior_id: "general".to_string(),
         principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),

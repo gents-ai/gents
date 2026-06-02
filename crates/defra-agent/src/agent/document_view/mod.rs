@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::backend_registry::InferenceBackend;
 use crate::document_config::{
-    AgentBehavior, AgentPrincipal, EventTrigger, InferenceProfile, Schedule, Task,
+    AgentBehavior, AgentPrincipal, EventTrigger, InferenceProfile, Schedule, SkillDocument, Task,
     ToolSelectionDocument,
 };
 
@@ -24,6 +24,7 @@ pub(crate) struct DocumentRecord<T> {
 pub(crate) struct DocumentRuntimeView {
     pub(crate) principal: DocumentRecord<AgentPrincipal>,
     pub(crate) behaviors: HashMap<String, DocumentRecord<AgentBehavior>>,
+    pub(crate) skills: HashMap<String, DocumentRecord<SkillDocument>>,
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,

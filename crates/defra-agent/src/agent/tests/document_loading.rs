@@ -144,6 +144,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
@@ -163,6 +165,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "researcher".to_string(),
             agent_did: did.clone(),
             display_name: Some("Researcher".to_string()),
@@ -260,6 +264,8 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
@@ -279,6 +285,8 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "disabled-researcher".to_string(),
             agent_did: did.clone(),
             display_name: Some("Disabled Researcher".to_string()),
@@ -351,6 +359,8 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
@@ -417,6 +427,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "code".to_string(),
             agent_did: did.clone(),
             display_name: Some("Code".to_string()),
@@ -436,6 +448,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "broken".to_string(),
             agent_did: did.clone(),
             display_name: Some("Broken".to_string()),
@@ -455,6 +469,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "disabled".to_string(),
             agent_did: did.clone(),
             display_name: Some("Disabled".to_string()),
@@ -474,6 +490,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: "unhealthy".to_string(),
             agent_did: did.clone(),
             display_name: Some("Unhealthy".to_string()),

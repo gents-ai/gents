@@ -146,6 +146,8 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: behavior_id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some("Default".to_string()),

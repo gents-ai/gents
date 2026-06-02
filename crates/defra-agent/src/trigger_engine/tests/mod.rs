@@ -432,6 +432,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         enabled: true,
     });
     Arc::new(AgentBehavior {
+        skills: Vec::new(),
         behavior_id: behavior_name.to_string(),
         principal,
         backend_id: Some("backend-it".to_string()),

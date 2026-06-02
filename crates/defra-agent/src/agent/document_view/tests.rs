@@ -231,6 +231,111 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     assert!(tool_names.contains(&"list_files".to_string()));
 }
 
+/// End-to-end (#340 composition): a principal-scoped Skill document is
+/// inherited by the behavior (D5), and its instructions compose into the prompt
+/// preamble with a degrade note for tool_refs outside the behavior's tool
+/// ceiling (D3 — the skill never widens the surface).
+#[tokio::test]
+async fn resolve_composes_principal_scoped_skill_into_prompt() {
+    use crate::prompt::LayeredPromptBuilder;
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-skill"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-skill",
+        "http://127.0.0.1:8231/v1",
+    )
+    .await;
+
+    // Read-only tool selection: the ceiling contains read_file but not bash.
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
+    crate::upsert_tool_selection(
+        node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: identity.did().to_string(),
+            display_name: Some("Read tools".to_string()),
+            enable_file_tools: Some(true),
+            file_tools_mode: Some("ReadOnly".to_string()),
+            enable_bash: Some(false),
+            bash_mode: Some("Off".to_string()),
+            enable_meta_tools: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
+        .await
+        .unwrap()
+        .expect("default behavior");
+    default_behavior.tool_selection_id = Some(selection_id.clone());
+    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
+        .await
+        .unwrap();
+
+    // Principal-scoped skill referencing one in-ceiling tool (read_file) and one
+    // ungranted tool (exercises the D3 degrade note).
+    let create_skill = format!(
+        r#"mutation {{ create_Skill(input: {{
+            skill_id: "skill-research",
+            agent_did: "{did}",
+            scope: "principal",
+            name: "Research",
+            description: "Find and cite sources",
+            instructions: "Always cite your sources.",
+            tool_refs: ["read_file", "definitely_not_a_tool"],
+            enabled: true
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(identity.did()),
+    );
+    let resp = node.execute(&create_skill).await;
+    assert!(!resp.has_errors(), "create_Skill failed: {:?}", resp.errors);
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+
+    let behavior = snapshot
+        .behaviors
+        .get(&default_behavior_id)
+        .expect("resolved default behavior");
+    assert_eq!(
+        behavior.skills.len(),
+        1,
+        "principal-scoped skill must be inherited by the behavior"
+    );
+    assert_eq!(behavior.skills[0].skill_id, "skill-research");
+
+    let tool_surface = snapshot
+        .tool_surfaces
+        .get(&default_behavior_id)
+        .expect("tool surface");
+    let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref())
+        .preamble()
+        .to_string();
+    assert!(
+        preamble.contains("Always cite your sources."),
+        "skill instructions must compose into the preamble: {preamble}"
+    );
+    assert!(
+        preamble.contains("definitely_not_a_tool"),
+        "degrade note must name the ungranted tool_ref: {preamble}"
+    );
+}
+
 #[tokio::test]
 async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
     let node = test_node().await;

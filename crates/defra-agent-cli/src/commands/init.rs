@@ -492,6 +492,8 @@ async fn initialize_runtime_home(
         compaction_strategy: None,
         compaction_threshold: None,
         enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     write_agent_behavior_document(access, &behavior).await?;

@@ -101,6 +101,8 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: "did:defra-agent:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),

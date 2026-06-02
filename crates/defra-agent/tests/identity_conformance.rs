@@ -75,6 +75,7 @@ fn build_agent_behavior_for_routing_test(
     principal: Arc<AgentPrincipal>,
 ) -> AgentBehavior {
     AgentBehavior {
+        skills: Vec::new(),
         behavior_id,
         principal,
         backend_id: None,

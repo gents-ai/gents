@@ -70,6 +70,14 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         >,
     > = Vec::new();
 
+    // Convert the principal's Skill documents once; each behavior then filters
+    // this set to its D5 effective candidates (see `crate::skills`).
+    let all_skills: Vec<crate::skills::Skill> = view
+        .skills
+        .values()
+        .map(|record| skill_from_document(&record.value))
+        .collect();
+
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
         if !behavior.enabled {
@@ -160,6 +168,15 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 let behavior_id = behavior.behavior_id.clone();
                 let behavior_value = behavior.clone();
                 let tool_ceiling = context.tool_ceiling.clone();
+                let behavior_skills = crate::skills::effective_skills(
+                    &all_skills,
+                    &behavior.agent_did,
+                    &behavior.skill_refs,
+                    &behavior.skill_excludes,
+                )
+                .into_iter()
+                .cloned()
+                .collect::<Vec<crate::skills::Skill>>();
                 let factory: Box<
                     dyn FnOnce(
                             Arc<AgentPrincipal>,
@@ -175,6 +192,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         tool_selection,
                         subagent_tools,
                         &tool_ceiling,
+                        behavior_skills,
                     )
                     .map_err(|error| BehaviorBuildError {
                         behavior_id: behavior_id.clone(),
@@ -569,4 +587,25 @@ pub(super) fn behavior_references_ready(
 pub(super) fn non_empty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Convert a `Skill` document into the runtime resolution type. An unknown or
+/// missing `scope` defaults to `Behavior` (the most restrictive — never
+/// auto-inherited); apply-time validation rejects invalid scopes before they
+/// reach the runtime, so this is defensive.
+fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
+    crate::skills::Skill {
+        skill_id: doc.skill_id.clone(),
+        agent_did: doc.agent_did.clone(),
+        scope: doc
+            .scope
+            .as_deref()
+            .and_then(crate::skills::SkillScope::parse)
+            .unwrap_or(crate::skills::SkillScope::Behavior),
+        name: doc.name.clone().unwrap_or_default(),
+        description: doc.description.clone().unwrap_or_default(),
+        instructions: doc.instructions.clone().unwrap_or_default(),
+        tool_refs: doc.tool_refs.clone(),
+        enabled: doc.enabled,
+    }
 }

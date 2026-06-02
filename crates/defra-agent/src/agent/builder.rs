@@ -372,6 +372,7 @@ pub(crate) struct PendingAgentBehavior {
     stream_batch_ms: u64,
     deadline_duration: Duration,
     sampling: SamplingConfig,
+    skills: Vec<crate::skills::Skill>,
 }
 
 impl PendingAgentBehavior {
@@ -393,6 +394,7 @@ impl PendingAgentBehavior {
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             sampling: SamplingConfig::default(),
+            skills: Vec::new(),
         }
     }
 
@@ -541,6 +543,7 @@ impl PendingAgentBehavior {
             stream_batch_ms: self.stream_batch_ms,
             deadline_duration: self.deadline_duration,
             sampling: self.sampling,
+            skills: self.skills,
         })
     }
 }

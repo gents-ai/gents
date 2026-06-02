@@ -148,6 +148,24 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> Stri
     out
 }
 
+/// Compose the behavior's active skills into a cached preamble section. v1
+/// activation is operator-bound: every effective skill's instructions are
+/// always included (each with a D3 degrade note for ungranted `tool_refs`).
+/// Returns `None` when the behavior has no skills, so the preamble is unchanged.
+pub fn compose_skill_preamble(skills: &[Skill], ceiling: &BTreeSet<String>) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "## Skills\n\nThe following skills are active for this agent; follow their instructions.",
+    );
+    for skill in skills {
+        out.push_str("\n\n");
+        out.push_str(&render_activated_skill(skill, ceiling));
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +271,21 @@ mod tests {
         assert!(body.contains("net")); // degrade note names the missing tool
         let s_ok = skill("b", "did:p", SkillScope::Principal, &["read"]);
         assert!(!render_activated_skill(&s_ok, &ceiling).contains("not available"));
+    }
+
+    #[test]
+    fn compose_skill_preamble_includes_bodies_and_degrade_notes() {
+        let ceiling = ceiling(&["read"]);
+        assert!(compose_skill_preamble(&[], &ceiling).is_none());
+        let skills = vec![
+            skill("a", "did:p", SkillScope::Principal, &["read"]),
+            skill("b", "did:p", SkillScope::Behavior, &["read", "net"]),
+        ];
+        let section = compose_skill_preamble(&skills, &ceiling).expect("section");
+        assert!(section.contains("## Skills"));
+        assert!(section.contains("a-instructions"));
+        assert!(section.contains("b-instructions"));
+        assert!(section.contains("net")); // degrade note for b's ungranted ref
     }
 
     #[test]
