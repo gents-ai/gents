@@ -272,6 +272,59 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
+    // /self is an alias for /status and carries the behavior join + context budget.
+    let self_response = client
+        .get(format!("http://127.0.0.1:{port}/self"))
+        .send()
+        .await
+        .context("fetching /self")?;
+    assert!(
+        self_response.status().is_success(),
+        "unexpected /self response: {self_response:?}"
+    );
+    let self_view: Value = self_response.json().await.context("reading /self body")?;
+    let behaviors = self_view
+        .get("behaviors")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty())
+        .unwrap_or_else(|| panic!("expected /self to include behaviors: {self_view}"));
+    assert!(
+        behaviors.iter().any(|behavior| {
+            behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
+                && behavior
+                    .get("endpoint")
+                    .and_then(Value::as_str)
+                    .is_some_and(|endpoint| !endpoint.is_empty())
+        }),
+        "expected /self behavior joined with backend endpoint for model {model_name}: {self_view}"
+    );
+    assert!(
+        self_view.get("context_budget").is_some(),
+        "expected /self to include context_budget: {self_view}"
+    );
+
+    // /fleet reshapes per-agent_did runtime + request counts.
+    let fleet_response = client
+        .get(format!("http://127.0.0.1:{port}/fleet"))
+        .send()
+        .await
+        .context("fetching /fleet")?;
+    assert!(
+        fleet_response.status().is_success(),
+        "unexpected /fleet response: {fleet_response:?}"
+    );
+    let fleet: Value = fleet_response.json().await.context("reading /fleet body")?;
+    assert!(
+        fleet
+            .get("agents")
+            .and_then(Value::as_array)
+            .is_some_and(|agents| agents.iter().any(|agent| {
+                agent.get("agent_did").and_then(Value::as_str) == Some(agent_did.as_str())
+                    && agent.get("process_state").and_then(Value::as_str) == Some("ready")
+            })),
+        "expected /fleet to list this agent in ready state: {fleet}"
+    );
+
     let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
