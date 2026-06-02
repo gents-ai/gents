@@ -336,6 +336,50 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
     );
 }
 
+/// Validates the raw GraphQL mutations the CLI `config skill` commands and the
+/// Codex shim use against the live Skill schema: upsert (create/update),
+/// update-by-filter (enable/disable), and delete-by-filter.
+#[tokio::test]
+async fn skill_crud_mutations_round_trip() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let did = "did:key:zSkillCrud";
+
+    let create = format!(
+        r#"mutation {{ upsert_Skill(
+            filter: {{ skill_id: {{ _eq: "s1" }} }},
+            add: {{ skill_id: "s1", agent_did: "{did}", scope: "behavior", name: "S", tool_refs: ["read_file"], enabled: true }},
+            update: {{ enabled: true }}
+        ) {{ _docID }} }}"#
+    );
+    let resp = node.execute(&create).await;
+    assert!(!resp.has_errors(), "upsert_Skill: {:?}", resp.errors);
+
+    let update = r#"mutation { update_Skill(
+        filter: { skill_id: { _eq: "s1" } },
+        input: { enabled: false }
+    ) { _docID } }"#;
+    let resp = node.execute(update).await;
+    assert!(!resp.has_errors(), "update_Skill by filter: {:?}", resp.errors);
+
+    let query = r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { skill_id enabled } }"#;
+    let resp = node.execute(query).await;
+    assert!(!resp.has_errors(), "query Skill: {:?}", resp.errors);
+    let enabled = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("Skill"))
+        .and_then(|a| a.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("enabled"))
+        .and_then(|v| v.as_bool());
+    assert_eq!(enabled, Some(false), "disable must persist");
+
+    let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#;
+    let resp = node.execute(delete).await;
+    assert!(!resp.has_errors(), "delete_Skill by filter: {:?}", resp.errors);
+}
+
 #[tokio::test]
 async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
     let node = test_node().await;

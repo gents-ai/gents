@@ -4204,3 +4204,156 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
     );
     Ok(())
 }
+
+/// End-to-end (#340 slice 4): add a skill via the `config skill` CLI, then list
+/// and enable/disable it through the Codex shim protocol (skills/list +
+/// skills/config/write) — the management flow from the Codex CLI.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-skill-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-skill-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Add a principal-scoped skill via the CLI management command.
+    let added = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    assert_eq!(added.get("skill_id").and_then(Value::as_str), Some("research"));
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    // skills/list surfaces the skill, enabled, with principal scope -> System.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsList {
+            request_id: request_id(2),
+            params: codex::SkillsListParams::default(),
+        },
+    )
+    .await?;
+    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(2)).await?;
+    let research = list
+        .data
+        .iter()
+        .flat_map(|entry| entry.skills.iter())
+        .find(|skill| skill.name == "Research")
+        .expect("Research skill should be listed");
+    assert!(research.enabled, "newly added skill should be enabled");
+    assert_eq!(research.scope, codex::SkillScope::System);
+
+    // skills/config/write disables it by name.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsConfigWrite {
+            request_id: request_id(3),
+            params: codex::SkillsConfigWriteParams {
+                path: None,
+                name: Some("Research".to_string()),
+                enabled: false,
+            },
+        },
+    )
+    .await?;
+    let write: codex::SkillsConfigWriteResponse =
+        read_typed_response(&mut ws, request_id(3)).await?;
+    assert!(!write.effective_enabled, "config write should report disabled");
+
+    // skills/list reflects the disable.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsList {
+            request_id: request_id(4),
+            params: codex::SkillsListParams::default(),
+        },
+    )
+    .await?;
+    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(4)).await?;
+    let research = list
+        .data
+        .iter()
+        .flat_map(|entry| entry.skills.iter())
+        .find(|skill| skill.name == "Research")
+        .expect("Research skill should still be listed");
+    assert!(
+        !research.enabled,
+        "skill should be disabled after skills/config/write"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}

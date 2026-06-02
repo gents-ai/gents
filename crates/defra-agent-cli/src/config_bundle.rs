@@ -604,14 +604,9 @@ pub(crate) fn sanitize_import_document(
     doc: &Value,
     for_update: bool,
 ) -> Result<Value> {
-    let mut object = match collection_name {
-        "InferenceBackend" | "Task" | "Schedule" | "EventTrigger" | "ToolServiceRegistry" => {
-            doc.as_object().cloned().ok_or_else(|| {
-                anyhow::anyhow!("{collection_name} import document must be an object")
-            })?
-        }
-        _ => return Ok(doc.clone()),
-    };
+    let mut object = doc.as_object().cloned().ok_or_else(|| {
+        anyhow::anyhow!("{collection_name} import document must be an object")
+    })?;
 
     match collection_name {
         "InferenceBackend" => {
@@ -692,8 +687,16 @@ pub(crate) fn sanitize_import_document(
                 }
             }
         }
-        _ => unreachable!(),
+        // AgentBehavior, ToolSelection, Skill, AgentPrincipal: no per-collection
+        // field surgery — they fall through to the universal empty-array strip.
+        _ => {}
     }
+
+    // DefraDB cannot type an empty array literal (`[]`) and rejects it on
+    // update, so an apply that wrote an empty list field would fail on the next
+    // (idempotent) re-apply. Omit empty arrays entirely — an unset list field
+    // reads back as empty via the null-safe deserializers.
+    object.retain(|_, value| !matches!(value, Value::Array(items) if items.is_empty()));
 
     Ok(Value::Object(object))
 }
