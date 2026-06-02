@@ -54,9 +54,9 @@ use lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
-    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -131,6 +131,11 @@ async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invari
 async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
     transcript_background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
         .await;
+}
+
+#[test]
+fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
+    transcript_background::generated_subagent_delegation_graph_cases_pin_gap2_contract();
 }
 
 #[tokio::test]

@@ -175,6 +175,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_recovery_equivalence_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
+    assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
 }
 
 #[tokio::test]
@@ -747,6 +748,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CascadeCancelsChildTheoremWitness".to_string(),
         ));
     }
+    if !lean_subagent_delegation_graph_cases().is_empty() {
+        emitted.insert((
+            "subagent_delegation_graph_cases".to_string(),
+            "SubagentDelegationGraphCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -791,6 +798,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "r6_background_cases",
         "r5_cross_deployment_cases",
         "r6_background_theorem_witnesses",
+        "subagent_delegation_graph_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

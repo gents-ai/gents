@@ -151,6 +151,24 @@ pub(crate) struct LeanBackgroundTheoremKindField {
     pub(crate) value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSubagentDelegationGraphCase {
+    pub(crate) name: String,
+    pub(crate) theorem_name: String,
+    pub(crate) property: String,
+    pub(crate) witness_kind: String,
+    pub(crate) max_depth: usize,
+    pub(crate) path_length: usize,
+    pub(crate) parent_depth: usize,
+    pub(crate) terminal_depth: usize,
+    pub(crate) cascade_path: bool,
+    pub(crate) acyclic: bool,
+    pub(crate) bounded: bool,
+    pub(crate) cascade_covered: bool,
+    pub(crate) edge_theorem: String,
+    pub(crate) cascade_edge_theorem: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanTranscriptCase {
     pub(crate) name: String,

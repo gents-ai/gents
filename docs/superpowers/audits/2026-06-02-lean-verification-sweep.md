@@ -21,7 +21,7 @@ sweep. It belongs with #155 and the remaining #349 P2P checkbox.
 | Interrupt workflow | Composed workflow | Request terminalization, streaming response interrupt finalization, queued wakeup drain, and daemon interrupt-flow consumer | No new gap found |
 | Deadline workflow | Trace + boundary metadata | Queue deadline cases, request transition cases, managed-exec/native filesystem deadline tests | No new gap found |
 | Startup recovery | Trace + runtime sweep + equivalence theorem | `Proofs/Recovery/Sweeps/*` emits 19 cases consumed by `generated_recovery_sweep_cases_drive_startup_recovery_contract`; `recovery_equivalence_cases` pins restart recovery to the uninterrupted terminalization path | #349 gap 1 fixed in this sweep |
-| Tool cancel | Trace + runtime workflow | Tool call lifecycle contract, cancel cause vocabulary, cascade/detach integration tests | No new gap found for current single-deployment and bridge semantics |
+| Tool cancel / subagent delegation | Trace + graph proof + runtime workflow | Tool call lifecycle contract, cancel cause vocabulary, cascade/detach integration tests; `Subagent.DelegationGraph` proves bounded acyclic arbitrary delegation paths and bounded cascade paths | #349 gap 2 fixed in this sweep |
 | Child-process cancel | Runtime workflow + managed-exec proof | `Proofs/ManagedExec/*`, native filesystem preemption boundary, managed-exec liveness cases | No new gap found |
 | Retry / manual reissue | Trace + runtime workflow | `Proofs/SessionRecovery.lean`; generated session recovery cases consumed by DB-backed reissue tests | No new gap found |
 | Provider failure | Atomic edge + runtime admission policy | Request fail edges, inference terminal reasons, backend health admission cases | No new gap found |
@@ -56,14 +56,19 @@ This branch adds:
   recovery equivalence proofs are emitted as 19 generated
   `recovery_equivalence_cases` and consumed by
   `generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract`.
+- `Subagent.DelegationGraph.delegation_path_length_bounded`,
+  `Subagent.DelegationGraph.delegation_paths_acyclic`, and
+  `Subagent.DelegationGraph.cascade_cancel_covers_path`: arbitrary delegation
+  graph edges strictly increase `subagentDepth`, so delegation and cascade paths
+  cannot cycle and are bounded by `maxSubagentDepth`.
+- Three generated `subagent_delegation_graph_cases` pin the #349 gap 2
+  termination, acyclicity, and cascade-coverage obligations in
+  `generated_subagent_delegation_graph_cases_pin_gap2_contract`.
 
 ## Remaining Work
 
 Remaining formal work should stay on the dedicated tracking issues:
 
-- #349 gap 2: depth bounds, subagent source recovery, bridge cascade, and
-  cross-deployment cases are covered by existing Lean/Rust consumers. A general
-  arbitrary delegation graph termination/acyclicity proof remains open.
 - #349 gap 3: P2P request/response pairing under partition is intentionally out
   of scope for this Lean sweep.
 - #57: delete semantics remain tracker-only until live-only document removal is

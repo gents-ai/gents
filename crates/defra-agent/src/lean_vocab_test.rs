@@ -70,6 +70,8 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
+    #[serde(default)]
+    pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
     #[serde(default)]
@@ -485,6 +487,10 @@ pub(crate) fn lean_r6_background_theorem_witness(
         .unwrap_or_else(|| {
             panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
         })
+}
+
+pub(crate) fn lean_subagent_delegation_graph_cases() -> &'static [LeanSubagentDelegationGraphCase] {
+    &lean_contract_snapshot().subagent_delegation_graph_cases
 }
 
 pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {

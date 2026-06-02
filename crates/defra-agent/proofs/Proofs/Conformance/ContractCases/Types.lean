@@ -293,6 +293,23 @@ structure BackgroundTheoremWitness where
   kindFields : List (String × String)
   deriving Repr
 
+structure SubagentDelegationGraphCase where
+  name : String
+  theoremName : String
+  property : String
+  witnessKind : String
+  maxDepth : Nat
+  pathLength : Nat
+  parentDepth : Nat
+  terminalDepth : Nat
+  cascadePath : Bool
+  acyclic : Bool
+  bounded : Bool
+  cascadeCovered : Bool
+  edgeTheorem : String
+  cascadeEdgeTheorem : Option String
+  deriving Repr
+
 namespace R4cWitnesses
 
 structure ListSubagentsLineageRejects where

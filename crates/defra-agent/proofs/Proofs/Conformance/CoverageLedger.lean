@@ -589,6 +589,11 @@ def caseCoverage : List CoverageEntry :=
       "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "subagent_delegation_graph_cases"
+      "SubagentDelegationGraphCases"
+      "state_machine_conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
       "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes")
@@ -722,7 +727,7 @@ def followUpHookCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "follow_up_hook"
       "Subagent.BridgedState.inv_depth"
-      "Subagent.BridgedState.inv_depth proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.inv_link. Accepted Lean-only today because these are structural trace invariants with no current Rust witness surface.")
+      "Subagent.BridgedState.inv_depth proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.inv_link. The arbitrary graph-level closure is emitted through subagent_delegation_graph_cases; this hook remains for the paired bridge trace invariant.")
       "background-tools" []
   , tagged (followUpCoverage
       "follow_up_hook"

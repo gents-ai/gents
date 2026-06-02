@@ -114,6 +114,9 @@ def snapshotJson : String :=
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
+    ++ "\"subagent_delegation_graph_cases\":"
+      ++ jsonArray
+        (subagentDelegationGraphCases.map subagentDelegationGraphCaseJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

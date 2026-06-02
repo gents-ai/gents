@@ -420,6 +420,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_subagent_delegation_graph_cases_pin_gap2_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
