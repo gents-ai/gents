@@ -1,0 +1,13 @@
+type Skill {
+    skill_id: String @index(unique: true)
+    agent_did: String @index
+    scope: String @index
+    name: String @index
+    description: String
+    instructions: String
+    tool_refs: [String!]
+    display_name: String
+    interface_json: String
+    enabled: Boolean @index
+    created_at: String
+}

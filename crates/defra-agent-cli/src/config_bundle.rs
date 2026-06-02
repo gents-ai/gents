@@ -12,7 +12,7 @@ use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
     EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
-    EXPORT_SCHEDULE_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
+    EXPORT_SCHEDULE_FIELDS, EXPORT_SKILL_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
     EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
@@ -195,6 +195,24 @@ pub(crate) async fn build_config_export_bundle(
     sort_document_rows(&mut schedule_rows, "schedule_id");
     sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
+    let mut skill_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Skill",
+        &format!(
+            r#"{{
+                Skill(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SKILL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut skill_rows, "skill_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -202,6 +220,7 @@ pub(crate) async fn build_config_export_bundle(
         access_mode: access.mode().to_string(),
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
+        skills: skill_rows,
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
@@ -434,6 +453,24 @@ pub(crate) async fn build_desired_state_live_bundle(
     sort_document_rows(&mut schedule_rows, "schedule_id");
     sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
+    let mut skill_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Skill",
+        &format!(
+            r#"{{
+                Skill(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SKILL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut skill_rows, "skill_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -441,6 +478,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         access_mode: access.mode().to_string(),
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
+        skills: skill_rows,
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
@@ -467,6 +505,7 @@ pub(crate) fn live_manifest_from_bundle(
             desired_state::DesiredStateManifest {
                 agent_principal: desired_manifest.agent_principal.clone(),
                 agent_behaviors: Vec::new(),
+                skills: Vec::new(),
                 tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),

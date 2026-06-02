@@ -80,6 +80,7 @@ def boolString (value : Bool) : String :=
 def collectionName : Collection → String
   | .agentPrincipal => "AgentPrincipal"
   | .agentBehavior => "AgentBehavior"
+  | .skill => "Skill"
   | .toolSelection => "ToolSelection"
   | .inferenceBackend => "InferenceBackend"
   | .inferenceProfile => "InferenceProfile"
@@ -91,6 +92,7 @@ def collectionName : Collection → String
 def collectionUniqueField : Collection → String
   | .agentPrincipal => "agent_did"
   | .agentBehavior => "behavior_id"
+  | .skill => "skill_id"
   | .toolSelection => "selection_id"
   | .inferenceBackend => "backend_id"
   | .inferenceProfile => "profile_id"
@@ -104,6 +106,7 @@ def productionWriteOrder : List Collection :=
   , .inferenceProfile
   , .toolServiceRegistry
   , .toolSelection
+  , .skill
   , .agentBehavior
   , .task
   , .schedule

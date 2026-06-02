@@ -10,5 +10,7 @@ type AgentBehavior {
     compaction_strategy: String
     compaction_threshold: Float
     enabled: Boolean @index
+    skill_refs: [String!]
+    skill_excludes: [String!]
     created_at: String
 }

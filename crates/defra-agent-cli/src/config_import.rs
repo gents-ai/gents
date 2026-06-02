@@ -33,11 +33,12 @@ const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 // realizes the Lean retry model by rebuilding the live diff at the start of
 // each `config apply` attempt, then applying selected documents with
 // unique-field upserts or equivalent override writers.
-const CONFIG_APPLY_ORDER: [Collection; 9] = [
+const CONFIG_APPLY_ORDER: [Collection; 10] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
     Collection::ToolSelection,
+    Collection::Skill,
     Collection::AgentBehavior,
     Collection::Task,
     Collection::Schedule,
@@ -1510,6 +1511,10 @@ mod lean_apply_write_boundary_tests {
                 .into_iter()
                 .map(|doc| desired_behavior(doc, &agent_did))
                 .collect(),
+            skills: docs_for_collection(case, Collection::Skill)
+                .into_iter()
+                .map(|doc| desired_skill(doc, &agent_did))
+                .collect(),
             tool_selections: docs_for_collection(case, Collection::ToolSelection)
                 .into_iter()
                 .map(|doc| desired_tool_selection(doc, &agent_did))
@@ -1565,6 +1570,23 @@ mod lean_apply_write_boundary_tests {
             inference_profile_id: ref_id(doc, Collection::InferenceProfile),
             compaction_strategy: None,
             compaction_threshold: None,
+            enabled: true,
+            skill_refs: ref_ids_for_collection(&doc.refs, Collection::Skill),
+            skill_excludes: Vec::new(),
+        }
+    }
+
+    fn desired_skill(doc: &LeanApplyDesiredDoc, agent_did: &str) -> desired_state::DesiredSkill {
+        desired_state::DesiredSkill {
+            skill_id: doc.id.clone(),
+            agent_did: agent_did.to_string(),
+            scope: "behavior".to_string(),
+            name: doc.content.clone(),
+            description: Some(doc.content.clone()),
+            instructions: None,
+            tool_refs: ref_ids_for_collection(&doc.refs, Collection::ToolServiceRegistry),
+            display_name: Some(doc.content.clone()),
+            interface_json: None,
             enabled: true,
         }
     }
@@ -1686,6 +1708,7 @@ mod lean_apply_write_boundary_tests {
         let collections = desired_state::DesiredStateDiffCollections {
             agent_principal: diff_for_collection(case, Collection::AgentPrincipal),
             agent_behaviors: diff_for_collection(case, Collection::AgentBehavior),
+            skills: diff_for_collection(case, Collection::Skill),
             tool_selections: diff_for_collection(case, Collection::ToolSelection),
             inference_backends: diff_for_collection(case, Collection::InferenceBackend),
             inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
@@ -1810,6 +1833,7 @@ mod lean_apply_write_boundary_tests {
         match collection {
             Collection::AgentPrincipal => counts.agent_principal,
             Collection::AgentBehavior => counts.agent_behaviors,
+            Collection::Skill => counts.skills,
             Collection::ToolSelection => counts.tool_selections,
             Collection::InferenceBackend => counts.inference_backends,
             Collection::InferenceProfile => counts.inference_profiles,

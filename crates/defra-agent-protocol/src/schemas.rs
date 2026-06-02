@@ -34,6 +34,8 @@ pub const CODEX_THREAD_PROJECTION: &str =
     include_str!("../schemas/agent/codex_thread_projection.graphql");
 pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
+pub const SKILL_NAME: &str = "Skill";
+pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
 pub const TASK_NAME: &str = "Task";
 pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
 pub const SCHEDULE_NAME: &str = "Schedule";
@@ -72,6 +74,7 @@ pub const ALL: &[&str] = &[
     AGENT_BEHAVIOR,
     AGENT_RUNTIME,
     TOOL_SELECTION,
+    SKILL,
     INFERENCE_PROFILE,
     INFERENCE_CALL,
     AGENT_CONVERSATION,
@@ -95,6 +98,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_BEHAVIOR_NAME,
     AGENT_RUNTIME_NAME,
     TOOL_SELECTION_NAME,
+    SKILL_NAME,
     INFERENCE_PROFILE_NAME,
     INFERENCE_CALL_NAME,
     AGENT_CONVERSATION_NAME,
@@ -140,7 +144,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            21,
+            22,
             "ALL should enumerate every non-runtime schema"
         );
     }

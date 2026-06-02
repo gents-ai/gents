@@ -261,6 +261,7 @@ mod tests {
             access_mode: "graphql".to_string(),
             agent_principal: None,
             agent_behaviors,
+            skills: Vec::new(),
             tool_selections,
             inference_backends,
             inference_profiles,

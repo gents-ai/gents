@@ -17,6 +17,7 @@ namespace ApplyReconcile
 inductive Collection where
   | agentPrincipal
   | agentBehavior
+  | skill
   | toolSelection
   | inferenceBackend
   | inferenceProfile
@@ -33,6 +34,7 @@ def Collection.applyOrder : Collection → Nat
   | .toolSelection         => 0
   | .inferenceProfile      => 0
   | .toolServiceRegistry   => 0
+  | .skill                 => 0
   | .agentBehavior         => 1
   | .task                  => 2
   | .schedule              => 2
@@ -83,6 +85,7 @@ example (c : Collection) : Nat :=
   match c with
   | .agentPrincipal       => 3
   | .agentBehavior        => 1
+  | .skill                => 0
   | .toolSelection        => 0
   | .inferenceBackend     => 0
   | .inferenceProfile     => 0
@@ -97,6 +100,7 @@ theorem applyOrder_matches_parity_contract : ∀ c : Collection,
       (match c with
        | .agentPrincipal       => 3
        | .agentBehavior        => 1
+       | .skill                => 0
        | .toolSelection        => 0
        | .inferenceBackend     => 0
        | .inferenceProfile     => 0

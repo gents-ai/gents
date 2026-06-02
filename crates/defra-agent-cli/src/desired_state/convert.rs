@@ -91,6 +91,29 @@ pub(crate) fn manifest_from_export_bundle(
                         "compaction_strategy",
                         "compaction_threshold",
                         "enabled",
+                        "skill_refs",
+                        "skill_excludes",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        skills: bundle
+            .skills
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "skill_id",
+                        "agent_did",
+                        "scope",
+                        "name",
+                        "description",
+                        "instructions",
+                        "tool_refs",
+                        "display_name",
+                        "interface_json",
+                        "enabled",
                     ],
                 )
             })
@@ -237,6 +260,11 @@ pub(crate) fn export_bundle_from_manifest(
         agent_principal: Some(serde_json::to_value(&manifest.agent_principal)?),
         agent_behaviors: manifest
             .agent_behaviors
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        skills: manifest
+            .skills
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,

@@ -19,6 +19,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
             enabled: true,
         },
         agent_behaviors: Vec::new(),
+        skills: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
@@ -44,6 +45,8 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
         compaction_strategy: None,
         compaction_threshold: None,
         enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
     });
     manifest
 }
@@ -1354,7 +1357,10 @@ pub(super) mod write_manifest_root {
                 compaction_strategy: None,
                 compaction_threshold: None,
                 enabled: true,
+                skill_refs: Vec::new(),
+                skill_excludes: Vec::new(),
             }],
+            skills: Vec::new(),
             tool_selections: Vec::new(),
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
@@ -1489,6 +1495,8 @@ pub(super) mod write_manifest_root {
             compaction_strategy: None,
             compaction_threshold: None,
             enabled: true,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
         });
 
         let err = write_manifest_root(tmp.path(), &bad_manifest, true).unwrap_err();
