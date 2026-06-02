@@ -364,6 +364,11 @@ pub(crate) fn tool_selection_from_document(
             .backgroundable_tool_names
             .clone()
             .unwrap_or_default(),
+        // The `defra_query` read tool is enabled by default for every behavior
+        // and exposes all collections; document/CLI-level configuration to trim
+        // this is a follow-up.
+        enable_defra_query: true,
+        defra_query_collections: Vec::new(),
     })
 }
 
