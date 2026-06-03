@@ -108,7 +108,7 @@ impl CollectionScope {
 /// The collection name and every field name are validated as identifiers, and
 /// the filter is rendered through [`render_filter`] (which escapes all string
 /// literals), so untrusted input cannot inject GraphQL.
-pub(crate) fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result<String> {
+pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result<String> {
     validate_identifier(&params.collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
     scope.ensure_allowed(&params.collection)?;
 

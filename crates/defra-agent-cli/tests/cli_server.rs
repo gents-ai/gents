@@ -1115,3 +1115,192 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     Ok(())
 }
+
+/// Proves the `defra-agent query` command can reconstruct a full agent trace
+/// (AgentRequest + AgentResponse + AgentMessage + AgentToolCall, stitched by
+/// request_id / session_id) purely from structured query output — i.e. it can
+/// retire Amygdala's hand-rolled GraphQL client / escaping / polling /
+/// AgentMessage.content parsing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_command_reconstructs_a_trace() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-query-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-query-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a linked trace (same request_id + session_id across collections).
+    let client = reqwest::Client::new();
+    let mutations = [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", status: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_AgentResponse(input: { response_key: "trace-resp", request_id: "trace-req", session_id: "trace-session", content: "hello", status: "completed", token_count: 7 }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentMessage(input: { message_key: "trace-msg", session_id: "trace-session", sequence: 1, role: "assistant", content: "encoded-blob" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "trace-tc", request_id: "trace-req", session_id: "trace-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
+    ];
+    for mutation in mutations {
+        let resp = client
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding trace")?;
+        let body: Value = resp.json().await?;
+        assert!(
+            body.get("errors").is_none(),
+            "seed mutation errored: {body}"
+        );
+    }
+
+    // Reconstruct each collection via `defra-agent query`.
+    let request = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentRequest",
+            "--field",
+            "request_id",
+            "--field",
+            "session_id",
+            "--field",
+            "status",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    assert_eq!(
+        request.get("count").and_then(Value::as_i64),
+        Some(1),
+        "{request}"
+    );
+    let req_row = &request["results"][0];
+    assert_eq!(req_row["session_id"].as_str(), Some("trace-session"));
+    assert_eq!(req_row["status"].as_str(), Some("completed"));
+
+    let tool_calls = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentToolCall",
+            "--field",
+            "request_id",
+            "--field",
+            "tool_name",
+            "--field",
+            "args",
+            "--field",
+            "result",
+            "--field",
+            "status",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    assert_eq!(
+        tool_calls.get("count").and_then(Value::as_i64),
+        Some(1),
+        "{tool_calls}"
+    );
+    let tc = &tool_calls["results"][0];
+    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    // args/result are first-class JSON-string columns — no content reconstruction.
+    let tc_args: Value = serde_json::from_str(tc["args"].as_str().unwrap())
+        .context("tool call args parse as JSON")?;
+    assert_eq!(tc_args["collection"].as_str(), Some("AgentRequest"));
+
+    let responses = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentResponse",
+            "--field",
+            "request_id",
+            "--field",
+            "status",
+            "--field",
+            "token_count",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    let resp_row = &responses["results"][0];
+    assert_eq!(resp_row["token_count"].as_i64(), Some(7));
+
+    let messages = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentMessage",
+            "--field",
+            "session_id",
+            "--field",
+            "role",
+            "--field",
+            "sequence",
+            "--filter",
+            r#"{"session_id":{"_eq":"trace-session"}}"#,
+        ],
+    )?;
+    let msg_row = &messages["results"][0];
+    assert_eq!(msg_row["role"].as_str(), Some("assistant"));
+
+    // Trace stitches across all four collections, entirely from structured output.
+    assert_eq!(
+        req_row["session_id"].as_str(),
+        msg_row["session_id"].as_str()
+    );
+    assert_eq!(tc["request_id"].as_str(), resp_row["request_id"].as_str());
+
+    // Secret guard holds on the CLI surface too.
+    let denied = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "InferenceBackend",
+            "--field",
+            "api_key",
+        ],
+    )?;
+    assert!(
+        denied.contains("restricted"),
+        "expected secret guard to fire: {denied}"
+    );
+
+    Ok(())
+}

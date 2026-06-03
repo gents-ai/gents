@@ -21,7 +21,7 @@ use serde_json::json;
 pub(crate) mod query;
 pub(crate) mod render;
 
-pub use query::{CollectionScope, DefraQueryParams, DEFAULT_LIMIT, MAX_LIMIT};
+pub use query::{build_query, CollectionScope, DefraQueryParams, DEFAULT_LIMIT, MAX_LIMIT};
 
 /// The model-facing tool name.
 pub const DEFRA_QUERY_TOOL_NAME: &str = "defra_query";

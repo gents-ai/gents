@@ -76,6 +76,8 @@ pub(crate) enum Command {
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
+    #[command(about = "Run a read-only structured query against a DefraDB collection")]
+    Query(QueryArgs),
     #[command(
         about = "Inspect backgrounded tool calls",
         after_help = BACKGROUND_AFTER_HELP
@@ -530,6 +532,33 @@ pub(crate) struct StatusArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct QueryArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Collection (GraphQL type) to read, e.g. AgentRequest")]
+    pub(crate) collection: String,
+    #[arg(
+        long = "field",
+        help = "Field to return (repeatable); at least one is required"
+    )]
+    pub(crate) fields: Vec<String>,
+    #[arg(
+        long,
+        help = r#"DefraDB filter as JSON, e.g. '{"status":{"_eq":"completed"}}'"#
+    )]
+    pub(crate) filter: Option<String>,
+    #[arg(long, help = "Maximum rows to return (default 50, capped at 1000)")]
+    pub(crate) limit: Option<u32>,
+    #[arg(
+        long = "allow-collection",
+        help = "Restrict the query to these collections (repeatable); omit for all"
+    )]
+    pub(crate) allow_collections: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
