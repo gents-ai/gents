@@ -287,7 +287,7 @@ fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
-fn estimate_message_tokens(messages: &[Message]) -> usize {
+pub(crate) fn estimate_message_tokens(messages: &[Message]) -> usize {
     let serialized = serde_json::to_string(messages).unwrap_or_default();
     estimate_tokens(&serialized)
 }

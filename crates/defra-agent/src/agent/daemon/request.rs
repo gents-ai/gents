@@ -32,6 +32,20 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         admission::scope_request(admission_context, async {
             self.spawn_conversation_title_generation(&request, title_admission_context);
 
+            // Deterministically activate explicitly-selected skills (the Codex
+            // "pill"): the request metadata names skill ids; the prompt builder
+            // resolves each against this behavior's effective set (D5) and renders
+            // its body — with the D3 degrade note — as a per-turn system reminder.
+            // Resolution/scoping lives entirely here in the runtime; the shim only
+            // forwards the selection. Rendered up front so the body's tokens count
+            // toward the compaction-threshold decision below (a large skill-only
+            // turn must still be able to trigger compaction).
+            let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
+            let skill_reminders = self
+                .prompt_builder
+                .selected_skill_reminders(&selected_skill_ids);
+            let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
+
             let mut built = async {
                 let full_history = session::load_history(&self.node, &request.session_id).await?;
                 let (stripped_history, file_activity) =
@@ -58,6 +72,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .collect::<Vec<_>>();
 
                 let mut built = self.prompt_builder.build(&history, &summaries).await?;
+                // Count the to-be-injected skill bodies toward the threshold.
+                built.estimated_tokens =
+                    built.estimated_tokens.saturating_add(skill_reminder_tokens);
                 if prompt_exceeds_compaction_threshold(
                     built.estimated_tokens,
                     &request.content,
@@ -95,6 +112,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     }
 
                     built = self.prompt_builder.build(&history, &summaries).await?;
+                    built.estimated_tokens =
+                        built.estimated_tokens.saturating_add(skill_reminder_tokens);
                 }
 
                 Ok::<_, anyhow::Error>(built)
@@ -107,22 +126,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             ))
             .await?;
 
-            // Deterministically activate explicitly-selected skills (the Codex
-            // "pill"): the request metadata names skill ids; the prompt builder
-            // resolves each against this behavior's effective set (D5) and
-            // renders its body — with the D3 degrade note — as a per-turn system
-            // reminder. Injected ahead of the conversation so it's in context for
-            // the turn. Resolution/scoping lives entirely here in the runtime;
-            // the shim only forwards the selection.
-            let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
-            if !selected_skill_ids.is_empty() {
-                let mut reminders = self
-                    .prompt_builder
-                    .selected_skill_reminders(&selected_skill_ids);
-                if !reminders.is_empty() {
-                    reminders.append(&mut built.messages);
-                    built.messages = reminders;
-                }
+            // Inject the rendered skill reminders ahead of the conversation so
+            // they're in context for the turn (their tokens were already folded
+            // into the compaction decision above).
+            if !skill_reminders.is_empty() {
+                let mut reminders = skill_reminders;
+                reminders.append(&mut built.messages);
+                built.messages = reminders;
             }
 
             lifecycle.begin_execution().await?;
