@@ -649,6 +649,8 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
+            enable_defra_query: None,
+            defra_query_collections: None,
             ..Default::default()
         },
     )

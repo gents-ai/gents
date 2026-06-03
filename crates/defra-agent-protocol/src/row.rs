@@ -536,6 +536,10 @@ pub struct ToolSelectionRow {
     pub subagent_background_enabled: Option<bool>,
     #[serde(default)]
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
+    #[serde(default)]
+    pub enable_defra_query: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub defra_query_collections: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
