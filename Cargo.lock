@@ -4519,6 +4519,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "defra-agent-schemas",
  "reqwest 0.12.28",
  "rig-core",
  "serde",
@@ -4526,6 +4527,10 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "defra-agent-schemas"
+version = "0.2.3"
 
 [[package]]
 name = "defra-core"

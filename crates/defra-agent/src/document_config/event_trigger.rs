@@ -152,7 +152,7 @@ pub(crate) async fn update_event_trigger_runtime_fields(
 /// Description of an event-driven trigger for a task.
 ///
 /// Mirrors the `EventTrigger` GraphQL schema in
-/// `crates/defra-agent-protocol/schemas/agent/event_trigger.graphql`. Includes
+/// `crates/defra-agent-schemas/schemas/agent/event_trigger.graphql`. Includes
 /// both apply-owned fields (`trigger_id`, `task_id`, `source_collection`,
 /// `event_kind`, `filter`, `enabled`, `concurrency`, `created_at`,
 /// `updated_at`) and runtime-owned fields (`last_attempt_at`,
