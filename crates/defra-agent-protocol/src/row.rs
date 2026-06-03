@@ -192,6 +192,16 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<i64>,
+    #[serde(default)]
+    pub max_tokens: Option<i64>,
+    #[serde(default)]
+    pub metadata: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
@@ -675,6 +685,11 @@ mod tests {
             "retry_root_request": "req-1",
             "superseded_by_request": "",
             "content": "hello",
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_tokens": 512,
+            "metadata": "{\"run_id\":\"run-1\"}",
             "status": "pending",
             "lifecycle_state": "pending",
             "backend_id": "",
@@ -687,6 +702,11 @@ mod tests {
         let row: AgentRequestRow = serde_json::from_str(json).expect("parse");
         assert_eq!(row.request_id, "req-1");
         assert_eq!(row.retry_count, Some(0));
+        assert_eq!(row.temperature, Some(0.0));
+        assert_eq!(row.top_p, Some(0.95));
+        assert_eq!(row.top_k, Some(40));
+        assert_eq!(row.max_tokens, Some(512));
+        assert_eq!(row.metadata.as_deref(), Some(r#"{"run_id":"run-1"}"#));
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
         assert_eq!(row, round);
