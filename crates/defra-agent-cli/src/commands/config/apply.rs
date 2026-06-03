@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use defra_agent::Collection;
 use std::path::Path;
 
 use crate::cli::*;
@@ -24,7 +25,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     })
     .await?
     .require_valid()?;
-    let report = apply_bound_desired_manifest(&args.root, &access, &bound).await?;
+    let report = apply_bound_desired_manifest(&args.root, &access, &bound, args.prune).await?;
     print_json(&serde_json::to_value(&report)?)?;
     if report.ok {
         Ok(())
@@ -37,6 +38,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     root: &Path,
     access: &ConfigAccess,
     bound: &super::binding::BoundDesiredManifest,
+    prune: bool,
 ) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
@@ -59,20 +61,34 @@ pub(crate) async fn apply_bound_desired_manifest(
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;
-    let planned = desired_state::diff_manifests(
-        root,
-        access.mode(),
-        desired_manifest,
-        live_principal.as_ref(),
-        &live_manifest,
-    );
+    let planned = if prune {
+        desired_state::diff_manifests_with_prune(
+            root,
+            access.mode(),
+            desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+        )
+    } else {
+        desired_state::diff_manifests(
+            root,
+            access.mode(),
+            desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+        )
+    };
 
-    let applied = {
+    let (applied, pruned) = {
         let txn = access
             .begin_apply_txn()
             .await
             .context("config apply: begin transaction")?;
-        let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+        let result = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+            Ok(applied_total) => Ok(split_apply_counts(applied_total, &planned, prune)),
+            Err(error) => Err(error),
+        };
+        let counts = match result {
             Ok(counts) => counts,
             Err(error) => {
                 if let Err(discard_err) = txn.discard().await {
@@ -101,21 +117,41 @@ pub(crate) async fn apply_bound_desired_manifest(
         &remaining_manifest,
     );
 
+    let changed = config_apply_counts_changed(&applied) || config_apply_counts_changed(&pruned);
     let report = ConfigApplyReport {
-        status: if config_apply_counts_changed(&applied) {
-            "applied"
-        } else {
-            "noop"
-        },
+        status: if changed { "applied" } else { "noop" },
         ok: !diff_has_pending_apply(&remaining.counts),
         exact_match: remaining.ok,
-        changed: config_apply_counts_changed(&applied),
+        changed,
         root: root.display().to_string(),
         access_mode: access.mode().to_string(),
         agent_did: bound.context.target_agent_did.clone(),
         planned: planned.counts.clone(),
         applied,
+        pruned,
         remaining: remaining.counts.clone(),
     };
     Ok(report)
+}
+
+fn split_apply_counts(
+    applied_total: ConfigApplyCounts,
+    planned: &desired_state::DesiredStateDiffReport,
+    prune: bool,
+) -> (ConfigApplyCounts, ConfigApplyCounts) {
+    let pruned = if prune {
+        prune_counts_from_plan(planned)
+    } else {
+        ConfigApplyCounts::default()
+    };
+    let applied = applied_total.saturating_sub(&pruned);
+    (applied, pruned)
+}
+
+fn prune_counts_from_plan(planned: &desired_state::DesiredStateDiffReport) -> ConfigApplyCounts {
+    let mut counts = ConfigApplyCounts::default();
+    for collection in Collection::ALL {
+        counts.set(collection, planned.collections.get(collection).delete.len());
+    }
+    counts
 }

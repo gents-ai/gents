@@ -5,6 +5,7 @@ use super::{
     DesiredAgentPrincipal, DesiredStateCollectionDiff, DesiredStateDiffCollections,
     DesiredStateDiffReport, DesiredStateManifest, HasUniqueId,
 };
+use defra_agent::Collection;
 
 pub(crate) fn diff_manifests(
     root: &Path,
@@ -13,12 +14,33 @@ pub(crate) fn diff_manifests(
     live_principal: Option<&DesiredAgentPrincipal>,
     live: &DesiredStateManifest,
 ) -> DesiredStateDiffReport {
+    diff_manifests_inner(root, access_mode, desired, live_principal, live, false)
+}
+
+pub(crate) fn diff_manifests_with_prune(
+    root: &Path,
+    access_mode: &str,
+    desired: &DesiredStateManifest,
+    live_principal: Option<&DesiredAgentPrincipal>,
+    live: &DesiredStateManifest,
+) -> DesiredStateDiffReport {
+    diff_manifests_inner(root, access_mode, desired, live_principal, live, true)
+}
+
+fn diff_manifests_inner(
+    root: &Path,
+    access_mode: &str,
+    desired: &DesiredStateManifest,
+    live_principal: Option<&DesiredAgentPrincipal>,
+    live: &DesiredStateManifest,
+    prune: bool,
+) -> DesiredStateDiffReport {
     let agent_principal = diff_single(
         &desired.agent_principal.agent_did,
         Some(&desired.agent_principal),
         live_principal,
     );
-    let collections = DesiredStateDiffCollections {
+    let mut collections = DesiredStateDiffCollections {
         agent_principal,
         agent_behaviors: diff_manifest_collection(&desired.agent_behaviors, &live.agent_behaviors),
         skills: diff_manifest_collection(&desired.skills, &live.skills),
@@ -40,6 +62,10 @@ pub(crate) fn diff_manifests(
         event_triggers: diff_manifest_collection(&desired.event_triggers, &live.event_triggers),
     };
 
+    if prune {
+        mark_delete_safe_live_only_docs(&mut collections, live);
+    }
+
     let counts = collections.counts();
     let ok = counts.is_exact_match();
 
@@ -51,6 +77,117 @@ pub(crate) fn diff_manifests(
         agent_did: desired.agent_principal.agent_did.clone(),
         counts,
         collections,
+    }
+}
+
+fn mark_delete_safe_live_only_docs(
+    collections: &mut DesiredStateDiffCollections,
+    live: &DesiredStateManifest,
+) {
+    let live_references = live_structural_references(live);
+    for collection in Collection::ALL {
+        let diff = collections.get_mut(collection);
+        diff.delete = diff
+            .live_only
+            .iter()
+            .filter(|id| !live_references.contains(&(collection, (*id).clone())))
+            .cloned()
+            .collect();
+    }
+}
+
+fn live_structural_references(live: &DesiredStateManifest) -> BTreeSet<(Collection, String)> {
+    let mut references = BTreeSet::new();
+
+    insert_optional_reference(
+        &mut references,
+        Collection::AgentBehavior,
+        live.agent_principal.default_behavior_id.as_deref(),
+    );
+
+    for behavior in &live.agent_behaviors {
+        insert_optional_reference(
+            &mut references,
+            Collection::InferenceBackend,
+            behavior.backend_id.as_deref(),
+        );
+        insert_optional_reference(
+            &mut references,
+            Collection::ToolSelection,
+            behavior.tool_selection_id.as_deref(),
+        );
+        insert_optional_reference(
+            &mut references,
+            Collection::InferenceProfile,
+            behavior.inference_profile_id.as_deref(),
+        );
+        insert_reference_values(&mut references, Collection::Skill, &behavior.skill_refs);
+        insert_reference_values(&mut references, Collection::Skill, &behavior.skill_excludes);
+    }
+
+    for skill in &live.skills {
+        insert_reference_values(
+            &mut references,
+            Collection::ToolServiceRegistry,
+            &skill.tool_refs,
+        );
+    }
+
+    for selection in &live.tool_selections {
+        insert_reference_values(
+            &mut references,
+            Collection::ToolServiceRegistry,
+            &selection.allowed_mcp_service_ids,
+        );
+    }
+
+    for task in &live.tasks {
+        insert_reference(
+            &mut references,
+            Collection::AgentBehavior,
+            &task.behavior_id,
+        );
+    }
+
+    for schedule in &live.schedules {
+        insert_reference(&mut references, Collection::Task, &schedule.task_id);
+    }
+
+    for trigger in &live.event_triggers {
+        insert_reference(&mut references, Collection::Task, &trigger.task_id);
+    }
+
+    references
+}
+
+fn insert_optional_reference(
+    references: &mut BTreeSet<(Collection, String)>,
+    collection: Collection,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        insert_reference(references, collection, value);
+    }
+}
+
+fn insert_reference_values(
+    references: &mut BTreeSet<(Collection, String)>,
+    collection: Collection,
+    values: &[String],
+) {
+    for value in values {
+        insert_reference(references, collection, value);
+    }
+}
+
+fn insert_reference(
+    references: &mut BTreeSet<(Collection, String)>,
+    collection: Collection,
+    value: &str,
+) {
+    let value = value.trim();
+    if !value.is_empty() {
+        references.insert((collection, value.to_string()));
     }
 }
 

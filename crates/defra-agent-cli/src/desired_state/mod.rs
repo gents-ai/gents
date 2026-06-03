@@ -13,7 +13,7 @@ pub(crate) use convert::{
     export_bundle_from_manifest, manifest_from_export_bundle,
     normalize_tool_service_registry_storage_fields,
 };
-pub(crate) use diff::diff_manifests;
+pub(crate) use diff::{diff_manifests, diff_manifests_with_prune};
 pub(crate) use load::load_manifest_root;
 pub(crate) use normalize::strip_deprecated_inference_backend_fields;
 pub(crate) use write::write_manifest_root;
@@ -346,6 +346,21 @@ impl DesiredStateDiffCollections {
             Collection::Task => &self.tasks,
             Collection::Schedule => &self.schedules,
             Collection::EventTrigger => &self.event_triggers,
+        }
+    }
+
+    pub(crate) fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
+        match collection {
+            Collection::AgentPrincipal => &mut self.agent_principal,
+            Collection::AgentBehavior => &mut self.agent_behaviors,
+            Collection::Skill => &mut self.skills,
+            Collection::ToolSelection => &mut self.tool_selections,
+            Collection::InferenceBackend => &mut self.inference_backends,
+            Collection::InferenceProfile => &mut self.inference_profiles,
+            Collection::ToolServiceRegistry => &mut self.tool_service_registries,
+            Collection::Task => &mut self.tasks,
+            Collection::Schedule => &mut self.schedules,
+            Collection::EventTrigger => &mut self.event_triggers,
         }
     }
 

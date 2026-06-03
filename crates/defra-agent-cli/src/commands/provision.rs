@@ -41,7 +41,8 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     .await?
     .require_valid()?;
 
-    let apply_report = apply::apply_bound_desired_manifest(&args.root, &access, &bound).await?;
+    let apply_report =
+        apply::apply_bound_desired_manifest(&args.root, &access, &bound, false).await?;
     let diff_report = diff::diff_bound_desired_manifest(&args.root, &access, &bound).await?;
     let ok = apply_report.ok && diff_report.ok;
     let report = ProvisionReport {
