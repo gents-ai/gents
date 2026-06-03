@@ -17,6 +17,7 @@ use anyhow::Result;
 use rig::tool::ToolDyn;
 
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
+use crate::document_config::load_agent_behavior;
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_delegate_tool, build_subagent_tools,
@@ -58,6 +59,16 @@ impl ToolSurface {
     #[allow(dead_code)]
     pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
         &self.subagent_tools
+    }
+
+    /// Returns the statically-allowed spawn targets when spawn is enabled,
+    /// or an empty slice when spawn is disabled.
+    pub(crate) fn subagent_targets(&self) -> &[String] {
+        if self.subagent_tools.spawn_enabled {
+            &self.subagent_tools.targets
+        } else {
+            &[]
+        }
     }
 
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
@@ -142,6 +153,48 @@ impl std::fmt::Debug for ToolSurface {
             .field("defra_query_collections", &self.defra_query_collections)
             .finish()
     }
+}
+
+/// Resolves `(behavior_id, description)` pairs for the agent's spawnable
+/// subagent targets. Uses `description` if set, then `summary`, then an empty
+/// string. Lookup failures are logged and skipped and never prevent the runtime
+/// path from starting.
+pub(crate) async fn resolve_subagent_target_descriptions(
+    node: &defra_node::EmbeddedNode,
+    tool_surface: &ToolSurface,
+) -> Vec<(String, String)> {
+    let targets = tool_surface.subagent_targets();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(targets.len());
+    for target_id in targets {
+        let description = match load_agent_behavior(node, target_id).await {
+            Ok(Some(behavior)) => behavior
+                .description
+                .filter(|s| !s.is_empty())
+                .or_else(|| behavior.summary.filter(|s| !s.is_empty()))
+                .unwrap_or_default(),
+            Ok(None) => {
+                tracing::warn!(
+                    target_behavior_id = %target_id,
+                    "subagent target behavior not found; using empty description in preamble"
+                );
+                String::new()
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target_behavior_id = %target_id,
+                    error = %error,
+                    "failed to load subagent target behavior; using empty description in preamble"
+                );
+                String::new()
+            }
+        };
+        result.push((target_id.clone(), description));
+    }
+    result
 }
 
 pub fn cli_tool(

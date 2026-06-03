@@ -328,6 +328,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         true,
         crate::config::DEFAULT_CONTEXT_WINDOW,
         crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
+        &[],
     );
     let summaries = entries
         .iter()

@@ -9,6 +9,7 @@ fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilde
         true,
         100_000,
         8_192,
+        &[],
     )
 }
 
@@ -142,6 +143,7 @@ fn message_budget_accounts_for_preamble_and_output() {
         true,
         10_000,
         2_000,
+        &[],
     );
 
     let budget = builder.message_budget();
@@ -166,8 +168,70 @@ fn would_exceed_budget_long_messages() {
         true,
         100,
         50,
+        &[],
     );
 
     let big = user_msg(&"x".repeat(10000));
     assert!(builder.would_exceed_budget(&[big]));
+}
+
+#[test]
+fn preamble_lists_allowed_subagent_targets() {
+    let targets = vec![
+        (
+            "code-reviewer".to_string(),
+            "Reviews code for correctness and style.".to_string(),
+        ),
+        (
+            "data-analyst".to_string(),
+            "Analyzes datasets and produces summaries.".to_string(),
+        ),
+    ];
+    let preamble = build_preamble_with_targets(
+        "You are a coordinator.",
+        "orchestrator",
+        &["spawn_subagent"],
+        false,
+        &targets,
+    );
+    assert!(
+        preamble.contains("code-reviewer"),
+        "preamble should contain target id 'code-reviewer'"
+    );
+    assert!(
+        preamble.contains("Reviews code for correctness and style."),
+        "preamble should contain code-reviewer description"
+    );
+    assert!(
+        preamble.contains("data-analyst"),
+        "preamble should contain target id 'data-analyst'"
+    );
+    assert!(
+        preamble.contains("Analyzes datasets and produces summaries."),
+        "preamble should contain data-analyst description"
+    );
+    assert!(
+        preamble.contains("spawn_subagent"),
+        "preamble should reference the spawn_subagent tool"
+    );
+}
+
+#[test]
+fn preamble_no_targets_block_when_empty() {
+    let preamble = build_preamble_with_targets(
+        "You are a standalone agent.",
+        "standalone",
+        &["bash"],
+        false,
+        &[],
+    );
+    // Should not contain any subagent section heading
+    assert!(
+        !preamble.contains("Spawnable Sub-Agents"),
+        "preamble should have no subagent section when targets is empty"
+    );
+    assert!(
+        !preamble.contains("spawn_subagent"),
+        "preamble should not mention spawn_subagent when there are no targets"
+    );
 }

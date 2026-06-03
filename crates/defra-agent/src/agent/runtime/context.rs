@@ -13,7 +13,7 @@ use crate::completion_factory::build_admitted_agent;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
-use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
+use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::watcher::AgentRequest;
 
 #[derive(Clone)]
@@ -81,7 +81,11 @@ impl RuntimeContext {
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
         let api_key = behavior.completion_client_api_key()?;
-        let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
+        let allowed_targets =
+            tool_surface::resolve_subagent_target_descriptions(&self.node, tool_surface.as_ref())
+                .await;
+        let prompt_builder =
+            LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
         let preamble = prompt_builder.preamble().to_string();
         let tools = tool_surface
             .build_tools(&self.tool_runtime)?
