@@ -56,6 +56,10 @@ pub struct Skill {
     /// Declared tool dependencies (host tool kinds, mcp service ids, cli names).
     /// Advisory — intersected with the behavior ceiling, never granted (D3).
     pub tool_refs: Vec<String>,
+    /// Optional UI display name (from `agents/openai.yaml` `interface.display_name`).
+    /// Preferred over `name` for the catalog/activation label when present; opaque
+    /// to privilege (decision: UI metadata, not load-bearing).
+    pub display_name: Option<String>,
     pub enabled: bool,
 }
 
@@ -113,6 +117,15 @@ pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &BTreeSet<String>) -> Ve
 }
 
 fn skill_label(skill: &Skill) -> &str {
+    // Prefer the UI display name, then the canonical name, then the id.
+    if let Some(display_name) = skill
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return display_name;
+    }
     if skill.name.trim().is_empty() {
         skill.skill_id.as_str()
     } else {
@@ -265,6 +278,7 @@ mod tests {
             description: format!("{id}-desc"),
             instructions: format!("{id}-instructions"),
             tool_refs: tool_refs.iter().map(|s| s.to_string()).collect(),
+            display_name: None,
             enabled: true,
         }
     }
@@ -354,6 +368,15 @@ mod tests {
         // Progressive disclosure: bodies are NOT in the catalog.
         assert!(!catalog.contains("a-instructions"));
         assert!(!catalog.contains("b-instructions"));
+    }
+
+    #[test]
+    fn catalog_prefers_display_name_over_name() {
+        let mut s = skill("a", "did:p", SkillScope::Principal, &[]);
+        s.display_name = Some("Pretty Label".to_string());
+        let catalog = render_skill_catalog(std::slice::from_ref(&s)).expect("catalog");
+        assert!(catalog.contains("Pretty Label"));
+        assert!(!catalog.contains("a-name")); // the raw name is superseded by the UI label
     }
 
     #[test]

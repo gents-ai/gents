@@ -51,6 +51,9 @@ struct SkillInput {
     instructions: Option<String>,
     tool_refs: Vec<String>,
     display_name: Option<String>,
+    /// Opaque UI metadata (the whole `agents/openai.yaml` `interface` block) as
+    /// a JSON string. Round-trips through export; never affects privilege.
+    interface_json: Option<String>,
     enabled: bool,
 }
 
@@ -66,6 +69,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
         gql_opt_string("description", skill.description.as_deref()),
         gql_opt_string("instructions", skill.instructions.as_deref()),
         gql_opt_string("display_name", skill.display_name.as_deref()),
+        gql_opt_string("interface_json", skill.interface_json.as_deref()),
         format!("enabled: {}", skill.enabled),
     ];
     if !skill.tool_refs.is_empty() {
@@ -116,6 +120,9 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         instructions,
         tool_refs: args.tool_refs.clone(),
         display_name: args.display_name.clone(),
+        // `config skill add` has no flag for opaque UI metadata; it arrives only
+        // via `config skill import` from an `agents/openai.yaml` interface block.
+        interface_json: None,
         enabled: args.enabled,
     };
     let doc_id = upsert_skill(&access, &skill).await?;
@@ -225,12 +232,12 @@ struct SkillFrontmatter {
 
 #[derive(Default, serde::Deserialize)]
 struct OpenAiYaml {
-    interface: Option<OpenAiInterface>,
+    /// The whole `interface` mapping is captured opaquely (icons, brand,
+    /// default_prompt, …) so it round-trips through `interface_json`; only
+    /// `display_name` is promoted to a typed column. UI metadata, not
+    /// load-bearing.
+    interface: Option<serde_yaml::Value>,
     dependencies: Option<OpenAiDependencies>,
-}
-#[derive(Default, serde::Deserialize)]
-struct OpenAiInterface {
-    display_name: Option<String>,
 }
 #[derive(Default, serde::Deserialize)]
 struct OpenAiDependencies {
@@ -343,9 +350,10 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         };
         let (frontmatter, body) = parse_skill_md(&contents);
 
-        // Optional agents/openai.yaml: tool dependencies + display name.
+        // Optional agents/openai.yaml: tool dependencies + opaque UI interface.
         let mut tool_refs = Vec::new();
         let mut display_name = None;
+        let mut interface_json = None;
         if let Ok(yaml) = std::fs::read_to_string(dir.join("agents").join("openai.yaml")) {
             match serde_yaml::from_str::<OpenAiYaml>(&yaml) {
                 Ok(parsed) => {
@@ -357,7 +365,16 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
                             .filter(|value| !value.trim().is_empty())
                             .collect();
                     }
-                    display_name = parsed.interface.and_then(|interface| interface.display_name);
+                    if let Some(interface) = parsed.interface {
+                        // Promote display_name to its typed column; preserve the
+                        // whole interface block opaquely so export round-trips it.
+                        display_name = interface
+                            .get("display_name")
+                            .and_then(serde_yaml::Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(ToOwned::to_owned);
+                        interface_json = serde_json::to_string(&interface).ok();
+                    }
                 }
                 Err(error) => errors.push(json!({
                     "skill_id": skill_id,
@@ -376,6 +393,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
             instructions: (!body.is_empty()).then_some(body),
             tool_refs: tool_refs.clone(),
             display_name,
+            interface_json,
             enabled: !args.disabled,
         };
 
@@ -460,13 +478,9 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
         tools: Vec<Tool>,
     }
     #[derive(serde::Serialize)]
-    struct Interface<'a> {
-        display_name: &'a str,
-    }
-    #[derive(serde::Serialize)]
-    struct OpenAi<'a> {
+    struct OpenAi {
         #[serde(skip_serializing_if = "Option::is_none")]
-        interface: Option<Interface<'a>>,
+        interface: Option<serde_yaml::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         dependencies: Option<Dependencies>,
     }
@@ -481,15 +495,32 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
                 .collect()
         })
         .unwrap_or_default();
-    let display_name = skill
-        .get("display_name")
+    // Prefer the opaque round-tripped interface block; fall back to a minimal
+    // `{display_name}` when only the typed column is set.
+    let interface = match skill
+        .get("interface_json")
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-    if tool_refs.is_empty() && display_name.is_none() {
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(raw) => {
+            let json: Value =
+                serde_json::from_str(raw).context("parsing stored interface_json")?;
+            Some(serde_yaml::to_value(&json)?)
+        }
+        None => skill
+            .get("display_name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(|display_name| {
+                serde_yaml::to_value(serde_json::json!({ "display_name": display_name }))
+            })
+            .transpose()?,
+    };
+    if tool_refs.is_empty() && interface.is_none() {
         return Ok(None);
     }
     let openai = OpenAi {
-        interface: display_name.map(|display_name| Interface { display_name }),
+        interface,
         dependencies: (!tool_refs.is_empty()).then(|| Dependencies {
             tools: tool_refs
                 .into_iter()
@@ -581,7 +612,11 @@ mod tests {
             .collect();
         assert_eq!(tools, vec!["web_search", "read_file"]);
         assert_eq!(
-            parsed.interface.unwrap().display_name.as_deref(),
+            parsed
+                .interface
+                .unwrap()
+                .get("display_name")
+                .and_then(serde_yaml::Value::as_str),
             Some("Research")
         );
     }
@@ -618,10 +653,57 @@ mod tests {
             .filter_map(|tool| tool.value)
             .collect();
         assert_eq!(tools, vec!["web_search", "read_file"]);
-        assert_eq!(parsed.interface.unwrap().display_name.as_deref(), Some("Research"));
+        assert_eq!(
+            parsed
+                .interface
+                .unwrap()
+                .get("display_name")
+                .and_then(serde_yaml::Value::as_str),
+            Some("Research")
+        );
 
         // No tool_refs / display_name -> nothing to write.
         assert!(render_openai_yaml(&json!({ "skill_id": "x" })).unwrap().is_none());
+    }
+
+    #[test]
+    fn import_captures_and_export_round_trips_opaque_interface() {
+        // An interface block richer than display_name (icons, brand, …) must
+        // survive import (captured opaquely into interface_json) and export.
+        let yaml = "interface:\n  display_name: Research\n  icon: telescope\n  brand:\n    color: \"#0af\"\n";
+        let parsed: OpenAiYaml = serde_yaml::from_str(yaml).unwrap();
+        let interface = parsed.interface.expect("interface present");
+        let display_name = interface
+            .get("display_name")
+            .and_then(serde_yaml::Value::as_str)
+            .map(ToOwned::to_owned);
+        let interface_json = serde_json::to_string(&interface).unwrap();
+        assert_eq!(display_name.as_deref(), Some("Research"));
+        assert!(interface_json.contains("icon"));
+        assert!(interface_json.contains("telescope"));
+
+        // Export reconstructs the full block from interface_json (not just name).
+        let skill = json!({
+            "skill_id": "research",
+            "display_name": display_name,
+            "interface_json": interface_json,
+        });
+        let exported = render_openai_yaml(&skill).unwrap().expect("openai.yaml");
+        let reparsed: OpenAiYaml = serde_yaml::from_str(&exported).unwrap();
+        let reparsed_interface = reparsed.interface.expect("interface round-trips");
+        assert_eq!(
+            reparsed_interface
+                .get("display_name")
+                .and_then(serde_yaml::Value::as_str),
+            Some("Research")
+        );
+        assert_eq!(
+            reparsed_interface
+                .get("icon")
+                .and_then(serde_yaml::Value::as_str),
+            Some("telescope"),
+            "opaque interface fields beyond display_name must round-trip"
+        );
     }
 
     #[test]

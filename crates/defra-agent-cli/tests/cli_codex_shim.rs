@@ -4673,6 +4673,85 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     Ok(())
 }
 
+/// CLI management round-trip for the `config skill` surface that the other
+/// tests don't exercise directly: disable -> enable -> rm, verified through
+/// `config skill show`/`list` (#340). Covers `skill_set_enabled` and `skill_rm`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-skill-crud-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-crud-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
+    wait_for_port(server_port, &mut serve)?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config", "skill", "add", "--graphql", &graphql, "--agent-did", &agent_did,
+            "--skill-id", "research", "--scope", "principal", "--name", "Research",
+            "--description", "Find and cite sources", "--instructions", "Always cite your sources.",
+        ],
+    )?;
+
+    let show = run_cli_json(
+        &home_dir,
+        &["config", "skill", "show", "--graphql", &graphql, "--skill-id", "research"],
+    )?;
+    assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(true));
+
+    // disable
+    let disabled = run_cli_json(
+        &home_dir,
+        &["config", "skill", "disable", "--graphql", &graphql, "--skill-id", "research"],
+    )?;
+    assert_eq!(disabled.get("updated").and_then(Value::as_u64), Some(1));
+    assert_eq!(disabled.get("enabled").and_then(Value::as_bool), Some(false));
+    let show = run_cli_json(
+        &home_dir,
+        &["config", "skill", "show", "--graphql", &graphql, "--skill-id", "research"],
+    )?;
+    assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
+
+    // re-enable
+    let enabled = run_cli_json(
+        &home_dir,
+        &["config", "skill", "enable", "--graphql", &graphql, "--skill-id", "research"],
+    )?;
+    assert_eq!(enabled.get("enabled").and_then(Value::as_bool), Some(true));
+
+    // rm, then it's gone from list
+    let removed = run_cli_json(
+        &home_dir,
+        &["config", "skill", "rm", "--graphql", &graphql, "--skill-id", "research"],
+    )?;
+    assert_eq!(removed.get("deleted").and_then(Value::as_u64), Some(1));
+    let list = run_cli_json(
+        &home_dir,
+        &["config", "skill", "list", "--graphql", &graphql, "--agent-did", &agent_did],
+    )?;
+    assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
+
+    Ok(())
+}
+
 /// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
 /// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
 /// the export. Gated on the hermes skills directory existing (override with
