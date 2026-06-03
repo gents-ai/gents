@@ -13,7 +13,7 @@ use super::super::protocol::{
     absolute_path, backend_model_summary, empty_rate_limits, initialize_result, send_error,
     send_result, send_typed_json_result,
 };
-use super::super::store::query_node_json;
+use super::super::store::{execute_committed, query_node_json};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
 use defra_agent::graphql::escape_graphql_string;
@@ -331,7 +331,10 @@ pub(super) async fn handle_skills_config_write(
         skill_id = escape_graphql_string(&skill_id),
         enabled = params.enabled,
     );
-    if let Err(error) = query_node_json(state.node.as_ref(), &mutation).await {
+    // Commit in a transaction so the COMMIT emits the DefraDB `Update` event
+    // the runtime control watcher reconciles on -- a Codex-driven enable/disable
+    // then reaches a running agent without a restart (#340).
+    if let Err(error) = execute_committed(state.node.as_ref(), &mutation).await {
         return send_error(
             outbound,
             request_id,
