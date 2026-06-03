@@ -24,7 +24,7 @@ pub(crate) enum ListStatusFilter {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ListSubagentsArgs {
+pub struct ListSubagentsArgs {
     #[serde(default)]
     pub(crate) status: ListStatusFilter,
     #[serde(default = "default_list_limit")]
@@ -33,6 +33,15 @@ pub(crate) struct ListSubagentsArgs {
 
 fn default_list_limit() -> u32 {
     DEFAULT_LIST_LIMIT
+}
+
+impl Default for ListSubagentsArgs {
+    fn default() -> Self {
+        Self {
+            status: ListStatusFilter::default(),
+            limit: DEFAULT_LIST_LIMIT,
+        }
+    }
 }
 
 impl ListSubagentsArgs {
@@ -115,23 +124,23 @@ pub(crate) struct SteerSubagentArgs {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ListSubagentsEntry {
-    pub(crate) child_request_id: String,
-    pub(crate) child_session_id: String,
-    pub(crate) behavior_id: String,
-    pub(crate) deployment_id: String,
-    pub(crate) await_mode: String,
-    pub(crate) status: String,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) last_update: DateTime<Utc>,
-    pub(crate) depth: u32,
+pub struct ListSubagentsEntry {
+    pub child_request_id: String,
+    pub child_session_id: String,
+    pub behavior_id: String,
+    pub deployment_id: String,
+    pub await_mode: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub last_update: DateTime<Utc>,
+    pub depth: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ListSubagentsResponse {
-    pub(crate) read_at: DateTime<Utc>,
-    pub(crate) truncated: bool,
-    pub(crate) entries: Vec<ListSubagentsEntry>,
+pub struct ListSubagentsResponse {
+    pub read_at: DateTime<Utc>,
+    pub truncated: bool,
+    pub entries: Vec<ListSubagentsEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]

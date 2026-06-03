@@ -9,7 +9,8 @@ pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
-pub(crate) mod background_tools;
+#[doc(hidden)]
+pub mod background_tools;
 pub mod chatgpt_codex;
 pub mod collection;
 pub mod compaction;
@@ -145,10 +146,18 @@ pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 /// proptest (`tests/identity_conformance_proptest.rs`) call the same
 /// helper that both production snapshot paths funnel through, without
 /// widening the public API.
+///
+/// `handle_list_subagents` and its arg/response types are exposed here so
+/// the `subagent_enablement_e2e` integration test can call the handler
+/// directly and assert C2 state (running-subagent listing) end-to-end.
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
         assemble_principal_and_behaviors, BehaviorBuildError,
+    };
+    pub use crate::background_tools::handle_list_subagents;
+    pub use crate::background_tools::r4c_args::{
+        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
     };
 }
 

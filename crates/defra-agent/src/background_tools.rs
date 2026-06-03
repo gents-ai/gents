@@ -323,7 +323,7 @@ pub(crate) enum SteerSubagentTarget {
     Terminal(String),
 }
 
-pub(crate) async fn handle_list_subagents(
+pub async fn handle_list_subagents(
     node: &EmbeddedNode,
     caller_request_id: &str,
     local_deployment_id: &str,
