@@ -234,6 +234,8 @@ pub(crate) async fn save_tool_selection_config(
             subagent_steering_enabled: Some(false),
             subagent_background_enabled: Some(false),
             cross_deployment_spawn_timeout_seconds: None,
+            enable_defra_query: Some(false),
+            defra_query_collections: Vec::new(),
         });
     row.agent_did = Some(agent_did);
     row.display_name = Some(display_name);

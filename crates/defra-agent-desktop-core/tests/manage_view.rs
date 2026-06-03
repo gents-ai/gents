@@ -82,6 +82,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
         cross_deployment_spawn_timeout_seconds: Some(45),
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
 

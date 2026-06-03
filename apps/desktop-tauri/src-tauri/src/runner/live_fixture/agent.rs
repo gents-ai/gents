@@ -146,6 +146,8 @@ async fn seed_live_behavior_documents(
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
         cross_deployment_spawn_timeout_seconds: Some(60),
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
     core.save_tool_selection(&ToolSelectionRow {
@@ -171,6 +173,8 @@ async fn seed_live_behavior_documents(
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
     core.save_inference_profile(&InferenceProfileRow {
