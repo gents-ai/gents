@@ -31,6 +31,11 @@ pub struct CreateAgentRequestInput<'a> {
     pub content: &'a str,
     pub session_id: &'a str,
     pub behavior_id: Option<&'a str>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub max_tokens: Option<i64>,
+    pub metadata: Option<&'a str>,
     pub created_at: &'a str,
     pub caused_by_trigger_id: Option<&'a str>,
     pub caused_by_trigger_kind: Option<&'a str>,
@@ -154,6 +159,22 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
             )
         })
         .unwrap_or_default();
+    let request_override_fields = vec![
+        optional_f64_field("temperature", input.temperature),
+        optional_f64_field("top_p", input.top_p),
+        optional_i64_field("top_k", input.top_k),
+        optional_i64_field("max_tokens", input.max_tokens),
+        optional_string_field("metadata", input.metadata),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|field| {
+        format!(
+            r#"
+                {field},"#
+        )
+    })
+    .collect::<String>();
     format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -165,6 +186,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "{content}",
+                {request_override_fields}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -180,6 +202,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
         behavior_field = behavior_field,
         session_id = escape_graphql_string(input.session_id),
         content = escape_graphql_string(input.content),
+        request_override_fields = request_override_fields,
         created_at = escape_graphql_string(input.created_at),
         caused_by_trigger_id_field = caused_by_trigger_id_field,
         caused_by_trigger_kind_field = caused_by_trigger_kind_field,
@@ -608,6 +631,11 @@ pub fn turn_state_query(request_id: &str) -> String {
                 request_id
                 retry_parent_request
                 superseded_by_request
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
                 lifecycle_state
                 interrupt_requested_at
                 valid_until
@@ -856,6 +884,11 @@ mod tests {
     #[test]
     fn shared_graphql_queries_include_recent_row_fields() {
         let turn_query = turn_state_query("req-1");
+        assert!(turn_query.contains("temperature"));
+        assert!(turn_query.contains("top_p"));
+        assert!(turn_query.contains("top_k"));
+        assert!(turn_query.contains("max_tokens"));
+        assert!(turn_query.contains("metadata"));
         assert!(turn_query.contains("interrupt_requested_at"));
         assert!(turn_query.contains("valid_until"));
         assert!(turn_query.contains("interrupted_at"));
@@ -867,6 +900,31 @@ mod tests {
         assert!(session_query.contains("cancel_cause"));
         assert!(session_query.contains("latency_ms"));
         assert!(session_query.contains("discarded_because_interrupted"));
+    }
+
+    #[test]
+    fn create_agent_request_mutation_includes_sampling_and_metadata() {
+        let mutation = create_agent_request_mutation(&CreateAgentRequestInput {
+            request_id: "req-1",
+            agent_did: "did:defra:amy",
+            content: "hello",
+            session_id: "session-1",
+            behavior_id: Some("amy-default"),
+            temperature: Some(0.0),
+            top_p: Some(0.95),
+            top_k: Some(40),
+            max_tokens: Some(512),
+            metadata: Some(r#"{"run_id":"run-1"}"#),
+            created_at: "2026-04-13T12:00:00Z",
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+        });
+
+        assert!(mutation.contains("temperature: 0"));
+        assert!(mutation.contains("top_p: 0.95"));
+        assert!(mutation.contains("top_k: 40"));
+        assert!(mutation.contains("max_tokens: 512"));
+        assert!(mutation.contains(r#"metadata: "{\"run_id\":\"run-1\"}""#));
     }
 
     #[test]
