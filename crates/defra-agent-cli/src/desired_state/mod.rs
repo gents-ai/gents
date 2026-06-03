@@ -131,6 +131,12 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) subagent_targets: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) subagent_spawn_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) subagent_steering_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) subagent_background_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

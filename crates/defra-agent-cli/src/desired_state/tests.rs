@@ -83,6 +83,9 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         defra_query_collections: Vec::new(),
         subagent_targets: None,
         subagent_spawn_enabled: None,
+        subagent_steering_enabled: None,
+        subagent_background_enabled: None,
+        cross_deployment_spawn_timeout_seconds: None,
     }
 }
 

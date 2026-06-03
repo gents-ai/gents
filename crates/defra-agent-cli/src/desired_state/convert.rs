@@ -123,6 +123,9 @@ pub(crate) fn manifest_from_export_bundle(
                         "defra_query_collections",
                         "subagent_targets",
                         "subagent_spawn_enabled",
+                        "subagent_steering_enabled",
+                        "subagent_background_enabled",
+                        "cross_deployment_spawn_timeout_seconds",
                     ],
                 )
             })

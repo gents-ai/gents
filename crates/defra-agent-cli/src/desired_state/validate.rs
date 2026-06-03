@@ -750,6 +750,9 @@ mod live_tests {
                 backgroundable_tool_names: Vec::new(),
                 subagent_targets: Some(targets),
                 subagent_spawn_enabled: Some(true),
+                subagent_steering_enabled: None,
+                subagent_background_enabled: None,
+                cross_deployment_spawn_timeout_seconds: None,
             }],
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
@@ -830,6 +833,173 @@ mod live_tests {
                 .any(|msg| msg.contains("amy-research") || msg.contains("live-test-sel")),
             "expected no subagent errors for known target, got {errors:?}"
         );
+        Ok(())
+    }
+
+    /// Apply a tool selection with all five subagent fields set, then:
+    ///   (a) read the ToolSelection back and assert all five persisted, and
+    ///   (b) recompute the apply diff and assert it shows UNCHANGED (idempotent).
+    ///
+    /// Before the fix this test fails because:
+    ///  - `DesiredToolSelection` was missing the three new fields → manifest
+    ///    deserialization with `deny_unknown_fields` would reject them.
+    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted all five fields → live read
+    ///    always saw them as `None` → diff never converged.
+    #[tokio::test]
+    async fn all_five_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
+        use std::path::PathBuf;
+
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+
+        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
+        // find the agent on the second (post-apply) read.
+        {
+            use defra_agent::graphql::escape_graphql_string;
+            let did = escape_graphql_string("did:key:test-subagent-idempotency");
+            access
+                .execute(&format!(
+                    r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
+                ))
+                .await?;
+        }
+
+        // Build the desired manifest with all five subagent fields set.
+        let desired_manifest = {
+            use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
+            DesiredStateManifest {
+                agent_principal: DesiredAgentPrincipal {
+                    agent_did: "did:key:test-subagent-idempotency".to_string(),
+                    display_name: None,
+                    default_behavior_id: None,
+                    enabled: true,
+                },
+                agent_behaviors: Vec::new(),
+                tool_selections: vec![DesiredToolSelection {
+                    selection_id: "subagent-idempotency-sel".to_string(),
+                    agent_did: "did:key:test-subagent-idempotency".to_string(),
+                    display_name: None,
+                    enable_file_tools: false,
+                    file_tools_mode: "ReadOnly".to_string(),
+                    file_tool_root: None,
+                    enable_bash: false,
+                    bash_mode: "ReadOnly".to_string(),
+                    command_execution_policy: None,
+                    command_allowed_argv_prefixes: Vec::new(),
+                    command_forbidden_argv_prefixes: Vec::new(),
+                    command_network_mode: None,
+                    cli_tool_names: Vec::new(),
+                    enable_meta_tools: false,
+                    allowed_mcp_service_ids: Vec::new(),
+                    delegate_to: Vec::new(),
+                    backgroundable_tool_names: Vec::new(),
+                    subagent_targets: Some(vec!["amy-research".to_string()]),
+                    subagent_spawn_enabled: Some(true),
+                    subagent_steering_enabled: Some(true),
+                    subagent_background_enabled: Some(true),
+                    cross_deployment_spawn_timeout_seconds: Some(90),
+                }],
+                inference_backends: Vec::new(),
+                inference_profiles: Vec::new(),
+                tool_service_registries: Vec::new(),
+                tasks: Vec::new(),
+                schedules: Vec::new(),
+                event_triggers: Vec::new(),
+            }
+        };
+
+        let root = PathBuf::from(".");
+        let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
+
+        // ── First apply ──────────────────────────────────────────────────────
+        let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (live_principal, live_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+        );
+
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
+        txn.commit().await?;
+
+        // ── (a) Read back and assert all five fields persisted ────────────────
+        let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (remaining_principal, remaining_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
+
+        let live_sel = remaining_manifest
+            .tool_selections
+            .iter()
+            .find(|s| s.selection_id == "subagent-idempotency-sel")
+            .expect("ToolSelection should exist after apply");
+
+        assert_eq!(
+            live_sel.subagent_targets,
+            Some(vec!["amy-research".to_string()]),
+            "subagent_targets must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_steering_enabled,
+            Some(true),
+            "subagent_steering_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must persist through apply"
+        );
+
+        // ── (b) Re-diff: tool selection must show as UNCHANGED ────────────────
+        let second_diff = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            remaining_principal.as_ref(),
+            &remaining_manifest,
+        );
+
+        assert!(
+            !diff_has_pending_apply(&second_diff.counts),
+            "second diff must have no pending apply (idempotent); got: {:?}",
+            second_diff.counts
+        );
+        assert!(
+            second_diff
+                .collections
+                .tool_selections
+                .unchanged
+                .contains(&"subagent-idempotency-sel".to_string()),
+            "tool selection must be in the 'unchanged' set after re-apply; got: {:?}",
+            second_diff.collections.tool_selections
+        );
+
         Ok(())
     }
 }
