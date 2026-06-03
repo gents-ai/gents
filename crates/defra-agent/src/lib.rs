@@ -9,8 +9,7 @@ pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
-#[doc(hidden)]
-pub mod background_tools;
+pub(crate) mod background_tools;
 pub mod chatgpt_codex;
 pub mod collection;
 pub mod compaction;
