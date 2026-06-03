@@ -90,7 +90,12 @@ impl RuntimeContext {
         // tool is scoped to this behavior's effective skill set + tool ceiling,
         // so it never reveals a foreign skill or widens the tool surface.
         if !behavior.skills.is_empty() {
-            let ceiling = tool_names.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+            // The D3 ceiling is the behavior's full callable surface (built tool
+            // names PLUS allowed MCP service ids) — see `skill_tool_ceiling`.
+            let ceiling = crate::skills::skill_tool_ceiling(
+                tool_surface.tool_names(),
+                tool_surface.allowed_mcp_service_ids(),
+            );
             built_tools.push(Box::new(crate::skills::LoadSkillTool::new(
                 behavior.skills.clone(),
                 ceiling,

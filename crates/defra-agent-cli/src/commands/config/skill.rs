@@ -58,11 +58,17 @@ struct SkillInput {
 }
 
 /// Upsert a Skill document, returning its `_docID`. An empty `tool_refs` is
-/// OMITTED rather than written as `[]`: DefraDB cannot type an empty array
-/// literal and rejects it on a later update.
+/// written as `null`, not `[]` (DefraDB cannot type an empty array literal):
+/// `null` is accepted on create and, crucially, CLEARS a previously non-empty
+/// list on the upsert's update path (omitting it would leave the stale value).
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<String> {
     let skill_id = escape_graphql_string(&skill.skill_id);
-    let mut fields = vec![
+    let tool_refs = if skill.tool_refs.is_empty() {
+        "tool_refs: null".to_string()
+    } else {
+        format!("tool_refs: {}", gql_string_list(&skill.tool_refs))
+    };
+    let fields = vec![
         gql_opt_string("agent_did", Some(&skill.agent_did)),
         gql_opt_string("scope", Some(&skill.scope)),
         gql_opt_string("name", skill.name.as_deref()),
@@ -71,10 +77,8 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
         gql_opt_string("display_name", skill.display_name.as_deref()),
         gql_opt_string("interface_json", skill.interface_json.as_deref()),
         format!("enabled: {}", skill.enabled),
+        tool_refs,
     ];
-    if !skill.tool_refs.is_empty() {
-        fields.push(format!("tool_refs: {}", gql_string_list(&skill.tool_refs)));
-    }
     let mutable = fields.join(",\n                    ");
     let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
@@ -157,7 +161,11 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
         a.get("skill_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
-            .cmp(b.get("skill_id").and_then(Value::as_str).unwrap_or_default())
+            .cmp(
+                b.get("skill_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
     });
     print_json(&json!({ "agent_did": args.agent_did, "count": skills.len(), "skills": skills }))?;
     Ok(())
@@ -344,7 +352,9 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         let contents = match std::fs::read_to_string(dir.join("SKILL.md")) {
             Ok(contents) => contents,
             Err(error) => {
-                errors.push(json!({ "skill_id": skill_id, "error": format!("reading SKILL.md: {error}") }));
+                errors.push(
+                    json!({ "skill_id": skill_id, "error": format!("reading SKILL.md: {error}") }),
+                );
                 continue;
             }
         };
@@ -412,9 +422,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
             Ok(doc_id) => {
                 imported.push(json!({ "skill_id": skill_id, "name": name, "doc_id": doc_id }))
             }
-            Err(error) => {
-                errors.push(json!({ "skill_id": skill_id, "error": error.to_string() }))
-            }
+            Err(error) => errors.push(json!({ "skill_id": skill_id, "error": error.to_string() })),
         }
     }
 
@@ -503,8 +511,7 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
         .filter(|value| !value.trim().is_empty())
     {
         Some(raw) => {
-            let json: Value =
-                serde_json::from_str(raw).context("parsing stored interface_json")?;
+            let json: Value = serde_json::from_str(raw).context("parsing stored interface_json")?;
             Some(serde_yaml::to_value(&json)?)
         }
         None => skill
@@ -542,13 +549,15 @@ pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
 
     let mut exported = Vec::new();
     for skill in &skills {
-        let skill_id = skill.get("skill_id").and_then(Value::as_str).unwrap_or_default();
+        let skill_id = skill
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if skill_id.trim().is_empty() {
             continue;
         }
         let dir = args.dir.join(skill_id);
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         std::fs::write(dir.join("SKILL.md"), render_skill_md(skill)?)
             .with_context(|| format!("writing {}/SKILL.md", dir.display()))?;
         if let Some(yaml) = render_openai_yaml(skill)? {
@@ -579,7 +588,8 @@ mod tests {
 
     #[test]
     fn parse_skill_md_splits_frontmatter_and_body() {
-        let md = "---\nname: Research\ndescription: Find sources\n---\n\nAlways cite your sources.\n";
+        let md =
+            "---\nname: Research\ndescription: Find sources\n---\n\nAlways cite your sources.\n";
         let (fm, body) = parse_skill_md(md);
         assert_eq!(fm.name.as_deref(), Some("Research"));
         assert_eq!(fm.description.as_deref(), Some("Find sources"));
@@ -632,7 +642,10 @@ mod tests {
         let md = render_skill_md(&skill).unwrap();
         let (fm, body) = parse_skill_md(&md);
         assert_eq!(fm.name.as_deref(), Some("Research"));
-        assert_eq!(fm.description.as_deref(), Some("Find sources: cite everything."));
+        assert_eq!(
+            fm.description.as_deref(),
+            Some("Find sources: cite everything.")
+        );
         assert_eq!(body, "Always cite your sources.\n\nUse primary references.");
     }
 
@@ -663,7 +676,9 @@ mod tests {
         );
 
         // No tool_refs / display_name -> nothing to write.
-        assert!(render_openai_yaml(&json!({ "skill_id": "x" })).unwrap().is_none());
+        assert!(render_openai_yaml(&json!({ "skill_id": "x" }))
+            .unwrap()
+            .is_none());
     }
 
     #[test]

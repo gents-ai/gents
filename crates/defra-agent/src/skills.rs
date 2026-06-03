@@ -84,11 +84,24 @@ pub fn effective_skills<'a>(
         .filter(|skill| {
             skill.agent_did == behavior_principal
                 && skill.enabled
-                && (skill.scope == SkillScope::Principal
-                    || refs.contains(skill.skill_id.as_str()))
+                && (skill.scope == SkillScope::Principal || refs.contains(skill.skill_id.as_str()))
                 && !excludes.contains(skill.skill_id.as_str())
         })
         .collect()
+}
+
+/// The D3 tool ceiling a skill's `tool_refs` are checked against: the behavior's
+/// built tool names UNION its allowed MCP service ids. MCP services are callable
+/// via `call_tool` but never appear in the built tool-name list, so they must be
+/// folded in here or an MCP-dependent skill gets a spurious "not available"
+/// degrade note even though the behavior can reach that service.
+pub fn skill_tool_ceiling(
+    tool_names: impl IntoIterator<Item = String>,
+    allowed_mcp_service_ids: &[String],
+) -> BTreeSet<String> {
+    let mut ceiling: BTreeSet<String> = tool_names.into_iter().collect();
+    ceiling.extend(allowed_mcp_service_ids.iter().cloned());
+    ceiling
 }
 
 /// Tools an active skill may use against a behavior's resolved tool `ceiling`:
@@ -149,7 +162,11 @@ pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
          instructions. Skip skills only when none are relevant.\n",
     );
     for skill in skills {
-        out.push_str(&format!("\n- {}: {}", skill_label(skill), skill.description));
+        out.push_str(&format!(
+            "\n- {}: {}",
+            skill_label(skill),
+            skill.description
+        ));
     }
     Some(out)
 }
@@ -171,16 +188,23 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> Stri
     out
 }
 
-/// Find a skill by display name or `skill_id` (exact, then case-insensitive).
+/// Find a skill by display name, `name`, or `skill_id` (exact, then
+/// case-insensitive). The catalog labels skills with `display_name` when set
+/// (see `skill_label`), so the model may call `load_skill` with that label —
+/// it must resolve here too, or a cataloged skill becomes unloadable.
 fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
     let needle = needle.trim();
+    let display_name = |skill: &Skill| skill.display_name.clone().unwrap_or_default();
     skills
         .iter()
-        .find(|skill| skill.name == needle || skill.skill_id == needle)
+        .find(|skill| {
+            skill.name == needle || skill.skill_id == needle || display_name(skill) == needle
+        })
         .or_else(|| {
             skills.iter().find(|skill| {
                 skill.name.eq_ignore_ascii_case(needle)
                     || skill.skill_id.eq_ignore_ascii_case(needle)
+                    || display_name(skill).eq_ignore_ascii_case(needle)
             })
         })
 }
@@ -343,7 +367,12 @@ mod tests {
     #[test]
     fn skill_tools_never_widen_the_ceiling() {
         let ceiling = ceiling(&["read", "bash"]);
-        let s = skill("a", "did:p", SkillScope::Principal, &["read", "bash", "net"]);
+        let s = skill(
+            "a",
+            "did:p",
+            SkillScope::Principal,
+            &["read", "bash", "net"],
+        );
         let resolved = skill_tools(&s, &ceiling);
         assert_eq!(resolved, vec!["read", "bash"]); // "net" degraded away
         for tool in &resolved {
@@ -394,7 +423,12 @@ mod tests {
     async fn load_skill_tool_returns_body_on_demand_and_handles_unknown() {
         use rig::tool::Tool;
         let ceiling = ceiling(&["read"]);
-        let skills = vec![skill("research", "did:p", SkillScope::Principal, &["read", "net"])];
+        let skills = vec![skill(
+            "research",
+            "did:p",
+            SkillScope::Principal,
+            &["read", "net"],
+        )];
         let tool = LoadSkillTool::new(skills, ceiling);
 
         // load by name -> full body + degrade note for the ungranted "net" ref.
@@ -425,6 +459,40 @@ mod tests {
             .expect("unknown is Ok text");
         assert!(miss.contains("No skill named"));
         assert!(miss.contains("research-name"));
+    }
+
+    #[test]
+    fn skill_tool_ceiling_folds_in_mcp_service_ids() {
+        let ceiling = skill_tool_ceiling(
+            vec!["read".to_string(), "bash".to_string()],
+            &["x-data".to_string(), "observability-mcp".to_string()],
+        );
+        // Built tools AND MCP service ids are both part of the D3 ceiling.
+        assert!(ceiling.contains("read"));
+        assert!(ceiling.contains("x-data"));
+        assert!(ceiling.contains("observability-mcp"));
+
+        // A skill depending on an MCP service in the ceiling is NOT degraded.
+        let mut mcp_skill = skill("a", "did:p", SkillScope::Principal, &["x-data"]);
+        mcp_skill.tool_refs = vec!["x-data".to_string()];
+        assert!(missing_tool_refs(&mcp_skill, &ceiling).is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_skill_resolves_by_display_name() {
+        use rig::tool::Tool;
+        let mut s = skill("research", "did:p", SkillScope::Principal, &["read"]);
+        s.display_name = Some("Deep Research".to_string());
+        let tool = LoadSkillTool::new(vec![s], ceiling(&["read"]));
+        // The catalog labels it "Deep Research"; load_skill with that label must
+        // resolve (else a cataloged skill is unloadable).
+        let body = tool
+            .call(LoadSkillArgs {
+                name: "Deep Research".to_string(),
+            })
+            .await
+            .expect("load by display_name");
+        assert!(body.contains("research-instructions"));
     }
 
     #[test]

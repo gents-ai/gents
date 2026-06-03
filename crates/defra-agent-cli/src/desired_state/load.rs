@@ -32,8 +32,7 @@ pub(crate) fn load_manifest_root(
 
     let mut agent_behaviors: Vec<DesiredAgentBehavior> =
         load_per_doc_collection(root, Collection::AgentBehavior, &mut errors);
-    let skills: Vec<DesiredSkill> =
-        load_per_doc_collection(root, Collection::Skill, &mut errors);
+    let skills: Vec<DesiredSkill> = load_per_doc_collection(root, Collection::Skill, &mut errors);
     let tool_selections: Vec<DesiredToolSelection> =
         load_per_doc_collection(root, Collection::ToolSelection, &mut errors);
     let inference_backends: Vec<DesiredInferenceBackend> =

@@ -17,7 +17,10 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 /// whether the row is an object or a single-element array.
 fn created_skill_doc_id(data: Option<&serde_json::Value>) -> Option<String> {
     for value in data?.as_object()?.values() {
-        let row = value.as_array().and_then(|rows| rows.first()).unwrap_or(value);
+        let row = value
+            .as_array()
+            .and_then(|rows| rows.first())
+            .unwrap_or(value);
         if let Some(id) = row.get("_docID").and_then(|v| v.as_str()) {
             return Some(id.to_string());
         }
@@ -342,12 +345,18 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
     let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref())
         .preamble()
         .to_string();
-    assert!(preamble.contains("Research"), "catalog lists the skill name: {preamble}");
+    assert!(
+        preamble.contains("Research"),
+        "catalog lists the skill name: {preamble}"
+    );
     assert!(
         preamble.contains("Find and cite sources"),
         "catalog lists the skill description: {preamble}"
     );
-    assert!(preamble.contains("load_skill"), "catalog directs the model to load_skill");
+    assert!(
+        preamble.contains("load_skill"),
+        "catalog directs the model to load_skill"
+    );
     assert!(
         !preamble.contains("Always cite your sources."),
         "skill BODY must NOT be in the catalog (loaded on demand): {preamble}"
@@ -399,7 +408,11 @@ async fn skill_crud_mutations_round_trip() {
         input: { enabled: false }
     ) { _docID } }"#;
     let resp = node.execute(update).await;
-    assert!(!resp.has_errors(), "update_Skill by filter: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "update_Skill by filter: {:?}",
+        resp.errors
+    );
 
     let query = r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { skill_id enabled } }"#;
     let resp = node.execute(query).await;
@@ -416,7 +429,11 @@ async fn skill_crud_mutations_round_trip() {
 
     let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#;
     let resp = node.execute(delete).await;
-    assert!(!resp.has_errors(), "delete_Skill by filter: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "delete_Skill by filter: {:?}",
+        resp.errors
+    );
 }
 
 /// The control watcher must hot-reload Skill changes (#340): a Skill
@@ -473,13 +490,17 @@ async fn apply_control_update_hot_reloads_skill() {
     assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
 
     // Deletion drops it from the view.
-    let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
+    let delete =
+        r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
     assert!(!node.execute(delete).await.has_errors());
     let outcome = apply_control_update(node.as_ref(), identity.did(), "skill", &doc_id, &mut view)
         .await
         .expect("apply skill delete");
     assert_eq!(outcome, ControlUpdateOutcome::Applied);
-    assert!(!view.skills.contains_key("s-reload"), "skill removed from view");
+    assert!(
+        !view.skills.contains_key("s-reload"),
+        "skill removed from view"
+    );
 }
 
 #[tokio::test]

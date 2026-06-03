@@ -4274,7 +4274,10 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             "Always cite your sources.",
         ],
     )?;
-    assert_eq!(added.get("skill_id").and_then(Value::as_str), Some("research"));
+    assert_eq!(
+        added.get("skill_id").and_then(Value::as_str),
+        Some("research")
+    );
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
@@ -4331,7 +4334,10 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     .await?;
     let write: codex::SkillsConfigWriteResponse =
         read_typed_response(&mut ws, request_id(3)).await?;
-    assert!(!write.effective_enabled, "config write should report disabled");
+    assert!(
+        !write.effective_enabled,
+        "config write should report disabled"
+    );
 
     // skills/list reflects the disable.
     send_client_request(
@@ -4413,9 +4419,23 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "add", "--graphql", &graphql, "--agent-did", &agent_did,
-            "--skill-id", "live-skill", "--scope", "principal", "--name", &catalog_phrase,
-            "--description", "find and cite sources", "--instructions", "Always cite your sources.",
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "live-skill",
+            "--scope",
+            "principal",
+            "--name",
+            &catalog_phrase,
+            "--description",
+            "find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
         ],
     )?;
     // The live skill add must reconcile the running runtime (no restart).
@@ -4545,9 +4565,23 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "add", "--graphql", &graphql, "--agent-did", &agent_did,
-            "--skill-id", "toggle-skill", "--scope", "principal", "--name", &catalog_phrase,
-            "--description", "find and cite sources", "--instructions", "Always cite your sources.",
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "toggle-skill",
+            "--scope",
+            "principal",
+            "--name",
+            &catalog_phrase,
+            "--description",
+            "find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
         ],
     )?;
     let gen1 =
@@ -4607,10 +4641,13 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     let (_text, completed) = read_turn_to_completion(&mut ws).await?;
     assert_eq!(completed.status, codex::TurnStatus::Completed);
     assert!(
-        mock_endpoint.captured_chat_requests().iter().any(|request| {
-            let text = request.to_string();
-            text.contains(&catalog_phrase) && text.contains("load_skill")
-        }),
+        mock_endpoint
+            .captured_chat_requests()
+            .iter()
+            .any(|request| {
+                let text = request.to_string();
+                text.contains(&catalog_phrase) && text.contains("load_skill")
+            }),
         "enabled skill's catalog entry should reach the model before the disable"
     );
 
@@ -4630,7 +4667,10 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     .await?;
     let write: codex::SkillsConfigWriteResponse =
         read_typed_response(&mut ws, request_id(4)).await?;
-    assert!(!write.effective_enabled, "shim should report the skill disabled");
+    assert!(
+        !write.effective_enabled,
+        "shim should report the skill disabled"
+    );
 
     // The shim's committed toggle must reconcile the running runtime (no restart).
     wait_for_runtime_quiescence(&graphql, &agent_did, gen1 + 1, Duration::from_secs(2)).await?;
@@ -4705,47 +4745,168 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "add", "--graphql", &graphql, "--agent-did", &agent_did,
-            "--skill-id", "research", "--scope", "principal", "--name", "Research",
-            "--description", "Find and cite sources", "--instructions", "Always cite your sources.",
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+            "--tool-ref",
+            "web_search",
         ],
     )?;
 
     let show = run_cli_json(
         &home_dir,
-        &["config", "skill", "show", "--graphql", &graphql, "--skill-id", "research"],
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
     )?;
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        show.get("tool_refs")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1),
+        "tool_ref should be stored on add"
+    );
+
+    // Re-add without --tool-ref must CLEAR the list (upsert update writes null),
+    // not leave the stale ["web_search"] in place.
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    let show = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    let tool_refs_empty = match show.get("tool_refs") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(items)) => items.is_empty(),
+        _ => false,
+    };
+    assert!(
+        tool_refs_empty,
+        "re-add without --tool-ref must clear tool_refs; got {:?}",
+        show.get("tool_refs")
+    );
 
     // disable
     let disabled = run_cli_json(
         &home_dir,
-        &["config", "skill", "disable", "--graphql", &graphql, "--skill-id", "research"],
+        &[
+            "config",
+            "skill",
+            "disable",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
     )?;
     assert_eq!(disabled.get("updated").and_then(Value::as_u64), Some(1));
-    assert_eq!(disabled.get("enabled").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        disabled.get("enabled").and_then(Value::as_bool),
+        Some(false)
+    );
     let show = run_cli_json(
         &home_dir,
-        &["config", "skill", "show", "--graphql", &graphql, "--skill-id", "research"],
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
     )?;
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
 
     // re-enable
     let enabled = run_cli_json(
         &home_dir,
-        &["config", "skill", "enable", "--graphql", &graphql, "--skill-id", "research"],
+        &[
+            "config",
+            "skill",
+            "enable",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
     )?;
     assert_eq!(enabled.get("enabled").and_then(Value::as_bool), Some(true));
 
     // rm, then it's gone from list
     let removed = run_cli_json(
         &home_dir,
-        &["config", "skill", "rm", "--graphql", &graphql, "--skill-id", "research"],
+        &[
+            "config",
+            "skill",
+            "rm",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
     )?;
     assert_eq!(removed.get("deleted").and_then(Value::as_u64), Some(1));
     let list = run_cli_json(
         &home_dir,
-        &["config", "skill", "list", "--graphql", &graphql, "--agent-did", &agent_did],
+        &[
+            "config",
+            "skill",
+            "list",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
     )?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
 
@@ -4794,11 +4955,22 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     let imported = run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "import", &hermes_dir, "--graphql", &graphql, "--agent-did",
-            &agent_did, "--scope", "behavior",
+            "config",
+            "skill",
+            "import",
+            &hermes_dir,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--scope",
+            "behavior",
         ],
     )?;
-    let imported_count = imported.get("imported_count").and_then(Value::as_u64).unwrap_or(0);
+    let imported_count = imported
+        .get("imported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     assert!(
         imported_count >= 50,
         "expected to import many hermes skills, got {imported_count}: {imported}"
@@ -4807,22 +4979,45 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     // List reflects the distinct skills (≤ import count if dir names collide).
     let listed = run_cli_json(
         &home_dir,
-        &["config", "skill", "list", "--graphql", &graphql, "--agent-did", &agent_did],
+        &[
+            "config",
+            "skill",
+            "list",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
     )?;
     let listed_count = listed.get("count").and_then(Value::as_u64).unwrap_or(0);
-    assert!(listed_count >= 50 && listed_count <= imported_count, "list count {listed_count}");
+    assert!(
+        listed_count >= 50 && listed_count <= imported_count,
+        "list count {listed_count}"
+    );
 
     // Export back to a SKILL.md tree.
     let out_dir = tempdir.path().join("export");
     let exported = run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "export", out_dir.to_str().unwrap(), "--graphql", &graphql,
-            "--agent-did", &agent_did,
+            "config",
+            "skill",
+            "export",
+            out_dir.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
         ],
     )?;
-    let exported_count = exported.get("exported_count").and_then(Value::as_u64).unwrap_or(0);
-    assert_eq!(exported_count, listed_count, "export count must match distinct skills");
+    let exported_count = exported
+        .get("exported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(
+        exported_count, listed_count,
+        "export count must match distinct skills"
+    );
     assert!(
         out_dir.join("notion").join("SKILL.md").is_file(),
         "exported notion/SKILL.md should exist"
@@ -4832,12 +5027,26 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     let reimported = run_cli_json(
         &home_dir,
         &[
-            "config", "skill", "import", out_dir.to_str().unwrap(), "--graphql", &graphql,
-            "--agent-did", &agent_did, "--scope", "behavior",
+            "config",
+            "skill",
+            "import",
+            out_dir.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--scope",
+            "behavior",
         ],
     )?;
-    let reimported_count = reimported.get("imported_count").and_then(Value::as_u64).unwrap_or(0);
-    assert_eq!(reimported_count, exported_count, "re-import of export must round-trip");
+    let reimported_count = reimported
+        .get("imported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(
+        reimported_count, exported_count,
+        "re-import of export must round-trip"
+    );
 
     Ok(())
 }

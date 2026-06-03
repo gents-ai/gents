@@ -268,7 +268,10 @@ async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetada
 
     let mut skills = Vec::new();
     for row in rows {
-        let skill_id = row.get("skill_id").and_then(Value::as_str).unwrap_or_default();
+        let skill_id = row
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if skill_id.trim().is_empty() {
             continue;
         }
@@ -366,7 +369,11 @@ async fn resolve_skill_id(
             return Ok(skill_id.to_string());
         }
     }
-    if let Some(name) = params.name.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(name) = params
+        .name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         // Match by display name OR skill_id.
         let metadata = load_skill_metadata(state).await?;
         if let Some(found) = metadata.iter().find(|skill| {
