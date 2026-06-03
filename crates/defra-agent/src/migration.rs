@@ -86,6 +86,17 @@ const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
 
+// Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
+// fields compiles to that kind. AgentBehavior gained `description` and `summary`
+// on branch design/issue-377; existing DBs upgraded from a prior schema version
+// must have these fields patched in so that reads/writes referencing them do not
+// fail with "unknown field" errors.
+#[allow(dead_code)]
+const ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":11}},
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}
+]"#;
+
 const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":2}}
 ]"#;
@@ -560,6 +571,54 @@ pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) ->
     Ok(())
 }
 
+/// Idempotent migration for AgentBehavior: adds `description` and `summary`
+/// fields (Kind 11, nullable String) introduced on branch issue-377.
+/// Existing DBs upgraded from a prior schema version need these fields patched
+/// in so that GraphQL reads/writes referencing them do not fail.
+pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentBehavior")
+        .context("get AgentBehavior collection")?
+    else {
+        return Ok(());
+    };
+
+    // Build the list of fields we need to add (only those absent).
+    let mut field_patches: Vec<&str> = Vec::new();
+    if !collection_has_field(&collection, "description") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":11}}"#,
+        );
+    }
+    if !collection_has_field(&collection, "summary") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}"#,
+        );
+    }
+
+    if field_patches.is_empty() {
+        tracing::debug!(
+            "AgentBehavior already has description and summary fields; migration no-op"
+        );
+        return Ok(());
+    }
+
+    let patch = format!("[{}]", field_patches.join(","));
+    let next = node
+        .patch_collection("AgentBehavior", &patch)
+        .await
+        .context("patch_collection AgentBehavior description+summary")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version AgentBehavior description+summary")?;
+    tracing::info!(
+        version = %next.version_id,
+        fields = ?field_patches,
+        "AgentBehavior patched with description and summary fields"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
@@ -629,10 +688,24 @@ mod patch_kind_tests {
             ADD_AGENT_TOOL_CALL_R5_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
+            ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
             }
+        }
+    }
+
+    #[test]
+    fn agent_behavior_description_summary_use_nillable_string_kind() {
+        // Kind 11 == NillableString. Both `description` and `summary` are
+        // nullable String fields in the AgentBehavior SDL; patches must match.
+        const NILLABLE_STRING_KIND: i64 = 11;
+        for (name, kind) in field_kinds(ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH) {
+            assert_eq!(
+                kind, NILLABLE_STRING_KIND,
+                "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
+            );
         }
     }
 }
