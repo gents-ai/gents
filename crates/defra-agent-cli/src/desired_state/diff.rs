@@ -68,6 +68,7 @@ where
                 DesiredStateCollectionDiff {
                     create: Vec::new(),
                     update: Vec::new(),
+                    delete: Vec::new(),
                     unchanged: vec![id.to_string()],
                     live_only: Vec::new(),
                 }
@@ -75,6 +76,7 @@ where
                 DesiredStateCollectionDiff {
                     create: Vec::new(),
                     update: vec![id.to_string()],
+                    delete: Vec::new(),
                     unchanged: Vec::new(),
                     live_only: Vec::new(),
                 }
@@ -83,18 +85,21 @@ where
         (Some(_), None) => DesiredStateCollectionDiff {
             create: vec![id.to_string()],
             update: Vec::new(),
+            delete: Vec::new(),
             unchanged: Vec::new(),
             live_only: Vec::new(),
         },
         (None, Some(_)) => DesiredStateCollectionDiff {
             create: Vec::new(),
             update: Vec::new(),
+            delete: Vec::new(),
             unchanged: Vec::new(),
             live_only: vec![id.to_string()],
         },
         (None, None) => DesiredStateCollectionDiff {
             create: Vec::new(),
             update: Vec::new(),
+            delete: Vec::new(),
             unchanged: Vec::new(),
             live_only: Vec::new(),
         },
@@ -142,6 +147,7 @@ where
     DesiredStateCollectionDiff {
         create,
         update,
+        delete: Vec::new(),
         unchanged,
         live_only,
     }

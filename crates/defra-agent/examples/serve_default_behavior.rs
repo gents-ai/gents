@@ -175,6 +175,8 @@ async fn seed_demo_documents(
             compaction_strategy: Some("StripThenSummarize".to_string()),
             compaction_threshold: Some(0.75),
             enabled: true,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             created_at: bootstrap.default_behavior.created_at,
         },
     )

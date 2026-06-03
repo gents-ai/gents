@@ -12,7 +12,7 @@ namespace ApplyReconcile
     changes; the `live` projection is untouched, which is the structural
     carrier of apply/runtime non-interference on this side. -/
 def applyOne (L : LiveState) (s : ApplyStep) : LiveState where
-  desired := fun d => if d = s.target then some s.payload else L.desired d
+  desired := fun d => if d = s.target then s.payload? else L.desired d
   live    := L.live
 
 /-- A full apply pass folds `applyOne` over the diff. -/
@@ -47,6 +47,7 @@ lemma applyAll_desired_of_not_mem
     `applyAll` rewrites `desired d` to that step's payload. -/
 lemma applyAll_desired_of_unique_target
     (L : LiveState) (steps : List ApplyStep) (s : ApplyStep) (d : DocRef)
+    (hpayload : s.payload? = some s.payload)
     (hmem : s ∈ steps)
     (htgt : s.target = d)
     (hunique : ∀ s' ∈ steps, s'.target = d → s' = s) :
@@ -77,7 +78,7 @@ lemma applyAll_desired_of_unique_target
           -- reduce applyOne
           have : (applyOne L s).desired d = some s.payload := by
             unfold applyOne
-            simp [htgt]
+            simp [htgt, hpayload]
           exact this
       · -- s ∈ rest
         have hunique_rest : ∀ s' ∈ rest, s'.target = d → s' = s := by
@@ -159,7 +160,9 @@ lemma apply_realizes_manifest
                   -- but L.desired d = some g' contradicts hLd : L.desired d = none
                   rw [hLd] at hLd'
                   exact absurd hLd' (by simp)
-      have := applyAll_desired_of_unique_target L (diff M L) s d hs_mem hs_tgt hunique
+      have hs_payload_some : s.payload? = some s.payload := rfl
+      have := applyAll_desired_of_unique_target L (diff M L) s d
+        hs_payload_some hs_mem hs_tgt hunique
       rw [hs_pay] at this
       exact this
   | some g =>
@@ -258,7 +261,9 @@ lemma apply_realizes_manifest
                       exact (Option.some.inj h1).symm
                     subst hff
                     rfl
-        have := applyAll_desired_of_unique_target L (diff M L) s d hs_mem hs_tgt hunique
+        have hs_payload_some : s.payload? = some s.payload := rfl
+        have := applyAll_desired_of_unique_target L (diff M L) s d
+          hs_payload_some hs_mem hs_tgt hunique
         rw [hs_pay] at this
         exact this
 

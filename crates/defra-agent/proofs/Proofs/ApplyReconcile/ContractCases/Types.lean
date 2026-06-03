@@ -42,22 +42,27 @@ structure ApplyReconcileScenario where
   manifest : List ContractDoc
   preDesired : List ContractDoc
   preLive : List ContractLiveDoc
+  pruneMode : Bool
   prefixLen : Nat
 
 structure ApplyReconcileCase where
   name : String
+  pruneMode : Bool
   manifest : List ContractDoc
   preDesired : List ContractDoc
   preLive : List ContractLiveDoc
   expectedExternalStateAfterAbort : List ContractLiveDoc
   expectedCreate : List DocRef
   expectedUpdate : List DocRef
+  expectedDelete : List DocRef
   expectedUnchanged : List DocRef
   expectedLiveOnly : List DocRef
   expectedSteps : List ContractStep
   expectedWriteOrder : List ContractCollectionWrite
+  expectedPruneOrder : List ContractCollectionWrite
   expectedSelectedCreateDocs : List ContractSelectedDoc
   expectedSelectedUpdateDocs : List ContractSelectedDoc
+  expectedSelectedDeleteDocs : List ContractSelectedDoc
   expectedSelectedWrites : List ContractSelectedDoc
   prefixLen : Nat
   expectedPrefixDesired : List ContractDoc
@@ -70,9 +75,11 @@ structure ApplyReconcileCase where
   retryConverges : Bool
   idempotentAfter : Bool
   writeOrderPrefixSafe : Bool
+  pruneOrderReferrersBeforeDependencies : Bool
   productionPrefixesReferrersClosed : Bool
   prefixReferrersClosed : Bool
   desiredReferencesClosedAfterPrefix : Bool
+  deleteSafetyHolds : Bool
 
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
@@ -113,6 +120,9 @@ def productionWriteOrder : List Collection :=
   , .eventTrigger
   , .agentPrincipal
   ]
+
+def productionPruneOrder : List Collection :=
+  productionWriteOrder.reverse
 
 def collectionWriteProjection (collection : Collection) : ContractCollectionWrite :=
   { collection := collection
@@ -167,6 +177,10 @@ def sortedSteps (steps : List ContractStep) : List ContractStep :=
 
 def productionOrderedSteps (steps : List ContractStep) : List ContractStep :=
   productionWriteOrder.flatMap fun collection =>
+    steps.filter fun step => collectionBEq step.target.collection collection
+
+def productionPruneOrderedSteps (steps : List ContractStep) : List ContractStep :=
+  productionPruneOrder.flatMap fun collection =>
     steps.filter fun step => collectionBEq step.target.collection collection
 
 end ApplyReconcile.ContractCases

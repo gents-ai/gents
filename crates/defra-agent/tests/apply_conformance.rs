@@ -7,9 +7,9 @@
 //! reason about without running proptest.
 
 use defra_agent::apply_model::{
-    apply_all, apply_prefix, desired_references_closed, diff, manifest_realized,
-    prefix_referrers_closed, references_of, retry_after_prefix, ApplyStep, Collection,
-    DesiredFields, DocRef, LiveState, Manifest,
+    apply_all, apply_prefix, desired_references_closed, diff, diff_prune, manifest_realized,
+    prefix_referrers_closed, references_of, retry_after_prefix, retry_after_prune_prefix,
+    ApplyStep, Collection, DesiredFields, DocRef, LiveState, Manifest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -149,6 +149,7 @@ fn step_contract(step: &ApplyStep) -> (String, DocRef, DesiredFields) {
     match step {
         ApplyStep::Create(doc, fields) => ("create".to_string(), doc.clone(), fields.clone()),
         ApplyStep::Update(doc, fields) => ("update".to_string(), doc.clone(), fields.clone()),
+        ApplyStep::Delete(doc) => ("delete".to_string(), doc.clone(), DesiredFields::opaque("")),
     }
 }
 
@@ -216,6 +217,8 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
         "backend_before_behavior_ordering",
         "update_existing_backend",
         "live_only_no_op",
+        "prune_live_only_unreferenced_backend",
+        "prune_blocks_referenced_dependency",
         "prefix_retry_convergence_idempotence",
         "referrer_closure",
     ] {
@@ -228,7 +231,11 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
     for case in cases {
         let manifest = manifest_from_lean(&case.manifest);
         let live = live_state_from_lean(&case.pre_desired, &case.pre_live);
-        let report = diff(&manifest, &live);
+        let report = if case.prune_mode {
+            diff_prune(&manifest, &live)
+        } else {
+            diff(&manifest, &live)
+        };
         let steps = report.steps().to_vec();
 
         assert_eq!(
@@ -241,6 +248,12 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
             doc_ref_set(&report.update),
             doc_ref_set_from_lean(&case.expected_update),
             "update bucket mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            doc_ref_set(&report.delete),
+            doc_ref_set_from_lean(&case.expected_delete),
+            "delete bucket mismatch for Lean case {}",
             case.name,
         );
         assert_eq!(
@@ -300,7 +313,11 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
             case.name,
         );
 
-        let retry_steps = diff(&manifest, &prefix).into_steps();
+        let retry_steps = if case.prune_mode {
+            diff_prune(&manifest, &prefix).into_steps()
+        } else {
+            diff(&manifest, &prefix).into_steps()
+        };
         assert_eq!(
             retry_steps.len(),
             case.expected_retry_step_count,
@@ -314,7 +331,11 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
             "retry desired projection mismatch for Lean case {}",
             case.name,
         );
-        let helper_retry = retry_after_prefix(&manifest, &live, case.prefix_len);
+        let helper_retry = if case.prune_mode {
+            retry_after_prune_prefix(&manifest, &live, case.prefix_len)
+        } else {
+            retry_after_prefix(&manifest, &live, case.prefix_len)
+        };
         assert_eq!(
             helper_retry, retry,
             "retry_after_prefix helper mismatch for Lean case {}",
@@ -332,7 +353,11 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
             case.name,
         );
 
-        let rediff = diff(&manifest, &after).into_steps();
+        let rediff = if case.prune_mode {
+            diff_prune(&manifest, &after).into_steps()
+        } else {
+            diff(&manifest, &after).into_steps()
+        };
         assert_eq!(
             rediff.len(),
             case.expected_rediff_step_count,

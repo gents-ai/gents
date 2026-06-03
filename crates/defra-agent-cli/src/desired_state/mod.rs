@@ -293,6 +293,7 @@ pub(crate) struct DesiredStateManifest {
 pub(crate) struct DesiredStateCollectionDiff {
     pub(crate) create: Vec<String>,
     pub(crate) update: Vec<String>,
+    pub(crate) delete: Vec<String>,
     pub(crate) unchanged: Vec<String>,
     pub(crate) live_only: Vec<String>,
 }
@@ -302,6 +303,7 @@ impl DesiredStateCollectionDiff {
         DesiredStateDiffCounts {
             create: self.create.len(),
             update: self.update.len(),
+            delete: self.delete.len(),
             unchanged: self.unchanged.len(),
             live_only: self.live_only.len(),
         }
@@ -312,6 +314,7 @@ impl DesiredStateCollectionDiff {
 pub(crate) struct DesiredStateDiffCounts {
     pub(crate) create: usize,
     pub(crate) update: usize,
+    pub(crate) delete: usize,
     pub(crate) unchanged: usize,
     pub(crate) live_only: usize,
 }
@@ -400,13 +403,14 @@ impl DesiredStateDiffCollectionsCounts {
     }
 
     pub(crate) fn is_exact_match(&self) -> bool {
-        self.iter()
-            .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0)
+        self.iter().all(|count| {
+            count.create == 0 && count.update == 0 && count.delete == 0 && count.live_only == 0
+        })
     }
 
     pub(crate) fn has_pending_apply(&self) -> bool {
         self.iter()
-            .any(|count| count.create > 0 || count.update > 0)
+            .any(|count| count.create > 0 || count.update > 0 || count.delete > 0)
     }
 }
 

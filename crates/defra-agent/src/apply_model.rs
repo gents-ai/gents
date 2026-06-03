@@ -65,17 +65,20 @@ pub struct LiveState {
 pub enum ApplyStep {
     Create(DocRef, DesiredFields),
     Update(DocRef, DesiredFields),
+    Delete(DocRef),
 }
 
 impl ApplyStep {
     pub fn target(&self) -> &DocRef {
         match self {
-            ApplyStep::Create(d, _) | ApplyStep::Update(d, _) => d,
+            ApplyStep::Create(d, _) | ApplyStep::Update(d, _) | ApplyStep::Delete(d) => d,
         }
     }
-    pub fn payload(&self) -> &DesiredFields {
+
+    pub fn payload(&self) -> Option<&DesiredFields> {
         match self {
-            ApplyStep::Create(_, f) | ApplyStep::Update(_, f) => f,
+            ApplyStep::Create(_, f) | ApplyStep::Update(_, f) => Some(f),
+            ApplyStep::Delete(_) => None,
         }
     }
 }
@@ -84,6 +87,7 @@ impl ApplyStep {
 pub struct DiffReport {
     pub create: Vec<DocRef>,
     pub update: Vec<DocRef>,
+    pub delete: Vec<DocRef>,
     pub unchanged: Vec<DocRef>,
     pub live_only: Vec<DocRef>,
     steps: Vec<ApplyStep>,
@@ -106,8 +110,17 @@ pub fn references_of(payload: &DesiredFields) -> Vec<DocRef> {
 }
 
 pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
+    diff_inner(m, l, false)
+}
+
+pub fn diff_prune(m: &Manifest, l: &LiveState) -> DiffReport {
+    diff_inner(m, l, true)
+}
+
+fn diff_inner(m: &Manifest, l: &LiveState, prune: bool) -> DiffReport {
     let mut create = Vec::new();
     let mut update = Vec::new();
+    let mut delete = Vec::new();
     let mut unchanged = Vec::new();
     let mut live_only = Vec::new();
     let mut steps = Vec::new();
@@ -127,25 +140,49 @@ pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
                 update.push((*d).clone());
                 steps.push(ApplyStep::Update((*d).clone(), f.clone()));
             }
-            (None, Some(_)) => live_only.push((*d).clone()),
+            (None, Some(_)) => {
+                live_only.push((*d).clone());
+                if prune && delete_safe(l, d) {
+                    delete.push((*d).clone());
+                }
+            }
             (None, None) => unreachable!("BTreeSet union contains neither side"),
         }
     }
 
     steps.sort_by_key(|s| (s.target().collection.apply_order(), s.target().id.clone()));
+    delete.sort_by_key(|d| (std::cmp::Reverse(d.collection.apply_order()), d.id.clone()));
+    if prune {
+        steps.extend(delete.iter().cloned().map(ApplyStep::Delete));
+    }
 
     DiffReport {
         create,
         update,
+        delete,
         unchanged,
         live_only,
         steps,
     }
 }
 
+pub fn delete_safe(l: &LiveState, target: &DocRef) -> bool {
+    l.desired
+        .values()
+        .flat_map(references_of)
+        .all(|reference| &reference != target)
+}
+
 pub fn apply_one(l: &LiveState, s: &ApplyStep) -> LiveState {
     let mut desired = l.desired.clone();
-    desired.insert(s.target().clone(), s.payload().clone());
+    match s {
+        ApplyStep::Create(doc, fields) | ApplyStep::Update(doc, fields) => {
+            desired.insert(doc.clone(), fields.clone());
+        }
+        ApplyStep::Delete(doc) => {
+            desired.remove(doc);
+        }
+    }
     LiveState {
         desired,
         live: l.live.clone(),
@@ -176,6 +213,13 @@ pub fn retry_after_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) -> Liv
     apply_all(&prefix_state, &retry_steps)
 }
 
+pub fn retry_after_prune_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) -> LiveState {
+    let initial_steps = diff_prune(m, l).into_steps();
+    let prefix_state = apply_prefix(l, &initial_steps, prefix_len);
+    let retry_steps = diff_prune(m, &prefix_state).into_steps();
+    apply_all(&prefix_state, &retry_steps)
+}
+
 /// Manifest-realized predicate mirrored from Lean:
 /// every manifest document is present with the requested desired payload.
 pub fn manifest_realized(m: &Manifest, l: &LiveState) -> bool {
@@ -195,6 +239,9 @@ pub fn desired_references_closed(l: &LiveState) -> bool {
 /// Product-facing corollary scoped to documents already written by a prefix.
 pub fn prefix_referrers_closed(prefix: &[ApplyStep], l: &LiveState) -> bool {
     prefix.iter().all(|step| {
+        if matches!(step, ApplyStep::Delete(_)) {
+            return true;
+        }
         l.desired.get(step.target()).is_some_and(|payload| {
             references_of(payload)
                 .into_iter()
@@ -265,5 +312,66 @@ mod tests {
 
         let rediff = diff(&m, &retried).into_steps();
         assert_eq!(apply_all(&retried, &rediff), retried);
+    }
+
+    #[test]
+    fn prune_diff_deletes_unreferenced_live_only_doc() {
+        let backend = DocRef {
+            collection: Collection::InferenceBackend,
+            id: "orphan".into(),
+        };
+        let m = Manifest {
+            docs: BTreeMap::new(),
+        };
+        let l = LiveState {
+            desired: BTreeMap::from([(backend.clone(), DesiredFields::opaque("old"))]),
+            live: BTreeMap::new(),
+        };
+
+        let default_report = diff(&m, &l);
+        assert_eq!(default_report.live_only, vec![backend.clone()]);
+        assert!(default_report.delete.is_empty());
+        assert!(default_report.steps().is_empty());
+
+        let prune_report = diff_prune(&m, &l);
+        assert_eq!(prune_report.delete, vec![backend.clone()]);
+        assert_eq!(prune_report.steps(), &[ApplyStep::Delete(backend.clone())]);
+        let after = apply_all(&l, prune_report.steps());
+        assert!(!after.desired.contains_key(&backend));
+        assert_eq!(after.live, l.live);
+    }
+
+    #[test]
+    fn prune_diff_blocks_referenced_dependency_until_referrer_is_deleted() {
+        let backend = DocRef {
+            collection: Collection::InferenceBackend,
+            id: "backend".into(),
+        };
+        let behavior = DocRef {
+            collection: Collection::AgentBehavior,
+            id: "behavior".into(),
+        };
+        let m = Manifest {
+            docs: BTreeMap::new(),
+        };
+        let l = LiveState {
+            desired: BTreeMap::from([
+                (backend.clone(), DesiredFields::opaque("backend")),
+                (
+                    behavior.clone(),
+                    DesiredFields::with_refs("behavior", vec![backend.clone()]),
+                ),
+            ]),
+            live: BTreeMap::new(),
+        };
+
+        let first = diff_prune(&m, &l);
+        assert_eq!(first.delete, vec![behavior.clone()]);
+        let after_first = apply_all(&l, first.steps());
+        assert!(after_first.desired.contains_key(&backend));
+        assert!(!after_first.desired.contains_key(&behavior));
+
+        let second = diff_prune(&m, &after_first);
+        assert_eq!(second.delete, vec![backend.clone()]);
     }
 }
