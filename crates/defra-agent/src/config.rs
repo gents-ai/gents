@@ -105,6 +105,10 @@ impl std::fmt::Debug for AgentBehavior {
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("deadline_duration", &self.deadline_duration)
             .field("sampling", &self.sampling)
+            // Included so the runtime configuration fingerprint (which hashes
+            // `{behavior:?}`) changes when a behavior's effective skills change,
+            // letting the control watcher reconcile live skill updates (#340).
+            .field("skills", &self.skills)
             .finish()
     }
 }

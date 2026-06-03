@@ -6,6 +6,24 @@ use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::{extract_mutation_doc_id, print_json, EXPORT_SKILL_FIELDS};
 
+/// Run a write mutation inside a transaction and commit it. A transaction
+/// commit emits the DefraDB `Update` event the runtime control watcher
+/// reconciles on (a bare auto-committed single mutation does not), so live
+/// skill changes take effect without an agent restart.
+async fn execute_committed(access: &ConfigAccess, mutation: &str) -> Result<Value> {
+    let txn = access.begin_apply_txn().await?;
+    match txn.execute(mutation).await {
+        Ok(response) => {
+            txn.commit().await?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
 fn gql_opt_string(name: &str, value: Option<&str>) -> String {
     match value {
         Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
@@ -68,7 +86,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute(&mutation).await?;
+    let response = execute_committed(access, &mutation).await?;
     extract_mutation_doc_id(&response, "Skill")
 }
 
@@ -158,7 +176,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
     let mutation = format!(
         r#"mutation {{ delete_Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ _docID }} }}"#
     );
-    let response = access.execute(&mutation).await?;
+    let response = execute_committed(&access, &mutation).await?;
     let deleted = response
         .get("data")
         .and_then(|data| data.get("delete_Skill"))
@@ -183,7 +201,7 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute(&mutation).await?;
+    let response = execute_committed(&access, &mutation).await?;
     let updated = response
         .get("data")
         .and_then(|data| data.get("update_Skill"))

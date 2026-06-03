@@ -4358,6 +4358,135 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     Ok(())
 }
 
+/// End-to-end "agent discovers a skill in a live conversation" (#340): with the
+/// agent already running, `config skill add` reconciles the runtime live (no
+/// restart), and a subsequent turn carries the skill's catalog entry into the
+/// request the agent sends the model (progressive disclosure — the model would
+/// then call load_skill for the body).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("skill-live-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-live-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-live-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+
+    // Add a principal-scoped skill LIVE; the catalog phrase is distinctive.
+    let catalog_phrase = format!("cite-sources-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config", "skill", "add", "--graphql", &graphql, "--agent-did", &agent_did,
+            "--skill-id", "live-skill", "--scope", "principal", "--name", &catalog_phrase,
+            "--description", "find and cite sources", "--instructions", "Always cite your sources.",
+        ],
+    )?;
+    // The live skill add must reconcile the running runtime (no restart).
+    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    // The skill catalog (name + load_skill mandate) must have reached the model.
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured.iter().any(|request| {
+            let text = request.to_string();
+            text.contains(&catalog_phrase) && text.contains("load_skill")
+        }),
+        "live-added skill's catalog entry did not reach the model; captured={captured:?}"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
 /// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
 /// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
 /// the export. Gated on the hermes skills directory existing (override with
