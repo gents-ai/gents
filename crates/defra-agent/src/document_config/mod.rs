@@ -39,7 +39,7 @@ pub(crate) use tool_selection::{
 pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelectionDocument};
 
 #[allow(unused_imports)]
-pub(crate) use skill::{list_skill_records, SkillDocument};
+pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
 
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{

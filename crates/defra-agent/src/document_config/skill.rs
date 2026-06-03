@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-use super::serde_helpers::rows_with_doc_id;
+use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 
 /// Document-layer view of a `Skill` row (decision D1). Mirrors
 /// `crates/defra-agent-protocol/schemas/agent/skill.graphql`.
@@ -65,4 +65,23 @@ pub(crate) async fn list_skill_records(
     }
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Skill"))
+}
+
+/// Load a single `Skill` document by its DefraDB `_docID` (used by the control
+/// watcher to hot-reload skill changes into the runtime snapshot).
+pub(crate) async fn load_skill_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<(String, SkillDocument)>> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            Skill(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{{SKILL_FIELDS}}}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("query Skill by _docID failed: {:?}", resp.errors);
+    }
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Skill"))
 }

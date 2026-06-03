@@ -12,6 +12,19 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
 
+/// Extract a created document's `_docID` from a create/add mutation response,
+/// regardless of the wrapper field name (`add_Skill`/`create_Skill`/…) or
+/// whether the row is an object or a single-element array.
+fn created_skill_doc_id(data: Option<&serde_json::Value>) -> Option<String> {
+    for value in data?.as_object()?.values() {
+        let row = value.as_array().and_then(|rows| rows.first()).unwrap_or(value);
+        if let Some(id) = row.get("_docID").and_then(|v| v.as_str()) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     KeyIdentity::load_or_create(path, None).unwrap()
@@ -378,6 +391,69 @@ async fn skill_crud_mutations_round_trip() {
     let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#;
     let resp = node.execute(delete).await;
     assert!(!resp.has_errors(), "delete_Skill by filter: {:?}", resp.errors);
+}
+
+/// The control watcher must hot-reload Skill changes (#340): a Skill
+/// create/delete drives `apply_control_update` to `Applied` and updates the
+/// view, so a running agent picks up skills without a restart.
+#[tokio::test]
+async fn apply_control_update_hot_reloads_skill() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-skill-reload"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-skill-reload",
+        "http://127.0.0.1:8233/v1",
+    )
+    .await;
+
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    assert!(view.skills.is_empty(), "no skills before create");
+
+    let create = format!(
+        r#"mutation {{ create_Skill(input: {{
+            skill_id: "s-reload", agent_did: "{did}", scope: "principal",
+            name: "Reload", instructions: "Reload me.", enabled: true
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(identity.did()),
+    );
+    let resp = node.execute(&create).await;
+    assert!(!resp.has_errors(), "create_Skill: {:?}", resp.errors);
+    let doc_id = created_skill_doc_id(resp.data.as_ref()).expect("created Skill _docID");
+
+    let outcome = apply_control_update(node.as_ref(), identity.did(), "skill", &doc_id, &mut view)
+        .await
+        .expect("apply skill create");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(view.skills.contains_key("s-reload"), "skill added to view");
+
+    // A skill owned by a different principal is irrelevant.
+    let foreign = "mutation { create_Skill(input: { skill_id: \"s-foreign\", agent_did: \"did:key:zOther\", scope: \"principal\", name: \"F\", enabled: true }) { _docID } }";
+    let resp = node.execute(foreign).await;
+    let foreign_doc_id = created_skill_doc_id(resp.data.as_ref()).expect("foreign Skill _docID");
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "skill",
+        &foreign_doc_id,
+        &mut view,
+    )
+    .await
+    .expect("apply foreign skill");
+    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
+
+    // Deletion drops it from the view.
+    let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
+    assert!(!node.execute(delete).await.has_errors());
+    let outcome = apply_control_update(node.as_ref(), identity.did(), "skill", &doc_id, &mut view)
+        .await
+        .expect("apply skill delete");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(!view.skills.contains_key("s-reload"), "skill removed from view");
 }
 
 #[tokio::test]

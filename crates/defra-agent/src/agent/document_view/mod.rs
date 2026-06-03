@@ -53,6 +53,10 @@ impl DocumentRuntimeView {
             .any(|record| record.doc_id == doc_id)
     }
 
+    fn has_skill_doc_id(&self, doc_id: &str) -> bool {
+        self.skills.values().any(|record| record.doc_id == doc_id)
+    }
+
     fn has_inference_profile_doc_id(&self, doc_id: &str) -> bool {
         self.inference_profiles
             .values()
@@ -94,6 +98,14 @@ impl DocumentRuntimeView {
                 (record.doc_id == doc_id).then_some(selection_id.clone())
             });
         key.is_some_and(|selection_id| self.tool_selections.remove(&selection_id).is_some())
+    }
+
+    fn remove_skill_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self
+            .skills
+            .iter()
+            .find_map(|(skill_id, record)| (record.doc_id == doc_id).then_some(skill_id.clone()));
+        key.is_some_and(|skill_id| self.skills.remove(&skill_id).is_some())
     }
 
     fn remove_inference_profile_by_doc_id(&mut self, doc_id: &str) -> bool {
