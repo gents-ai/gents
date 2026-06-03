@@ -363,10 +363,9 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
     );
 
     // `load_skill` returns the full body on demand, with the D3 degrade note.
-    let ceiling = tool_surface
-        .tool_names()
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
+    // mcp_enabled=false: this read-only surface has no MCP, so an out-of-ceiling
+    // ref is genuinely unavailable and must be flagged.
+    let ceiling = crate::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
     let load_skill = crate::skills::LoadSkillTool::new(behavior.skills.clone(), ceiling);
     let loaded = load_skill
         .call(crate::skills::LoadSkillArgs {

@@ -27,7 +27,27 @@ use super::{
 };
 use crate::RequestSubmitOptions;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::skills::{effective_skills, Skill, SkillScope};
 use serde_json::Value;
+
+/// Build the turn's user text: the plain text PLUS any explicitly-selected
+/// skills' full bodies injected ahead of it (deterministic activation). Used by
+/// both TurnStart and steering, so a skill-only turn is non-empty on both paths.
+async fn combine_input_with_explicit_skills(
+    state: &ShimState,
+    input: &[codex::UserInput],
+) -> String {
+    let user_text = user_text_from_input(input);
+    let skill_blocks = resolve_explicit_skill_injections(state, input).await;
+    if skill_blocks.is_empty() {
+        return user_text;
+    }
+    let mut parts = skill_blocks;
+    if !user_text.trim().is_empty() {
+        parts.push(user_text);
+    }
+    parts.join("\n\n")
+}
 
 /// Resolve explicit Codex skill selections (`UserInput::Skill`, the skill
 /// "pill") to their full bodies for DETERMINISTIC injection into the turn.
@@ -36,13 +56,33 @@ use serde_json::Value;
 /// body, never by relying on the model to fetch it: Codex injects the full
 /// `SKILL.md` as a user-role `<skill>` block per turn, and Hermes preloads the
 /// body into the system prompt. The `load_skill` tool is for model-driven
-/// discovery, not for an explicit selection — so we inject here. Disabled and
-/// foreign-principal skills are skipped. Returns one rendered block per
-/// resolved skill, in selection order.
+/// discovery, not for an explicit selection — so we inject here.
+///
+/// Crucially the selection is gated through the SAME D5 effective-set rule the
+/// runtime uses (`effective_skills` over the bound behavior's
+/// `skill_refs`/`skill_excludes`), so a behavior-scoped skill not opted into the
+/// bound behavior, an excluded inherited skill, a disabled skill, or a foreign
+/// principal's skill can NOT be force-activated via the pill.
 async fn resolve_explicit_skill_injections(
     state: &ShimState,
     input: &[codex::UserInput],
 ) -> Vec<String> {
+    if !input
+        .iter()
+        .any(|item| matches!(item, codex::UserInput::Skill { .. }))
+    {
+        return Vec::new();
+    }
+
+    // The bound behavior's opt-in/opt-out lists drive the effective set (D5).
+    let (skill_refs, skill_excludes) =
+        match defra_agent::load_agent_behavior(state.node.as_ref(), &state.behavior_id).await {
+            Ok(Some(behavior)) => (behavior.skill_refs, behavior.skill_excludes),
+            // Behavior missing/unreadable: fall back to empty lists, which still
+            // admits principal-scoped skills and excludes behavior-scoped ones.
+            _ => (Vec::new(), Vec::new()),
+        };
+
     let mut blocks = Vec::new();
     for item in input {
         let codex::UserInput::Skill { name, path } = item else {
@@ -51,18 +91,22 @@ async fn resolve_explicit_skill_injections(
         // The Codex UI sends our synthetic path (`/defra/skills/<skill_id>`);
         // the final segment is the skill_id. Fall back to the display name.
         let skill_id = path.file_name().and_then(|segment| segment.to_str());
-        if let Some(block) = load_skill_injection_block(state, skill_id, name, path).await {
+        if let Some(block) =
+            load_scoped_skill_block(state, skill_id, name, path, &skill_refs, &skill_excludes).await
+        {
             blocks.push(block);
         }
     }
     blocks
 }
 
-async fn load_skill_injection_block(
+async fn load_scoped_skill_block(
     state: &ShimState,
     skill_id: Option<&str>,
     selected_name: &str,
     path: &std::path::Path,
+    skill_refs: &[String],
+    skill_excludes: &[String],
 ) -> Option<String> {
     let did = escape_graphql_string(&state.agent_did);
     let selector = match skill_id.map(str::trim).filter(|id| !id.is_empty()) {
@@ -76,7 +120,7 @@ async fn load_skill_injection_block(
         }
     };
     let query = format!(
-        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }}, {selector} }}, limit: 1) {{ name instructions enabled }} }}"#
+        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }}, {selector} }}, limit: 1) {{ skill_id name instructions scope enabled }} }}"#
     );
     let response = query_node_json(state.node.as_ref(), &query).await.ok()?;
     let row = response
@@ -85,26 +129,56 @@ async fn load_skill_injection_block(
         .as_array()?
         .first()?
         .clone();
-    // Only an enabled skill activates (matches the effective-set rule and the
-    // Codex disabled-paths filter).
-    if !row.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+
+    // Reuse the canonical D5 predicate (no drift): build the runtime Skill and
+    // check it is in the bound behavior's effective set. `effective_skills`
+    // enforces enabled + scope/refs + excludes + principal ownership.
+    let skill = Skill {
+        skill_id: row
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        agent_did: state.agent_did.to_string(),
+        scope: row
+            .get("scope")
+            .and_then(Value::as_str)
+            .and_then(SkillScope::parse)
+            .unwrap_or(SkillScope::Behavior),
+        name: row
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        description: String::new(),
+        instructions: row
+            .get("instructions")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        tool_refs: Vec::new(),
+        display_name: None,
+        enabled: row.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+    };
+    let in_effective_set = !effective_skills(
+        std::slice::from_ref(&skill),
+        &state.agent_did,
+        skill_refs,
+        skill_excludes,
+    )
+    .is_empty();
+    if !in_effective_set || skill.instructions.trim().is_empty() {
         return None;
     }
-    let instructions = row
-        .get("instructions")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if instructions.trim().is_empty() {
-        return None;
-    }
-    let name = row
-        .get("name")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(selected_name);
+    let label = if skill.name.trim().is_empty() {
+        skill.skill_id.as_str()
+    } else {
+        skill.name.as_str()
+    };
     Some(format!(
-        "<skill>\n<name>{name}</name>\n<path>{}</path>\n{instructions}\n</skill>",
-        path.display()
+        "<skill>\n<name>{label}</name>\n<path>{}</path>\n{}\n</skill>",
+        path.display(),
+        skill.instructions
     ))
 }
 
@@ -115,19 +189,9 @@ pub(super) async fn start_defra_turn(
     thread_id: String,
     input: Vec<codex::UserInput>,
 ) -> Result<()> {
-    let user_text = user_text_from_input(&input);
     // Explicit skill selections are injected as full bodies ahead of the user's
     // text (deterministic activation), so a skill-only turn is non-empty.
-    let skill_blocks = resolve_explicit_skill_injections(state, &input).await;
-    let user_text = if skill_blocks.is_empty() {
-        user_text
-    } else {
-        let mut parts = skill_blocks;
-        if !user_text.trim().is_empty() {
-            parts.push(user_text);
-        }
-        parts.join("\n\n")
-    };
+    let user_text = combine_input_with_explicit_skills(state, &input).await;
     if user_text.trim().is_empty() {
         return send_error(
             &connection.outbound,
@@ -239,7 +303,9 @@ pub(super) async fn steer_defra_turn(
         .await;
     }
 
-    let user_text = user_text_from_input(&params.input);
+    // Steering honors explicit skill selections the same way TurnStart does:
+    // inject the body so a skill-only (or text+skill) steer is not dropped.
+    let user_text = combine_input_with_explicit_skills(state, &params.input).await;
     if user_text.trim().is_empty() {
         return send_error(
             &connection.outbound,

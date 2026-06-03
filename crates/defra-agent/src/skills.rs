@@ -90,42 +90,74 @@ pub fn effective_skills<'a>(
         .collect()
 }
 
-/// The D3 tool ceiling a skill's `tool_refs` are checked against: the behavior's
-/// built tool names UNION its allowed MCP service ids. MCP services are callable
-/// via `call_tool` but never appear in the built tool-name list, so they must be
-/// folded in here or an MCP-dependent skill gets a spurious "not available"
-/// degrade note even though the behavior can reach that service.
+/// The D3 tool ceiling a skill's `tool_refs` are evaluated against.
+///
+/// `names` is the behavior's built tool names UNION its explicitly-allowed MCP
+/// service ids (MCP services are callable via `call_tool` but never appear in
+/// the built tool-name list). `mcp_unrestricted` is the default "any MCP service
+/// allowed" case — meta tools enabled AND an EMPTY allowlist (see
+/// `meta_tools::mcp_service_allowed`): there we cannot enumerate the reachable
+/// services, so a ref that isn't a built tool must be assumed reachable rather
+/// than flagged unavailable (it may well be an MCP service the behavior can
+/// call). Treating it as missing would be a spurious degrade note.
+#[derive(Debug, Clone, Default)]
+pub struct SkillToolCeiling {
+    names: BTreeSet<String>,
+    mcp_unrestricted: bool,
+}
+
+impl SkillToolCeiling {
+    pub fn new(names: BTreeSet<String>, mcp_unrestricted: bool) -> Self {
+        Self {
+            names,
+            mcp_unrestricted,
+        }
+    }
+
+    /// Whether the behavior can actually use `tool`. A built/allowlisted tool is
+    /// in `names`; under unrestricted MCP everything else is given the benefit
+    /// of the doubt (it may be a reachable MCP service).
+    pub fn allows(&self, tool: &str) -> bool {
+        self.mcp_unrestricted || self.names.contains(tool)
+    }
+}
+
+/// Build the D3 ceiling from a behavior's resolved tool surface. `mcp_enabled`
+/// is whether the behavior can call MCP at all (meta tools effectively on); an
+/// empty `allowed_mcp_service_ids` then means "any service" (unrestricted).
 pub fn skill_tool_ceiling(
     tool_names: impl IntoIterator<Item = String>,
     allowed_mcp_service_ids: &[String],
-) -> BTreeSet<String> {
-    let mut ceiling: BTreeSet<String> = tool_names.into_iter().collect();
-    ceiling.extend(allowed_mcp_service_ids.iter().cloned());
-    ceiling
+    mcp_enabled: bool,
+) -> SkillToolCeiling {
+    let mut names: BTreeSet<String> = tool_names.into_iter().collect();
+    names.extend(allowed_mcp_service_ids.iter().cloned());
+    let mcp_unrestricted = mcp_enabled && allowed_mcp_service_ids.is_empty();
+    SkillToolCeiling::new(names, mcp_unrestricted)
 }
 
-/// Tools an active skill may use against a behavior's resolved tool `ceiling`:
-/// the declared `tool_refs` intersected with the ceiling (D3 intersect+degrade).
-/// Never returns a tool absent from the ceiling — the executable form of
+/// Tools an active skill may use against a behavior's resolved `ceiling`: the
+/// declared `tool_refs` intersected with the ceiling (D3 intersect+degrade).
+/// Never returns a tool the ceiling disallows — the executable form of
 /// `Skills.skillTools` / `Skills.activation_subset_ceiling`.
-pub fn skill_tools<'a>(skill: &'a Skill, ceiling: &BTreeSet<String>) -> Vec<&'a str> {
+pub fn skill_tools<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Vec<&'a str> {
     skill
         .tool_refs
         .iter()
         .map(String::as_str)
-        .filter(|tool| ceiling.contains(*tool))
+        .filter(|tool| ceiling.allows(tool))
         .collect()
 }
 
 /// Declared `tool_refs` the behavior ceiling does NOT grant. Used to annotate
 /// the activated-skill prompt so the model adapts (D3 degrade), and never to
 /// expand the tool surface.
-pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &BTreeSet<String>) -> Vec<&'a str> {
+pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Vec<&'a str> {
     skill
         .tool_refs
         .iter()
         .map(String::as_str)
-        .filter(|tool| !ceiling.contains(*tool))
+        .filter(|tool| !ceiling.allows(tool))
         .collect()
 }
 
@@ -175,7 +207,7 @@ pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
 /// tool output). Appends a degrade note for any `tool_refs` the behavior ceiling
 /// does not grant (D3), so the model knows the capability is unavailable rather
 /// than silently failing.
-pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> String {
+pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> String {
     let mut out = format!("Skill: {}\n\n{}", skill_label(skill), skill.instructions);
     let missing = missing_tool_refs(skill, ceiling);
     if !missing.is_empty() {
@@ -194,7 +226,17 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> Stri
 /// it must resolve here too, or a cataloged skill becomes unloadable.
 fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
     let needle = needle.trim();
-    let display_name = |skill: &Skill| skill.display_name.clone().unwrap_or_default();
+    // Trim the stored display name to match the catalog, which renders the
+    // trimmed label (see `skill_label`) — otherwise a name with incidental
+    // whitespace shows as loadable but fails to resolve.
+    let display_name = |skill: &Skill| {
+        skill
+            .display_name
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
     skills
         .iter()
         .find(|skill| {
@@ -236,11 +278,11 @@ pub struct LoadSkillArgs {
 #[derive(Clone)]
 pub struct LoadSkillTool {
     skills: Vec<Skill>,
-    ceiling: BTreeSet<String>,
+    ceiling: SkillToolCeiling,
 }
 
 impl LoadSkillTool {
-    pub fn new(skills: Vec<Skill>, ceiling: BTreeSet<String>) -> Self {
+    pub fn new(skills: Vec<Skill>, ceiling: SkillToolCeiling) -> Self {
         Self { skills, ceiling }
     }
 }
@@ -307,8 +349,9 @@ mod tests {
         }
     }
 
-    fn ceiling(tools: &[&str]) -> BTreeSet<String> {
-        tools.iter().map(|s| s.to_string()).collect()
+    /// A restricted ceiling (MCP not unrestricted) listing exactly `tools`.
+    fn ceiling(tools: &[&str]) -> SkillToolCeiling {
+        SkillToolCeiling::new(tools.iter().map(|s| s.to_string()).collect(), false)
     }
 
     fn ids(skills: &[&Skill]) -> Vec<String> {
@@ -376,7 +419,7 @@ mod tests {
         let resolved = skill_tools(&s, &ceiling);
         assert_eq!(resolved, vec!["read", "bash"]); // "net" degraded away
         for tool in &resolved {
-            assert!(ceiling.contains(*tool));
+            assert!(ceiling.allows(tool));
         }
         assert_eq!(missing_tool_refs(&s, &ceiling), vec!["net"]);
     }
@@ -462,20 +505,49 @@ mod tests {
     }
 
     #[test]
-    fn skill_tool_ceiling_folds_in_mcp_service_ids() {
+    fn skill_tool_ceiling_folds_in_explicit_mcp_service_ids() {
+        // Restricted allowlist: built tools AND the explicit MCP ids are allowed.
         let ceiling = skill_tool_ceiling(
             vec!["read".to_string(), "bash".to_string()],
             &["x-data".to_string(), "observability-mcp".to_string()],
+            /*mcp_enabled*/ true,
         );
-        // Built tools AND MCP service ids are both part of the D3 ceiling.
-        assert!(ceiling.contains("read"));
-        assert!(ceiling.contains("x-data"));
-        assert!(ceiling.contains("observability-mcp"));
+        assert!(ceiling.allows("read"));
+        assert!(ceiling.allows("x-data"));
+        assert!(ceiling.allows("observability-mcp"));
+        assert!(!ceiling.allows("unlisted-service")); // restricted: unknown is denied
 
-        // A skill depending on an MCP service in the ceiling is NOT degraded.
         let mut mcp_skill = skill("a", "did:p", SkillScope::Principal, &["x-data"]);
         mcp_skill.tool_refs = vec!["x-data".to_string()];
         assert!(missing_tool_refs(&mcp_skill, &ceiling).is_empty());
+    }
+
+    #[test]
+    fn skill_tool_ceiling_unrestricted_mcp_allows_any_service() {
+        // Default behavior: meta tools on + EMPTY allowlist == any MCP service
+        // allowed. A skill's MCP tool_ref must NOT be flagged unavailable, since
+        // it may well be a reachable service we cannot enumerate.
+        let ceiling = skill_tool_ceiling(
+            vec!["read".to_string()],
+            &[], // empty allowlist
+            /*mcp_enabled*/ true,
+        );
+        assert!(ceiling.allows("read"));
+        assert!(ceiling.allows("some-mcp-service")); // benefit of the doubt
+        let mut mcp_skill = skill("a", "did:p", SkillScope::Principal, &["some-mcp-service"]);
+        mcp_skill.tool_refs = vec!["some-mcp-service".to_string()];
+        assert!(
+            missing_tool_refs(&mcp_skill, &ceiling).is_empty(),
+            "unrestricted MCP must not flag a service ref as unavailable"
+        );
+
+        // But with MCP disabled (no call_tool), an empty allowlist grants nothing.
+        let no_mcp = skill_tool_ceiling(vec!["read".to_string()], &[], /*mcp_enabled*/ false);
+        assert!(!no_mcp.allows("some-mcp-service"));
+        assert_eq!(
+            missing_tool_refs(&mcp_skill, &no_mcp),
+            vec!["some-mcp-service"]
+        );
     }
 
     #[tokio::test]

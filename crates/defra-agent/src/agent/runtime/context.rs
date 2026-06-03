@@ -95,6 +95,7 @@ impl RuntimeContext {
             let ceiling = crate::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),
+                tool_surface.includes_meta_tools(),
             );
             built_tools.push(Box::new(crate::skills::LoadSkillTool::new(
                 behavior.skills.clone(),
