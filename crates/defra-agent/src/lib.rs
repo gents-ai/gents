@@ -41,6 +41,7 @@ pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub mod schema;
 pub mod session;
+pub mod skills;
 pub mod streaming;
 pub mod template;
 pub mod tool_call_lifecycle;

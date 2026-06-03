@@ -21,6 +21,7 @@ pub(crate) fn diff_manifests(
     let collections = DesiredStateDiffCollections {
         agent_principal,
         agent_behaviors: diff_manifest_collection(&desired.agent_behaviors, &live.agent_behaviors),
+        skills: diff_manifest_collection(&desired.skills, &live.skills),
         tool_selections: diff_manifest_collection(&desired.tool_selections, &live.tool_selections),
         inference_backends: diff_manifest_collection(
             &desired.inference_backends,

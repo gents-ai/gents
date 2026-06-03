@@ -12,6 +12,22 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
 
+/// Extract a created document's `_docID` from a create/add mutation response,
+/// regardless of the wrapper field name (`add_Skill`/`create_Skill`/…) or
+/// whether the row is an object or a single-element array.
+fn created_skill_doc_id(data: Option<&serde_json::Value>) -> Option<String> {
+    for value in data?.as_object()?.values() {
+        let row = value
+            .as_array()
+            .and_then(|rows| rows.first())
+            .unwrap_or(value);
+        if let Some(id) = row.get("_docID").and_then(|v| v.as_str()) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     KeyIdentity::load_or_create(path, None).unwrap()
@@ -229,6 +245,261 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
     assert!(tool_names.contains(&"list_files".to_string()));
+}
+
+/// End-to-end (#340 progressive disclosure / D2): a principal-scoped Skill
+/// document is inherited by the behavior (D5); its name+description appear in
+/// the prompt CATALOG (not its body), and `load_skill` returns the full body on
+/// demand with a degrade note for tool_refs outside the behavior ceiling (D3).
+#[tokio::test]
+async fn resolve_composes_principal_scoped_skill_into_prompt() {
+    use crate::prompt::LayeredPromptBuilder;
+    use rig::tool::Tool;
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-skill"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-skill",
+        "http://127.0.0.1:8231/v1",
+    )
+    .await;
+
+    // Read-only tool selection: the ceiling contains read_file but not bash.
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
+    crate::upsert_tool_selection(
+        node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: identity.did().to_string(),
+            display_name: Some("Read tools".to_string()),
+            enable_file_tools: Some(true),
+            file_tools_mode: Some("ReadOnly".to_string()),
+            enable_bash: Some(false),
+            bash_mode: Some("Off".to_string()),
+            enable_meta_tools: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
+        .await
+        .unwrap()
+        .expect("default behavior");
+    default_behavior.tool_selection_id = Some(selection_id.clone());
+    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
+        .await
+        .unwrap();
+
+    // Principal-scoped skill referencing one in-ceiling tool (read_file) and one
+    // ungranted tool (exercises the D3 degrade note).
+    let create_skill = format!(
+        r#"mutation {{ create_Skill(input: {{
+            skill_id: "skill-research",
+            agent_did: "{did}",
+            scope: "principal",
+            name: "Research",
+            description: "Find and cite sources",
+            instructions: "Always cite your sources.",
+            tool_refs: ["read_file", "definitely_not_a_tool"],
+            enabled: true
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(identity.did()),
+    );
+    let resp = node.execute(&create_skill).await;
+    assert!(!resp.has_errors(), "create_Skill failed: {:?}", resp.errors);
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+
+    let behavior = snapshot
+        .behaviors
+        .get(&default_behavior_id)
+        .expect("resolved default behavior");
+    assert_eq!(
+        behavior.skills.len(),
+        1,
+        "principal-scoped skill must be inherited by the behavior"
+    );
+    assert_eq!(behavior.skills[0].skill_id, "skill-research");
+
+    let tool_surface = snapshot
+        .tool_surfaces
+        .get(&default_behavior_id)
+        .expect("tool surface");
+    // The preamble holds the CATALOG (name + description + load_skill mandate),
+    // NOT the skill body (progressive disclosure).
+    let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref())
+        .preamble()
+        .to_string();
+    assert!(
+        preamble.contains("Research"),
+        "catalog lists the skill name: {preamble}"
+    );
+    assert!(
+        preamble.contains("Find and cite sources"),
+        "catalog lists the skill description: {preamble}"
+    );
+    assert!(
+        preamble.contains("load_skill"),
+        "catalog directs the model to load_skill"
+    );
+    assert!(
+        !preamble.contains("Always cite your sources."),
+        "skill BODY must NOT be in the catalog (loaded on demand): {preamble}"
+    );
+
+    // `load_skill` returns the full body on demand, with the D3 degrade note.
+    // mcp_enabled=false: this read-only surface has no MCP, so an out-of-ceiling
+    // ref is genuinely unavailable and must be flagged.
+    let ceiling = crate::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
+    let load_skill = crate::skills::LoadSkillTool::new(behavior.skills.clone(), ceiling);
+    let loaded = load_skill
+        .call(crate::skills::LoadSkillArgs {
+            name: "Research".to_string(),
+        })
+        .await
+        .expect("load_skill");
+    assert!(
+        loaded.contains("Always cite your sources."),
+        "load_skill returns the full body: {loaded}"
+    );
+    assert!(
+        loaded.contains("definitely_not_a_tool"),
+        "load_skill body carries the degrade note for the ungranted tool_ref: {loaded}"
+    );
+}
+
+/// Validates the raw GraphQL mutations the CLI `config skill` commands and the
+/// Codex shim use against the live Skill schema: upsert (create/update),
+/// update-by-filter (enable/disable), and delete-by-filter.
+#[tokio::test]
+async fn skill_crud_mutations_round_trip() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let did = "did:key:zSkillCrud";
+
+    let create = format!(
+        r#"mutation {{ upsert_Skill(
+            filter: {{ skill_id: {{ _eq: "s1" }} }},
+            add: {{ skill_id: "s1", agent_did: "{did}", scope: "behavior", name: "S", tool_refs: ["read_file"], enabled: true }},
+            update: {{ enabled: true }}
+        ) {{ _docID }} }}"#
+    );
+    let resp = node.execute(&create).await;
+    assert!(!resp.has_errors(), "upsert_Skill: {:?}", resp.errors);
+
+    let update = r#"mutation { update_Skill(
+        filter: { skill_id: { _eq: "s1" } },
+        input: { enabled: false }
+    ) { _docID } }"#;
+    let resp = node.execute(update).await;
+    assert!(
+        !resp.has_errors(),
+        "update_Skill by filter: {:?}",
+        resp.errors
+    );
+
+    let query = r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { skill_id enabled } }"#;
+    let resp = node.execute(query).await;
+    assert!(!resp.has_errors(), "query Skill: {:?}", resp.errors);
+    let enabled = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("Skill"))
+        .and_then(|a| a.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("enabled"))
+        .and_then(|v| v.as_bool());
+    assert_eq!(enabled, Some(false), "disable must persist");
+
+    let delete = r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#;
+    let resp = node.execute(delete).await;
+    assert!(
+        !resp.has_errors(),
+        "delete_Skill by filter: {:?}",
+        resp.errors
+    );
+}
+
+/// The control watcher must hot-reload Skill changes (#340): a Skill
+/// create/delete drives `apply_control_update` to `Applied` and updates the
+/// view, so a running agent picks up skills without a restart.
+#[tokio::test]
+async fn apply_control_update_hot_reloads_skill() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-skill-reload"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-skill-reload",
+        "http://127.0.0.1:8233/v1",
+    )
+    .await;
+
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    assert!(view.skills.is_empty(), "no skills before create");
+
+    let create = format!(
+        r#"mutation {{ create_Skill(input: {{
+            skill_id: "s-reload", agent_did: "{did}", scope: "principal",
+            name: "Reload", instructions: "Reload me.", enabled: true
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(identity.did()),
+    );
+    let resp = node.execute(&create).await;
+    assert!(!resp.has_errors(), "create_Skill: {:?}", resp.errors);
+    let doc_id = created_skill_doc_id(resp.data.as_ref()).expect("created Skill _docID");
+
+    let outcome = apply_control_update(node.as_ref(), identity.did(), "skill", &doc_id, &mut view)
+        .await
+        .expect("apply skill create");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(view.skills.contains_key("s-reload"), "skill added to view");
+
+    // A skill owned by a different principal is irrelevant.
+    let foreign = "mutation { create_Skill(input: { skill_id: \"s-foreign\", agent_did: \"did:key:zOther\", scope: \"principal\", name: \"F\", enabled: true }) { _docID } }";
+    let resp = node.execute(foreign).await;
+    let foreign_doc_id = created_skill_doc_id(resp.data.as_ref()).expect("foreign Skill _docID");
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "skill",
+        &foreign_doc_id,
+        &mut view,
+    )
+    .await
+    .expect("apply foreign skill");
+    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
+
+    // Deletion drops it from the view.
+    let delete =
+        r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
+    assert!(!node.execute(delete).await.has_errors());
+    let outcome = apply_control_update(node.as_ref(), identity.did(), "skill", &doc_id, &mut view)
+        .await
+        .expect("apply skill delete");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(
+        !view.skills.contains_key("s-reload"),
+        "skill removed from view"
+    );
 }
 
 #[tokio::test]

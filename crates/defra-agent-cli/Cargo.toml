@@ -45,6 +45,7 @@ rmcp = { version = "1.2.0", features = [
 schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true

@@ -58,6 +58,7 @@ fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
     }
 
     validate_vec(&manifest.agent_behaviors, "behavior_id")?;
+    validate_vec(&manifest.skills, "skill_id")?;
     validate_vec(&manifest.tool_selections, "selection_id")?;
     validate_vec(&manifest.inference_backends, "backend_id")?;
     validate_vec(&manifest.inference_profiles, "profile_id")?;
@@ -99,6 +100,7 @@ pub(crate) fn write_manifest_root(
         &manifest.agent_behaviors,
         spill_behavior_sidecar,
     )?;
+    write_per_doc_collection(root, Collection::Skill, &manifest.skills, no_sidecar)?;
     write_per_doc_collection(
         root,
         Collection::ToolSelection,

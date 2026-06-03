@@ -43,6 +43,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         access_mode: access.mode().to_string(),
         agent_principal: None,
         agent_behaviors: Vec::new(),
+        skills: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),

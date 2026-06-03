@@ -83,8 +83,26 @@ impl RuntimeContext {
         let api_key = behavior.completion_client_api_key()?;
         let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
         let preamble = prompt_builder.preamble().to_string();
-        let tools = tool_surface
-            .build_tools(&self.tool_runtime)?
+        let mut built_tools = tool_surface.build_tools(&self.tool_runtime)?;
+        // Progressive-disclosure activation (D2): when the behavior has skills,
+        // expose `load_skill` so the model can pull a skill's full instructions
+        // on demand (the catalog of names+descriptions is in the preamble). The
+        // tool is scoped to this behavior's effective skill set + tool ceiling,
+        // so it never reveals a foreign skill or widens the tool surface.
+        if !behavior.skills.is_empty() {
+            // The D3 ceiling is the behavior's full callable surface (built tool
+            // names PLUS allowed MCP service ids) — see `skill_tool_ceiling`.
+            let ceiling = crate::skills::skill_tool_ceiling(
+                tool_surface.tool_names(),
+                tool_surface.allowed_mcp_service_ids(),
+                tool_surface.includes_meta_tools(),
+            );
+            built_tools.push(Box::new(crate::skills::LoadSkillTool::new(
+                behavior.skills.clone(),
+                ceiling,
+            )));
+        }
+        let tools = built_tools
             .into_iter()
             .map(crate::tool_call_lifecycle::runtime::wrap_tool)
             .collect();

@@ -25,6 +25,7 @@ def backendB : DocRef := doc .inferenceBackend "backend-b"
 def selectionA : DocRef := doc .toolSelection "selection-a"
 def profileA : DocRef := doc .inferenceProfile "profile-a"
 def serviceA : DocRef := doc .toolServiceRegistry "service-a"
+def skillA : DocRef := doc .skill "skill-a"
 def behaviorA : DocRef := doc .agentBehavior "behavior-a"
 def taskA : DocRef := doc .task "task-a"
 def scheduleA : DocRef := doc .schedule "schedule-a"
@@ -89,8 +90,9 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         , desired .inferenceProfile "profile-a" "profile-desired"
         , desired .toolServiceRegistry "service-a" "service-desired"
         , desired .toolSelection "selection-a" "selection-desired"
+        , desired .skill "skill-a" "skill-desired" [serviceA]
         , desired .agentBehavior "behavior-a" "behavior-desired"
-            [backendA, selectionA, profileA, serviceA]
+            [backendA, selectionA, profileA, serviceA, skillA]
         , desired .task "task-a" "task-desired" [behaviorA]
         , desired .schedule "schedule-a" "schedule-desired"
         , desired .eventTrigger "trigger-a" "trigger-desired" [taskA]

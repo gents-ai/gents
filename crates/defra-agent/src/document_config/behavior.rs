@@ -22,6 +22,16 @@ pub struct AgentBehavior {
     pub compaction_strategy: Option<String>,
     pub compaction_threshold: Option<f64>,
     pub enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    pub skill_refs: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    pub skill_excludes: Vec<String>,
     pub created_at: Option<String>,
 }
 
@@ -57,6 +67,8 @@ pub(crate) async fn load_agent_behavior_record(
                 compaction_strategy
                 compaction_threshold
                 enabled
+                skill_refs
+                skill_excludes
                 created_at
             }}
         }}"#
@@ -93,6 +105,8 @@ pub(crate) async fn load_agent_behavior_by_doc_id(
                 compaction_strategy
                 compaction_threshold
                 enabled
+                skill_refs
+                skill_excludes
                 created_at
             }}
         }}"#
@@ -140,6 +154,8 @@ pub(crate) async fn list_agent_behavior_records(
                 compaction_strategy
                 compaction_threshold
                 enabled
+                skill_refs
+                skill_excludes
                 created_at
             }}
         }}"#
@@ -272,6 +288,8 @@ pub(super) async fn create_default_behavior(
             compaction_strategy: None,
             compaction_threshold: None,
             enabled: true,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             created_at: Some(chrono::Utc::now().to_rfc3339()),
         },
     )

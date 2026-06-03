@@ -177,6 +177,8 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4 parent".to_string()),
@@ -196,6 +198,8 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4 child".to_string()),

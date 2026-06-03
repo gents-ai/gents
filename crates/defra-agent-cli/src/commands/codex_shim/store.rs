@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::defra_node::{EmbeddedNode, QueryRequest};
 use defra_agent_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
 
@@ -11,6 +11,34 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
     if response.has_errors() {
         anyhow::bail!("DEFRA Codex shim query failed: {:?}", response.errors);
     }
+    Ok(json!({
+        "data": response.data.unwrap_or_else(|| json!({})),
+    }))
+}
+
+/// Run a write mutation inside a transaction and commit it. A bare
+/// auto-committed single mutation (`node.execute`) does NOT emit the DefraDB
+/// `Update` event the runtime control watcher reconciles on, but a transaction
+/// COMMIT does. Routing skill enable/disable writes through here lets a running
+/// agent pick up Codex-driven toggles without a restart — matching the
+/// `config skill` CLI path (#340). Mirrors the Local arm of
+/// `config_writes::txn::ConfigApplyTxn`.
+pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
+    let handle = node
+        .runner()
+        .begin_txn(false)
+        .await
+        .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+    let request = QueryRequest::new(mutation);
+    let response = node.runner().execute_in_txn(request, &handle).await;
+    if response.has_errors() {
+        let _ = node.runner().rollback_txn(&handle).await;
+        anyhow::bail!("DEFRA Codex shim mutation failed: {:?}", response.errors);
+    }
+    node.runner()
+        .commit_txn(&handle)
+        .await
+        .map_err(|error| anyhow::anyhow!("commit_txn: {error}"))?;
     Ok(json!({
         "data": response.data.unwrap_or_else(|| json!({})),
     }))

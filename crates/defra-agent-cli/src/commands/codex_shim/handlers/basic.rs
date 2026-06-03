@@ -13,8 +13,10 @@ use super::super::protocol::{
     absolute_path, backend_model_summary, empty_rate_limits, initialize_result, send_error,
     send_result, send_typed_json_result,
 };
+use super::super::store::{execute_committed, query_node_json};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
+use defra_agent::graphql::escape_graphql_string;
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,
@@ -178,10 +180,25 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::SkillsList { request_id, .. } => {
+            let entry = match load_skill_metadata(state).await {
+                Ok(skills) => codex::SkillsListEntry {
+                    cwd: state.cwd.clone(),
+                    skills,
+                    errors: Vec::new(),
+                },
+                Err(error) => codex::SkillsListEntry {
+                    cwd: state.cwd.clone(),
+                    skills: Vec::new(),
+                    errors: vec![codex::SkillErrorInfo {
+                        path: state.cwd.clone(),
+                        message: format!("failed to load skills: {error}"),
+                    }],
+                },
+            };
             send_result(
                 outbound,
                 request_id,
-                codex::SkillsListResponse { data: Vec::new() },
+                codex::SkillsListResponse { data: vec![entry] },
             )
             .await
         }
@@ -221,6 +238,160 @@ pub(super) async fn handle_basic_request(
             other.method()
         ),
     }
+}
+
+/// Synthetic absolute path Codex uses as the skill identifier. The final
+/// segment is the `skill_id`, which `SkillsConfigWrite` parses back out.
+fn skill_doc_path(skill_id: &str) -> codex_utils_absolute_path::AbsolutePathBuf {
+    std::path::PathBuf::from(format!("/defra/skills/{skill_id}"))
+        .try_into()
+        .expect("synthetic skill path is absolute")
+}
+
+/// Query the bound agent's `Skill` documents and project them to Codex
+/// `SkillMetadata`. Defra's `scope` maps `principal` -> `System` (shared across
+/// the agent's behaviors) and `behavior` -> `User`.
+async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
+    let query = format!(
+        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{
+            skill_id name description scope enabled
+        }} }}"#,
+        did = escape_graphql_string(&state.agent_did),
+    );
+    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("Skill"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut skills = Vec::new();
+    for row in rows {
+        let skill_id = row
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if skill_id.trim().is_empty() {
+            continue;
+        }
+        let name = row
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(skill_id)
+            .to_string();
+        let description = row
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let enabled = row.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let scope = match row.get("scope").and_then(Value::as_str) {
+            Some("principal") => codex::SkillScope::System,
+            _ => codex::SkillScope::User,
+        };
+        skills.push(codex::SkillMetadata {
+            name,
+            description,
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: skill_doc_path(skill_id),
+            scope,
+            enabled,
+        });
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+/// Enable/disable a `Skill` document (Codex `skills/config/write`). Resolves the
+/// target by the synthetic path's final segment, or by matching `name`.
+pub(super) async fn handle_skills_config_write(
+    outbound: &Outbound,
+    state: &ShimState,
+    request_id: codex::RequestId,
+    params: codex::SkillsConfigWriteParams,
+) -> Result<()> {
+    let skill_id = match resolve_skill_id(state, &params).await {
+        Ok(skill_id) => skill_id,
+        Err(error) => {
+            return send_error(
+                outbound,
+                request_id,
+                JSONRPC_INVALID_PARAMS,
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let mutation = format!(
+        r#"mutation {{ update_Skill(
+            filter: {{ skill_id: {{ _eq: "{skill_id}" }} }},
+            input: {{ enabled: {enabled} }}
+        ) {{ _docID }} }}"#,
+        skill_id = escape_graphql_string(&skill_id),
+        enabled = params.enabled,
+    );
+    // Commit in a transaction so the COMMIT emits the DefraDB `Update` event
+    // the runtime control watcher reconciles on -- a Codex-driven enable/disable
+    // then reaches a running agent without a restart (#340).
+    if let Err(error) = execute_committed(state.node.as_ref(), &mutation).await {
+        return send_error(
+            outbound,
+            request_id,
+            JSONRPC_INVALID_PARAMS,
+            format!("failed to update skill {skill_id}: {error}"),
+        )
+        .await;
+    }
+    send_result(
+        outbound,
+        request_id,
+        codex::SkillsConfigWriteResponse {
+            effective_enabled: params.enabled,
+        },
+    )
+    .await
+}
+
+async fn resolve_skill_id(
+    state: &ShimState,
+    params: &codex::SkillsConfigWriteParams,
+) -> Result<String> {
+    if let Some(path) = params.path.as_ref() {
+        if let Some(skill_id) = std::path::Path::new(path.as_path())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Ok(skill_id.to_string());
+        }
+    }
+    if let Some(name) = params
+        .name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        // Match by display name OR skill_id.
+        let metadata = load_skill_metadata(state).await?;
+        if let Some(found) = metadata.iter().find(|skill| {
+            skill.name == name
+                || std::path::Path::new(skill.path.as_path())
+                    .file_name()
+                    .and_then(|segment| segment.to_str())
+                    == Some(name)
+        }) {
+            return Ok(std::path::Path::new(found.path.as_path())
+                .file_name()
+                .and_then(|segment| segment.to_str())
+                .unwrap_or(name)
+                .to_string());
+        }
+        anyhow::bail!("no skill named {name:?}");
+    }
+    anyhow::bail!("skills/config/write requires a path or name selector")
 }
 
 async fn apply_config_writes(

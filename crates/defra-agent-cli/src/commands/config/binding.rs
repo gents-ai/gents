@@ -198,6 +198,7 @@ fn counts_for_manifest(manifest: &DesiredStateManifest) -> DesiredStateCounts {
     DesiredStateCounts {
         agent_principal: 1,
         agent_behaviors: manifest.agent_behaviors.len(),
+        skills: manifest.skills.len(),
         tool_selections: manifest.tool_selections.len(),
         inference_backends: manifest.inference_backends.len(),
         inference_profiles: manifest.inference_profiles.len(),

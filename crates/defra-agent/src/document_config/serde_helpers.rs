@@ -82,6 +82,19 @@ where
     deserializer.deserialize_any(OptionalStringVecVisitor)
 }
 
+/// Like [`deserialize_optional_string_vec`] but yields a plain `Vec<String>`,
+/// mapping null / unit / empty-string / missing to an empty vec. DefraDB returns
+/// `null` for an unset `[String!]` field, which a bare `Vec<String>` cannot
+/// deserialize; this keeps such fields null-safe without an `Option` wrapper.
+pub(super) fn deserialize_string_vec_or_null<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_optional_string_vec(deserializer)?.unwrap_or_default())
+}
+
 pub(super) fn first_row_with_doc_id<T>(data: Option<&Value>, field: &str) -> Option<(String, T)>
 where
     T: DeserializeOwned,

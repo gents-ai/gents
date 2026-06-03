@@ -12,7 +12,7 @@ use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
     EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
-    EXPORT_SCHEDULE_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
+    EXPORT_SCHEDULE_FIELDS, EXPORT_SKILL_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
     EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
@@ -195,6 +195,24 @@ pub(crate) async fn build_config_export_bundle(
     sort_document_rows(&mut schedule_rows, "schedule_id");
     sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
+    let mut skill_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Skill",
+        &format!(
+            r#"{{
+                Skill(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SKILL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut skill_rows, "skill_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -202,6 +220,7 @@ pub(crate) async fn build_config_export_bundle(
         access_mode: access.mode().to_string(),
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
+        skills: skill_rows,
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
@@ -434,6 +453,24 @@ pub(crate) async fn build_desired_state_live_bundle(
     sort_document_rows(&mut schedule_rows, "schedule_id");
     sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
+    let mut skill_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Skill",
+        &format!(
+            r#"{{
+                Skill(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SKILL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut skill_rows, "skill_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -441,6 +478,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         access_mode: access.mode().to_string(),
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
+        skills: skill_rows,
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
@@ -467,6 +505,7 @@ pub(crate) fn live_manifest_from_bundle(
             desired_state::DesiredStateManifest {
                 agent_principal: desired_manifest.agent_principal.clone(),
                 agent_behaviors: Vec::new(),
+                skills: Vec::new(),
                 tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
@@ -565,14 +604,10 @@ pub(crate) fn sanitize_import_document(
     doc: &Value,
     for_update: bool,
 ) -> Result<Value> {
-    let mut object = match collection_name {
-        "InferenceBackend" | "Task" | "Schedule" | "EventTrigger" | "ToolServiceRegistry" => {
-            doc.as_object().cloned().ok_or_else(|| {
-                anyhow::anyhow!("{collection_name} import document must be an object")
-            })?
-        }
-        _ => return Ok(doc.clone()),
-    };
+    let mut object = doc
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("{collection_name} import document must be an object"))?;
 
     match collection_name {
         "InferenceBackend" => {
@@ -653,7 +688,34 @@ pub(crate) fn sanitize_import_document(
                 }
             }
         }
-        _ => unreachable!(),
+        // AgentBehavior, ToolSelection, Skill, AgentPrincipal: no per-collection
+        // field surgery — they fall through to the universal empty-array strip.
+        _ => {}
+    }
+
+    // DefraDB cannot type an empty array literal (`[]`) and rejects it. How an
+    // empty list is handled depends on whether this is a create or an update:
+    //
+    //  - CREATE: there is no prior value to clear, so omit the field (a new row
+    //    reads back as empty via the null-safe deserializers). Required-list
+    //    fields would also reject `null` here.
+    //  - UPDATE: omitting would leave a previously non-empty list in place,
+    //    so a "remove the last entry" edit could never converge on re-apply.
+    //    Write `null` to actually CLEAR it (the deserializers read null as
+    //    empty). Required non-null list fields (peer_pairing_desired) cannot be
+    //    nulled — leave them omitted so apply does not clobber/err on them.
+    const REQUIRED_LIST_FIELDS: [&str; 2] = ["collections", "replicator_addresses"];
+    let empty_list_fields: Vec<String> = object
+        .iter()
+        .filter(|(_, value)| matches!(value, Value::Array(items) if items.is_empty()))
+        .map(|(key, _)| key.clone())
+        .collect();
+    for field in empty_list_fields {
+        if for_update && !REQUIRED_LIST_FIELDS.contains(&field.as_str()) {
+            object.insert(field, Value::Null);
+        } else {
+            object.remove(&field);
+        }
     }
 
     Ok(Value::Object(object))
@@ -709,6 +771,49 @@ pub(crate) fn select_apply_collection_docs(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn empty_list_is_cleared_on_update_but_omitted_on_create() {
+        // CREATE: empty list is omitted (DefraDB rejects a literal `[]`; a new
+        // row reads back empty).
+        let created = sanitize_import_document(
+            "Skill",
+            &json!({ "skill_id": "s", "tool_refs": [], "agent_did": "did:p" }),
+            false,
+        )
+        .unwrap();
+        assert!(
+            created.get("tool_refs").is_none(),
+            "create omits empty list"
+        );
+
+        // UPDATE: empty list is written as `null` so a prior non-empty value is
+        // actually cleared (omitting it would leave the stale list — apply could
+        // never converge after removing the last entry).
+        let updated = sanitize_import_document(
+            "AgentBehavior",
+            &json!({ "behavior_id": "b", "skill_refs": [], "skill_excludes": [] }),
+            true,
+        )
+        .unwrap();
+        assert_eq!(updated.get("skill_refs"), Some(&Value::Null));
+        assert_eq!(updated.get("skill_excludes"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn required_non_null_list_fields_are_never_nulled() {
+        // peer_pairing_desired.collections / replicator_addresses are `[String!]!`
+        // — nulling them would be rejected, so even on update they are omitted
+        // (left unchanged) rather than cleared.
+        let updated = sanitize_import_document(
+            "PeerPairingDesired",
+            &json!({ "id": "p", "collections": [], "replicator_addresses": [] }),
+            true,
+        )
+        .unwrap();
+        assert!(updated.get("collections").is_none());
+        assert!(updated.get("replicator_addresses").is_none());
+    }
 
     /// Regression for Finding 3 (multi-agent scoping): when two agents
     /// live on the same node, `config export` / `config diff` must only

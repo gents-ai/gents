@@ -180,6 +180,37 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         }
     }
 
+    let mut skill_ids = BTreeSet::new();
+    for skill in &manifest.skills {
+        let skill_id = skill.skill_id.trim();
+        if skill_id.is_empty() {
+            errors.push("skills manifest contains a skill with an empty skill_id".to_string());
+        } else if !skill_ids.insert(skill_id.to_string()) {
+            errors.push(format!("duplicate skill_id in skills manifest: {skill_id}"));
+        }
+
+        if !principal_agent_did.is_empty() && skill.agent_did.trim() != principal_agent_did {
+            errors.push(format!(
+                "skill {} belongs to {} not {}",
+                skill.skill_id, skill.agent_did, manifest.agent_principal.agent_did
+            ));
+        }
+
+        if !matches!(skill.scope.trim(), "principal" | "behavior") {
+            errors.push(format!(
+                "skill {} has invalid scope {:?}; expected \"principal\" or \"behavior\"",
+                skill.skill_id, skill.scope
+            ));
+        }
+
+        if skill.name.trim().is_empty() {
+            errors.push(format!(
+                "skill {} in skills manifest must contain a non-empty name",
+                skill.skill_id
+            ));
+        }
+    }
+
     for behavior in &manifest.agent_behaviors {
         let behavior_id = behavior.behavior_id.trim();
         if behavior_id.is_empty() {
@@ -222,6 +253,29 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 errors.push(format!(
                     "behavior {} references missing inference_profile_id {}",
                     behavior.behavior_id, profile_id
+                ));
+            }
+        }
+
+        // skill_refs / skill_excludes must resolve to skills in this manifest.
+        // Because every skill is validated above to belong to this principal,
+        // this also enforces D6 (no live cross-principal skill references —
+        // share by importing a copy instead).
+        for skill_ref in &behavior.skill_refs {
+            let skill_ref = skill_ref.trim();
+            if !skill_ref.is_empty() && !skill_ids.contains(skill_ref) {
+                errors.push(format!(
+                    "behavior {} references missing skill_ref {} (import the skill first)",
+                    behavior.behavior_id, skill_ref
+                ));
+            }
+        }
+        for skill_exclude in &behavior.skill_excludes {
+            let skill_exclude = skill_exclude.trim();
+            if !skill_exclude.is_empty() && !skill_ids.contains(skill_exclude) {
+                errors.push(format!(
+                    "behavior {} references missing skill_exclude {}",
+                    behavior.behavior_id, skill_exclude
                 ));
             }
         }
