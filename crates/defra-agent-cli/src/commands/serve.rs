@@ -107,11 +107,22 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    // The MCP `defra_query` endpoint is opt-in (unauthenticated read surface).
+    let mcp_query_scope = if !args.enable_mcp {
+        None
+    } else if args.mcp_query_collections.is_empty() {
+        Some(defra_agent::defra_query::CollectionScope::all())
+    } else {
+        Some(defra_agent::defra_query::CollectionScope::restricted(
+            args.mcp_query_collections.clone(),
+        ))
+    };
     let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
         defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
             graphql_url.clone(),
             agent_name.clone(),
             identity.did().to_string(),
+            mcp_query_scope,
         )),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {

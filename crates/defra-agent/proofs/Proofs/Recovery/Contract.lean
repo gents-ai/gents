@@ -147,4 +147,64 @@ theorem finite_stale_rows_converge
 
 end RecoverySweep
 
+/--
+Equivalence between the daemon-restart recovery path and the canonical
+uninterrupted terminalization path for the same persisted facts.
+
+The relation is exact row equality: recovery is not allowed to re-execute,
+skip, or hang on a stale persisted row when the uninterrupted lifecycle path
+has a deterministic terminal outcome for that row.
+-/
+structure RecoveryEquivalence (sweep : RecoverySweep) where
+  uninterrupted : sweep.Row → sweep.Row
+  h_recover_eq_uninterrupted :
+    ∀ row, sweep.stale row → sweep.recover row = uninterrupted row
+
+namespace RecoveryEquivalence
+
+def uninterruptedRows
+    {sweep : RecoverySweep}
+    (equivalence : RecoveryEquivalence sweep)
+    (rows : List sweep.Row) : List sweep.Row :=
+  rows.map equivalence.uninterrupted
+
+theorem recoveredRows_eq_uninterruptedRows
+    {sweep : RecoverySweep}
+    (equivalence : RecoveryEquivalence sweep)
+    {rows : List sweep.Row}
+    (h_all_stale : ∀ row, row ∈ rows → sweep.stale row) :
+    sweep.recoveredRows rows = equivalence.uninterruptedRows rows := by
+  induction rows with
+  | nil =>
+      simp [RecoverySweep.recoveredRows, uninterruptedRows]
+  | cons hd tl ih =>
+      have h_hd :
+          sweep.recover hd = equivalence.uninterrupted hd :=
+        equivalence.h_recover_eq_uninterrupted hd (h_all_stale hd (by simp))
+      have h_tl : ∀ row, row ∈ tl → sweep.stale row := by
+        intro row h_mem
+        exact h_all_stale row (by simp [h_mem])
+      change
+        sweep.recover hd :: sweep.recoveredRows tl =
+          equivalence.uninterrupted hd :: equivalence.uninterruptedRows tl
+      rw [h_hd, ih h_tl]
+
+theorem finite_stale_rows_converge_to_uninterrupted
+    {sweep : RecoverySweep}
+    (equivalence : RecoveryEquivalence sweep)
+    (rows : List sweep.Row)
+    (h_all_stale : ∀ row, row ∈ rows → sweep.stale row) :
+    ∃ results : List sweep.Row,
+      results = equivalence.uninterruptedRows rows ∧
+      results.length = rows.length ∧
+      sweep.aggregateMeasure results = 0 ∧
+      ∀ row, row ∈ results → sweep.terminal row := by
+  refine ⟨sweep.recoveredRows rows, ?_, ?_, ?_, ?_⟩
+  · exact recoveredRows_eq_uninterruptedRows equivalence h_all_stale
+  · exact sweep.recoveredRows_length rows
+  · exact sweep.aggregateMeasure_recovered_zero h_all_stale
+  · exact sweep.recoveredRows_terminal h_all_stale
+
+end RecoveryEquivalence
+
 end Recovery

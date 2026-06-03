@@ -311,6 +311,7 @@ mod tests {
             graphql,
             "identity-test-agent".to_string(),
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

@@ -35,6 +35,106 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     }
 }
 
+pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract() {
+    let sweep_cases = lean_recovery_sweep_cases();
+    let equivalence_cases = lean_recovery_equivalence_cases();
+    assert_eq!(
+        equivalence_cases.len(),
+        sweep_cases.len(),
+        "Lean must emit one uninterrupted-equivalence witness per recovery sweep case"
+    );
+    assert_eq!(
+        equivalence_cases.len(),
+        19,
+        "Lean recovery equivalence witness count drifted"
+    );
+
+    let sweep_by_name = sweep_cases
+        .iter()
+        .map(|case| (case.name.as_str(), case))
+        .collect::<HashMap<_, _>>();
+    let mut seen_sources = BTreeSet::new();
+    for case in equivalence_cases {
+        let source = sweep_by_name
+            .get(case.source_sweep_case.as_str())
+            .unwrap_or_else(|| {
+                panic!(
+                    "recovery equivalence case {} references unknown sweep case {}",
+                    case.name, case.source_sweep_case
+                )
+            });
+        assert!(
+            seen_sources.insert(case.source_sweep_case.as_str()),
+            "duplicate recovery equivalence witness for {}",
+            case.source_sweep_case
+        );
+        assert_eq!(case.sweep_id, source.sweep_id, "sweep id drifted");
+        assert_eq!(case.collection, source.collection, "collection drifted");
+        assert_eq!(
+            case.rust_function, source.rust_function,
+            "Rust function drifted"
+        );
+        assert_eq!(
+            case.cadence, "startup",
+            "recovery equivalence cadence drifted"
+        );
+        assert_eq!(case.pre_state, source.pre_state, "pre-state drifted");
+        assert_eq!(
+            case.recovered_state, source.terminal_state,
+            "recovery terminal state drifted"
+        );
+        assert_eq!(
+            case.uninterrupted_state, source.terminal_state,
+            "uninterrupted terminal state drifted"
+        );
+        assert!(
+            case.equivalent,
+            "recovery case {} must equal the uninterrupted terminalization path",
+            case.name
+        );
+        assert!(
+            !case.reexecutes,
+            "recovery case {} must not claim tool/request re-execution",
+            case.name
+        );
+        assert!(
+            !case.can_hang,
+            "recovery case {} must not permit hanging after startup recovery",
+            case.name
+        );
+        assert_eq!(
+            case.theorem.as_str(),
+            expected_recovery_equivalence_theorem(case.sweep_id.as_str()),
+            "wrong concrete Lean equivalence theorem for {}",
+            case.name
+        );
+        assert_eq!(
+            case.aggregate_theorem.as_str(),
+            "Recovery.RecoveryEquivalence.finite_stale_rows_converge_to_uninterrupted"
+        );
+    }
+    assert_eq!(seen_sources.len(), sweep_cases.len());
+}
+
+fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
+    match sweep_id {
+        "request_lifecycle_recover_all_requests" => "Recovery.requestRecover_matches_uninterrupted",
+        "request_lifecycle_recover_all_streaming_responses" => {
+            "Recovery.responseRecover_matches_uninterrupted"
+        }
+        "tool_call_lifecycle_recover_all_running_calls" => {
+            "Recovery.toolCallRecover_matches_uninterrupted"
+        }
+        "tool_call_lifecycle_recover_detached_bridge_rows" => {
+            "Recovery.detachedBridgeRecover_matches_uninterrupted"
+        }
+        "inference_call_recover_all_stale_calls" => {
+            "Recovery.inferenceCallRecover_matches_uninterrupted"
+        }
+        other => panic!("unhandled recovery equivalence sweep id {other}"),
+    }
+}
+
 fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
     assert_eq!(case.cadence.as_str(), "startup");
     assert_eq!(

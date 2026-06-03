@@ -541,6 +541,7 @@ mod tests {
             graphql,
             "subagent-tree-test-agent".to_string(),
             "did:key:z6Mksubagenttree".to_string(),
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

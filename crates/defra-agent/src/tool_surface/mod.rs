@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use rig::tool::ToolDyn;
 
+use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_delegate_tool, build_subagent_tools,
@@ -33,6 +34,8 @@ pub struct ToolSurface {
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
+    pub(super) enable_defra_query: bool,
+    pub(super) defra_query_collections: Vec<String>,
 }
 
 impl ToolSurface {
@@ -78,6 +81,9 @@ impl ToolSurface {
         names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
+        if self.enable_defra_query {
+            names.push(DEFRA_QUERY_TOOL_NAME.to_string());
+        }
         build::dedupe_strings(names)
     }
 
@@ -105,6 +111,12 @@ impl ToolSurface {
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
         }
+        if self.enable_defra_query {
+            tools.push(build_defra_query_tool(
+                runtime.node.clone(),
+                CollectionScope::restricted(self.defra_query_collections.clone()),
+            ));
+        }
         Ok(tools)
     }
 }
@@ -126,6 +138,8 @@ impl std::fmt::Debug for ToolSurface {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
+            .field("enable_defra_query", &self.enable_defra_query)
+            .field("defra_query_collections", &self.defra_query_collections)
             .finish()
     }
 }

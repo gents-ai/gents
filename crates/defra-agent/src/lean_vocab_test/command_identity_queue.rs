@@ -169,3 +169,21 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) measure_after: usize,
     pub(crate) deadline_audit_ref: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanRecoveryEquivalenceCase {
+    pub(crate) name: String,
+    pub(crate) source_sweep_case: String,
+    pub(crate) sweep_id: String,
+    pub(crate) collection: String,
+    pub(crate) rust_function: String,
+    pub(crate) cadence: String,
+    pub(crate) pre_state: String,
+    pub(crate) recovered_state: String,
+    pub(crate) uninterrupted_state: String,
+    pub(crate) equivalent: bool,
+    pub(crate) reexecutes: bool,
+    pub(crate) can_hang: bool,
+    pub(crate) theorem: String,
+    pub(crate) aggregate_theorem: String,
+}
