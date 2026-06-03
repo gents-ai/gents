@@ -36,14 +36,22 @@ pub(crate) struct SelfBehavior {
     pub(crate) context_window: Option<i64>,
 }
 
-/// Agent-scoped context-budget summary derived from `CompactionEntry` over the
-/// agent's own sessions.
+/// Agent-scoped context-budget summary derived from `CompactionEntry`.
+///
+/// Scope is the agent's sessions discovered from its most-recent
+/// [`RECENT_REQUEST_SCAN`] requests — a recent-activity view, not an all-time
+/// total. `sessions_considered` reports how many sessions were aggregated so
+/// the figures are not mistaken for an exhaustive count.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ContextBudget {
     pub(crate) compaction_count: i64,
     pub(crate) latest_compaction_at: Option<String>,
     pub(crate) latest_original_tokens: Option<i64>,
     pub(crate) latest_compacted_tokens: Option<i64>,
+    /// Number of (recent) agent sessions aggregated for this summary.
+    pub(crate) sessions_considered: i64,
+    /// The recent-request scan bound used to discover those sessions.
+    pub(crate) request_scan_limit: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,13 +132,15 @@ pub(crate) async fn load_self_view(
     let behaviors = build_behaviors(envelope.behaviors, envelope.backends, envelope.profiles);
     let session_ids = distinct_session_ids(&envelope.requests);
 
-    let context_budget = if session_ids.is_empty() {
+    let mut context_budget = if session_ids.is_empty() {
         ContextBudget::default()
     } else {
         let response = post_graphql(graphql, &compaction_query(&session_ids)).await?;
         let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
         aggregate_compaction(envelope.compactions)
     };
+    context_budget.sessions_considered = session_ids.len() as i64;
+    context_budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
 
     Ok((behaviors, context_budget))
 }
@@ -269,6 +279,9 @@ fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
         latest_compaction_at: latest.and_then(|entry| entry.created_at.clone()),
         latest_original_tokens: latest.and_then(|entry| entry.original_tokens),
         latest_compacted_tokens: latest.and_then(|entry| entry.compacted_tokens),
+        // Scope metadata is filled in by `load_self_view`, which knows the
+        // session set; aggregation alone leaves them zero.
+        ..Default::default()
     }
 }
 

@@ -357,6 +357,19 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /fleet to list this agent in ready state: {fleet}"
     );
 
+    // /mcp is opt-in: this server was started without --enable-mcp, so the
+    // endpoint must not be mounted.
+    let mcp_off = client
+        .get(format!("http://127.0.0.1:{port}/mcp"))
+        .send()
+        .await
+        .context("probing /mcp")?;
+    assert_eq!(
+        mcp_off.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "expected /mcp to be absent without --enable-mcp"
+    );
+
     let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
@@ -1337,7 +1350,8 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
 
-    let mut serve = spawn_server(&home_dir, port)?;
+    // MCP is opt-in; the endpoint only mounts with --enable-mcp.
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--enable-mcp"], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 

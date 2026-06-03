@@ -34,10 +34,12 @@ pub(crate) fn runtime_contract_router(
     graphql: String,
     agent_name: String,
     agent_did: String,
-    defra_query_scope: CollectionScope,
+    // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
+    // `None` leaves it off. It is opt-in because it is an unauthenticated read
+    // surface (same listener exposure as the GraphQL endpoint).
+    defra_query_mcp_scope: Option<CollectionScope>,
 ) -> Router {
-    let mcp_service =
-        crate::http::mcp_server::defra_query_mcp_service(graphql.clone(), defra_query_scope);
+    let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
         graphql,
         agent_name,
@@ -46,8 +48,7 @@ pub(crate) fn runtime_contract_router(
         started_instant: Instant::now(),
     };
 
-    Router::new()
-        .nest_service("/mcp", mcp_service)
+    let mut router = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
@@ -66,8 +67,16 @@ pub(crate) fn runtime_contract_router(
         .route(
             "/identity/decide",
             post(crate::http::identity_decide::identity_decide_handler),
-        )
-        .with_state(state)
+        );
+
+    if let Some(scope) = defra_query_mcp_scope {
+        router = router.nest_service(
+            "/mcp",
+            crate::http::mcp_server::defra_query_mcp_service(graphql_for_mcp, scope),
+        );
+    }
+
+    router.with_state(state)
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {

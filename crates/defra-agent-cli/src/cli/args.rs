@@ -350,8 +350,14 @@ pub(crate) struct ServeArgs {
     #[arg(long = "cli-tool")]
     pub(crate) cli_tools: Vec<String>,
     #[arg(
+        long,
+        default_value_t = false,
+        help = "Expose the read-only defra_query MCP tool at /mcp. Off by default: this is an unauthenticated read surface (same listener exposure as the GraphQL endpoint)"
+    )]
+    pub(crate) enable_mcp: bool,
+    #[arg(
         long = "mcp-query-collection",
-        help = "Restrict the /mcp defra_query tool to these collections (repeatable); omit for all"
+        help = "When --enable-mcp is set, restrict the /mcp defra_query tool to these collections (repeatable); omit for all"
     )]
     pub(crate) mcp_query_collections: Vec<String>,
     #[arg(
@@ -866,10 +872,9 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[arg(
         long,
-        default_value_t = true,
-        help = "Enable the read-only defra_query structured query tool"
+        help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
     )]
-    pub(crate) enable_defra_query: bool,
+    pub(crate) enable_defra_query: Option<bool>,
     #[arg(
         long = "defra-query-collection",
         help = "Restrict defra_query to these collections (repeatable); omit for all collections"
@@ -1572,4 +1577,52 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_tools_set(extra: &[&str]) -> ToolSelectionUpsertArgs {
+        let mut argv = vec![
+            "defra-agent",
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            "http://127.0.0.1/api/v0/graphql",
+            "--agent-did",
+            "did:key:z-test",
+            "--selection-id",
+            "s1",
+        ];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("config tools set should parse");
+        match cli.command {
+            Command::Config {
+                command:
+                    ConfigCommand::Tools {
+                        command: ToolSelectionCommand::Set(args),
+                    },
+            } => args,
+            _ => panic!("expected `config tools set`"),
+        }
+    }
+
+    #[test]
+    fn enable_defra_query_flag_accepts_false_true_and_omission() {
+        // Omitted -> None, so an unrelated `config tools set` preserves the
+        // existing document setting rather than re-enabling it.
+        assert_eq!(parse_tools_set(&[]).enable_defra_query, None);
+        // Operators can actually disable it.
+        assert_eq!(
+            parse_tools_set(&["--enable-defra-query", "false"]).enable_defra_query,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
+            Some(true)
+        );
+    }
 }

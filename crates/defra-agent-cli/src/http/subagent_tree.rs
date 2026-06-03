@@ -541,7 +541,7 @@ mod tests {
             graphql,
             "subagent-tree-test-agent".to_string(),
             "did:key:z6Mksubagenttree".to_string(),
-            defra_agent::defra_query::CollectionScope::all(),
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
