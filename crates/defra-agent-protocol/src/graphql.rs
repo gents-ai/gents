@@ -779,8 +779,14 @@ fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> 
         return None;
     }
     let rendered = serde_json::Value::Array(errors).to_string();
-    (rendered.contains("transaction conflict") || rendered.contains("Please retry"))
-        .then_some(rendered)
+    retryable_graphql_error_text(&rendered).then_some(rendered)
+}
+
+fn retryable_graphql_error_text(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("transaction conflict")
+        || message.contains("please retry")
+        || message.contains("database is locked")
 }
 
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
@@ -895,9 +901,19 @@ mod tx_tests {
         last_tx_header: Arc<Mutex<Option<String>>>,
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct RetryRecorder {
         attempts: Arc<Mutex<usize>>,
+        first_error_message: Arc<String>,
+    }
+
+    impl RetryRecorder {
+        fn new(first_error_message: impl Into<String>) -> Self {
+            Self {
+                attempts: Arc::new(Mutex::new(0)),
+                first_error_message: Arc::new(first_error_message.into()),
+            }
+        }
     }
 
     async fn capture_handler(
@@ -921,7 +937,7 @@ mod tx_tests {
         if *attempts == 1 {
             return Json(serde_json::json!({
                 "errors": [{
-                    "message": "commit error: datastore error: storage error: transaction conflict. Please retry"
+                    "message": state.first_error_message.as_str()
                 }]
             }));
         }
@@ -957,9 +973,8 @@ mod tx_tests {
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_transaction_conflict_errors() {
-        let state = RetryRecorder::default();
+    async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {
+        let state = RetryRecorder::new(first_error_message);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let app = Router::new()
@@ -986,5 +1001,28 @@ mod tx_tests {
             Some(true)
         );
         assert_eq!(*state.attempts.lock().unwrap(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_transaction_conflict_errors() {
+        assert_execute_graphql_async_retries_error(
+            "commit error: datastore error: storage error: transaction conflict. Please retry",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_database_locked_errors() {
+        assert_execute_graphql_async_retries_error("database is locked").await;
+    }
+
+    #[test]
+    fn retryable_graphql_error_text_matches_store_conflict_variants() {
+        assert!(retryable_graphql_error_text("Transaction conflict"));
+        assert!(retryable_graphql_error_text("please retry"));
+        assert!(retryable_graphql_error_text("database is locked"));
+        assert!(!retryable_graphql_error_text(
+            "validation error: unknown collection"
+        ));
     }
 }
