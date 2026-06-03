@@ -85,6 +85,39 @@ fn validate_rejects_empty_string_in_backgroundable_tool_names() {
     );
 }
 
+#[tokio::test]
+async fn tool_selection_document_round_trips_defra_query_fields() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = ToolSelectionDocument {
+        selection_id: "amy-general-tools".to_string(),
+        agent_did: "did:key:z-test".to_string(),
+        enable_defra_query: Some(false),
+        defra_query_collections: Some(vec![
+            "AgentRequest".to_string(),
+            "AgentResponse".to_string(),
+        ]),
+        ..Default::default()
+    };
+    upsert_tool_selection(&node, &doc)
+        .await
+        .expect("upsert should persist the defra_query fields");
+
+    let loaded = load_tool_selection(&node, "amy-general-tools")
+        .await
+        .expect("load should succeed")
+        .expect("selection should exist");
+    assert_eq!(loaded.enable_defra_query, Some(false));
+    assert_eq!(
+        loaded.defra_query_collections,
+        Some(vec![
+            "AgentRequest".to_string(),
+            "AgentResponse".to_string()
+        ])
+    );
+}
+
 #[test]
 fn validate_accepts_well_formed_subagent_targets() {
     let doc = ToolSelectionDocument {

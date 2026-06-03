@@ -24,6 +24,8 @@ pub struct BehaviorToolConfig {
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
+    enable_defra_query: bool,
+    defra_query_collections: Vec<String>,
 }
 
 impl BehaviorToolConfig {
@@ -36,6 +38,8 @@ impl BehaviorToolConfig {
             subagent_tools: SubagentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
+            enable_defra_query: true,
+            defra_query_collections: Vec::new(),
         }
     }
 
@@ -71,6 +75,8 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids,
             delegate_to,
             backgroundable_tool_names,
+            enable_defra_query,
+            defra_query_collections,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
@@ -110,6 +116,8 @@ impl BehaviorToolConfig {
                 allowlist: background_allowlist,
             },
             custom_tools,
+            enable_defra_query,
+            defra_query_collections: dedupe_strings(defra_query_collections),
         })
     }
 
@@ -170,6 +178,8 @@ impl BehaviorToolConfig {
             subagent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
+            enable_defra_query: self.enable_defra_query,
+            defra_query_collections: self.defra_query_collections.clone(),
         })
     }
 
@@ -209,6 +219,8 @@ impl std::fmt::Debug for BehaviorToolConfig {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
+            .field("enable_defra_query", &self.enable_defra_query)
+            .field("defra_query_collections", &self.defra_query_collections)
             .finish()
     }
 }

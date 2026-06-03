@@ -382,6 +382,7 @@ mod tests {
             graphql,
             "r5-dispatch-test-agent".to_string(),
             "did:key:z6Mkr5dispatchtest".to_string(),
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
