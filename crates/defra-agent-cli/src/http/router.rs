@@ -9,12 +9,15 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::prometheus::{
     load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
 };
+use crate::http::self_view::load_self_view;
 use crate::http::version::version_response;
+use defra_agent::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
@@ -31,7 +34,12 @@ pub(crate) fn runtime_contract_router(
     graphql: String,
     agent_name: String,
     agent_did: String,
+    // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
+    // `None` leaves it off. It is opt-in because it is an unauthenticated read
+    // surface (same listener exposure as the GraphQL endpoint).
+    defra_query_mcp_scope: Option<CollectionScope>,
 ) -> Router {
+    let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
         graphql,
         agent_name,
@@ -40,11 +48,13 @@ pub(crate) fn runtime_contract_router(
         started_instant: Instant::now(),
     };
 
-    Router::new()
+    let mut router = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/self", get(status_handler))
+        .route("/fleet", get(fleet_handler))
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             "/subagents/dispatches",
@@ -57,8 +67,16 @@ pub(crate) fn runtime_contract_router(
         .route(
             "/identity/decide",
             post(crate::http::identity_decide::identity_decide_handler),
-        )
-        .with_state(state)
+        );
+
+    if let Some(scope) = defra_query_mcp_scope {
+        router = router.nest_service(
+            "/mcp",
+            crate::http::mcp_server::defra_query_mcp_service(graphql_for_mcp, scope),
+        );
+    }
+
+    router.with_state(state)
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -142,11 +160,36 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
         }),
     };
 
+    // Best-effort surfacing of the agent's own behaviors (with backend/profile
+    // joined) and a context-budget summary. Failures here must not fail /status.
+    if body.get("error").is_none() {
+        if let Ok((behaviors, context_budget)) =
+            load_self_view(&state.graphql, &state.agent_did).await
+        {
+            if let Some(map) = body.as_object_mut() {
+                map.insert("behaviors".to_string(), json!(behaviors));
+                map.insert("context_budget".to_string(), json!(context_budget));
+            }
+        }
+    }
+
     if let Some(map) = body.as_object_mut() {
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match load_fleet_snapshot(&state.graphql).await {
+        Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("fleet snapshot failed: {error:#}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response {

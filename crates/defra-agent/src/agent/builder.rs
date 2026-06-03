@@ -282,6 +282,21 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_defra_query(mut self, enable_defra_query: bool) -> Self {
+        self.behavior.tool_selection.enable_defra_query = enable_defra_query;
+        self
+    }
+
+    pub fn defra_query_collections<I, S>(mut self, collections: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.defra_query_collections =
+            collections.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn allowed_mcp_service_ids<I, S>(mut self, service_ids: I) -> Self
     where
         I: IntoIterator<Item = S>,

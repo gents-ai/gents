@@ -15,6 +15,7 @@ pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
+pub mod defra_query;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;

@@ -552,6 +552,8 @@ fn standard_tool_selection(
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+        enable_defra_query: None,
+        defra_query_collections: None,
     }
 }
 

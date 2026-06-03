@@ -366,6 +366,15 @@ pub(crate) fn tool_selection_from_document(
             .backgroundable_tool_names
             .clone()
             .unwrap_or_default(),
+        // The `defra_query` read tool defaults on with all collections; an
+        // operator can disable it or restrict its collection scope per behavior
+        // via the ToolSelection document. (A built-in guard always blocks
+        // sensitive fields regardless of this scope.)
+        enable_defra_query: selection.enable_defra_query.unwrap_or(true),
+        defra_query_collections: selection
+            .defra_query_collections
+            .clone()
+            .unwrap_or_default(),
     })
 }
 

@@ -21,4 +21,6 @@ type ToolSelection {
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
     cross_deployment_spawn_timeout_seconds: Int
+    enable_defra_query: Boolean
+    defra_query_collections: [String]
 }

@@ -95,6 +95,10 @@ fn default_event_kind() -> String {
     "created".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredToolSelection {
@@ -123,6 +127,10 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) delegate_to: Vec<String>,
     #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[serde(default = "default_true")]
+    pub(crate) enable_defra_query: bool,
+    #[serde(default)]
+    pub(crate) defra_query_collections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

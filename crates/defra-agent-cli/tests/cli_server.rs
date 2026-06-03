@@ -272,6 +272,104 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
+    // Seed an AgentRequest (so the agent's session resolves) plus a
+    // CompactionEntry in that session, so the agent-scoped context budget has
+    // something to aggregate. This exercises the agent -> session -> compaction
+    // path end-to-end against the live schema.
+    for mutation in [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", status: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
+    ] {
+        let seed = client
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding self-view fixtures")?;
+        let seed_body: Value = seed.json().await.context("reading seed mutation response")?;
+        assert!(
+            seed_body.get("errors").is_none(),
+            "seed mutation returned errors: {seed_body}"
+        );
+    }
+
+    // /self is an alias for /status and carries the behavior join + context budget.
+    let self_response = client
+        .get(format!("http://127.0.0.1:{port}/self"))
+        .send()
+        .await
+        .context("fetching /self")?;
+    assert!(
+        self_response.status().is_success(),
+        "unexpected /self response: {self_response:?}"
+    );
+    let self_view: Value = self_response.json().await.context("reading /self body")?;
+    let behaviors = self_view
+        .get("behaviors")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty())
+        .unwrap_or_else(|| panic!("expected /self to include behaviors: {self_view}"));
+    assert!(
+        behaviors.iter().any(|behavior| {
+            behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
+                && behavior
+                    .get("endpoint")
+                    .and_then(Value::as_str)
+                    .is_some_and(|endpoint| !endpoint.is_empty())
+        }),
+        "expected /self behavior joined with backend endpoint for model {model_name}: {self_view}"
+    );
+    let budget = self_view
+        .get("context_budget")
+        .unwrap_or_else(|| panic!("expected /self to include context_budget: {self_view}"));
+    assert_eq!(
+        budget.get("compaction_count").and_then(Value::as_i64),
+        Some(1),
+        "expected agent-scoped context_budget to count exactly the seeded compaction: {self_view}"
+    );
+    assert_eq!(
+        budget.get("latest_original_tokens").and_then(Value::as_i64),
+        Some(1234),
+        "expected context_budget latest tokens from the seeded compaction: {self_view}"
+    );
+
+    // /fleet reshapes per-agent_did runtime + request counts.
+    let fleet_response = client
+        .get(format!("http://127.0.0.1:{port}/fleet"))
+        .send()
+        .await
+        .context("fetching /fleet")?;
+    assert!(
+        fleet_response.status().is_success(),
+        "unexpected /fleet response: {fleet_response:?}"
+    );
+    let fleet: Value = fleet_response.json().await.context("reading /fleet body")?;
+    assert!(
+        fleet
+            .get("agents")
+            .and_then(Value::as_array)
+            .is_some_and(|agents| agents.iter().any(|agent| {
+                agent.get("agent_did").and_then(Value::as_str) == Some(agent_did.as_str())
+                    && agent.get("process_state").and_then(Value::as_str) == Some("ready")
+            })),
+        "expected /fleet to list this agent in ready state: {fleet}"
+    );
+
+    // /mcp is opt-in: this server was started without --enable-mcp, so the
+    // endpoint must not be mounted.
+    let mcp_off = client
+        .get(format!("http://127.0.0.1:{port}/mcp"))
+        .send()
+        .await
+        .context("probing /mcp")?;
+    assert_eq!(
+        mcp_off.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "expected /mcp to be absent without --enable-mcp"
+    );
+
     let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
@@ -1028,5 +1126,323 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         "expected chat output to contain {expected_reply}, got:\n{output}"
     );
 
+    Ok(())
+}
+
+/// Proves the `defra-agent query` command can reconstruct a full agent trace
+/// (AgentRequest + AgentResponse + AgentMessage + AgentToolCall, stitched by
+/// request_id / session_id) purely from structured query output — i.e. it can
+/// retire Amygdala's hand-rolled GraphQL client / escaping / polling /
+/// AgentMessage.content parsing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_command_reconstructs_a_trace() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-query-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-query-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a linked trace (same request_id + session_id across collections).
+    let client = reqwest::Client::new();
+    let mutations = [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", status: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_AgentResponse(input: { response_key: "trace-resp", request_id: "trace-req", session_id: "trace-session", content: "hello", status: "completed", token_count: 7 }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentMessage(input: { message_key: "trace-msg", session_id: "trace-session", sequence: 1, role: "assistant", content: "encoded-blob" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "trace-tc", request_id: "trace-req", session_id: "trace-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
+    ];
+    for mutation in mutations {
+        let resp = client
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding trace")?;
+        let body: Value = resp.json().await?;
+        assert!(
+            body.get("errors").is_none(),
+            "seed mutation errored: {body}"
+        );
+    }
+
+    // Reconstruct each collection via `defra-agent query`.
+    let request = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentRequest",
+            "--field",
+            "request_id",
+            "--field",
+            "session_id",
+            "--field",
+            "status",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    assert_eq!(
+        request.get("count").and_then(Value::as_i64),
+        Some(1),
+        "{request}"
+    );
+    let req_row = &request["results"][0];
+    assert_eq!(req_row["session_id"].as_str(), Some("trace-session"));
+    assert_eq!(req_row["status"].as_str(), Some("completed"));
+
+    let tool_calls = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentToolCall",
+            "--field",
+            "request_id",
+            "--field",
+            "tool_name",
+            "--field",
+            "args",
+            "--field",
+            "result",
+            "--field",
+            "status",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    assert_eq!(
+        tool_calls.get("count").and_then(Value::as_i64),
+        Some(1),
+        "{tool_calls}"
+    );
+    let tc = &tool_calls["results"][0];
+    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    // args/result are first-class JSON-string columns — no content reconstruction.
+    let tc_args: Value = serde_json::from_str(tc["args"].as_str().unwrap())
+        .context("tool call args parse as JSON")?;
+    assert_eq!(tc_args["collection"].as_str(), Some("AgentRequest"));
+
+    let responses = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentResponse",
+            "--field",
+            "request_id",
+            "--field",
+            "status",
+            "--field",
+            "token_count",
+            "--filter",
+            r#"{"request_id":{"_eq":"trace-req"}}"#,
+        ],
+    )?;
+    let resp_row = &responses["results"][0];
+    assert_eq!(resp_row["token_count"].as_i64(), Some(7));
+
+    let messages = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentMessage",
+            "--field",
+            "session_id",
+            "--field",
+            "role",
+            "--field",
+            "sequence",
+            "--filter",
+            r#"{"session_id":{"_eq":"trace-session"}}"#,
+        ],
+    )?;
+    let msg_row = &messages["results"][0];
+    assert_eq!(msg_row["role"].as_str(), Some("assistant"));
+
+    // Trace stitches across all four collections, entirely from structured output.
+    assert_eq!(
+        req_row["session_id"].as_str(),
+        msg_row["session_id"].as_str()
+    );
+    assert_eq!(tc["request_id"].as_str(), resp_row["request_id"].as_str());
+
+    // Secret guard holds on the CLI surface too.
+    let denied = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "InferenceBackend",
+            "--field",
+            "api_key",
+        ],
+    )?;
+    assert!(
+        denied.contains("restricted"),
+        "expected secret guard to fire: {denied}"
+    );
+
+    Ok(())
+}
+
+/// Proves the `/mcp` endpoint serves `defra_query` to an external MCP client,
+/// reconstructing trace data structurally (so an external consumer like
+/// Amygdala can retire its hand-rolled stack) and still enforcing the secret
+/// guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_endpoint_serves_defra_query() -> Result<()> {
+    use rmcp::model::CallToolRequestParams;
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+    use rmcp::ServiceExt;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-mcp-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-mcp-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    // MCP is opt-in; the endpoint only mounts with --enable-mcp.
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--enable-mcp"], &[])?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a linked request + tool call.
+    let http = reqwest::Client::new();
+    for mutation in [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", status: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
+    ] {
+        let resp = http
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding mcp trace")?;
+        let body: Value = resp.json().await?;
+        assert!(body.get("errors").is_none(), "seed mutation errored: {body}");
+    }
+
+    // Connect an MCP client to the mounted /mcp endpoint.
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"));
+    let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
+    let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
+
+    // The server advertises the defra_query tool.
+    let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
+    assert!(
+        tools
+            .tools
+            .iter()
+            .any(|tool| tool.name.as_ref() == "defra_query"),
+        "expected defra_query in advertised tools: {:?}",
+        tools
+            .tools
+            .iter()
+            .map(|t| t.name.as_ref())
+            .collect::<Vec<_>>()
+    );
+
+    // Reconstruct the tool call structurally via the MCP tool.
+    let args = serde_json::json!({
+        "collection": "AgentToolCall",
+        "fields": ["request_id", "tool_name", "args", "result", "status"],
+        "filter": { "request_id": { "_eq": "mcp-req" } }
+    });
+    let params =
+        CallToolRequestParams::new("defra_query").with_arguments(args.as_object().unwrap().clone());
+    let result = mcp
+        .peer()
+        .call_tool(params)
+        .await
+        .context("call_tool defra_query")?;
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+        .collect::<Vec<_>>()
+        .join("");
+    let payload: Value = serde_json::from_str(&text).context("MCP tool result is JSON")?;
+    assert_eq!(payload["count"].as_i64(), Some(1), "{payload}");
+    let tc = &payload["results"][0];
+    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
+
+    // Secret guard holds over MCP too.
+    let denied_args =
+        serde_json::json!({ "collection": "InferenceBackend", "fields": ["api_key"] });
+    let denied_params = CallToolRequestParams::new("defra_query")
+        .with_arguments(denied_args.as_object().unwrap().clone());
+    let denied = mcp.peer().call_tool(denied_params).await;
+    let blocked = match denied {
+        Err(_) => true,
+        Ok(result) => {
+            result.is_error == Some(true)
+                || result.content.iter().any(|content| {
+                    content
+                        .raw
+                        .as_text()
+                        .map(|t| t.text.contains("restricted"))
+                        .unwrap_or(false)
+                })
+        }
+    };
+    assert!(
+        blocked,
+        "expected MCP defra_query to block api_key selection"
+    );
+
+    let _ = mcp.cancel().await;
     Ok(())
 }
