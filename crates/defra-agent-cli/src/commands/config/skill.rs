@@ -390,9 +390,137 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         "imported": imported,
         "errors": errors,
     }))?;
-    if !errors.is_empty() {
-        anyhow::bail!("{} skill(s) failed to import", errors.len());
+    // Partial success is fine for a bulk import — per-skill errors are reported
+    // above. Only fail when nothing imported despite errors (total failure).
+    if imported.is_empty() && !errors.is_empty() {
+        anyhow::bail!("no skills imported ({} error(s))", errors.len());
     }
+    Ok(())
+}
+
+// ---- Export Skill documents to a SKILL.md directory tree ----
+
+/// Render a Skill row as `SKILL.md` text: YAML frontmatter (name + optional
+/// description) followed by the instruction body. Round-trips through
+/// `parse_skill_md`.
+fn render_skill_md(skill: &Value) -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct Frontmatter<'a> {
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<&'a str>,
+    }
+    let name = skill
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| skill.get("skill_id").and_then(Value::as_str))
+        .unwrap_or_default();
+    let description = skill
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let instructions = skill
+        .get("instructions")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let frontmatter = serde_yaml::to_string(&Frontmatter { name, description })?;
+    Ok(format!("---\n{frontmatter}---\n\n{instructions}\n"))
+}
+
+/// Render `agents/openai.yaml` for a skill that declares tool_refs or a display
+/// name; `None` when there is nothing to write.
+fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
+    #[derive(serde::Serialize)]
+    struct Tool {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        value: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Dependencies {
+        tools: Vec<Tool>,
+    }
+    #[derive(serde::Serialize)]
+    struct Interface<'a> {
+        display_name: &'a str,
+    }
+    #[derive(serde::Serialize)]
+    struct OpenAi<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        interface: Option<Interface<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dependencies: Option<Dependencies>,
+    }
+    let tool_refs: Vec<String> = skill
+        .get("tool_refs")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let display_name = skill
+        .get("display_name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    if tool_refs.is_empty() && display_name.is_none() {
+        return Ok(None);
+    }
+    let openai = OpenAi {
+        interface: display_name.map(|display_name| Interface { display_name }),
+        dependencies: (!tool_refs.is_empty()).then(|| Dependencies {
+            tools: tool_refs
+                .into_iter()
+                .map(|value| Tool { kind: "mcp", value })
+                .collect(),
+        }),
+    };
+    Ok(Some(serde_yaml::to_string(&openai)?))
+}
+
+pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
+    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let agent_did = escape_graphql_string(&args.agent_did);
+    let query = format!(
+        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+    );
+    let response = access.execute(&query).await?;
+    let skills = skill_rows(&response);
+
+    let mut exported = Vec::new();
+    for skill in &skills {
+        let skill_id = skill.get("skill_id").and_then(Value::as_str).unwrap_or_default();
+        if skill_id.trim().is_empty() {
+            continue;
+        }
+        let dir = args.dir.join(skill_id);
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::write(dir.join("SKILL.md"), render_skill_md(skill)?)
+            .with_context(|| format!("writing {}/SKILL.md", dir.display()))?;
+        if let Some(yaml) = render_openai_yaml(skill)? {
+            let agents_dir = dir.join("agents");
+            std::fs::create_dir_all(&agents_dir)
+                .with_context(|| format!("creating {}", agents_dir.display()))?;
+            std::fs::write(agents_dir.join("openai.yaml"), yaml)
+                .with_context(|| format!("writing {}/openai.yaml", agents_dir.display()))?;
+        }
+        exported.push(json!({
+            "skill_id": skill_id,
+            "path": dir.join("SKILL.md").display().to_string(),
+        }));
+    }
+
+    print_json(&json!({
+        "agent_did": args.agent_did,
+        "dir": args.dir.display().to_string(),
+        "exported_count": exported.len(),
+        "exported": exported,
+    }))?;
     Ok(())
 }
 
@@ -438,6 +566,44 @@ mod tests {
             parsed.interface.unwrap().display_name.as_deref(),
             Some("Research")
         );
+    }
+
+    #[test]
+    fn export_render_round_trips_through_import_parser() {
+        let skill = json!({
+            "skill_id": "research",
+            "name": "Research",
+            "description": "Find sources: cite everything.",
+            "instructions": "Always cite your sources.\n\nUse primary references.",
+        });
+        let md = render_skill_md(&skill).unwrap();
+        let (fm, body) = parse_skill_md(&md);
+        assert_eq!(fm.name.as_deref(), Some("Research"));
+        assert_eq!(fm.description.as_deref(), Some("Find sources: cite everything."));
+        assert_eq!(body, "Always cite your sources.\n\nUse primary references.");
+    }
+
+    #[test]
+    fn export_openai_yaml_round_trips_tool_refs() {
+        let skill = json!({
+            "skill_id": "research",
+            "tool_refs": ["web_search", "read_file"],
+            "display_name": "Research",
+        });
+        let yaml = render_openai_yaml(&skill).unwrap().expect("openai.yaml");
+        let parsed: OpenAiYaml = serde_yaml::from_str(&yaml).unwrap();
+        let tools: Vec<String> = parsed
+            .dependencies
+            .unwrap()
+            .tools
+            .into_iter()
+            .filter_map(|tool| tool.value)
+            .collect();
+        assert_eq!(tools, vec!["web_search", "read_file"]);
+        assert_eq!(parsed.interface.unwrap().display_name.as_deref(), Some("Research"));
+
+        // No tool_refs / display_name -> nothing to write.
+        assert!(render_openai_yaml(&json!({ "skill_id": "x" })).unwrap().is_none());
     }
 
     #[test]

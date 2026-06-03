@@ -39,6 +39,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Skill { command } => match command {
             SkillCommand::Add(args) => skill::skill_add(args).await,
             SkillCommand::Import(args) => skill::skill_import(args).await,
+            SkillCommand::Export(args) => skill::skill_export(args).await,
             SkillCommand::List(args) => skill::skill_list(args).await,
             SkillCommand::Show(args) => skill::skill_show(args).await,
             SkillCommand::Rm(args) => skill::skill_rm(args).await,

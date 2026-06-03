@@ -4357,3 +4357,93 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     let _ = ws.close(None).await;
     Ok(())
 }
+
+/// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
+/// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
+/// the export. Gated on the hermes skills directory existing (override with
+/// HERMES_SKILLS_DIR); skipped otherwise so CI stays green without that checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
+    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").unwrap_or_else(|_| {
+        "/Users/johnzampolin/go/src/github.com/NousResearch/hermes-agent/skills".to_string()
+    });
+    if !std::path::Path::new(&hermes_dir).is_dir() {
+        eprintln!("skipping config_skill_import_export_roundtrip_hermes: {hermes_dir} not found");
+        return Ok(());
+    }
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-skill-import-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-import-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Import the hermes skill tree.
+    let imported = run_cli_json(
+        &home_dir,
+        &[
+            "config", "skill", "import", &hermes_dir, "--graphql", &graphql, "--agent-did",
+            &agent_did, "--scope", "behavior",
+        ],
+    )?;
+    let imported_count = imported.get("imported_count").and_then(Value::as_u64).unwrap_or(0);
+    assert!(
+        imported_count >= 50,
+        "expected to import many hermes skills, got {imported_count}: {imported}"
+    );
+
+    // List reflects the distinct skills (≤ import count if dir names collide).
+    let listed = run_cli_json(
+        &home_dir,
+        &["config", "skill", "list", "--graphql", &graphql, "--agent-did", &agent_did],
+    )?;
+    let listed_count = listed.get("count").and_then(Value::as_u64).unwrap_or(0);
+    assert!(listed_count >= 50 && listed_count <= imported_count, "list count {listed_count}");
+
+    // Export back to a SKILL.md tree.
+    let out_dir = tempdir.path().join("export");
+    let exported = run_cli_json(
+        &home_dir,
+        &[
+            "config", "skill", "export", out_dir.to_str().unwrap(), "--graphql", &graphql,
+            "--agent-did", &agent_did,
+        ],
+    )?;
+    let exported_count = exported.get("exported_count").and_then(Value::as_u64).unwrap_or(0);
+    assert_eq!(exported_count, listed_count, "export count must match distinct skills");
+    assert!(
+        out_dir.join("notion").join("SKILL.md").is_file(),
+        "exported notion/SKILL.md should exist"
+    );
+
+    // Re-import the export: round-trips cleanly (same skill_ids upsert in place).
+    let reimported = run_cli_json(
+        &home_dir,
+        &[
+            "config", "skill", "import", out_dir.to_str().unwrap(), "--graphql", &graphql,
+            "--agent-did", &agent_did, "--scope", "behavior",
+        ],
+    )?;
+    let reimported_count = reimported.get("imported_count").and_then(Value::as_u64).unwrap_or(0);
+    assert_eq!(reimported_count, exported_count, "re-import of export must round-trip");
+
+    Ok(())
+}

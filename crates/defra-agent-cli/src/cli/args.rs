@@ -766,6 +766,11 @@ pub(crate) enum SkillCommand {
         about = "Import a directory tree of Codex-format SKILL.md files as Skill documents"
     )]
     Import(SkillImportArgs),
+    #[command(
+        name = "export",
+        about = "Export an agent's Skill documents as a SKILL.md directory tree"
+    )]
+    Export(SkillExportArgs),
     #[command(name = "list", about = "List Skill documents for an agent")]
     List(SkillListArgs),
     #[command(name = "show", about = "Show a single Skill document")]
@@ -829,6 +834,18 @@ pub(crate) struct SkillImportArgs {
     /// Parse and report what would be imported without writing.
     #[arg(long)]
     pub(crate) dry_run: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillExportArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    /// Output directory. Each skill is written to `<dir>/<skill_id>/SKILL.md`
+    /// (plus `agents/openai.yaml` when it has tool_refs or a display name).
+    #[arg(value_name = "DIR")]
+    pub(crate) dir: PathBuf,
 }
 
 #[derive(clap::Args)]
