@@ -19,12 +19,94 @@ use super::protocol::{
     codex_steering_metadata, codex_turn_metadata, send_committed_user_message, send_error,
     send_notification, send_result, turn_value, user_text_from_input,
 };
+use super::store::query_node_json;
 use super::turn_projection::TurnProjection;
 use super::{
     ConnectionState, ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS,
     JSONRPC_INVALID_REQUEST,
 };
 use crate::RequestSubmitOptions;
+use defra_agent::graphql::escape_graphql_string;
+use serde_json::Value;
+
+/// Resolve explicit Codex skill selections (`UserInput::Skill`, the skill
+/// "pill") to their full bodies for DETERMINISTIC injection into the turn.
+///
+/// Both reference implementations honor an explicit user pick by injecting the
+/// body, never by relying on the model to fetch it: Codex injects the full
+/// `SKILL.md` as a user-role `<skill>` block per turn, and Hermes preloads the
+/// body into the system prompt. The `load_skill` tool is for model-driven
+/// discovery, not for an explicit selection — so we inject here. Disabled and
+/// foreign-principal skills are skipped. Returns one rendered block per
+/// resolved skill, in selection order.
+async fn resolve_explicit_skill_injections(
+    state: &ShimState,
+    input: &[codex::UserInput],
+) -> Vec<String> {
+    let mut blocks = Vec::new();
+    for item in input {
+        let codex::UserInput::Skill { name, path } = item else {
+            continue;
+        };
+        // The Codex UI sends our synthetic path (`/defra/skills/<skill_id>`);
+        // the final segment is the skill_id. Fall back to the display name.
+        let skill_id = path.file_name().and_then(|segment| segment.to_str());
+        if let Some(block) = load_skill_injection_block(state, skill_id, name, path).await {
+            blocks.push(block);
+        }
+    }
+    blocks
+}
+
+async fn load_skill_injection_block(
+    state: &ShimState,
+    skill_id: Option<&str>,
+    selected_name: &str,
+    path: &std::path::Path,
+) -> Option<String> {
+    let did = escape_graphql_string(&state.agent_did);
+    let selector = match skill_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => format!(r#"skill_id: {{ _eq: "{}" }}"#, escape_graphql_string(id)),
+        None => {
+            let name = selected_name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            format!(r#"name: {{ _eq: "{}" }}"#, escape_graphql_string(name))
+        }
+    };
+    let query = format!(
+        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }}, {selector} }}, limit: 1) {{ name instructions enabled }} }}"#
+    );
+    let response = query_node_json(state.node.as_ref(), &query).await.ok()?;
+    let row = response
+        .get("data")?
+        .get("Skill")?
+        .as_array()?
+        .first()?
+        .clone();
+    // Only an enabled skill activates (matches the effective-set rule and the
+    // Codex disabled-paths filter).
+    if !row.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let instructions = row
+        .get("instructions")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if instructions.trim().is_empty() {
+        return None;
+    }
+    let name = row
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(selected_name);
+    Some(format!(
+        "<skill>\n<name>{name}</name>\n<path>{}</path>\n{instructions}\n</skill>",
+        path.display()
+    ))
+}
 
 pub(super) async fn start_defra_turn(
     connection: &ConnectionState,
@@ -34,6 +116,18 @@ pub(super) async fn start_defra_turn(
     input: Vec<codex::UserInput>,
 ) -> Result<()> {
     let user_text = user_text_from_input(&input);
+    // Explicit skill selections are injected as full bodies ahead of the user's
+    // text (deterministic activation), so a skill-only turn is non-empty.
+    let skill_blocks = resolve_explicit_skill_injections(state, &input).await;
+    let user_text = if skill_blocks.is_empty() {
+        user_text
+    } else {
+        let mut parts = skill_blocks;
+        if !user_text.trim().is_empty() {
+            parts.push(user_text);
+        }
+        parts.join("\n\n")
+    };
     if user_text.trim().is_empty() {
         return send_error(
             &connection.outbound,

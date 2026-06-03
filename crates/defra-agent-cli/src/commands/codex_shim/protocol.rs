@@ -234,17 +234,10 @@ pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
     input
         .iter()
         .filter_map(|item| match item {
-            codex::UserInput::Text { text, .. } => Some(text.clone()),
-            // An explicit skill selection from the Codex UI (the skill "pill")
-            // is rendered as a directive naming the skill, so the user's intent
-            // is honored: the turn is non-empty and the model loads the skill on
-            // demand via `load_skill` (the name resolves through `find_skill`).
-            // Progressive disclosure means we point at the skill rather than
-            // inline its body here.
-            codex::UserInput::Skill { name, .. } if !name.trim().is_empty() => Some(format!(
-                "Use the \"{}\" skill for this request: load it with the load_skill tool and follow its instructions.",
-                name.trim()
-            )),
+            codex::UserInput::Text { text, .. } => Some(text.as_str()),
+            // Explicit skill selections are resolved separately and injected as
+            // full skill bodies (see `resolve_explicit_skill_injections`), so
+            // they are NOT folded into the plain text here.
             codex::UserInput::Skill { .. }
             | codex::UserInput::Image { .. }
             | codex::UserInput::LocalImage { .. }
@@ -341,21 +334,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_skill_selection_becomes_a_load_directive() {
-        // A Codex skill "pill" must not be silently dropped: it renders as a
-        // directive naming the skill, so a skill-only turn is non-empty and the
-        // model activates it via load_skill.
-        let input = vec![codex::UserInput::Skill {
-            name: "Deep Research".to_string(),
-            path: std::path::PathBuf::from("/defra/skills/research"),
-        }];
-        let text = user_text_from_input(&input);
-        assert!(!text.trim().is_empty(), "skill-only turn must not be empty");
-        assert!(text.contains("Deep Research"));
-        assert!(text.contains("load_skill"));
-
-        // Combined with text, both are present.
-        let combined = vec![
+    fn user_text_extraction_ignores_skill_selections() {
+        // Explicit skill selections are resolved + injected as full bodies
+        // elsewhere (resolve_explicit_skill_injections), so the plain-text
+        // extractor must not fold them in.
+        let input = vec![
             codex::UserInput::Text {
                 text: "summarize this".to_string(),
                 text_elements: Vec::new(),
@@ -365,9 +348,7 @@ mod tests {
                 path: std::path::PathBuf::from("/defra/skills/research"),
             },
         ];
-        let text = user_text_from_input(&combined);
-        assert!(text.contains("summarize this"));
-        assert!(text.contains("Deep Research"));
+        assert_eq!(user_text_from_input(&input), "summarize this");
     }
 
     #[test]

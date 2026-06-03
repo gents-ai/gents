@@ -4507,6 +4507,150 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     Ok(())
 }
 
+/// End-to-end proof that an EXPLICIT Codex skill selection (`UserInput::Skill`,
+/// the skill "pill") deterministically injects the skill's full body into the
+/// turn (#340) — matching how Codex injects the SKILL.md as a `<skill>` block
+/// and Hermes preloads it, rather than relying on the model to pull it. A
+/// skill-only turn (no text) must (a) not be rejected as empty and (b) carry
+/// the skill body to the model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("skill-inject-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-inject-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-inject-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // A skill with a distinctive instruction body (the injected-body marker).
+    let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "inject-skill",
+            "--scope",
+            "principal",
+            "--name",
+            "Injectable",
+            "--description",
+            "a skill to inject",
+            "--instructions",
+            &body_phrase,
+        ],
+    )?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+
+    // Turn input is ONLY the skill selection (no text) — proves it isn't
+    // rejected as empty and that the body is injected.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Skill {
+                    name: "Injectable".to_string(),
+                    path: std::path::PathBuf::from("/defra/skills/inject-skill"),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    // The full skill body must have reached the model, wrapped as a <skill> block.
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured.iter().any(|request| {
+            let text = request.to_string();
+            text.contains(&body_phrase) && text.contains("<skill>")
+        }),
+        "explicit skill selection did not inject the body; captured={captured:?}"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
 /// End-to-end proof that a Codex-shim-driven `skills/config/write` disable
 /// reconciles a RUNNING agent without a restart (#340): the shim commits the
 /// toggle in a transaction, the COMMIT wakes the control watcher, the runtime
