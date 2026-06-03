@@ -121,6 +121,8 @@ pub(crate) fn manifest_from_export_bundle(
                         "backgroundable_tool_names",
                         "enable_defra_query",
                         "defra_query_collections",
+                        "subagent_targets",
+                        "subagent_spawn_enabled",
                     ],
                 )
             })

@@ -127,6 +127,10 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) enable_defra_query: bool,
     #[serde(default)]
     pub(crate) defra_query_collections: Vec<String>,
+    #[serde(default)]
+    pub(crate) subagent_targets: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) subagent_spawn_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

@@ -81,6 +81,8 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         backgroundable_tool_names: Vec::new(),
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
+        subagent_targets: None,
+        subagent_spawn_enabled: None,
     }
 }
 
@@ -680,6 +682,83 @@ fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
     let mut errors = Vec::new();
     validate_manifest(manifest, &mut errors);
     errors
+}
+
+// ── subagent_targets structural validation ──────────────────────────────────
+
+#[test]
+fn validate_rejects_empty_string_in_subagent_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_targets = Some(vec!["".to_string()]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|msg| msg.contains("subagent_targets") && msg.contains("agent-tools")),
+        "expected empty subagent_targets entry rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_subagent_spawn_enabled_without_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = None;
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("agent-tools")
+                && msg.contains("subagent_spawn_enabled")
+                && msg.contains("subagent_targets")
+        }),
+        "expected subagent_spawn_enabled-without-targets rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_subagent_spawn_enabled_with_empty_targets_vec() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec![]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("agent-tools")
+                && msg.contains("subagent_spawn_enabled")
+                && msg.contains("subagent_targets")
+        }),
+        "expected subagent_spawn_enabled-with-empty-targets-vec rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_subagent_spawn_enabled_with_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec!["amy-research".to_string()]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("subagent_targets") || msg.contains("subagent_spawn_enabled")),
+        "expected no subagent rejections for valid config, got {errors:?}"
+    );
 }
 
 #[test]

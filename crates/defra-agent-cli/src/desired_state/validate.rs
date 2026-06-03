@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, CommandExecutionMode, CommandNetworkMode, VariableRef,
+    graphql::escape_graphql_string, parse_template_for_validation, CommandExecutionMode,
+    CommandNetworkMode, VariableRef,
 };
 
 use super::DesiredStateManifest;
@@ -135,6 +136,25 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.allowed_mcp_service_ids,
             errors,
         );
+        validate_non_empty_values(
+            &selection.selection_id,
+            "subagent_targets",
+            selection.subagent_targets.as_deref().unwrap_or(&[]),
+            errors,
+        );
+        if selection.subagent_spawn_enabled == Some(true) {
+            let targets_empty = selection
+                .subagent_targets
+                .as_ref()
+                .map(|t| t.is_empty())
+                .unwrap_or(true);
+            if targets_empty {
+                errors.push(format!(
+                    "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
+                    selection.selection_id
+                ));
+            }
+        }
     }
 
     for profile in &manifest.inference_profiles {
@@ -558,6 +578,53 @@ pub(crate) async fn validate_manifest_against_live(
             ));
         }
     }
+
+    // Check that every subagent_targets entry resolves to a known AgentBehavior
+    // in the local DB.
+    //
+    // NOTE: a target may legitimately live on a remote deployment and only appear
+    // once `AgentBehavior` replicates locally, so this is best-effort operator
+    // guidance, not the security boundary.
+    for selection in &manifest.tool_selections {
+        let targets = match selection.subagent_targets.as_deref() {
+            Some(targets) if !targets.is_empty() => targets,
+            _ => continue,
+        };
+        for target in targets {
+            let target = target.trim();
+            if target.is_empty() {
+                continue; // structural validator already caught this
+            }
+            let query = format!(
+                r#"query {{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{bid}" }} }}, limit: 1) {{ _docID }} }}"#,
+                bid = escape_graphql_string(target),
+            );
+            let response = match access.execute(&query).await {
+                Ok(response) => response,
+                Err(err) => {
+                    errors.push(format!(
+                        "tool selection {} subagent_targets lookup for \"{}\" failed: {}",
+                        selection.selection_id, target, err
+                    ));
+                    continue;
+                }
+            };
+            let found = response
+                .get("data")
+                .and_then(|d| d.get("AgentBehavior"))
+                .and_then(|arr| arr.as_array())
+                .map(|arr| !arr.is_empty())
+                .unwrap_or(false);
+            if !found {
+                errors.push(format!(
+                    "tool selection {} subagent_targets entry \"{}\" does not resolve to a known AgentBehavior; \
+                     the target may exist on a remote deployment and appear once replication completes",
+                    selection.selection_id, target
+                ));
+            }
+        }
+    }
+
     Ok(errors)
 }
 
@@ -637,6 +704,133 @@ pub(crate) fn normalize_tool_service_mcp_path(value: Option<String>) -> String {
         trimmed.to_string()
     } else {
         format!("/{trimmed}")
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use anyhow::Result;
+    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+    use defra_agent::ensure_runtime_schemas;
+
+    use super::*;
+    use crate::config_writes::ConfigAccess;
+
+    /// Build a minimal `DesiredStateManifest` whose only content is a single
+    /// tool selection with the given `subagent_targets` list and
+    /// `subagent_spawn_enabled` flag.  All other collections are empty (the
+    /// live validator only iterates `event_triggers` and `tool_selections`).
+    fn manifest_with_subagent_targets(targets: Vec<String>) -> DesiredStateManifest {
+        use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
+        DesiredStateManifest {
+            agent_principal: DesiredAgentPrincipal {
+                agent_did: "did:key:test-live-validate".to_string(),
+                display_name: None,
+                default_behavior_id: None,
+                enabled: true,
+            },
+            agent_behaviors: Vec::new(),
+            tool_selections: vec![DesiredToolSelection {
+                selection_id: "live-test-sel".to_string(),
+                agent_did: "did:key:test-live-validate".to_string(),
+                display_name: None,
+                enable_file_tools: false,
+                file_tools_mode: "ReadOnly".to_string(),
+                file_tool_root: None,
+                enable_bash: false,
+                bash_mode: "ReadOnly".to_string(),
+                command_execution_policy: None,
+                command_allowed_argv_prefixes: Vec::new(),
+                command_forbidden_argv_prefixes: Vec::new(),
+                command_network_mode: None,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                allowed_mcp_service_ids: Vec::new(),
+                delegate_to: Vec::new(),
+                backgroundable_tool_names: Vec::new(),
+                subagent_targets: Some(targets),
+                subagent_spawn_enabled: Some(true),
+            }],
+            inference_backends: Vec::new(),
+            inference_profiles: Vec::new(),
+            tool_service_registries: Vec::new(),
+            tasks: Vec::new(),
+            schedules: Vec::new(),
+            event_triggers: Vec::new(),
+        }
+    }
+
+    /// Seed a minimal AgentBehavior into the live node so `validate_manifest_against_live`
+    /// can resolve a known `behavior_id`.
+    async fn seed_agent_behavior(access: &ConfigAccess, behavior_id: &str) -> Result<()> {
+        use defra_agent::graphql::escape_graphql_string;
+        let mutation = format!(
+            r#"mutation {{ create_AgentBehavior(input: {{ behavior_id: "{bid}", agent_did: "did:key:seed", enabled: true }}) {{ _docID }} }}"#,
+            bid = escape_graphql_string(behavior_id),
+        );
+        access.execute(&mutation).await?;
+        Ok(())
+    }
+
+    /// Live-validator reports an error for an `AgentBehavior` that cannot be
+    /// found in the local DB.
+    ///
+    /// NOTE: a target may legitimately live on a remote deployment and only
+    /// appear once `AgentBehavior` replicates locally, so this is best-effort
+    /// operator guidance, not a security boundary.
+    #[tokio::test]
+    async fn live_validate_reports_error_for_unknown_subagent_target() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        // Seed one real behavior; the manifest references a *different* one.
+        let access = ConfigAccess::Local(node);
+        seed_agent_behavior(&access, "amy-research").await?;
+
+        let manifest = manifest_with_subagent_targets(vec!["does-not-exist".to_string()]);
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+
+        assert!(
+            errors
+                .iter()
+                .any(|msg| msg.contains("does-not-exist") && msg.contains("live-test-sel")),
+            "expected unresolved-target error for 'does-not-exist', got {errors:?}"
+        );
+        Ok(())
+    }
+
+    /// Live-validator does NOT report an error when every `subagent_targets`
+    /// entry resolves to an existing `AgentBehavior` in the local DB.
+    #[tokio::test]
+    async fn live_validate_passes_for_known_subagent_target() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+        seed_agent_behavior(&access, "amy-research").await?;
+
+        let manifest = manifest_with_subagent_targets(vec!["amy-research".to_string()]);
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+
+        assert!(
+            !errors
+                .iter()
+                .any(|msg| msg.contains("amy-research") || msg.contains("live-test-sel")),
+            "expected no subagent errors for known target, got {errors:?}"
+        );
+        Ok(())
     }
 }
 

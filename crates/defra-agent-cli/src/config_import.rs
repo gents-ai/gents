@@ -1600,6 +1600,8 @@ mod lean_apply_write_boundary_tests {
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
+            subagent_targets: None,
+            subagent_spawn_enabled: None,
         }
     }
 
