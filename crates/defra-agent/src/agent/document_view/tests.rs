@@ -244,13 +244,14 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     assert!(tool_names.contains(&"list_files".to_string()));
 }
 
-/// End-to-end (#340 composition): a principal-scoped Skill document is
-/// inherited by the behavior (D5), and its instructions compose into the prompt
-/// preamble with a degrade note for tool_refs outside the behavior's tool
-/// ceiling (D3 — the skill never widens the surface).
+/// End-to-end (#340 progressive disclosure / D2): a principal-scoped Skill
+/// document is inherited by the behavior (D5); its name+description appear in
+/// the prompt CATALOG (not its body), and `load_skill` returns the full body on
+/// demand with a degrade note for tool_refs outside the behavior ceiling (D3).
 #[tokio::test]
 async fn resolve_composes_principal_scoped_skill_into_prompt() {
     use crate::prompt::LayeredPromptBuilder;
+    use rig::tool::Tool;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -336,16 +337,41 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
         .tool_surfaces
         .get(&default_behavior_id)
         .expect("tool surface");
+    // The preamble holds the CATALOG (name + description + load_skill mandate),
+    // NOT the skill body (progressive disclosure).
     let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref())
         .preamble()
         .to_string();
+    assert!(preamble.contains("Research"), "catalog lists the skill name: {preamble}");
     assert!(
-        preamble.contains("Always cite your sources."),
-        "skill instructions must compose into the preamble: {preamble}"
+        preamble.contains("Find and cite sources"),
+        "catalog lists the skill description: {preamble}"
+    );
+    assert!(preamble.contains("load_skill"), "catalog directs the model to load_skill");
+    assert!(
+        !preamble.contains("Always cite your sources."),
+        "skill BODY must NOT be in the catalog (loaded on demand): {preamble}"
+    );
+
+    // `load_skill` returns the full body on demand, with the D3 degrade note.
+    let ceiling = tool_surface
+        .tool_names()
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let load_skill = crate::skills::LoadSkillTool::new(behavior.skills.clone(), ceiling);
+    let loaded = load_skill
+        .call(crate::skills::LoadSkillArgs {
+            name: "Research".to_string(),
+        })
+        .await
+        .expect("load_skill");
+    assert!(
+        loaded.contains("Always cite your sources."),
+        "load_skill returns the full body: {loaded}"
     );
     assert!(
-        preamble.contains("definitely_not_a_tool"),
-        "degrade note must name the ungranted tool_ref: {preamble}"
+        loaded.contains("definitely_not_a_tool"),
+        "load_skill body carries the degrade note for the ungranted tool_ref: {loaded}"
     );
 }
 

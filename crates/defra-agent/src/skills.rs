@@ -112,31 +112,41 @@ pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &BTreeSet<String>) -> Ve
         .collect()
 }
 
-/// Cached-layer listing of the candidate skill set (name + description), the
-/// progressive-disclosure block the model uses to decide which skill to
-/// activate. Returns `None` when there are no candidates (so the preamble adds
-/// nothing). Mirrors Codex's "available skills" context block.
-pub fn render_available_skills(candidates: &[&Skill]) -> Option<String> {
-    if candidates.is_empty() {
+fn skill_label(skill: &Skill) -> &str {
+    if skill.name.trim().is_empty() {
+        skill.skill_id.as_str()
+    } else {
+        skill.name.as_str()
+    }
+}
+
+/// Cached-layer skill **catalog**: name + description per candidate skill — the
+/// progressive-disclosure "discovery" tier. The full body is NOT included; the
+/// model loads it on demand via the `load_skill` tool. Returns `None` when the
+/// behavior has no skills (so the preamble is unchanged). This is the design
+/// shared by Anthropic Agent Skills, Codex, and Hermes: descriptions always in
+/// context, bodies on demand.
+pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
+    if skills.is_empty() {
         return None;
     }
     let mut out = String::from(
-        "## Skills\n\nThe following skills are available. If the user names a skill, or the \
-         task clearly matches a skill's description, follow that skill's instructions for the \
-         turn.\n",
+        "## Skills\n\nThese skills are available. Before acting, scan them; if one is relevant \
+         to the task, call the `load_skill` tool with its name and follow the returned \
+         instructions. Skip skills only when none are relevant.\n",
     );
-    for skill in candidates {
-        out.push_str(&format!("\n- {}: {}", skill.name, skill.description));
+    for skill in skills {
+        out.push_str(&format!("\n- {}: {}", skill_label(skill), skill.description));
     }
     Some(out)
 }
 
-/// Per-turn activated-skill body for injection as a `<system-reminder>`. Appends
-/// a degrade note for any `tool_refs` the behavior ceiling does not grant (D3),
-/// so the model knows the capability is unavailable rather than silently
-/// failing.
+/// Render a single skill's full body for on-demand activation (the `load_skill`
+/// tool output). Appends a degrade note for any `tool_refs` the behavior ceiling
+/// does not grant (D3), so the model knows the capability is unavailable rather
+/// than silently failing.
 pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> String {
-    let mut out = format!("Skill: {}\n\n{}", skill.name, skill.instructions);
+    let mut out = format!("Skill: {}\n\n{}", skill_label(skill), skill.instructions);
     let missing = missing_tool_refs(skill, ceiling);
     if !missing.is_empty() {
         out.push_str(&format!(
@@ -148,22 +158,98 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &BTreeSet<String>) -> Stri
     out
 }
 
-/// Compose the behavior's active skills into a cached preamble section. v1
-/// activation is operator-bound: every effective skill's instructions are
-/// always included (each with a D3 degrade note for ungranted `tool_refs`).
-/// Returns `None` when the behavior has no skills, so the preamble is unchanged.
-pub fn compose_skill_preamble(skills: &[Skill], ceiling: &BTreeSet<String>) -> Option<String> {
-    if skills.is_empty() {
-        return None;
+/// Find a skill by display name or `skill_id` (exact, then case-insensitive).
+fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
+    let needle = needle.trim();
+    skills
+        .iter()
+        .find(|skill| skill.name == needle || skill.skill_id == needle)
+        .or_else(|| {
+            skills.iter().find(|skill| {
+                skill.name.eq_ignore_ascii_case(needle)
+                    || skill.skill_id.eq_ignore_ascii_case(needle)
+            })
+        })
+}
+
+/// Error type for [`LoadSkillTool`]. A missing skill is returned as readable
+/// `Ok` text (so the model can recover), not an error.
+#[derive(Debug)]
+pub struct LoadSkillError(pub String);
+
+impl std::fmt::Display for LoadSkillError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
-    let mut out = String::from(
-        "## Skills\n\nThe following skills are active for this agent; follow their instructions.",
-    );
-    for skill in skills {
-        out.push_str("\n\n");
-        out.push_str(&render_activated_skill(skill, ceiling));
+}
+
+impl std::error::Error for LoadSkillError {}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LoadSkillArgs {
+    /// The skill name or skill_id from the Skills catalog.
+    pub name: String,
+}
+
+/// The `load_skill` tool — progressive-disclosure activation. Given a skill name
+/// (or id) from the catalog, returns that skill's full instructions, with tool
+/// dependencies intersected against the behavior's tool ceiling (D3). It holds
+/// the behavior's resolved effective skill set + ceiling, so it can only reveal
+/// skills in the behavior's candidate set and never widens the tool surface.
+#[derive(Clone)]
+pub struct LoadSkillTool {
+    skills: Vec<Skill>,
+    ceiling: BTreeSet<String>,
+}
+
+impl LoadSkillTool {
+    pub fn new(skills: Vec<Skill>, ceiling: BTreeSet<String>) -> Self {
+        Self { skills, ceiling }
     }
-    Some(out)
+}
+
+impl rig::tool::Tool for LoadSkillTool {
+    const NAME: &'static str = "load_skill";
+    type Error = LoadSkillError;
+    type Args = LoadSkillArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Load a skill's full instructions by name (or skill_id), then follow \
+                them for the task. Choose a skill from the Skills catalog in your system prompt."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name or skill_id from the Skills catalog."
+                    }
+                },
+                "required": ["name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        match find_skill(&self.skills, &args.name) {
+            Some(skill) => Ok(render_activated_skill(skill, &self.ceiling)),
+            None => {
+                let available = self
+                    .skills
+                    .iter()
+                    .map(skill_label)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Ok(format!(
+                    "No skill named {:?}. Available skills: {available}.",
+                    args.name.trim()
+                ))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -253,13 +339,21 @@ mod tests {
     }
 
     #[test]
-    fn render_available_skills_is_none_when_empty() {
-        assert!(render_available_skills(&[]).is_none());
-        let skills = vec![skill("a", "did:p", SkillScope::Principal, &[])];
-        let candidates = effective_skills(&skills, "did:p", &[], &[]);
-        let listing = render_available_skills(&candidates).expect("listing");
-        assert!(listing.contains("a-name"));
-        assert!(listing.contains("a-desc"));
+    fn catalog_lists_descriptions_not_bodies() {
+        assert!(render_skill_catalog(&[]).is_none());
+        let skills = vec![
+            skill("a", "did:p", SkillScope::Principal, &[]),
+            skill("b", "did:p", SkillScope::Behavior, &[]),
+        ];
+        let catalog = render_skill_catalog(&skills).expect("catalog");
+        assert!(catalog.contains("## Skills"));
+        assert!(catalog.contains("load_skill")); // mandate to load on demand
+        assert!(catalog.contains("a-name"));
+        assert!(catalog.contains("a-desc"));
+        assert!(catalog.contains("b-name"));
+        // Progressive disclosure: bodies are NOT in the catalog.
+        assert!(!catalog.contains("a-instructions"));
+        assert!(!catalog.contains("b-instructions"));
     }
 
     #[test]
@@ -273,19 +367,41 @@ mod tests {
         assert!(!render_activated_skill(&s_ok, &ceiling).contains("not available"));
     }
 
-    #[test]
-    fn compose_skill_preamble_includes_bodies_and_degrade_notes() {
+    #[tokio::test]
+    async fn load_skill_tool_returns_body_on_demand_and_handles_unknown() {
+        use rig::tool::Tool;
         let ceiling = ceiling(&["read"]);
-        assert!(compose_skill_preamble(&[], &ceiling).is_none());
-        let skills = vec![
-            skill("a", "did:p", SkillScope::Principal, &["read"]),
-            skill("b", "did:p", SkillScope::Behavior, &["read", "net"]),
-        ];
-        let section = compose_skill_preamble(&skills, &ceiling).expect("section");
-        assert!(section.contains("## Skills"));
-        assert!(section.contains("a-instructions"));
-        assert!(section.contains("b-instructions"));
-        assert!(section.contains("net")); // degrade note for b's ungranted ref
+        let skills = vec![skill("research", "did:p", SkillScope::Principal, &["read", "net"])];
+        let tool = LoadSkillTool::new(skills, ceiling);
+
+        // load by name -> full body + degrade note for the ungranted "net" ref.
+        let body = tool
+            .call(LoadSkillArgs {
+                name: "research-name".to_string(),
+            })
+            .await
+            .expect("load_skill");
+        assert!(body.contains("research-instructions"));
+        assert!(body.contains("net"));
+
+        // load by skill_id also works.
+        assert!(tool
+            .call(LoadSkillArgs {
+                name: "research".to_string(),
+            })
+            .await
+            .expect("load by id")
+            .contains("research-instructions"));
+
+        // unknown skill -> readable Ok message listing what is available.
+        let miss = tool
+            .call(LoadSkillArgs {
+                name: "nope".to_string(),
+            })
+            .await
+            .expect("unknown is Ok text");
+        assert!(miss.contains("No skill named"));
+        assert!(miss.contains("research-name"));
     }
 
     #[test]

@@ -105,13 +105,14 @@ impl LayeredPromptBuilder {
             behavior.context_window,
             behavior.max_output_tokens,
         );
-        // Compose the behavior's active skills (D5) into the cached preamble,
-        // with tool deps intersected against the resolved ceiling (D3). Skills
-        // never widen the tool surface — see `crate::skills`.
-        let ceiling: std::collections::BTreeSet<String> = tool_names.into_iter().collect();
-        if let Some(section) = crate::skills::compose_skill_preamble(&behavior.skills, &ceiling) {
+        // Progressive disclosure (D2): the behavior's effective skills (D5) go
+        // into the cached preamble as a CATALOG (name + description) only. The
+        // model loads a skill's full body on demand via the `load_skill` tool
+        // (registered in run_behavior). This keeps the always-present cost to
+        // one line per skill so a large skill library stays usable.
+        if let Some(catalog) = crate::skills::render_skill_catalog(&behavior.skills) {
             builder.preamble.push_str("\n\n");
-            builder.preamble.push_str(&section);
+            builder.preamble.push_str(&catalog);
         }
         builder
     }
