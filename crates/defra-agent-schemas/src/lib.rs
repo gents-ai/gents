@@ -1,0 +1,143 @@
+//! Static GraphQL schema strings for defra-agent agent collections.
+//!
+//! This crate is intentionally dependency-free so external document-peer
+//! consumers can depend on the agent collection contract without also pulling
+//! in the runtime, protocol, Codex, or DefraDB dependency graph.
+
+pub const AGENT_PRINCIPAL_NAME: &str = "AgentPrincipal";
+pub const AGENT_PRINCIPAL: &str = include_str!("../schemas/agent/agent_principal.graphql");
+pub const AGENT_BEHAVIOR_NAME: &str = "AgentBehavior";
+pub const AGENT_BEHAVIOR: &str = include_str!("../schemas/agent/agent_behavior.graphql");
+pub const AGENT_RUNTIME_NAME: &str = "AgentRuntime";
+pub const AGENT_RUNTIME: &str = include_str!("../schemas/agent/agent_runtime.graphql");
+pub const AGENT_CONVERSATION_NAME: &str = "AgentConversation";
+pub const AGENT_CONVERSATION: &str = include_str!("../schemas/agent/agent_conversation.graphql");
+pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
+pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
+pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
+pub const AGENT_RESPONSE: &str = include_str!("../schemas/agent/agent_response.graphql");
+pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
+pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
+pub const AGENT_SESSION_NAME: &str = "AgentSession";
+pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
+pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
+pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
+pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
+pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
+pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
+pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
+pub const CODEX_THREAD_PROJECTION_NAME: &str = "CodexThreadProjection";
+pub const CODEX_THREAD_PROJECTION: &str =
+    include_str!("../schemas/agent/codex_thread_projection.graphql");
+pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
+pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
+pub const TASK_NAME: &str = "Task";
+pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
+pub const SCHEDULE_NAME: &str = "Schedule";
+pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
+pub const EVENT_TRIGGER_NAME: &str = "EventTrigger";
+pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.graphql");
+pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
+pub const PEER_PAIRING_DESIRED: &str =
+    include_str!("../schemas/agent/peer_pairing_desired.graphql");
+
+/// Every agent-domain schema in registration order.
+pub const ALL: &[&str] = &[
+    AGENT_PRINCIPAL,
+    AGENT_BEHAVIOR,
+    AGENT_RUNTIME,
+    TOOL_SELECTION,
+    AGENT_CONVERSATION,
+    AGENT_REQUEST,
+    AGENT_RESPONSE,
+    AGENT_TOOL_RESULT,
+    AGENT_SESSION,
+    AGENT_MESSAGE,
+    AGENT_TOOL_CALL,
+    COMPACTION_ENTRY,
+    CODEX_THREAD_PROJECTION,
+    TASK,
+    SCHEDULE,
+    EVENT_TRIGGER,
+    PEER_PAIRING_DESIRED,
+];
+
+/// Collection names matching [`ALL`] order.
+pub const ALL_COLLECTION_NAMES: &[&str] = &[
+    AGENT_PRINCIPAL_NAME,
+    AGENT_BEHAVIOR_NAME,
+    AGENT_RUNTIME_NAME,
+    TOOL_SELECTION_NAME,
+    AGENT_CONVERSATION_NAME,
+    AGENT_REQUEST_NAME,
+    AGENT_RESPONSE_NAME,
+    AGENT_TOOL_RESULT_NAME,
+    AGENT_SESSION_NAME,
+    AGENT_MESSAGE_NAME,
+    AGENT_TOOL_CALL_NAME,
+    COMPACTION_ENTRY_NAME,
+    CODEX_THREAD_PROJECTION_NAME,
+    TASK_NAME,
+    SCHEDULE_NAME,
+    EVENT_TRIGGER_NAME,
+    PEER_PAIRING_DESIRED_NAME,
+];
+
+/// Agent-domain collections that can be replicated across desktop branches.
+pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
+    AGENT_RUNTIME_NAME,
+    AGENT_CONVERSATION_NAME,
+    AGENT_REQUEST_NAME,
+    AGENT_RESPONSE_NAME,
+    AGENT_TOOL_RESULT_NAME,
+    AGENT_SESSION_NAME,
+    AGENT_MESSAGE_NAME,
+    AGENT_TOOL_CALL_NAME,
+    COMPACTION_ENTRY_NAME,
+    CODEX_THREAD_PROJECTION_NAME,
+    TASK_NAME,
+    SCHEDULE_NAME,
+    EVENT_TRIGGER_NAME,
+];
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn all_contains_every_agent_schema() {
+        assert_eq!(ALL.len(), 17);
+    }
+
+    #[test]
+    fn every_agent_schema_starts_with_type_declaration() {
+        for sdl in ALL {
+            let first_sdl_line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+                .unwrap_or("");
+            assert!(
+                first_sdl_line.starts_with("type "),
+                "schema must begin with `type`: {}",
+                sdl.lines().next().unwrap_or("")
+            );
+        }
+    }
+
+    #[test]
+    fn collection_names_align_with_sdl_arrays() {
+        assert_eq!(ALL.len(), ALL_COLLECTION_NAMES.len());
+    }
+
+    #[test]
+    fn collection_names_are_unique() {
+        let mut seen = HashSet::new();
+
+        for name in ALL_COLLECTION_NAMES {
+            assert!(seen.insert(*name), "duplicate collection name: {name}");
+        }
+    }
+}

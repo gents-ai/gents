@@ -11,6 +11,7 @@ members = [
     "crates/defra-agent-lenses/agent_subagent_v2_to_v3",
     "crates/defra-native-fs-runner",
     "crates/defra-agent-protocol",
+    "crates/defra-agent-schemas",
 ]
 # Exclude the WASM lens crate from default workspace builds. Its cdylib target
 # relies on `lens_sdk::define!` which imports an `extern "C" fn next()` only
@@ -25,6 +26,7 @@ default-members = [
     "crates/defra-agent-desktop",
     "crates/defra-agent-desktop-core",
     "crates/defra-agent-protocol",
+    "crates/defra-agent-schemas",
 ]
 
 [workspace.package]
@@ -47,6 +49,7 @@ acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.14.
 crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.14.2" }
 defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.14.2" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
+defra-agent-schemas = { path = "crates/defra-agent-schemas" }
 defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
 defra-agent-lean-contract = { path = "crates/defra-agent-lean-contract" }
 defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.14.2" }
