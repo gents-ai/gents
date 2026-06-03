@@ -28,7 +28,10 @@ pub(crate) use conversation::{
     upsert_conversation_from_request_with_identity_and_title, CONVERSATION_TITLE_SOURCE_FALLBACK,
     CONVERSATION_TITLE_SOURCE_GENERATED, CONVERSATION_TITLE_SOURCE_TASK,
 };
-pub use fork::{fork, ForkError, ForkOutcome, ForkParams};
+pub use fork::{
+    fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
+    GraphqlExecutor, HttpGraphqlExecutor,
+};
 pub use history::load_history;
 pub(crate) use history::{
     append_message, mark_response_materialized, save_message, save_message_with_key,

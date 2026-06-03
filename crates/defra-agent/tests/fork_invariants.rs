@@ -1,9 +1,15 @@
+use std::sync::Arc;
+
+use axum::{extract::State, routing::post, Json, Router};
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::session::{fork, ForkError, ForkParams};
+use defra_agent::session::{fork, fork_via_http, ForkError, ForkParams};
+use serde::Deserialize;
+use tokio::net::TcpListener;
 
 mod support;
 
 use support::snapshots::fetch_compaction_entry_snapshots_for_session;
+use support::snapshots::fetch_conversation_snapshot;
 use support::snapshots::fetch_message_snapshots_for_session;
 use support::snapshots::fetch_tool_call_snapshots_for_session;
 use support::snapshots::fetch_tool_result_snapshots_for_session;
@@ -12,6 +18,47 @@ use support::{
     create_agent_tool_call, create_agent_tool_result, create_compaction_entry, create_request,
     test_db, AGENT_DID, AGENT_NAME,
 };
+
+#[derive(Clone)]
+struct EmbeddedGraphqlState {
+    node: Arc<defra_node::EmbeddedNode>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlRequest {
+    query: String,
+}
+
+async fn embedded_graphql_handler(
+    State(state): State<EmbeddedGraphqlState>,
+    Json(request): Json<GraphqlRequest>,
+) -> Json<serde_json::Value> {
+    let response = state.node.execute(&request.query).await;
+    Json(serde_json::json!({
+        "data": response.data,
+        "errors": response.errors,
+    }))
+}
+
+async fn spawn_embedded_graphql(node: Arc<defra_node::EmbeddedNode>) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind embedded graphql listener");
+    let addr = listener
+        .local_addr()
+        .expect("read embedded graphql listener addr");
+    let router = Router::new()
+        .route("/api/v0/graphql", post(embedded_graphql_handler))
+        .with_state(EmbeddedGraphqlState { node });
+
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("serve embedded graphql");
+    });
+
+    format!("http://{addr}/api/v0/graphql")
+}
 
 async fn set_tool_call_trace_fields(
     node: &defra_node::EmbeddedNode,
@@ -159,6 +206,79 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     assert_eq!(parent_messages.len(), 6);
 
     // Outcome counters.
+    assert_eq!(outcome.copied_messages, 2);
+}
+
+#[tokio::test]
+async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
+    let db = test_db("fork-http-happy-path-messages").await;
+
+    let parent_session = "parent-http-session";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "assistant",
+        "a1",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        3,
+        "user",
+        "u2",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+
+    let graphql = spawn_embedded_graphql(db.node.clone()).await;
+    let outcome = fork_via_http(
+        &graphql,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork via http succeeds");
+
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_messages.len(), 2);
+    assert_eq!(child_messages[0].sequence, 1);
+    assert_eq!(child_messages[0].role, "user");
+    assert_eq!(child_messages[0].content, "u1");
+    assert_eq!(child_messages[0].session_id, outcome.session_id);
+    assert_eq!(child_messages[1].sequence, 2);
+    assert_eq!(child_messages[1].role, "assistant");
+    assert_eq!(child_messages[1].content, "a1");
+
+    let child_conv = fetch_conversation_snapshot(&db.node, &outcome.session_id)
+        .await
+        .expect("child conversation exists");
+    assert_eq!(
+        child_conv.forked_from_session_id.as_deref(),
+        Some(parent_session)
+    );
+    assert_eq!(child_conv.fork_at_user_turn, Some(1));
+    assert!(child_conv.forked_at.is_some(), "forked_at must be set");
+
     assert_eq!(outcome.copied_messages, 2);
 }
 

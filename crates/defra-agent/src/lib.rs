@@ -114,7 +114,10 @@ pub use schema::{
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
-pub use session::{fork, ForkError, ForkOutcome, ForkParams};
+pub use session::{
+    fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
+    GraphqlExecutor, HttpGraphqlExecutor,
+};
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,

@@ -1,7 +1,5 @@
 use super::*;
 
-const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
-
 pub(crate) async fn execute_mutation_with_retry(
     node: &EmbeddedNode,
     mutation: &str,
@@ -44,27 +42,6 @@ pub(crate) async fn execute_mutation_with_retry(
         "{operation} failed after {MAX_MUTATION_RETRIES} retries: {:?}",
         resp.errors
     )
-}
-
-pub(crate) async fn execute_batch_mutation_with_retry(
-    node: &EmbeddedNode,
-    mutation_fields: &[String],
-    operation: &str,
-) -> Result<()> {
-    if mutation_fields.is_empty() {
-        return Ok(());
-    }
-
-    for fields in mutation_fields.chunks(DEFAULT_BATCH_MUTATION_SIZE) {
-        let mutation = build_batch_mutation(fields);
-        execute_mutation_with_retry(node, &mutation, operation).await?;
-    }
-
-    Ok(())
-}
-
-fn build_batch_mutation(fields: &[String]) -> String {
-    format!("mutation {{\n{}\n}}", fields.join("\n"))
 }
 
 pub(super) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
@@ -150,25 +127,4 @@ pub async fn count_active_sessions(node: &EmbeddedNode) -> Result<usize> {
         .and_then(|value| value.as_array())
         .map(|rows| rows.len())
         .unwrap_or(0))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::build_batch_mutation;
-
-    #[test]
-    fn build_batch_mutation_wraps_alias_fields() {
-        let fields = vec![
-            r#"msg_0: create_AgentMessage(input: { message_key: "s:1" }) { _docID }"#.to_string(),
-            r#"msg_1: create_AgentMessage(input: { message_key: "s:2" }) { _docID }"#.to_string(),
-        ];
-
-        assert_eq!(
-            build_batch_mutation(&fields),
-            r#"mutation {
-msg_0: create_AgentMessage(input: { message_key: "s:1" }) { _docID }
-msg_1: create_AgentMessage(input: { message_key: "s:2" }) { _docID }
-}"#
-        );
-    }
 }

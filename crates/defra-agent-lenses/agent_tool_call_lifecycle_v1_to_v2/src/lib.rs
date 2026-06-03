@@ -121,7 +121,7 @@ mod tests {
 fn try_transform(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
-    for item in iter {
+    if let Some(item) = iter.next() {
         let mut input = match item? {
             Some(v) => v,
             None => return Ok(StreamOption::None),
@@ -159,7 +159,7 @@ fn try_transform(
 fn try_inverse(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
-    for item in iter {
+    if let Some(item) = iter.next() {
         let mut input = match item? {
             Some(v) => v,
             None => return Ok(StreamOption::None),

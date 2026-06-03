@@ -48,8 +48,10 @@ pub(super) struct ConversationDocument {
     #[serde(default)]
     pub(super) created_at: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(super) agent_did: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(super) agent_name: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]

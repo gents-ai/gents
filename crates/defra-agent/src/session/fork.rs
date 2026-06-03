@@ -1,10 +1,103 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
+use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
-use super::query::load_conversation_document;
-use super::retry::{execute_batch_mutation_with_retry, execute_mutation_with_retry};
+use super::retry::log_mutation_timing;
+use super::{INITIAL_RETRY_BACKOFF_MS, MAX_MUTATION_RETRIES};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::active_runtime_lifecycle_state_graphql_list;
+
+const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
+
+#[derive(Debug, Clone)]
+pub struct GraphqlExecuteResponse {
+    pub data: Option<Value>,
+    pub errors: Vec<Value>,
+}
+
+impl GraphqlExecuteResponse {
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    fn from_http_value(value: Value) -> Self {
+        let data = value.get("data").cloned();
+        let errors = value
+            .get("errors")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Self { data, errors }
+    }
+
+    fn from_embedded(response: defra_node::QueryResponse) -> Self {
+        let errors = response
+            .errors
+            .into_iter()
+            .map(|error| {
+                serde_json::to_value(error)
+                    .unwrap_or_else(|_| Value::String("GraphQL error".to_string()))
+            })
+            .collect();
+        Self {
+            data: response.data,
+            errors,
+        }
+    }
+}
+
+#[async_trait]
+pub trait GraphqlExecutor: Send + Sync {
+    async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse>;
+}
+
+#[async_trait]
+impl GraphqlExecutor for EmbeddedNode {
+    async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
+        Ok(GraphqlExecuteResponse::from_embedded(
+            self.execute(query).await,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpGraphqlExecutor {
+    endpoint: String,
+    options: GraphqlRequestOptions,
+}
+
+impl HttpGraphqlExecutor {
+    pub fn new(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            options: GraphqlRequestOptions::default(),
+        }
+    }
+
+    pub fn with_options(endpoint: impl Into<String>, options: GraphqlRequestOptions) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            options,
+        }
+    }
+}
+
+#[async_trait]
+impl GraphqlExecutor for HttpGraphqlExecutor {
+    async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
+        let value = execute_graphql_async(&self.endpoint, query, self.options).await?;
+        Ok(GraphqlExecuteResponse::from_http_value(value))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ForkParentConversation {
+    behavior_id: Option<String>,
+    agent_did: Option<String>,
+    agent_name: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ForkParams<'a> {
@@ -41,7 +134,55 @@ pub enum ForkError {
     ForkCopyFailed(#[from] anyhow::Error),
 }
 
-async fn verify_source_idle(node: &EmbeddedNode, source_session_id: &str) -> Result<bool> {
+async fn load_parent_conversation(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    source_session_id: &str,
+) -> Result<Option<ForkParentConversation>> {
+    let escaped = escape_graphql_string(source_session_id);
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{
+                    session_id: {{ _eq: "{escaped}" }}
+                }},
+                limit: 1
+            ) {{
+                behavior_id
+                agent_did
+                agent_name
+            }}
+        }}"#
+    );
+    let resp = executor.execute_graphql(&query).await?;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading conversation document for session_id={}: {}",
+            source_session_id,
+            render_graphql_errors(&resp)
+        );
+    }
+
+    let mut rows = graphql_rows(&resp, "AgentConversation");
+    Ok(rows.pop().map(|row| ForkParentConversation {
+        behavior_id: row
+            .get("behavior_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        agent_did: row
+            .get("agent_did")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        agent_name: row
+            .get("agent_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    }))
+}
+
+async fn verify_source_idle(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    source_session_id: &str,
+) -> Result<bool> {
     let escaped = escape_graphql_string(source_session_id);
     let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
     let query = format!(
@@ -55,23 +196,35 @@ async fn verify_source_idle(node: &EmbeddedNode, source_session_id: &str) -> Res
             ) {{ request_id }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("verify_source_idle query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "verify_source_idle query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentRequest");
     Ok(rows.is_empty())
 }
 
 pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
+    fork_with_executor(node, params).await
+}
+
+pub async fn fork_via_http(
+    graphql_endpoint: &str,
+    params: ForkParams<'_>,
+) -> Result<ForkOutcome, ForkError> {
+    let executor = HttpGraphqlExecutor::new(graphql_endpoint);
+    fork_with_executor(&executor, params).await
+}
+
+async fn fork_with_executor(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    params: ForkParams<'_>,
+) -> Result<ForkOutcome, ForkError> {
     // Step 1: load parent conversation (validates existence).
-    let parent = load_conversation_document(node, params.source_session_id)
+    let parent = load_parent_conversation(executor, params.source_session_id)
         .await
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
@@ -90,7 +243,7 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
     }
 
     // Step 1c: reject busy sources before doing any copy work.
-    if !verify_source_idle(node, params.source_session_id)
+    if !verify_source_idle(executor, params.source_session_id)
         .await
         .map_err(ForkError::ForkCopyFailed)?
     {
@@ -99,7 +252,7 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 
     // Step 2: compute cut_seq from the Nth user message.
     let (cut_seq, cut_ts) =
-        match compute_cut(node, params.source_session_id, params.fork_at_user_turn)
+        match compute_cut(executor, params.source_session_id, params.fork_at_user_turn)
             .await
             .map_err(ForkError::ForkCopyFailed)?
         {
@@ -114,7 +267,7 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 
     // Step 3: resolve child behavior (inherit parent, or swap to validated target).
     let resolved_behavior_id = if let Some(target) = params.target_behavior_id {
-        if let Some(err) = resolve_target_behavior(node, target, parent_agent_did)
+        if let Some(err) = resolve_target_behavior(executor, target, parent_agent_did)
             .await
             .map_err(ForkError::ForkCopyFailed)?
         {
@@ -127,20 +280,29 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 
     // Step 4 & 5: copy messages, create child session + conversation.
     let child_session_id = uuid::Uuid::new_v4().to_string();
-    let copied_messages = copy_messages(node, params.source_session_id, &child_session_id, cut_seq)
-        .await
-        .map_err(ForkError::ForkCopyFailed)?;
+    let copied_messages = copy_messages(
+        executor,
+        params.source_session_id,
+        &child_session_id,
+        cut_seq,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
 
-    let copied_tool_calls =
-        copy_tool_calls(node, params.source_session_id, &child_session_id, cut_seq)
-            .await
-            .map_err(ForkError::ForkCopyFailed)?;
+    let copied_tool_calls = copy_tool_calls(
+        executor,
+        params.source_session_id,
+        &child_session_id,
+        cut_seq,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
 
     // Child rows inherit the parent's principal (agent_did) and display name.
     // parent_agent_did is already validated non-empty in step 1b.
     let parent_agent_name = parent.agent_name.as_deref().unwrap_or("");
     let copied_tool_results = copy_tool_results(
-        node,
+        executor,
         params.source_session_id,
         &child_session_id,
         &cut_ts,
@@ -149,13 +311,17 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
-    let copied_compaction_entries =
-        copy_compaction_entries(node, params.source_session_id, &child_session_id, &cut_ts)
-            .await
-            .map_err(ForkError::ForkCopyFailed)?;
+    let copied_compaction_entries = copy_compaction_entries(
+        executor,
+        params.source_session_id,
+        &child_session_id,
+        &cut_ts,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
 
     create_child_session_and_conversation(
-        node,
+        executor,
         &child_session_id,
         &resolved_behavior_id,
         params.source_session_id,
@@ -176,7 +342,7 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 }
 
 async fn resolve_target_behavior(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     target_behavior_id: &str,
     parent_agent_did: &str,
 ) -> Result<Option<ForkError>> {
@@ -186,17 +352,14 @@ async fn resolve_target_behavior(
             AgentBehavior(filter: {{ behavior_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("resolve_target_behavior query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "resolve_target_behavior query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentBehavior"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentBehavior");
     if rows.is_empty() {
         return Ok(Some(ForkError::ForkBehaviorNotFound(
             target_behavior_id.to_string(),
@@ -216,7 +379,7 @@ async fn resolve_target_behavior(
 }
 
 async fn compute_cut(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     fork_at_user_turn: u32,
 ) -> Result<std::result::Result<(u32, String), u32>> {
@@ -232,23 +395,17 @@ async fn compute_cut(
             ) {{ sequence timestamp }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("compute_cut query failed: {:?}", resp.errors);
+        anyhow::bail!("compute_cut query failed: {}", render_graphql_errors(&resp));
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentMessage");
     let total_user_msgs = rows.len() as u32;
     if fork_at_user_turn > total_user_msgs {
         return Ok(Err(total_user_msgs));
     }
     if fork_at_user_turn == total_user_msgs {
-        return compute_end_cut(node, source_session_id).await.map(Ok);
+        return compute_end_cut(executor, source_session_id).await.map(Ok);
     }
     let row = &rows[fork_at_user_turn as usize];
     let seq = row
@@ -263,7 +420,10 @@ async fn compute_cut(
     Ok(Ok((seq, ts)))
 }
 
-async fn compute_end_cut(node: &EmbeddedNode, source_session_id: &str) -> Result<(u32, String)> {
+async fn compute_end_cut(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    source_session_id: &str,
+) -> Result<(u32, String)> {
     let escaped = escape_graphql_string(source_session_id);
     let query = format!(
         r#"{{
@@ -274,16 +434,15 @@ async fn compute_end_cut(node: &EmbeddedNode, source_session_id: &str) -> Result
             ) {{ sequence }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("compute_end_cut query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "compute_end_cut query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let max_sequence = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
+    let max_sequence = graphql_rows(&resp, "AgentMessage")
+        .first()
         .and_then(|row| row.get("sequence"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
@@ -293,7 +452,7 @@ async fn compute_end_cut(node: &EmbeddedNode, source_session_id: &str) -> Result
 }
 
 async fn copy_messages(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
     cut_seq: u32,
@@ -310,17 +469,14 @@ async fn copy_messages(
             ) {{ sequence role content timestamp }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("copy_messages query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "copy_messages query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentMessage");
     let child_session_escaped = escape_graphql_string(child_session_id);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
@@ -347,12 +503,12 @@ async fn copy_messages(
             timestamp_escaped = escape_graphql_string(timestamp),
         ));
     }
-    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_messages").await?;
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_messages").await?;
     Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_tool_calls(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
     cut_seq: u32,
@@ -375,17 +531,14 @@ async fn copy_tool_calls(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("copy_tool_calls query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "copy_tool_calls query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentToolCall");
     let child_session_escaped = escape_graphql_string(child_session_id);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
@@ -472,12 +625,12 @@ async fn copy_tool_calls(
             latency_ms = nullable_i64_literal(latency_ms),
         ));
     }
-    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_tool_calls").await?;
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_tool_calls").await?;
     Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_tool_results(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
     cut_ts: &str,
@@ -496,17 +649,14 @@ async fn copy_tool_results(
             ) {{ tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("copy_tool_results query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "copy_tool_results query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolResult"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "AgentToolResult");
     let child_session_escaped = escape_graphql_string(child_session_id);
     let child_agent_did_escaped = escape_graphql_string(child_agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
@@ -551,12 +701,13 @@ async fn copy_tool_results(
             created_at_escaped = escape_graphql_string(created_at),
         ));
     }
-    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_tool_results").await?;
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_tool_results")
+        .await?;
     Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_compaction_entries(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
     cut_ts: &str,
@@ -576,17 +727,14 @@ async fn copy_compaction_entries(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
+    let resp = executor.execute_graphql(&query).await?;
     if resp.has_errors() {
-        anyhow::bail!("copy_compaction_entries query failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "copy_compaction_entries query failed: {}",
+            render_graphql_errors(&resp)
+        );
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("CompactionEntry"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = graphql_rows(&resp, "CompactionEntry");
     let child_session_escaped = escape_graphql_string(child_session_id);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
@@ -637,13 +785,13 @@ async fn copy_compaction_entries(
             created_at_escaped = escape_graphql_string(created_at),
         ));
     }
-    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_compaction_entries")
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_compaction_entries")
         .await?;
     Ok(mutation_fields.len() as u32)
 }
 
 async fn create_child_session_and_conversation(
-    node: &EmbeddedNode,
+    executor: &(impl GraphqlExecutor + ?Sized),
     child_session_id: &str,
     behavior_id: &str,
     source_session_id: &str,
@@ -674,7 +822,7 @@ async fn create_child_session_and_conversation(
             }}) {{ _docID }}
         }}"#
     );
-    execute_mutation_with_retry(node, &session_mutation, "fork::create_session").await?;
+    execute_mutation_with_retry(executor, &session_mutation, "fork::create_session").await?;
 
     let conv_mutation = format!(
         r#"mutation {{
@@ -695,8 +843,104 @@ async fn create_child_session_and_conversation(
             }}) {{ _docID }}
         }}"#
     );
-    execute_mutation_with_retry(node, &conv_mutation, "fork::create_conversation").await?;
+    execute_mutation_with_retry(executor, &conv_mutation, "fork::create_conversation").await?;
     Ok(())
+}
+
+async fn execute_mutation_with_retry(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    mutation: &str,
+    operation: &str,
+) -> Result<GraphqlExecuteResponse> {
+    let mut last_resp = None;
+    let mut last_error = None;
+    for attempt in 0..=MAX_MUTATION_RETRIES {
+        if attempt > 0 {
+            let backoff = std::time::Duration::from_millis(
+                INITIAL_RETRY_BACKOFF_MS * (1u64 << (attempt - 1)),
+            );
+            tracing::warn!(
+                operation = %operation,
+                attempt = attempt,
+                backoff_ms = backoff.as_millis() as u64,
+                "retrying mutation"
+            );
+            tokio::time::sleep(backoff).await;
+        }
+
+        let started = std::time::Instant::now();
+        let resp = executor.execute_graphql(mutation).await;
+        let elapsed = started.elapsed();
+        log_mutation_timing(operation, elapsed);
+
+        match resp {
+            Ok(resp) if !resp.has_errors() => return Ok(resp),
+            Ok(resp) => {
+                tracing::warn!(
+                    operation = %operation,
+                    attempt = attempt,
+                    errors = %render_graphql_errors(&resp),
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "mutation failed"
+                );
+                last_resp = Some(resp);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    operation = %operation,
+                    attempt = attempt,
+                    error = %error,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "mutation transport failed"
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if let Some(resp) = last_resp {
+        anyhow::bail!(
+            "{operation} failed after {MAX_MUTATION_RETRIES} retries: {}",
+            render_graphql_errors(&resp)
+        );
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("{operation} failed without GraphQL response")))
+}
+
+async fn execute_batch_mutation_with_retry(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    mutation_fields: &[String],
+    operation: &str,
+) -> Result<()> {
+    if mutation_fields.is_empty() {
+        return Ok(());
+    }
+
+    for fields in mutation_fields.chunks(DEFAULT_BATCH_MUTATION_SIZE) {
+        let mutation = build_batch_mutation(fields);
+        execute_mutation_with_retry(executor, &mutation, operation).await?;
+    }
+
+    Ok(())
+}
+
+fn build_batch_mutation(fields: &[String]) -> String {
+    format!("mutation {{\n{}\n}}", fields.join("\n"))
+}
+
+fn graphql_rows(response: &GraphqlExecuteResponse, collection_name: &str) -> Vec<Value> {
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(collection_name))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn render_graphql_errors(response: &GraphqlExecuteResponse) -> String {
+    Value::Array(response.errors.clone()).to_string()
 }
 
 fn nullable_string_literal(value: Option<&str>) -> String {
