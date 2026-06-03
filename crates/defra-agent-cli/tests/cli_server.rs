@@ -1304,3 +1304,131 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
 
     Ok(())
 }
+
+/// Proves the `/mcp` endpoint serves `defra_query` to an external MCP client,
+/// reconstructing trace data structurally (so an external consumer like
+/// Amygdala can retire its hand-rolled stack) and still enforcing the secret
+/// guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_endpoint_serves_defra_query() -> Result<()> {
+    use rmcp::model::CallToolRequestParams;
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+    use rmcp::ServiceExt;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-mcp-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-mcp-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a linked request + tool call.
+    let http = reqwest::Client::new();
+    for mutation in [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", status: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
+    ] {
+        let resp = http
+            .post(graphql.as_str())
+            .json(&serde_json::json!({ "query": mutation }))
+            .send()
+            .await
+            .context("seeding mcp trace")?;
+        let body: Value = resp.json().await?;
+        assert!(body.get("errors").is_none(), "seed mutation errored: {body}");
+    }
+
+    // Connect an MCP client to the mounted /mcp endpoint.
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"));
+    let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
+    let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
+
+    // The server advertises the defra_query tool.
+    let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
+    assert!(
+        tools
+            .tools
+            .iter()
+            .any(|tool| tool.name.as_ref() == "defra_query"),
+        "expected defra_query in advertised tools: {:?}",
+        tools
+            .tools
+            .iter()
+            .map(|t| t.name.as_ref())
+            .collect::<Vec<_>>()
+    );
+
+    // Reconstruct the tool call structurally via the MCP tool.
+    let args = serde_json::json!({
+        "collection": "AgentToolCall",
+        "fields": ["request_id", "tool_name", "args", "result", "status"],
+        "filter": { "request_id": { "_eq": "mcp-req" } }
+    });
+    let params =
+        CallToolRequestParams::new("defra_query").with_arguments(args.as_object().unwrap().clone());
+    let result = mcp
+        .peer()
+        .call_tool(params)
+        .await
+        .context("call_tool defra_query")?;
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+        .collect::<Vec<_>>()
+        .join("");
+    let payload: Value = serde_json::from_str(&text).context("MCP tool result is JSON")?;
+    assert_eq!(payload["count"].as_i64(), Some(1), "{payload}");
+    let tc = &payload["results"][0];
+    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
+
+    // Secret guard holds over MCP too.
+    let denied_args =
+        serde_json::json!({ "collection": "InferenceBackend", "fields": ["api_key"] });
+    let denied_params = CallToolRequestParams::new("defra_query")
+        .with_arguments(denied_args.as_object().unwrap().clone());
+    let denied = mcp.peer().call_tool(denied_params).await;
+    let blocked = match denied {
+        Err(_) => true,
+        Ok(result) => {
+            result.is_error == Some(true)
+                || result.content.iter().any(|content| {
+                    content
+                        .raw
+                        .as_text()
+                        .map(|t| t.text.contains("restricted"))
+                        .unwrap_or(false)
+                })
+        }
+    };
+    assert!(
+        blocked,
+        "expected MCP defra_query to block api_key selection"
+    );
+
+    let _ = mcp.cancel().await;
+    Ok(())
+}

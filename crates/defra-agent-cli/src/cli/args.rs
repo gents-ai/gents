@@ -350,6 +350,11 @@ pub(crate) struct ServeArgs {
     #[arg(long = "cli-tool")]
     pub(crate) cli_tools: Vec<String>,
     #[arg(
+        long = "mcp-query-collection",
+        help = "Restrict the /mcp defra_query tool to these collections (repeatable); omit for all"
+    )]
+    pub(crate) mcp_query_collections: Vec<String>,
+    #[arg(
         long,
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]

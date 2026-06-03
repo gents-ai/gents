@@ -17,6 +17,7 @@ use crate::http::prometheus::{
 };
 use crate::http::self_view::load_self_view;
 use crate::http::version::version_response;
+use defra_agent::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
@@ -33,7 +34,10 @@ pub(crate) fn runtime_contract_router(
     graphql: String,
     agent_name: String,
     agent_did: String,
+    defra_query_scope: CollectionScope,
 ) -> Router {
+    let mcp_service =
+        crate::http::mcp_server::defra_query_mcp_service(graphql.clone(), defra_query_scope);
     let state = RuntimeHttpState {
         graphql,
         agent_name,
@@ -43,6 +47,7 @@ pub(crate) fn runtime_contract_router(
     };
 
     Router::new()
+        .nest_service("/mcp", mcp_service)
         .route("/metrics", get(metrics_handler))
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
