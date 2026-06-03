@@ -28,6 +28,7 @@ use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
 use serde_json::json;
 
+use support::fixtures::spawn_subagent_source;
 use support::{first_row, test_db};
 
 const AGENT_DID: &str = "did:defra-agent:r4-subagent-completion";
@@ -261,20 +262,33 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
     first_row::<RequestSessionRow>(&node.execute(&query).await, "AgentRequest").session_id
 }
 
-async fn child_for_tool(node: &EmbeddedNode, tool_call_id: &str) -> (String, String) {
-    let tool_call_id = escape_graphql_string(tool_call_id);
+/// Wait for SubagentSource to materialize the child `AgentRequest` for
+/// `tool_call_id`, then return its `(request_id, session_id)` (#377).
+async fn wait_for_child_for_tool(node: &EmbeddedNode, tool_call_id: &str) -> (String, String) {
+    let escaped = escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    caused_by_parent_tool_call_id: {{ _eq: "{tool_call_id}" }}
+                    caused_by_parent_tool_call_id: {{ _eq: "{escaped}" }}
                 }},
                 limit: 1
             ) {{ request_id session_id }}
         }}"#
     );
-    let row: ChildForToolRow = first_row(&node.execute(&query).await, "AgentRequest");
-    (row.request_id, row.session_id)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = node.execute(&query).await;
+        if let Some(row) = support::first_optional_row::<ChildForToolRow>(&response, "AgentRequest")
+        {
+            return (row.request_id, row.session_id);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for child AgentRequest for tool call {tool_call_id}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -632,6 +646,14 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
 #[tokio::test]
 async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_order").await;
+    // Spawn convergence (#377): the child `AgentRequest` is materialized by
+    // SubagentSource, not synchronously by the hook. Run a standalone source.
+    let _source = spawn_subagent_source(
+        db.node.clone(),
+        AGENT_DID,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
     let hook = DefraSessionHook::resume_or_create_with_identity_policy(
         db.node.clone(),
         &session_id,
@@ -662,7 +684,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     .await;
     let receipt = skip_reason(action);
     let (child_request_id, child_session_id) =
-        child_for_tool(db.node.as_ref(), "spawn-bg-order").await;
+        wait_for_child_for_tool(db.node.as_ref(), "spawn-bg-order").await;
     persist_child_completion(
         db.node.as_ref(),
         &child_request_id,

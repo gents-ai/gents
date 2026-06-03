@@ -17,6 +17,7 @@ use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use support::fixtures::spawn_subagent_source;
 use support::test_db;
 
 const AGENT_DID: &str = "did:defra-agent:r4c-steer";
@@ -73,7 +74,7 @@ struct MessageRow {
     content: String,
 }
 
-async fn setup_db(name: &str) -> support::TestDb {
+async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSourceGuard) {
     let db = test_db(name).await;
     upsert_tool_selection(
         db.node.as_ref(),
@@ -131,7 +132,16 @@ async fn setup_db(name: &str) -> support::TestDb {
     )
     .await
     .unwrap();
-    db
+    // Spawn convergence (#377): the child `AgentRequest` is materialized by
+    // SubagentSource, not synchronously by the hook. Run a standalone source for
+    // the lifetime of the test; the guard is returned so callers hold it alive.
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        AGENT_DID,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+    (db, source)
 }
 
 async fn create_parent_hook(
@@ -202,6 +212,7 @@ async fn create_parent_request(
 }
 
 async fn spawn_background_child(
+    node: &EmbeddedNode,
     hook: &DefraSessionHook,
     internal_call_id: &str,
     prompt: &str,
@@ -220,9 +231,47 @@ async fn spawn_background_child(
         &args,
     )
     .await;
-    let receipt = skip_reason_json(action);
+    let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
+    // Spawn convergence (#377): backfill the child session id once SubagentSource
+    // materializes the child (the receipt no longer carries it).
+    let child_request_id = receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+    let child_session_id = wait_for_child_session_id(node, &child_request_id).await;
+    receipt["child_session_id"] = Value::String(child_session_id);
     receipt
+}
+
+async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ session_id }}
+        }}"#
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let response = node.execute(&query).await;
+        #[derive(serde::Deserialize)]
+        struct Row {
+            session_id: String,
+        }
+        if let Some(row) = support::first_optional_row::<Row>(&response, "AgentRequest") {
+            if !row.session_id.is_empty() {
+                return row.session_id;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for child AgentRequest {child_request_id} session id"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn steer_subagent(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
@@ -405,9 +454,9 @@ fn queue_metadata(
 
 #[tokio::test]
 async fn steer_subagent_append_enqueues_with_steering_source() {
-    let db = setup_db("r4c-steer-append").await;
+    let (db, _source) = setup_db("r4c-steer-append").await;
     let hook = create_parent_hook(&db, "parent-append", "session-append").await;
-    let child = spawn_background_child(&hook, "spawn-append", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-append", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
 
@@ -446,9 +495,9 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
 
 #[tokio::test]
 async fn steer_subagent_append_writes_user_message() {
-    let db = setup_db("r4c-steer-message").await;
+    let (db, _source) = setup_db("r4c-steer-message").await;
     let hook = create_parent_hook(&db, "parent-message", "session-message").await;
-    let child = spawn_background_child(&hook, "spawn-message", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-message", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
 
@@ -469,9 +518,9 @@ async fn steer_subagent_append_writes_user_message() {
 
 #[tokio::test]
 async fn steer_subagent_rejects_terminal_child() {
-    let db = setup_db("r4c-steer-terminal").await;
+    let (db, _source) = setup_db("r4c-steer-terminal").await;
     let hook = create_parent_hook(&db, "parent-terminal", "session-terminal").await;
-    let child = spawn_background_child(&hook, "spawn-terminal", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     update_request_state(db.node.as_ref(), child_request_id, "completed", "completed").await;
 
@@ -493,10 +542,10 @@ async fn steer_subagent_rejects_terminal_child() {
 
 #[tokio::test]
 async fn steer_subagent_rejects_unauthorized_child() {
-    let db = setup_db("r4c-steer-unauthorized").await;
+    let (db, _source) = setup_db("r4c-steer-unauthorized").await;
     let hook_1 = create_parent_hook(&db, "parent-one", "session-one").await;
     let hook_2 = create_parent_hook(&db, "parent-two", "session-two").await;
-    let child = spawn_background_child(&hook_2, "spawn-sibling", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook_2, "spawn-sibling", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
 
     let result = steer_subagent(
@@ -514,10 +563,10 @@ async fn steer_subagent_rejects_unauthorized_child() {
 
 #[tokio::test]
 async fn steer_subagent_no_parent_tool_call_row_written() {
-    let db = setup_db("r4c-steer-no-row").await;
+    let (db, _source) = setup_db("r4c-steer-no-row").await;
     let parent_session_id = "session-no-row";
     let hook = create_parent_hook(&db, "parent-no-row", parent_session_id).await;
-    let child = spawn_background_child(&hook, "spawn-no-row", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-no-row", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
 
     let _ = steer_subagent(
@@ -538,9 +587,9 @@ async fn steer_subagent_no_parent_tool_call_row_written() {
 
 #[tokio::test]
 async fn steer_subagent_interrupt_latches_active_child_request() {
-    let db = setup_db("r4c-steer-interrupt").await;
+    let (db, _source) = setup_db("r4c-steer-interrupt").await;
     let hook = create_parent_hook(&db, "parent-interrupt", "session-interrupt").await;
-    let child = spawn_background_child(&hook, "spawn-interrupt", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-interrupt", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     update_request_state(
         db.node.as_ref(),
@@ -585,9 +634,9 @@ async fn steer_subagent_interrupt_latches_active_child_request() {
 
 #[tokio::test]
 async fn steer_subagent_interrupt_drains_automated_wakeups() {
-    let db = setup_db("r4c-steer-drain").await;
+    let (db, _source) = setup_db("r4c-steer-drain").await;
     let hook = create_parent_hook(&db, "parent-drain", "session-drain").await;
-    let child = spawn_background_child(&hook, "spawn-drain", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-drain", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
     update_request_state(
@@ -634,10 +683,10 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
 
 #[tokio::test]
 async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
-    let db = setup_db("r4c-steer-cascade").await;
+    let (db, _source) = setup_db("r4c-steer-cascade").await;
     let hook = create_parent_hook(&db, "parent-cascade", "session-cascade").await;
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    let child = spawn_background_child(&hook, "spawn-cascade", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cascade", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap().to_string();
     let child_session_id = child["child_session_id"].as_str().unwrap().to_string();
     update_request_state(

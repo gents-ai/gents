@@ -2,8 +2,13 @@ use super::*;
 
 #[tokio::test]
 async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
-    let (db, hook, session_id, _request_id, parent_deadline) =
+    let fixture =
         setup_spawn_fixture("cancel_subagent_active", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let parent_deadline = fixture.parent_deadline;
+    let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "background child for cancel_subagent",
@@ -24,10 +29,10 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    let child_session_id = spawn_receipt["child_session_id"]
-        .as_str()
-        .expect("child_session_id")
-        .to_string();
+    // Spawn convergence (#377): resolve the child session id from the DB once
+    // SubagentSource has materialized the child (the receipt no longer carries
+    // it).
+    let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
     update_request_state(
         db.node.as_ref(),
         &child_request_id,
@@ -39,6 +44,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     let automated_request_id = "cancel-subagent-active-auto-queue";
     create_child_session_queued_request(
         db.node.as_ref(),
+        &agent_did,
         automated_request_id,
         &child_session_id,
         "scheduled",
@@ -53,6 +59,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     let steering_request_id = "cancel-subagent-active-steering-queue";
     create_child_session_queued_request(
         db.node.as_ref(),
+        &agent_did,
         steering_request_id,
         &child_session_id,
         "interactive",
@@ -62,6 +69,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     let user_request_id = "cancel-subagent-active-user-queue";
     create_child_session_queued_request(
         db.node.as_ref(),
+        &agent_did,
         user_request_id,
         &child_session_id,
         "interactive",
@@ -90,7 +98,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         child_request_id.clone(),
         "internal-cancel-descendant".to_string(),
         1,
-        AGENT_DID.to_string(),
+        agent_did.clone(),
         CHILD_BEHAVIOR_ID.to_string(),
         "grandchild prompt".to_string(),
         Some(parent_deadline - chrono::Duration::minutes(1)),
@@ -184,13 +192,16 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
 
 #[tokio::test]
 async fn cancel_subagent_rejects_unlinked_child_without_lifecycle_row() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "cancel_subagent_unlinked_child",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let cancel_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
 
     let action = PromptHook::<TestModel>::on_tool_call(

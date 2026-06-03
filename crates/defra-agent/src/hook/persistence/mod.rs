@@ -17,11 +17,11 @@ use crate::background_tools::{
     drain_automated_wakeups_returning_ids,
     effective_context_cross_deployment_spawn_timeout_seconds, handle_list_background_tools,
     handle_list_subagents, handle_read_subagent_transcript, handle_read_tool_output,
-    load_authorized_child_edge, load_child_final_response, load_child_session_id,
-    load_child_terminal_row, load_parent_subagent_context, load_steer_subagent_target,
-    pending_automated_wakeup_request_ids, project_child_terminal, target_is_allowed,
-    BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, ParentSubagentContext,
-    ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
+    load_authorized_child_edge, load_child_final_response, load_child_terminal_row,
+    load_parent_subagent_context, load_steer_subagent_target, pending_automated_wakeup_request_ids,
+    project_child_terminal, target_is_allowed, try_load_authorized_child_edge, BackgroundToolArgs,
+    CancelSubagentArgs, CancelToolArgs, ParentSubagentContext, ReadToolOutputOutcome,
+    SpawnSubagentArgs, SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::load_agent_behavior;
@@ -29,8 +29,8 @@ use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelCause, CancelPolicy, CascadeDispatch,
-    ChildTerminal, FailureClass, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
+    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
     CommandPolicyDenial, BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,

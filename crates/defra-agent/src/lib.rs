@@ -158,6 +158,7 @@ pub mod __test_internals {
     pub use crate::background_tools::r4c_args::{
         ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
     };
+    pub use crate::trigger_engine::run_subagent_source_for_test;
 }
 
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.

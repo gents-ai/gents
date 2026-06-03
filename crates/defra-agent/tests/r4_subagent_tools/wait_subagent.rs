@@ -2,13 +2,17 @@ use super::*;
 
 #[tokio::test]
 async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "wait_subagent_existing_bridge",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "background child for wait_subagent",
@@ -31,10 +35,9 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    let child_session_id = spawn_receipt["child_session_id"]
-        .as_str()
-        .expect("child_session_id")
-        .to_string();
+    // Spawn convergence (#377): resolve the child session id from the DB once
+    // SubagentSource has materialized the child.
+    let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
@@ -63,6 +66,7 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
 
     persist_child_completion(
         db.node.as_ref(),
+        &agent_did,
         &child_request_id,
         &child_session_id,
         "wait_subagent final answer",
@@ -138,8 +142,10 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
     {
         let test_name = format!("wait_subagent_terminal_{child_state}");
         let internal_call_id = format!("internal-wait-terminal-spawn-{child_state}");
-        let (db, hook, session_id, _request_id, _parent_deadline) =
-            setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
+        let fixture = setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
+        let db = &fixture.db;
+        let hook = fixture.hook.clone();
+        let session_id = fixture.session_id.clone();
         let spawn_args = json!({
             "behavior_id": CHILD_BEHAVIOR_ID,
             "prompt": format!("background child terminal {child_state}"),
@@ -173,6 +179,10 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
             background_bridge.lifecycle_state.as_deref(),
             Some("running")
         );
+
+        // Wait for SubagentSource to materialize the child before invoking
+        // wait_subagent (#377): the child is created asynchronously now.
+        wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
         let hook_for_wait = hook.clone();
         let wait_args = json!({ "child_request_id": child_request_id }).to_string();
@@ -237,13 +247,16 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
 
 #[tokio::test]
 async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "wait_subagent_unlinked_child",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let wait_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
 
     let action = PromptHook::<TestModel>::on_tool_call(
@@ -267,13 +280,19 @@ async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
 
 #[tokio::test]
 async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
-    let (db, hook, session_id, request_id, parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "wait_subagent_resumed_interrupt",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let request_id = fixture.request_id.clone();
+    let parent_deadline = fixture.parent_deadline;
+    let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "background child for resumed wait cancellation",
@@ -294,12 +313,14 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
         .as_str()
         .expect("child_request_id")
         .to_string();
+    // Wait for SubagentSource to materialize the child (#377).
+    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let resumed_hook = DefraSessionHook::resume_or_create_with_identity_policy(
         db.node.clone(),
         &session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -366,13 +387,16 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
 
 #[tokio::test]
 async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "wait_subagent_backgrounded",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let spawn_args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "background child for wait backgrounding",
@@ -393,6 +417,8 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
         .as_str()
         .expect("child_request_id")
         .to_string();
+    // Wait for SubagentSource to materialize the child (#377).
+    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();

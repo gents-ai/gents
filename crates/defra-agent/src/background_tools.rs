@@ -1448,6 +1448,30 @@ struct ParentToolCallEdgeRow {
     child_request_id: Option<String>,
 }
 
+/// Tolerant variant of [`load_authorized_child_edge`] used by the foreground
+/// subagent wait loop. After the spawn convergence (#377) the child
+/// `AgentRequest` is materialized asynchronously by `SubagentSource` rather than
+/// synchronously by the hook, so the foreground poller can observe the bridge
+/// before the child row exists. This returns `Ok(None)` for the "child not yet
+/// materialized" / not-yet-linked cases (using the same `authorization_lookup_error`
+/// predicate as `load_readable_background_child_edge`) so the caller can back off
+/// and keep polling; all other errors propagate.
+pub(crate) async fn try_load_authorized_child_edge(
+    node: &EmbeddedNode,
+    parent_context: &ParentSubagentContext,
+    child_request_id: &str,
+) -> Result<Option<ChildEdge>> {
+    match load_authorized_child_edge(node, parent_context, child_request_id).await {
+        Ok(edge) => Ok(Some(edge)),
+        Err(error)
+            if authorization_lookup_error(&error, &parent_context.request_id, child_request_id) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) async fn load_authorized_child_edge(
     node: &EmbeddedNode,
     parent_context: &ParentSubagentContext,
@@ -1635,35 +1659,6 @@ pub(crate) async fn load_child_final_response(
     }
 
     Ok(Some(render_assistant_message_text(&message_row.content)?))
-}
-
-pub(crate) async fn load_child_session_id(
-    node: &EmbeddedNode,
-    child_request_id: &str,
-) -> Result<Option<String>> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                limit: 1
-            ) {{
-                session_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query child AgentRequest {child_request_id} session failed: {:?}",
-            response.errors
-        );
-    }
-    #[derive(Deserialize)]
-    struct SessionRow {
-        session_id: String,
-    }
-    Ok(first_row::<SessionRow>(response.data.as_ref(), "AgentRequest").map(|row| row.session_id))
 }
 
 pub(crate) async fn load_child_terminal_row(

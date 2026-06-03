@@ -2,13 +2,17 @@ use super::*;
 
 #[tokio::test]
 async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
-    let (db, hook, session_id, _request_id, parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_skip_transcript",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let parent_deadline = fixture.parent_deadline;
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "child prompt for transcript",
@@ -76,13 +80,16 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
 
 #[tokio::test]
 async fn spawn_subagent_rejects_unauthorized_target_without_child_request() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_unauthorized",
         vec!["different-child"],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn",
@@ -122,7 +129,7 @@ async fn spawn_subagent_rejects_unauthorized_target_without_child_request() {
 
 #[tokio::test]
 async fn spawn_subagent_rejects_when_spawn_disabled_without_child_request() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture_with_flags(
+    let fixture = setup_spawn_fixture_with_flags(
         "spawn_subagent_spawn_disabled",
         vec![CHILD_BEHAVIOR_ID],
         0,
@@ -130,6 +137,9 @@ async fn spawn_subagent_rejects_when_spawn_disabled_without_child_request() {
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn",
@@ -163,13 +173,16 @@ async fn spawn_subagent_rejects_when_spawn_disabled_without_child_request() {
 
 #[tokio::test]
 async fn spawn_subagent_rejects_background_when_background_disabled_without_child_request() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_background_disabled",
         vec![CHILD_BEHAVIOR_ID],
         0,
         false,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn in background",
@@ -204,8 +217,12 @@ async fn spawn_subagent_rejects_background_when_background_disabled_without_chil
 
 #[tokio::test]
 async fn spawn_subagent_rejects_deadline_after_parent_without_child_request() {
-    let (db, hook, session_id, _request_id, parent_deadline) =
+    let fixture =
         setup_spawn_fixture("spawn_subagent_deadline", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let parent_deadline = fixture.parent_deadline;
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "deadline too late",
@@ -238,13 +255,16 @@ async fn spawn_subagent_rejects_deadline_after_parent_without_child_request() {
 
 #[tokio::test]
 async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_depth",
         vec![CHILD_BEHAVIOR_ID],
         MAX_SUBAGENT_DEPTH,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
         "behavior_id": CHILD_BEHAVIOR_ID,
         "prompt": "too deep",

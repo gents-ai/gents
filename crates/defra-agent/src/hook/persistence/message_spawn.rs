@@ -431,109 +431,35 @@ impl DefraSessionHook {
         }
         lifecycle.start_running().await?;
 
-        if target_host == SubagentTargetHost::Remote {
-            let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
-
-            self.in_flight_lifecycles
-                .lock()
-                .await
-                .insert(internal_call_id.to_string(), lifecycle);
-
-            return Ok(ToolCallHookAction::skip(receipt));
-        }
-
-        let child_session_id = if let Err(error) = create_subagent_request_with_request_id(
-            &self.node,
-            child_request_id.clone(),
-            parent_context.request_id.clone(),
-            internal_call_id.to_string(),
-            parent_context.subagent_depth,
-            self.agent_did.clone(),
-            behavior_id.to_string(),
-            parsed.prompt.clone(),
-            parsed.deadline,
-        )
-        .await
-        {
-            match load_authorized_child_edge(&self.node, &parent_context, &child_request_id).await {
-                Ok(edge) if edge.behavior_id == behavior_id => edge.child_session_id,
-                Ok(edge) => {
-                    let result = service_unavailable_payload(
-                        SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        format!(
-                            "pre-materialized child subagent request has behavior_id {}, expected {behavior_id}",
-                            edge.behavior_id
-                        ),
-                        false,
-                    );
-                    lifecycle
-                        .bridge_failure(ChildTerminal::Failed {
-                            reason: result.clone(),
-                            failure_class: FailureClass::External,
-                        })
-                        .await?;
-                    return Ok(ToolCallHookAction::skip(result));
-                }
-                Err(_) => {
-                    let result = service_unavailable_payload(
-                        SPAWN_SUBAGENT_TOOL_NAME,
-                        "/",
-                        format!("failed to materialize child subagent request: {error}"),
-                        true,
-                    );
-                    lifecycle
-                        .bridge_failure(ChildTerminal::Failed {
-                            reason: result.clone(),
-                            failure_class: FailureClass::External,
-                        })
-                        .await?;
-                    return Ok(ToolCallHookAction::skip(result));
-                }
-            }
-        } else if let Some(child_session_id) =
-            load_child_session_id(&self.node, &child_request_id).await?
-        {
-            child_session_id
-        } else {
-            let result = service_unavailable_payload(
-                SPAWN_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child subagent request was created without a readable session id",
-                true,
-            );
-            lifecycle
-                .bridge_failure(ChildTerminal::Failed {
-                    reason: result.clone(),
-                    failure_class: FailureClass::External,
-                })
-                .await?;
-            return Ok(ToolCallHookAction::skip(result));
-        };
-
-        if await_mode == AwaitMode::Background {
-            let receipt =
-                background_receipt_payload(&child_request_id, Some(&child_session_id), behavior_id);
-
-            self.in_flight_lifecycles
-                .lock()
-                .await
-                .insert(internal_call_id.to_string(), lifecycle);
-
-            return Ok(ToolCallHookAction::skip(receipt));
-        }
-
+        // Spawn convergence (#377): both same-deployment (local) and
+        // cross-deployment (remote) spawns now follow ONE path — write the
+        // `AgentToolCall` bridge (done by `start_running()` above) and let
+        // `SubagentSource` create the child `AgentRequest`. `SubagentSource`
+        // dedups via `child_request_exists`, so there is exactly one creator
+        // regardless of locality. The hook no longer synchronously creates the
+        // child, so the background receipt does not yet carry the child session
+        // id (the claiming deployment assigns it when it materializes the
+        // child); foreground waits adopt the session id from the edge once
+        // `SubagentSource` has materialized the child.
         self.in_flight_lifecycles
             .lock()
             .await
             .insert(internal_call_id.to_string(), lifecycle);
 
+        if await_mode == AwaitMode::Background {
+            let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
+            return Ok(ToolCallHookAction::skip(receipt));
+        }
+
+        // Foreground spawns are local-only (the remote-foreground case is
+        // rejected above). Block until `SubagentSource` materializes the child
+        // and the bridge reaches a terminal state.
         let result = self
             .await_foreground_subagent(
                 internal_call_id,
                 &parent_context,
                 &child_request_id,
-                &child_session_id,
+                "",
                 behavior_id,
                 parent_context.request_deadline_at,
             )
