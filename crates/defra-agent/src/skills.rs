@@ -100,6 +100,13 @@ pub fn effective_skills<'a>(
 /// services, so a ref that isn't a built tool must be assumed reachable rather
 /// than flagged unavailable (it may well be an MCP service the behavior can
 /// call). Treating it as missing would be a spurious degrade note.
+///
+/// Tradeoff (accepted): under `mcp_unrestricted` this also suppresses the
+/// degrade note for a genuinely-absent host/CLI ref (e.g. a skill naming `bash`
+/// when bash is off) — indistinguishable from an MCP service id without a
+/// built-in-tool registry. The note is advisory only (privilege is unaffected:
+/// the ceiling never *grants* a tool, it only annotates), so we prefer missing a
+/// hint over emitting false "unavailable" notes for reachable MCP services.
 #[derive(Debug, Clone, Default)]
 pub struct SkillToolCeiling {
     names: BTreeSet<String>,

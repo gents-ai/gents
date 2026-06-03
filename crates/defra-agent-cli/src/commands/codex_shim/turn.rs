@@ -78,9 +78,10 @@ async fn resolve_explicit_skill_injections(
     let (skill_refs, skill_excludes) =
         match defra_agent::load_agent_behavior(state.node.as_ref(), &state.behavior_id).await {
             Ok(Some(behavior)) => (behavior.skill_refs, behavior.skill_excludes),
-            // Behavior missing/unreadable: fall back to empty lists, which still
-            // admits principal-scoped skills and excludes behavior-scoped ones.
-            _ => (Vec::new(), Vec::new()),
+            // Fail CLOSED: without the bound behavior we cannot make the D5
+            // effective-set decision, so inject NOTHING rather than admit
+            // principal-scoped skills against an unknown gate (privilege gate).
+            _ => return Vec::new(),
         };
 
     let mut blocks = Vec::new();
@@ -175,6 +176,14 @@ async fn load_scoped_skill_block(
     } else {
         skill.name.as_str()
     };
+    // Raw body, matching how Codex/Hermes honor an explicit pick. We do NOT add
+    // the D3 "unavailable tools" degrade note here: that note needs the
+    // behavior's resolved tool ceiling, which only the runtime has (computing it
+    // in the shim would reimplement tool-surface resolution and risk drift). The
+    // omission is privilege-safe — injecting instructions never grants a tool
+    // (S-Skill-1 holds); at worst the model lacks an advisory hint and a tool it
+    // tries simply isn't there. The degrade note remains on the model-driven
+    // `load_skill` path. (Follow-up: move injection runtime-side to unify both.)
     Some(format!(
         "<skill>\n<name>{label}</name>\n<path>{}</path>\n{}\n</skill>",
         path.display(),
