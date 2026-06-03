@@ -31,6 +31,82 @@ pub(crate) async fn write_tool_selection_document(
     crate::extract_mutation_doc_id(&response, "ToolSelection")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+    use defra_agent::{ensure_runtime_schemas, load_tool_selection};
+
+    /// Round-trip test: write a `ToolSelectionDocument` with all five subagent
+    /// enablement fields set, then read it back and assert every field persisted.
+    ///
+    /// This test will FAIL before the fix because `tool_selection_fields()` does
+    /// not emit the subagent fields.
+    #[tokio::test]
+    async fn write_tool_selection_persists_subagent_enablement_fields() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let selection = ToolSelectionDocument {
+            selection_id: "test-subagent-fields".to_string(),
+            agent_did: "did:test:subagent-enablement".to_string(),
+            subagent_spawn_enabled: Some(true),
+            subagent_targets: Some(vec!["amy-research".to_string()]),
+            subagent_steering_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(90),
+            ..Default::default()
+        };
+
+        let access = ConfigAccess::Local(node);
+        write_tool_selection_document(&access, &selection).await?;
+
+        let node = match &access {
+            ConfigAccess::Local(n) => n,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+
+        let loaded = load_tool_selection(node, "test-subagent-fields")
+            .await?
+            .expect("ToolSelection should exist after write");
+
+        assert_eq!(
+            loaded.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_targets,
+            Some(vec!["amy-research".to_string()]),
+            "subagent_targets must persist"
+        );
+        assert_eq!(
+            loaded.subagent_steering_enabled,
+            Some(true),
+            "subagent_steering_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must persist"
+        );
+        assert_eq!(
+            loaded.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must persist"
+        );
+
+        Ok(())
+    }
+}
+
 fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) -> String {
     let mut fields = Vec::new();
     if include_id {
@@ -92,6 +168,22 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .defra_query_collections
                 .as_ref()
                 .and_then(|values| string_list_field("defra_query_collections", values)),
+            selection
+                .subagent_targets
+                .as_ref()
+                .and_then(|values| string_list_field("subagent_targets", values)),
+            optional_bool_field("subagent_spawn_enabled", selection.subagent_spawn_enabled),
+            optional_bool_field(
+                "subagent_steering_enabled",
+                selection.subagent_steering_enabled,
+            ),
+            optional_bool_field(
+                "subagent_background_enabled",
+                selection.subagent_background_enabled,
+            ),
+            selection
+                .cross_deployment_spawn_timeout_seconds
+                .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
         ]
         .into_iter()
         .flatten(),
