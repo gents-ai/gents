@@ -1519,8 +1519,7 @@ pub(crate) struct SessionForkArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
-        help = "Reserved — remote GraphQL-mode fork is not yet implemented. \
-                Passing this flag today errors."
+        help = "GraphQL endpoint for forking through a running runtime instead of opening local state"
     )]
     pub(crate) graphql: Option<String>,
     #[arg(

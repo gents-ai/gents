@@ -13,10 +13,11 @@ use serde_json::Value;
 #[cfg(target_arch = "wasm32")]
 lens_sdk::define!(try_transform, try_inverse);
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn try_transform(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
-    for item in iter {
+    if let Some(item) = iter.next() {
         let mut doc = match item? {
             Some(v) => v,
             None => return Ok(StreamOption::None),
@@ -65,10 +66,11 @@ fn try_transform(
     Ok(StreamOption::EndOfStream)
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn try_inverse(
     iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
 ) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
-    for item in iter {
+    if let Some(item) = iter.next() {
         let mut doc = match item? {
             Some(v) => v,
             None => return Ok(StreamOption::None),
