@@ -1558,6 +1558,8 @@ mod lean_apply_write_boundary_tests {
             behavior_id: doc.id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some(doc.content.clone()),
+            description: None,
+            summary: None,
             system_prompt: Some(doc.content.clone()),
             backend_id: ref_id(doc, Collection::InferenceBackend),
             model_name: Some(format!("model-{}", doc.id)),

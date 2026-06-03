@@ -23,6 +23,8 @@ pub(crate) async fn write_agent_behavior_document(
             escape_graphql_string(&behavior.agent_did)
         )),
         optional_string_field("display_name", behavior.display_name.as_deref()),
+        optional_string_field("description", behavior.description.as_deref()),
+        optional_string_field("summary", behavior.summary.as_deref()),
         optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
         optional_string_field("backend_id", behavior.backend_id.as_deref()),
         optional_string_field("model_name", behavior.model_name.as_deref()),
@@ -55,6 +57,8 @@ pub(crate) async fn write_agent_behavior_document(
             escape_graphql_string(&behavior.agent_did)
         )),
         optional_string_field("display_name", behavior.display_name.as_deref()),
+        optional_string_field("description", behavior.description.as_deref()),
+        optional_string_field("summary", behavior.summary.as_deref()),
         optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
         optional_string_field("backend_id", behavior.backend_id.as_deref()),
         optional_string_field("model_name", behavior.model_name.as_deref()),

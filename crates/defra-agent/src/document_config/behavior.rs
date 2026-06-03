@@ -14,6 +14,8 @@ pub struct AgentBehavior {
     pub behavior_id: String,
     pub agent_did: String,
     pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub summary: Option<String>,
     pub system_prompt: Option<String>,
     pub backend_id: Option<String>,
     pub model_name: Option<String>,
@@ -49,6 +51,8 @@ pub(crate) async fn load_agent_behavior_record(
                 behavior_id
                 agent_did
                 display_name
+                description
+                summary
                 system_prompt
                 backend_id
                 model_name
@@ -85,6 +89,8 @@ pub(crate) async fn load_agent_behavior_by_doc_id(
                 behavior_id
                 agent_did
                 display_name
+                description
+                summary
                 system_prompt
                 backend_id
                 model_name
@@ -132,6 +138,8 @@ pub(crate) async fn list_agent_behavior_records(
                 behavior_id
                 agent_did
                 display_name
+                description
+                summary
                 system_prompt
                 backend_id
                 model_name
@@ -166,6 +174,8 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         Some(format!(r#"behavior_id: "{escaped_behavior_id}""#)),
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", behavior.display_name.as_deref()),
+        graphql_fields::graphql_string_field("description", behavior.description.as_deref()),
+        graphql_fields::graphql_string_field("summary", behavior.summary.as_deref()),
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
@@ -202,6 +212,8 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
     let update_fields = vec![
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", behavior.display_name.as_deref()),
+        graphql_fields::graphql_string_field("description", behavior.description.as_deref()),
+        graphql_fields::graphql_string_field("summary", behavior.summary.as_deref()),
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
@@ -264,6 +276,8 @@ pub(super) async fn create_default_behavior(
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(DEFAULT_BEHAVIOR_LABEL.to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

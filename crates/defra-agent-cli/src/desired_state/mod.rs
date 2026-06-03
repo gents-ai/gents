@@ -41,6 +41,10 @@ pub(crate) struct DesiredAgentBehavior {
     pub(crate) behavior_id: String,
     pub(crate) agent_did: String,
     pub(crate) display_name: Option<String>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
     pub(crate) system_prompt: Option<String>,
     pub(crate) backend_id: Option<String>,
     pub(crate) model_name: Option<String>,

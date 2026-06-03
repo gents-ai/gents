@@ -23,6 +23,8 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         behavior_id: behavior_id.clone(),
         agent_did: args.agent_did.clone(),
         display_name: args.display_name.clone(),
+        description: None,
+        summary: None,
         system_prompt,
         backend_id: args.backend_id.clone(),
         model_name: args.model_name.clone(),

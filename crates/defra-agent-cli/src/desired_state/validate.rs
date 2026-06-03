@@ -1006,6 +1006,153 @@ mod live_tests {
 
         Ok(())
     }
+
+    /// Apply a manifest with an `AgentBehavior` that has `description` and
+    /// `summary` set, then:
+    ///   (a) read the `AgentBehavior` back and assert both fields persisted, and
+    ///   (b) recompute the apply diff and assert the behavior is UNCHANGED
+    ///       (idempotent).
+    ///
+    /// Before the fix this test fails because the fields were absent from:
+    ///  - `DesiredAgentBehavior` → manifest deserialization would lose them.
+    ///  - `EXPORT_AGENT_BEHAVIOR_FIELDS` → live read always saw `None` → diff
+    ///    never converged.
+    ///  - the `convert.rs` whitelist → fields stripped during export→manifest.
+    #[tokio::test]
+    async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> Result<()> {
+        use std::path::PathBuf;
+
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+
+        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
+        // find the agent on the second (post-apply) read.
+        {
+            use defra_agent::graphql::escape_graphql_string;
+            let did = escape_graphql_string("did:key:test-behavior-desc-idempotency");
+            access
+                .execute(&format!(
+                    r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
+                ))
+                .await?;
+        }
+
+        // Build the desired manifest with description and summary set.
+        let desired_manifest = {
+            use super::super::{DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest};
+            DesiredStateManifest {
+                agent_principal: DesiredAgentPrincipal {
+                    agent_did: "did:key:test-behavior-desc-idempotency".to_string(),
+                    display_name: None,
+                    default_behavior_id: None,
+                    enabled: true,
+                },
+                agent_behaviors: vec![DesiredAgentBehavior {
+                    behavior_id: "desc-idempotency-behavior".to_string(),
+                    agent_did: "did:key:test-behavior-desc-idempotency".to_string(),
+                    display_name: Some("Research Assistant".to_string()),
+                    description: Some(
+                        "A general-purpose assistant for research and writing tasks.".to_string(),
+                    ),
+                    summary: Some("Research assistant".to_string()),
+                    system_prompt: None,
+                    backend_id: None,
+                    model_name: None,
+                    tool_selection_id: None,
+                    inference_profile_id: None,
+                    compaction_strategy: None,
+                    compaction_threshold: None,
+                    enabled: true,
+                }],
+                tool_selections: Vec::new(),
+                inference_backends: Vec::new(),
+                inference_profiles: Vec::new(),
+                tool_service_registries: Vec::new(),
+                tasks: Vec::new(),
+                schedules: Vec::new(),
+                event_triggers: Vec::new(),
+            }
+        };
+
+        let root = PathBuf::from(".");
+        let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
+
+        // ── First apply ──────────────────────────────────────────────────────
+        let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (live_principal, live_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+        );
+
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
+        txn.commit().await?;
+
+        // ── (a) Read back and assert description + summary persisted ─────────
+        let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (remaining_principal, remaining_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
+
+        let live_behavior = remaining_manifest
+            .agent_behaviors
+            .iter()
+            .find(|b| b.behavior_id == "desc-idempotency-behavior")
+            .expect("AgentBehavior should exist after apply");
+
+        assert_eq!(
+            live_behavior.description,
+            Some("A general-purpose assistant for research and writing tasks.".to_string()),
+            "description must persist through apply"
+        );
+        assert_eq!(
+            live_behavior.summary,
+            Some("Research assistant".to_string()),
+            "summary must persist through apply"
+        );
+
+        // ── (b) Re-diff: behavior must show as UNCHANGED ─────────────────────
+        let second_diff = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            remaining_principal.as_ref(),
+            &remaining_manifest,
+        );
+
+        assert!(
+            !diff_has_pending_apply(&second_diff.counts),
+            "second diff must have no pending apply (idempotent); got: {:?}",
+            second_diff.counts
+        );
+        assert!(
+            second_diff
+                .collections
+                .agent_behaviors
+                .unchanged
+                .contains(&"desc-idempotency-behavior".to_string()),
+            "behavior must be in the 'unchanged' set after re-apply; got: {:?}",
+            second_diff.collections.agent_behaviors
+        );
+
+        Ok(())
+    }
 }
 
 pub(super) fn optional_string_from_value(

@@ -104,6 +104,8 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: "did:defra-agent:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

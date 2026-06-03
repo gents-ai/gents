@@ -74,6 +74,8 @@ async fn boot_self_spawn_agent(db: &support::TestDb, test_name: &str) -> Running
             behavior_id: behavior_id.clone(),
             agent_did: agent_did.clone(),
             display_name: Some(behavior_id.clone()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

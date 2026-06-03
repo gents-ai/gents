@@ -118,6 +118,47 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     );
 }
 
+#[tokio::test]
+async fn agent_behavior_description_and_summary_round_trip() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = AgentBehavior {
+        behavior_id: "amy-general".to_string(),
+        agent_did: "did:key:z-test-desc".to_string(),
+        display_name: Some("Amy General".to_string()),
+        description: Some("A general-purpose assistant for research and writing.".to_string()),
+        summary: Some("General assistant".to_string()),
+        system_prompt: Some("You are a helpful assistant.".to_string()),
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        created_at: None,
+    };
+    upsert_agent_behavior(&node, &doc)
+        .await
+        .expect("upsert should persist description and summary fields");
+
+    let loaded = load_agent_behavior(&node, "amy-general")
+        .await
+        .expect("load should succeed")
+        .expect("behavior should exist after upsert");
+    assert_eq!(
+        loaded.description,
+        Some("A general-purpose assistant for research and writing.".to_string()),
+        "description must round-trip through upsert/load"
+    );
+    assert_eq!(
+        loaded.summary,
+        Some("General assistant".to_string()),
+        "summary must round-trip through upsert/load"
+    );
+}
+
 #[test]
 fn validate_accepts_well_formed_subagent_targets() {
     let doc = ToolSelectionDocument {

@@ -149,6 +149,8 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
             behavior_id: behavior_id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Be precise".to_string()),
             backend_id: Some("backend-local".to_string()),
             model_name: Some("gpt-local".to_string()),

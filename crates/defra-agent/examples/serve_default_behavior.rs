@@ -167,6 +167,8 @@ async fn seed_demo_documents(
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: agent_did.to_string(),
             display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some(system_prompt.to_string()),
             backend_id: Some(backend_id.to_string()),
             model_name: Some(model_name.to_string()),

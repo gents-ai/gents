@@ -83,6 +83,8 @@ pub(crate) fn manifest_from_export_bundle(
                         "behavior_id",
                         "agent_did",
                         "display_name",
+                        "description",
+                        "summary",
                         "system_prompt",
                         "backend_id",
                         "model_name",

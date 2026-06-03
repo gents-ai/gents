@@ -484,6 +484,8 @@ async fn initialize_runtime_home(
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some("Default".to_string()),
+        description: None,
+        summary: None,
         system_prompt: Some(standard_system_prompt(tool_ceiling).to_string()),
         backend_id: Some(backend_id.clone()),
         model_name: Some(model_name.to_string()),
