@@ -247,17 +247,47 @@ pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
         .join("\n")
 }
 
-pub(super) fn codex_turn_metadata(cwd: &Path) -> String {
-    json!({
+/// Skill ids for explicitly-selected skills (the Codex "pill"), extracted as a
+/// REFERENCE only. The synthetic path `/defra/skills/<skill_id>` carries the id
+/// in its last segment; fall back to the display name. No DB access, no
+/// resolution — the runtime resolves the body against the behavior's effective
+/// set and injects it (see `LayeredPromptBuilder::selected_skill_reminders`).
+pub(super) fn selected_skill_ids_from_input(input: &[codex::UserInput]) -> Vec<String> {
+    input
+        .iter()
+        .filter_map(|item| match item {
+            codex::UserInput::Skill { name, path } => path
+                .file_name()
+                .and_then(|segment| segment.to_str())
+                .map(str::to_string)
+                .filter(|id| !id.trim().is_empty())
+                .or_else(|| {
+                    let name = name.trim();
+                    (!name.is_empty()).then(|| name.to_string())
+                }),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(super) fn codex_turn_metadata(cwd: &Path, selected_skill_ids: &[String]) -> String {
+    let mut metadata = json!({
         "codex_shim": {
             "cwd": absolute_path(cwd)
         }
-    })
-    .to_string()
+    });
+    if !selected_skill_ids.is_empty() {
+        metadata["selected_skill_ids"] = json!(selected_skill_ids);
+    }
+    metadata.to_string()
 }
 
-pub(super) fn codex_steering_metadata(cwd: &Path, queued_after_request_id: &str) -> String {
-    json!({
+pub(super) fn codex_steering_metadata(
+    cwd: &Path,
+    queued_after_request_id: &str,
+    selected_skill_ids: &[String],
+) -> String {
+    let mut metadata = json!({
         "codex_shim": {
             "cwd": absolute_path(cwd)
         },
@@ -267,8 +297,11 @@ pub(super) fn codex_steering_metadata(cwd: &Path, queued_after_request_id: &str)
             "key": null,
             "queued_after_request_id": queued_after_request_id
         }
-    })
-    .to_string()
+    });
+    if !selected_skill_ids.is_empty() {
+        metadata["selected_skill_ids"] = json!(selected_skill_ids);
+    }
+    metadata.to_string()
 }
 
 pub(super) fn effective_cwd(state: &ShimState, cwd: Option<&str>) -> PathBuf {
@@ -349,6 +382,24 @@ mod tests {
             },
         ];
         assert_eq!(user_text_from_input(&input), "summarize this");
+    }
+
+    #[test]
+    fn selected_skill_ids_extracts_reference_from_pill() {
+        let input = vec![
+            codex::UserInput::Text {
+                text: "go".to_string(),
+                text_elements: Vec::new(),
+            },
+            codex::UserInput::Skill {
+                name: "Deep Research".to_string(),
+                path: std::path::PathBuf::from("/defra/skills/research"),
+            },
+        ];
+        // The id comes from the synthetic path's last segment, not the body.
+        assert_eq!(selected_skill_ids_from_input(&input), vec!["research"]);
+        // No skill selection -> empty.
+        assert!(selected_skill_ids_from_input(&input[..1]).is_empty());
     }
 
     #[test]

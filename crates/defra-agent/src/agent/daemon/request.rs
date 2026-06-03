@@ -32,7 +32,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         admission::scope_request(admission_context, async {
             self.spawn_conversation_title_generation(&request, title_admission_context);
 
-            let built = async {
+            let mut built = async {
                 let full_history = session::load_history(&self.node, &request.session_id).await?;
                 let (stripped_history, file_activity) =
                     compaction::strip_tool_results(full_history);
@@ -106,6 +106,24 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 behavior_id = %behavior_name,
             ))
             .await?;
+
+            // Deterministically activate explicitly-selected skills (the Codex
+            // "pill"): the request metadata names skill ids; the prompt builder
+            // resolves each against this behavior's effective set (D5) and
+            // renders its body — with the D3 degrade note — as a per-turn system
+            // reminder. Injected ahead of the conversation so it's in context for
+            // the turn. Resolution/scoping lives entirely here in the runtime;
+            // the shim only forwards the selection.
+            let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
+            if !selected_skill_ids.is_empty() {
+                let mut reminders = self
+                    .prompt_builder
+                    .selected_skill_reminders(&selected_skill_ids);
+                if !reminders.is_empty() {
+                    reminders.append(&mut built.messages);
+                    built.messages = reminders;
+                }
+            }
 
             lifecycle.begin_execution().await?;
 
@@ -294,6 +312,27 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         })
         .await
     }
+}
+
+/// Parse `selected_skill_ids` out of an `AgentRequest`'s metadata JSON. The
+/// shim writes these for an explicit Codex skill selection; absent/malformed
+/// metadata yields an empty list (no injection).
+fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
+    let Some(metadata) = metadata else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
+        return Vec::new();
+    };
+    value
+        .get("selected_skill_ids")
+        .and_then(|ids| ids.as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn total_compacted_messages(entries: &[session::CompactionEntry]) -> usize {

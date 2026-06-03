@@ -4508,11 +4508,11 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
 }
 
 /// End-to-end proof that an EXPLICIT Codex skill selection (`UserInput::Skill`,
-/// the skill "pill") deterministically injects the skill's full body into the
-/// turn (#340) — matching how Codex injects the SKILL.md as a `<skill>` block
-/// and Hermes preloads it, rather than relying on the model to pull it. A
-/// skill-only turn (no text) must (a) not be rejected as empty and (b) carry
-/// the skill body to the model.
+/// the skill "pill") deterministically activates the skill (#340). The shim
+/// forwards only the id; the RUNTIME resolves it against the behavior's
+/// effective set and injects the body as a per-turn system reminder (rather than
+/// relying on the model to pull it). A skill-only turn (no text) must (a) not be
+/// rejected as empty and (b) carry the skill body to the model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -4556,6 +4556,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     // A skill with a distinctive instruction body (the injected-body marker).
     let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
@@ -4581,6 +4582,9 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &body_phrase,
         ],
     )?;
+    // The runtime resolves the explicit selection from its effective set, so the
+    // principal-scoped skill must reconcile into the running snapshot first.
+    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
@@ -4642,7 +4646,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     assert!(
         captured.iter().any(|request| {
             let text = request.to_string();
-            text.contains(&body_phrase) && text.contains("<skill>")
+            text.contains(&body_phrase) && text.contains("system-reminder")
         }),
         "explicit skill selection did not inject the body; captured={captured:?}"
     );

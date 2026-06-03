@@ -230,8 +230,10 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> Stri
 /// Find a skill by display name, `name`, or `skill_id` (exact, then
 /// case-insensitive). The catalog labels skills with `display_name` when set
 /// (see `skill_label`), so the model may call `load_skill` with that label —
-/// it must resolve here too, or a cataloged skill becomes unloadable.
-fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
+/// it must resolve here too, or a cataloged skill becomes unloadable. Also used
+/// to resolve an explicitly-selected skill id against a behavior's effective set
+/// for deterministic per-turn injection.
+pub fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
     let needle = needle.trim();
     // Trim the stored display name to match the catalog, which renders the
     // trimmed label (see `skill_label`) — otherwise a name with incidental

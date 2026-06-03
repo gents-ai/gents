@@ -91,6 +91,11 @@ pub struct LayeredPromptBuilder {
     context_window: usize,
     /// Max output tokens reserved for the response.
     max_output_tokens: usize,
+    /// The behavior's effective skills (D5) and the D3 tool ceiling, used to
+    /// render explicitly-selected skill bodies as per-turn system reminders.
+    /// Empty for non-behavior builders (e.g. title generation).
+    skills: Vec<crate::skills::Skill>,
+    skill_ceiling: crate::skills::SkillToolCeiling,
 }
 
 impl LayeredPromptBuilder {
@@ -114,7 +119,41 @@ impl LayeredPromptBuilder {
             builder.preamble.push_str("\n\n");
             builder.preamble.push_str(&catalog);
         }
+        // Retain the effective set + ceiling so an explicit skill selection (the
+        // Codex "pill", carried on the request) can be deterministically injected
+        // per turn via `selected_skill_reminders`.
+        builder.skills = behavior.skills.clone();
+        builder.skill_ceiling = crate::skills::skill_tool_ceiling(
+            tool_names.iter().cloned(),
+            tool_surface.allowed_mcp_service_ids(),
+            tool_surface.includes_meta_tools(),
+        );
         builder
+    }
+
+    /// Render per-turn system reminders for explicitly-selected skills.
+    ///
+    /// Each id is resolved against this behavior's EFFECTIVE set (D5): a skill
+    /// not in the set — un-opted-in, excluded, disabled, or another principal's
+    /// — is silently skipped, so the explicit pick can never escalate beyond
+    /// what the behavior already has. The body is rendered with the real D3
+    /// ceiling, so the unavailable-tools degrade note is included (parity with
+    /// the model-driven `load_skill` path). This is the deterministic,
+    /// runtime-side activation of an explicit user selection.
+    pub fn selected_skill_reminders(&self, selected_ids: &[String]) -> Vec<Message> {
+        let mut seen = std::collections::HashSet::new();
+        let mut reminders = Vec::new();
+        for id in selected_ids {
+            let id = id.trim();
+            if id.is_empty() || !seen.insert(id.to_string()) {
+                continue;
+            }
+            if let Some(skill) = crate::skills::find_skill(&self.skills, id) {
+                let body = crate::skills::render_activated_skill(skill, &self.skill_ceiling);
+                reminders.push(Self::system_reminder(&body));
+            }
+        }
+        reminders
     }
 
     pub fn for_behavior(
@@ -135,6 +174,8 @@ impl LayeredPromptBuilder {
             preamble,
             context_window,
             max_output_tokens,
+            skills: Vec::new(),
+            skill_ceiling: crate::skills::SkillToolCeiling::default(),
         }
     }
 
