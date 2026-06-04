@@ -60,7 +60,7 @@ pub struct ToolSelectionDocument {
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
     pub subagent_allow_cross_deployment: Option<bool>,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_defra_query: Option<bool>,
     #[serde(
         default,

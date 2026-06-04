@@ -230,6 +230,23 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
+        // Warn for every LOCAL target that is about to be dropped because its
+        // target behavior did not make it into the active set (either disabled,
+        // or its backend/MCP resolution failed). Remote-DID targets are always
+        // retained — they resolve out-of-band via P2P.
+        for target in tool_surface.subagent_targets() {
+            if target.agent_did == own_agent_did
+                && !active_behavior_ids.contains(&target.behavior_id)
+            {
+                tracing::warn!(
+                    behavior_id = %behavior.behavior_id,
+                    target_name = %target.name,
+                    target_behavior_id = %target.behavior_id,
+                    "dropping LOCAL subagent target: target behavior is not active \
+                     (behavior may be disabled or its backend/MCP resolution failed)"
+                );
+            }
+        }
         tool_surface.retain_subagent_targets(&own_agent_did, &active_behavior_ids);
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);

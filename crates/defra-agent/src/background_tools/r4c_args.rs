@@ -127,6 +127,10 @@ pub(crate) struct SteerSubagentArgs {
 pub struct ListSubagentsEntry {
     pub child_request_id: String,
     pub child_session_id: String,
+    /// Friendly model-facing name of the subagent target (from the spawn args).
+    /// Matches the `name` passed to `spawn_subagent`. Empty string if the
+    /// bridge args did not carry a name (legacy or malformed record).
+    pub name: String,
     pub behavior_id: String,
     pub deployment_id: String,
     pub await_mode: String,

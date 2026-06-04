@@ -1,5 +1,163 @@
 use super::*;
 
+/// Behavior ID that is listed as an allowed target but whose `AgentBehavior`
+/// document is never written to the DB. Simulates a behavior deleted after
+/// session start (Fix 2 / #377 orphan-on-deleted-behavior guard).
+const GHOST_BEHAVIOR_ID: &str = "r4-ghost-child";
+
+/// Set up a spawn fixture where `GHOST_BEHAVIOR_ID` is in the allowed-targets
+/// list but the corresponding `AgentBehavior` document does NOT exist in the
+/// DB. This is the scenario from Fix 2: a behavior that was present when the
+/// session started but was removed mid-session.
+async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
+    let db = test_db(test_name).await;
+    let agent_did = format!("did:defra-agent:r4-{test_name}");
+
+    // Allow parent to spawn GHOST_BEHAVIOR_ID — but deliberately DO NOT
+    // upsert an AgentBehaviorDocument for GHOST_BEHAVIOR_ID.
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: "r4-parent-tools".to_string(),
+            agent_did: agent_did.clone(),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                GHOST_BEHAVIOR_ID,
+                &agent_did,
+                GHOST_BEHAVIOR_ID,
+                None,
+            )]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    // Only the PARENT behavior is written — the ghost child is intentionally absent.
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehaviorDocument {
+            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
+            agent_did: agent_did.clone(),
+            display_name: Some("R4 parent (ghost test)".to_string()),
+            description: None,
+            summary: None,
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: Some("r4-parent-tools".to_string()),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        PARENT_BEHAVIOR_ID, // source only needs to know the parent
+    );
+
+    let session_id = format!("{test_name}-session");
+    let request_id = format!("{test_name}-parent");
+    let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    create_parent_request(
+        db.node.as_ref(),
+        &agent_did,
+        &request_id,
+        &session_id,
+        0,
+        parent_deadline,
+    )
+    .await;
+
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        PARENT_BEHAVIOR_ID,
+        &agent_did,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(parent_deadline)).await;
+
+    SpawnFixture {
+        db,
+        hook,
+        session_id,
+        request_id,
+        parent_deadline,
+        agent_did,
+        _source: source,
+    }
+}
+
+/// Fix 2 (#377): When a LOCAL target's behavior no longer exists in the DB at
+/// spawn time (e.g. deleted mid-session), the spawn must be rejected cleanly
+/// with a `service_unavailable` payload instead of writing an orphan child
+/// `AgentRequest` that can never be claimed.
+#[tokio::test]
+async fn spawn_subagent_rejects_local_target_whose_behavior_was_deleted() {
+    let fixture = setup_ghost_behavior_fixture("spawn_subagent_ghost_behavior").await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let args = json!({
+        "name": GHOST_BEHAVIOR_ID,
+        "prompt": "should not spawn orphan",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        None,
+        "internal-spawn-ghost",
+        &args,
+    )
+    .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false, "spawn must be rejected");
+    assert_eq!(
+        error["failure_class"], "tool_not_allowed",
+        "failure_class must be tool_not_allowed"
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("no longer exists"),
+        "message must mention the behavior no longer exists"
+    );
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-ghost").await;
+    assert_eq!(
+        tool.lifecycle_state.as_deref(),
+        Some("failed"),
+        "tool call must be in failed state"
+    );
+    assert_eq!(
+        tool.tool_failure_class.as_deref(),
+        Some("serviceUnavailable"),
+        "failure class must be serviceUnavailable"
+    );
+    // Most importantly: no orphan child AgentRequest was written.
+    assert!(
+        child_request_for_tool(db.node.as_ref(), "internal-spawn-ghost")
+            .await
+            .is_none(),
+        "must not write an orphan child AgentRequest"
+    );
+}
+
 #[tokio::test]
 async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
     let fixture = setup_spawn_fixture(

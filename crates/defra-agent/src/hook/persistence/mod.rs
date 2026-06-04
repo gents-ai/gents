@@ -24,7 +24,7 @@ use crate::background_tools::{
     ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
-use crate::document_config::SubagentTarget;
+use crate::document_config::{load_agent_behavior, SubagentTarget};
 use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};

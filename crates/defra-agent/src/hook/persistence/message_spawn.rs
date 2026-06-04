@@ -398,6 +398,49 @@ impl DefraSessionHook {
                 .await;
         }
 
+        // Fail-safe for local targets whose behavior was deleted mid-session
+        // (#377). If the resolved target is LOCAL (same agent DID) but its
+        // behavior no longer exists in the DB, writing a child AgentRequest
+        // would produce an orphan that can never be claimed. Reject cleanly
+        // with a service_unavailable payload instead of writing the orphan.
+        if target_host == SubagentTargetHost::Local {
+            match load_agent_behavior(&self.node, behavior_id).await {
+                Ok(None) => {
+                    return self
+                        .fail_spawn_subagent_tool_call(
+                            session_id,
+                            request_id,
+                            parent_context.request_deadline_at,
+                            seq,
+                            internal_call_id,
+                            args,
+                            FailureClass::ServiceUnavailable,
+                            tool_not_allowed_payload(
+                                SPAWN_SUBAGENT_TOOL_NAME,
+                                "/name",
+                                name,
+                                format!(
+                                    "subagent target '{name}' refers to behavior '{behavior_id}' \
+                                     which no longer exists; the target may have been removed \
+                                     after this session started"
+                                ),
+                                context_allowed_target_names(&parent_context),
+                            ),
+                        )
+                        .await;
+                }
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        behavior_id = %behavior_id,
+                        %error,
+                        "spawn guard: failed to verify local target behavior existence; \
+                         proceeding with spawn"
+                    );
+                }
+            }
+        }
+
         if let Some(child_deadline) = parsed.deadline.as_ref() {
             if *child_deadline > parent_context.request_deadline_at {
                 return self
@@ -470,7 +513,7 @@ impl DefraSessionHook {
             let timeout_secs =
                 effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);
             lifecycle.set_unclaimed_deadline_at(Some(
-                chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64),
+                chrono::Utc::now() + chrono::Duration::seconds(timeout_secs),
             ));
         }
         lifecycle.start_running().await?;

@@ -123,7 +123,7 @@ pub(crate) struct ParentSubagentContext {
     /// When false (default), cross-deployment (remote-DID) subagent spawns are
     /// rejected at runtime. Cross-deployment is deferred pending ACP.
     pub subagent_allow_cross_deployment: bool,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +133,7 @@ pub(crate) struct ParentSubagentAuthorization {
     pub spawn_enabled: bool,
     pub background_enabled: bool,
     pub allow_cross_deployment: bool,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 impl ParentSubagentAuthorization {
@@ -233,10 +233,10 @@ struct ToolSelectionTargetsRow {
     subagent_background_enabled: Option<bool>,
     #[serde(default)]
     subagent_allow_cross_deployment: Option<bool>,
-    cross_deployment_spawn_timeout_seconds: Option<u32>,
+    cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
-pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: u32 = 60;
+pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize)]
 struct ListSubagentBridgeRow {
@@ -246,6 +246,8 @@ struct ListSubagentBridgeRow {
     await_mode: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
+    /// Raw JSON bridge args — we extract the `name` field here.
+    args: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,6 +369,7 @@ pub async fn handle_list_subagents(
                 await_mode
                 started_at
                 completed_at
+                args
             }}
         }}"#
     );
@@ -434,9 +437,24 @@ pub async fn handle_list_subagents(
             .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
             .unwrap_or(created_at);
 
+        // Extract the model-facing `name` from the bridge args JSON. The
+        // named-target redesign (#377) always writes `name` into the bridge
+        // args payload; older or malformed records fall back to empty string.
+        let target_name = bridge
+            .args
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|v| {
+                v.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .and_then(|s| non_empty_string(Some(&s)))
+            .unwrap_or_default();
         entries.push(ListSubagentsEntry {
             child_request_id,
             child_session_id: child.session_id.clone(),
+            name: target_name,
             behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
             deployment_id: local_deployment_id.to_string(),
             await_mode: "background".to_string(),
@@ -1311,7 +1329,7 @@ pub(crate) async fn load_parent_subagent_authorization(
 
 pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
     authorization: &ParentSubagentAuthorization,
-) -> u32 {
+) -> i64 {
     authorization
         .cross_deployment_spawn_timeout_seconds
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
@@ -1319,7 +1337,7 @@ pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
 
 pub(crate) fn effective_context_cross_deployment_spawn_timeout_seconds(
     context: &ParentSubagentContext,
-) -> u32 {
+) -> i64 {
     context
         .cross_deployment_spawn_timeout_seconds
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
@@ -1355,7 +1373,7 @@ struct SubagentToolSelection {
     spawn_enabled: bool,
     background_enabled: bool,
     allow_cross_deployment: bool,
-    cross_deployment_spawn_timeout_seconds: Option<u32>,
+    cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 /// Parse the `subagent_targets` `[String]` JSON entries into structured
@@ -1471,7 +1489,7 @@ async fn load_subagent_tool_selection(
 mod cross_deployment_timeout_tests {
     use super::*;
 
-    fn auth(timeout: Option<u32>) -> ParentSubagentAuthorization {
+    fn auth(timeout: Option<i64>) -> ParentSubagentAuthorization {
         ParentSubagentAuthorization {
             behavior_id: "parent".to_string(),
             allowed_targets: vec![SubagentTarget {
