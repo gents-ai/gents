@@ -2,7 +2,7 @@
 //! `InferenceBackend` (provider/endpoint) and `InferenceProfile`
 //! (`context_window`), plus an agent-scoped context-budget summary derived from
 //! persisted `CompactionEntry` rows. All of this data already exists; this is
-//! pure surfacing onto the `/status` payload (and the `/self` alias).
+//! pure surfacing for the runtime HTTP status and self-awareness endpoints.
 //!
 //! `CompactionEntry` is keyed by `session_id`, so the budget is scoped to the
 //! agent by first resolving the agent's own sessions (via `AgentRequest`

@@ -1,3 +1,5 @@
+use chrono::Timelike;
+
 use super::*;
 
 /// Create a `Schedule` document with an explicit `next_run_at`. Used by
@@ -117,7 +119,10 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         output_schema_ref: None,
     };
     let schedule = resolved_schedule("sched-1", task);
-    let interval_secs = schedule.interval_secs;
+    let interval_secs = match schedule.cadence {
+        ScheduleCadence::Interval { interval_secs } => interval_secs,
+        ScheduleCadence::Cron { .. } => panic!("test helper should build an interval schedule"),
+    };
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -348,7 +353,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         schedule_id: "sched-e2e".to_string(),
         task_id: task.task_id.clone(),
         task,
-        interval_secs: 60,
+        cadence: ScheduleCadence::Interval { interval_secs: 60 },
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
@@ -580,6 +585,100 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     assert!(
         after_seed.is_some(),
         "Schedule.next_run_at should no longer be null after first-seen seeding"
+    );
+}
+
+#[tokio::test]
+async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let mutation = r#"mutation {
+        create_Schedule(input: {
+            schedule_id: "sched-cron-null",
+            task_id: "task-cron",
+            cron: "30 0 * * *",
+            timezone: "America/Los_Angeles",
+            missed_run_policy: "latest_only",
+            enabled: true,
+            concurrency: "serial"
+        }) { _docID }
+    }"#;
+    let response = node.execute(mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create cron Schedule without next_run_at failed: {:?}",
+        response.errors
+    );
+
+    let task = ResolvedTask {
+        task_id: "task-cron".to_string(),
+        name: None,
+        behavior_id: "general".to_string(),
+        prompt_template: "hi".to_string(),
+        output_schema_ref: None,
+    };
+    let schedule = ResolvedSchedule {
+        schedule_id: "sched-cron-null".to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        cadence: ScheduleCadence::Cron {
+            expression: "30 0 * * *".to_string(),
+            timezone: "America/Los_Angeles".to_string(),
+            missed_run_policy: crate::schedule_cron::CronMissedRunPolicy::LatestOnly,
+        },
+        enabled: true,
+        concurrency: ConcurrencyMode::Serial,
+    };
+    let snapshot =
+        snapshot_with_schedules(HashMap::from([("sched-cron-null".to_string(), schedule)]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(50));
+    let started_at = Utc::now();
+
+    let handle = tokio::spawn(async move { source.next_fire().await });
+    let seeded = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match load_schedule_next_run_at(node.as_ref(), "sched-cron-null")
+                .await
+                .unwrap()
+            {
+                Some(value) => break value,
+                None => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+        }
+    })
+    .await
+    .expect("cron schedule should seed next_run_at within 2s");
+
+    cancel.cancel();
+    assert!(
+        handle.await.unwrap().is_none(),
+        "cron schedule should stay idle after seeding a future next_run_at"
+    );
+
+    let parsed = DateTime::parse_from_rfc3339(&seeded)
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(
+        parsed > started_at,
+        "cron first seed should be in the future, got {seeded}"
+    );
+    let timezone = crate::schedule_cron::parse_timezone("America/Los_Angeles").unwrap();
+    let local = parsed.with_timezone(&timezone);
+    assert_eq!(local.hour(), 0);
+    assert_eq!(local.minute(), 30);
+    let started_local_date = started_at.with_timezone(&timezone).date_naive();
+    let next_local_date = started_local_date
+        .succ_opt()
+        .expect("test date should have a next day");
+    assert!(
+        local.date_naive() == started_local_date || local.date_naive() == next_local_date,
+        "daily cron should seed to today or tomorrow in local time, got {local}"
     );
 }
 

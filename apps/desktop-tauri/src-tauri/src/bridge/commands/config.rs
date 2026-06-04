@@ -229,6 +229,8 @@ pub(crate) async fn save_tool_selection_config(
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_defra_query: Some(true),
+            defra_query_collections: Vec::new(),
             subagent_targets: Vec::new(),
             subagent_spawn_enabled: Some(false),
             subagent_steering_enabled: Some(false),

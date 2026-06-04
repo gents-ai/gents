@@ -39,6 +39,7 @@ pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
+pub mod schedule_cron;
 pub mod schema;
 pub mod session;
 pub mod skills;
@@ -104,7 +105,7 @@ pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunR
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
-    ResolvedTask,
+    ResolvedTask, ScheduleCadence,
 };
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
