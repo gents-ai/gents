@@ -37,6 +37,7 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
     , manifest := []
     , preDesired := []
     , preLive := []
+    , pruneMode := false
     , prefixLen := 0
     }
   , { name := "backend_before_behavior_ordering"
@@ -46,18 +47,38 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         ]
     , preDesired := []
     , preLive := []
+    , pruneMode := false
     , prefixLen := 0
     }
   , { name := "update_existing_backend"
     , manifest := [desired .inferenceBackend "backend-a" "backend-new"]
     , preDesired := [desired .inferenceBackend "backend-a" "backend-old"]
     , preLive := [live .inferenceBackend "backend-a" "runtime-probe"]
+    , pruneMode := false
     , prefixLen := 0
     }
   , { name := "live_only_no_op"
     , manifest := []
     , preDesired := [desired .inferenceBackend "backend-b" "orphan-desired"]
     , preLive := [live .inferenceBackend "backend-b" "orphan-runtime"]
+    , pruneMode := false
+    , prefixLen := 0
+    }
+  , { name := "prune_live_only_unreferenced_backend"
+    , manifest := []
+    , preDesired := [desired .inferenceBackend "backend-b" "orphan-desired"]
+    , preLive := [live .inferenceBackend "backend-b" "orphan-runtime"]
+    , pruneMode := true
+    , prefixLen := 1
+    }
+  , { name := "prune_blocks_referenced_dependency"
+    , manifest := []
+    , preDesired :=
+        [ desired .agentBehavior "behavior-a" "behavior-live-only" [backendB]
+        , desired .inferenceBackend "backend-b" "backend-live-only"
+        ]
+    , preLive := []
+    , pruneMode := true
     , prefixLen := 0
     }
   , { name := "prefix_retry_convergence_idempotence"
@@ -68,6 +89,7 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         ]
     , preDesired := []
     , preLive := [live .agentBehavior "behavior-a" "runtime-live"]
+    , pruneMode := false
     , prefixLen := 1
     }
   , { name := "referrer_closure"
@@ -82,6 +104,7 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         ]
     , preDesired := []
     , preLive := []
+    , pruneMode := false
     , prefixLen := 4
     }
   , { name := "production_write_boundary_all_collections"
@@ -90,7 +113,7 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         , desired .inferenceProfile "profile-a" "profile-desired"
         , desired .toolServiceRegistry "service-a" "service-desired"
         , desired .toolSelection "selection-a" "selection-desired"
-        , desired .skill "skill-a" "skill-desired" [serviceA]
+        , desired .skill "skill-a" "skill-desired"
         , desired .agentBehavior "behavior-a" "behavior-desired"
             [backendA, selectionA, profileA, serviceA, skillA]
         , desired .task "task-a" "task-desired" [behaviorA]
@@ -100,6 +123,7 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         ]
     , preDesired := []
     , preLive := []
+    , pruneMode := false
     , prefixLen := 6
     }
   ]

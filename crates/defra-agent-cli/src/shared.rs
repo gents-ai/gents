@@ -224,6 +224,21 @@ impl ConfigApplyCounts {
         }
     }
 
+    pub(crate) fn add(&mut self, collection: Collection, count: usize) {
+        match collection {
+            Collection::AgentPrincipal => self.agent_principal += count,
+            Collection::AgentBehavior => self.agent_behaviors += count,
+            Collection::Skill => self.skills += count,
+            Collection::ToolSelection => self.tool_selections += count,
+            Collection::InferenceBackend => self.inference_backends += count,
+            Collection::InferenceProfile => self.inference_profiles += count,
+            Collection::ToolServiceRegistry => self.tool_service_registries += count,
+            Collection::Task => self.tasks += count,
+            Collection::Schedule => self.schedules += count,
+            Collection::EventTrigger => self.event_triggers += count,
+        }
+    }
+
     pub(crate) fn changed(&self) -> bool {
         Collection::ALL.iter().copied().any(|collection| {
             let count = match collection {

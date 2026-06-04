@@ -31,31 +31,41 @@ lemma applyAll_append (L : LiveState) (pref : List ApplyStep) (s : ApplyStep) :
   unfold applyAll
   simp [List.foldl_append]
 
-/-- `applyAll` only adds (never removes) `desired` entries. -/
+/-- A payload-bearing step only adds/updates (never removes) `desired`
+    entries. Delete is intentionally excluded because it clears its target. -/
 lemma applyOne_desired_some_of_some (L : LiveState) (s : ApplyStep) (d : DocRef)
+    (hwrite : s.payload?.isSome = true)
     (h : (L.desired d).isSome = true) : ((applyOne L s).desired d).isSome = true := by
   unfold applyOne
   by_cases heq : d = s.target
-  · simp [heq]
+  · simp [heq, hwrite]
   · simp [heq, h]
 
 lemma applyAll_desired_some_of_some (L : LiveState) (steps : List ApplyStep) (d : DocRef)
+    (hsteps : ∀ s ∈ steps, s.payload?.isSome = true)
     (h : (L.desired d).isSome = true) : ((applyAll L steps).desired d).isSome = true := by
   induction steps generalizing L with
   | nil => exact h
   | cons s rest ih =>
       show ((applyAll (applyOne L s) rest).desired d).isSome = true
-      exact ih _ (applyOne_desired_some_of_some L s d h)
+      have hs : s.payload?.isSome = true := hsteps s (List.mem_cons_self _ _)
+      have hrest : ∀ s' ∈ rest, s'.payload?.isSome = true :=
+        fun s' hmem => hsteps s' (List.mem_cons_of_mem _ hmem)
+      exact ih (L := applyOne L s) hrest (applyOne_desired_some_of_some L s d hs h)
 
-/-- Applying a step makes its target's desired projection present. -/
+/-- Applying a payload-bearing step makes its target's desired projection
+    present. -/
 lemma applyOne_target_isSome (L : LiveState) (s : ApplyStep) :
+    s.payload?.isSome = true →
     ((applyOne L s).desired s.target).isSome = true := by
-  unfold applyOne; simp
+  intro hwrite
+  unfold applyOne; simp [hwrite]
 
 /-- If any step in `steps` targets `d`, then `applyAll` produces a `some`
     at `d`. -/
 lemma applyAll_desired_some_of_target_mem
     (L : LiveState) (steps : List ApplyStep) (d : DocRef)
+    (hsteps : ∀ s ∈ steps, s.payload?.isSome = true)
     (h : ∃ s ∈ steps, s.target = d) :
     ((applyAll L steps).desired d).isSome = true := by
   induction steps generalizing L with
@@ -67,11 +77,18 @@ lemma applyAll_desired_some_of_target_mem
       obtain ⟨s', hmem', htgt'⟩ := h
       rcases List.mem_cons.mp hmem' with heq | hmem_rest
       · -- s' = s, so applying s gives d a some; then applyAll preserves it.
+        have hs_write : s.payload?.isSome = true := hsteps s (List.mem_cons_self _ _)
         subst heq
+        have hrest : ∀ s' ∈ rest, s'.payload?.isSome = true :=
+          fun s' hmem => hsteps s' (List.mem_cons_of_mem _ hmem)
         apply applyAll_desired_some_of_some
+        · exact hrest
         subst htgt'
-        exact applyOne_target_isSome _ _
-      · exact ih _ ⟨s', hmem_rest, htgt'⟩
+        exact applyOne_target_isSome _ _ hs_write
+      ·
+        have hrest : ∀ s' ∈ rest, s'.payload?.isSome = true :=
+          fun s' hmem => hsteps s' (List.mem_cons_of_mem _ hmem)
+        exact ih (L := applyOne L s) hrest ⟨s', hmem_rest, htgt'⟩
 
 /-- If `pref ++ [s]` is a prefix of `diff M L` and `s' ∈ diff M L` has
     strictly lower rank than `s`, then `s' ∈ pref`. -/
@@ -164,6 +181,17 @@ lemma apply_preserves_wellFormed
         obtain ⟨suf, hsuf⟩ := hpref
         rw [← hsuf]
         simp
+      have hs_payload_some : s.payload? = some s.payload :=
+        diff_step_payload_eq_some hs_mem
+      have hs_write : s.payload?.isSome = true :=
+        diff_step_payload_isSome hs_mem
+      have hpref'_mem : ∀ t ∈ pref', t ∈ diff M L := by
+        intro t ht
+        obtain ⟨suf, hsuf⟩ := hpref'
+        rw [← hsuf]
+        exact List.mem_append_left _ ht
+      have hpref'_write : ∀ t ∈ pref', t.payload?.isSome = true :=
+        fun t ht => diff_step_payload_isSome (hpref'_mem t ht)
       -- Decode s from the filterMap: s.target ∈ M.support and s.payload = (M.docs s.target).get.
       have hMd : M.docs s.target = some s.payload := by
         unfold diff at hs_mem
@@ -205,7 +233,7 @@ lemma apply_preserves_wellFormed
         · -- d = s.target: payload is s.payload = f
           have hf_payload : s.payload = f := by
             have : (applyOne (applyAll L pref') s).desired d = some s.payload := by
-              unfold applyOne; simp [heq]
+              unfold applyOne; simp [heq, hs_payload_some]
             rw [this] at hf
             exact Option.some.inj hf
           -- Now r ∈ referencesOf s.payload = referencesOf f.
@@ -218,10 +246,12 @@ lemma apply_preserves_wellFormed
           show ((applyAll L (pref' ++ [s])).desired r).isSome = true
           rw [happ]
           apply applyOne_desired_some_of_some
+          · exact hs_write
           -- Now reduce to showing ((applyAll L pref').desired r).isSome.
           cases hLd : L.desired r with
           | some _ =>
               apply applyAll_desired_some_of_some
+              · exact hpref'_write
               rw [hLd]; rfl
           | none =>
               unfold Manifest.contains at hr_in_M
@@ -244,6 +274,7 @@ lemma apply_preserves_wellFormed
                   have hs_r_in_pref' : s_r ∈ pref' :=
                     mem_prefix_of_lower_rank hpref hs_r_mem hs_r_rank
                   apply applyAll_desired_some_of_target_mem
+                  · exact hpref'_write
                   exact ⟨s_r, hs_r_in_pref', hs_r_tgt⟩
         · -- d ≠ s.target: applyOne doesn't change desired d.
           have hpre : (applyOne (applyAll L pref') s).desired d = (applyAll L pref').desired d :=
@@ -252,14 +283,14 @@ lemma apply_preserves_wellFormed
           have hrclo := ih_wf.1 d f hf r hr
           show ((applyAll L (pref' ++ [s])).desired r).isSome = true
           rw [happ]
-          exact applyOne_desired_some_of_some _ _ _ hrclo
+          exact applyOne_desired_some_of_some _ _ _ hs_write hrclo
       · -- Rank invariant
         intro d f hf r hr
         rw [happ] at hf
         by_cases heq : d = s.target
         · have hf_payload : s.payload = f := by
             have : (applyOne (applyAll L pref') s).desired d = some s.payload := by
-              unfold applyOne; simp [heq]
+              unfold applyOne; simp [heq, hs_payload_some]
             rw [this] at hf
             exact Option.some.inj hf
           rw [← hf_payload] at hr
