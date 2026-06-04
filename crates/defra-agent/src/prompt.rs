@@ -96,7 +96,7 @@ pub struct LayeredPromptBuilder {
 impl LayeredPromptBuilder {
     /// Construct a builder from a loaded behavior and its resolved tool surface.
     ///
-    /// `allowed_targets` is a list of `(behavior_id, description)` pairs for
+    /// `allowed_targets` is a list of `(name, description)` pairs for
     /// subagent targets that the model is statically permitted to spawn.  Pass
     /// an empty slice when the behavior has no spawn targets or when spawn is
     /// disabled (the caller is responsible for filtering via
@@ -206,8 +206,8 @@ impl PromptBuilder for LayeredPromptBuilder {
 /// Build a preamble with an optional subagent spawn-target guidance block.
 ///
 /// When `allowed_targets` is non-empty a "## Spawnable Sub-Agents" section is
-/// appended that lists each `(behavior_id, description)` pair and reminds the
-/// model to use the `spawn_subagent` tool's `behavior_id` argument.
+/// appended that lists each `(name, description)` pair and reminds the
+/// model to use the `spawn_subagent` tool's `name` argument.
 pub(crate) fn build_preamble_with_targets(
     system_prompt: &str,
     behavior_name: &str,
@@ -235,12 +235,12 @@ pub(crate) fn build_preamble_with_targets(
         let mut lines = Vec::with_capacity(allowed_targets.len() + 3);
         lines.push("## Spawnable Sub-Agents".to_string());
         lines.push(
-            "You may spawn the following sub-agents via the `spawn_subagent` tool's \
-             `behavior_id` argument:"
+            "You may spawn the following sub-agents by passing one of these names as the \
+             `spawn_subagent` tool's `name` argument:"
                 .to_string(),
         );
-        for (id, description) in allowed_targets {
-            lines.push(format!("- {id}: {description}"));
+        for (name, description) in allowed_targets {
+            lines.push(format!("- {name}: {description}"));
         }
         parts.push(lines.join("\n"));
     }
