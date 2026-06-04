@@ -1923,7 +1923,10 @@ mod lean_apply_write_boundary_tests {
         desired_state::DesiredSchedule {
             schedule_id: doc.id.clone(),
             task_id: ref_id(doc, Collection::Task).unwrap_or_else(|| DEFAULT_TASK_ID.to_string()),
-            interval_secs: 60,
+            interval_secs: Some(60),
+            cron: None,
+            timezone: None,
+            missed_run_policy: None,
             enabled: true,
             concurrency: doc.content.clone(),
         }

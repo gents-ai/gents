@@ -73,7 +73,14 @@ pub(crate) struct DesiredTask {
 pub(crate) struct DesiredSchedule {
     pub(crate) schedule_id: String,
     pub(crate) task_id: String,
-    pub(crate) interval_secs: i64,
+    #[serde(default)]
+    pub(crate) interval_secs: Option<i64>,
+    #[serde(default)]
+    pub(crate) cron: Option<String>,
+    #[serde(default)]
+    pub(crate) timezone: Option<String>,
+    #[serde(default)]
+    pub(crate) missed_run_policy: Option<String>,
     pub(crate) enabled: bool,
     pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
 }

@@ -144,6 +144,12 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
             "interval_secs",
             row.interval_secs,
         )),
+        Some(graphql_string_field("cron", row.cron.as_deref())),
+        Some(graphql_string_field("timezone", row.timezone.as_deref())),
+        Some(graphql_string_field(
+            "missed_run_policy",
+            row.missed_run_policy.as_deref(),
+        )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(
             "concurrency",
@@ -155,6 +161,12 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
         Some(graphql_optional_int_field(
             "interval_secs",
             row.interval_secs,
+        )),
+        Some(graphql_string_field("cron", row.cron.as_deref())),
+        Some(graphql_string_field("timezone", row.timezone.as_deref())),
+        Some(graphql_string_field(
+            "missed_run_policy",
+            row.missed_run_policy.as_deref(),
         )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(

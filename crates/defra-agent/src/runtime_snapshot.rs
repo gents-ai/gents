@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use anyhow::Result;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::watch;
@@ -8,6 +10,7 @@ use tokio::sync::watch;
 use crate::admission::BackendAdmissionConfig;
 use crate::config::AgentBehavior;
 use crate::identity::AgentPrincipal;
+use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
@@ -51,10 +54,54 @@ pub struct ResolvedSchedule {
     #[allow(dead_code)]
     pub task_id: String,
     pub task: ResolvedTask,
-    pub interval_secs: i64,
+    pub cadence: ScheduleCadence,
     #[allow(dead_code)]
     pub enabled: bool,
     pub concurrency: ConcurrencyMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleCadence {
+    Interval {
+        interval_secs: i64,
+    },
+    Cron {
+        expression: String,
+        timezone: String,
+        missed_run_policy: CronMissedRunPolicy,
+    },
+}
+
+impl ScheduleCadence {
+    pub(crate) fn seed_next_run_at(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+        match self {
+            Self::Interval { .. } => Ok(now),
+            Self::Cron {
+                expression,
+                timezone,
+                ..
+            } => next_cron_run_after(expression, timezone, now),
+        }
+    }
+
+    pub(crate) fn advance_next_run_at(
+        &self,
+        parsed_next_run_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>> {
+        match self {
+            Self::Interval { interval_secs } => {
+                Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
+            }
+            Self::Cron {
+                expression,
+                timezone,
+                missed_run_policy,
+            } => match missed_run_policy {
+                CronMissedRunPolicy::LatestOnly => next_cron_run_after(expression, timezone, now),
+            },
+        }
+    }
 }
 
 /// How a schedule handles overlapping runs when the previous fire has not

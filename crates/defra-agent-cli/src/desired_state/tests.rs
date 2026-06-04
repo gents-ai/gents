@@ -263,7 +263,10 @@ fn sample_schedule(schedule_id: &str, task_id: &str) -> DesiredSchedule {
     DesiredSchedule {
         schedule_id: schedule_id.to_string(),
         task_id: task_id.to_string(),
-        interval_secs: 3600,
+        interval_secs: Some(3600),
+        cron: None,
+        timezone: None,
+        missed_run_policy: None,
         enabled: true,
         concurrency: "serial".to_string(),
     }
@@ -831,7 +834,7 @@ fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
 fn diff_manifests_marks_schedule_update_when_interval_changes() {
     let mut desired = empty_manifest("did:defra-agent:test");
     let mut desired_schedule = sample_schedule("summarize-inbox-hourly", "summarize-inbox");
-    desired_schedule.interval_secs = 7200;
+    desired_schedule.interval_secs = Some(7200);
     desired.schedules.push(desired_schedule);
 
     let mut live = empty_manifest("did:defra-agent:test");
@@ -1000,7 +1003,7 @@ fn validate_rejects_schedule_interval_zero_or_negative() {
     let mut manifest = manifest_with_default_behavior();
     manifest.tasks.push(sample_task("summarize-inbox"));
     let mut schedule = sample_schedule("hourly", "summarize-inbox");
-    schedule.interval_secs = 0;
+    schedule.interval_secs = Some(0);
     manifest.schedules.push(schedule);
 
     let errors = validation_errors(&manifest);
@@ -1009,6 +1012,85 @@ fn validate_rejects_schedule_interval_zero_or_negative() {
             .iter()
             .any(|message| message.contains("hourly") && message.contains("interval_secs")),
         "expected interval_secs >= 1 rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_cron_schedule_with_timezone() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("weekday-digest", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("America/Los_Angeles".to_string());
+    schedule.missed_run_policy = Some("latest_only".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.is_empty(),
+        "expected valid cron schedule, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_malformed_cron_schedule() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("bad-cron", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * *".to_string());
+    schedule.timezone = Some("UTC".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("bad-cron")
+                && message.contains("invalid cron schedule")
+                && message.contains("exactly 5 fields")
+        }),
+        "expected malformed cron rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_invalid_cron_timezone() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("bad-zone", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("Mars/Olympus".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("bad-zone")
+                && message.contains("invalid cron schedule")
+                && message.contains("invalid IANA timezone")
+        }),
+        "expected invalid timezone rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_with_interval_and_cron() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("double-cadence", "summarize-inbox");
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("UTC".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("double-cadence")
+                && message.contains("exactly one of interval_secs or cron")
+        }),
+        "expected double cadence rejection, got {errors:?}"
     );
 }
 
@@ -1266,9 +1348,12 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
     manifest
         .schedules
         .push(sample_schedule("beta-hourly", "beta-task"));
-    manifest
-        .schedules
-        .push(sample_schedule("alpha-hourly", "alpha-task"));
+    let mut cron_schedule = sample_schedule("alpha-weekday", "alpha-task");
+    cron_schedule.interval_secs = None;
+    cron_schedule.cron = Some("30 3 * * MON".to_string());
+    cron_schedule.timezone = Some("America/Los_Angeles".to_string());
+    cron_schedule.missed_run_policy = Some("latest_only".to_string());
+    manifest.schedules.push(cron_schedule);
 
     let bundle =
         export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
@@ -1291,7 +1376,7 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
         .iter()
         .map(|schedule| schedule.schedule_id.as_str())
         .collect();
-    assert_eq!(schedule_ids, vec!["alpha-hourly", "beta-hourly"]);
+    assert_eq!(schedule_ids, vec!["alpha-weekday", "beta-hourly"]);
 
     let mut expected_tasks = manifest.tasks.clone();
     expected_tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));

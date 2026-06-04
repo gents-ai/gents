@@ -2,7 +2,7 @@
 //! `InferenceBackend` (provider/endpoint) and `InferenceProfile`
 //! (`context_window`), plus an agent-scoped context-budget summary derived from
 //! persisted `CompactionEntry` rows. All of this data already exists; this is
-//! pure surfacing onto the `/status` payload (and the `/self` alias).
+//! pure surfacing for the runtime HTTP status and self-awareness endpoints.
 //!
 //! `CompactionEntry` is keyed by `session_id`, so the budget is scoped to the
 //! agent by first resolving the agent's own sessions (via `AgentRequest`
@@ -52,6 +52,16 @@ pub(crate) struct ContextBudget {
     pub(crate) sessions_considered: i64,
     /// The recent-request scan bound used to discover those sessions.
     pub(crate) request_scan_limit: i64,
+}
+
+/// Compact `/status.context` indicator requested by observability clients.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ContextIndicator {
+    pub(crate) max_tokens: Option<i64>,
+    pub(crate) current_estimate: Option<i64>,
+    pub(crate) utilization_percent: Option<f64>,
+    pub(crate) compaction_count: i64,
+    pub(crate) last_compacted_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +135,7 @@ struct CompactionRow {
 pub(crate) async fn load_self_view(
     graphql: &str,
     agent_did: &str,
-) -> Result<(Vec<SelfBehavior>, ContextBudget)> {
+) -> Result<(Vec<SelfBehavior>, ContextBudget, ContextIndicator)> {
     let response = post_graphql(graphql, &self_view_query(agent_did)).await?;
     let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
 
@@ -141,8 +151,9 @@ pub(crate) async fn load_self_view(
     };
     context_budget.sessions_considered = session_ids.len() as i64;
     context_budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
+    let context = build_context_indicator(&behaviors, &context_budget);
 
-    Ok((behaviors, context_budget))
+    Ok((behaviors, context_budget, context))
 }
 
 fn self_view_query(agent_did: &str) -> String {
@@ -285,6 +296,33 @@ fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
     }
 }
 
+fn build_context_indicator(
+    behaviors: &[SelfBehavior],
+    context_budget: &ContextBudget,
+) -> ContextIndicator {
+    let max_tokens = behaviors
+        .iter()
+        .filter(|behavior| behavior.enabled)
+        .filter_map(|behavior| behavior.context_window)
+        .filter(|value| *value > 0)
+        .max();
+    let current_estimate = context_budget
+        .latest_compacted_tokens
+        .or(context_budget.latest_original_tokens);
+    let utilization_percent = match (current_estimate, max_tokens) {
+        (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
+        _ => None,
+    };
+
+    ContextIndicator {
+        max_tokens,
+        current_estimate,
+        utilization_percent,
+        compaction_count: context_budget.compaction_count,
+        last_compacted_at: context_budget.latest_compaction_at.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +405,52 @@ mod tests {
         let budget = aggregate_compaction(rows(json!([])));
         assert_eq!(budget.compaction_count, 0);
         assert_eq!(budget.latest_compaction_at, None);
+    }
+
+    #[test]
+    fn context_indicator_uses_enabled_behavior_window_and_latest_compaction() {
+        let behaviors = vec![
+            SelfBehavior {
+                behavior_id: "disabled".to_string(),
+                display_name: String::new(),
+                model_name: String::new(),
+                enabled: false,
+                backend_id: String::new(),
+                provider_kind: String::new(),
+                endpoint: String::new(),
+                inference_profile_id: String::new(),
+                context_window: Some(2000),
+            },
+            SelfBehavior {
+                behavior_id: "enabled".to_string(),
+                display_name: String::new(),
+                model_name: String::new(),
+                enabled: true,
+                backend_id: String::new(),
+                provider_kind: String::new(),
+                endpoint: String::new(),
+                inference_profile_id: String::new(),
+                context_window: Some(1000),
+            },
+        ];
+        let budget = ContextBudget {
+            compaction_count: 2,
+            latest_compaction_at: Some("2026-06-03T10:30:00Z".to_string()),
+            latest_original_tokens: Some(800),
+            latest_compacted_tokens: Some(400),
+            sessions_considered: 1,
+            request_scan_limit: RECENT_REQUEST_SCAN as i64,
+        };
+
+        let context = build_context_indicator(&behaviors, &budget);
+
+        assert_eq!(context.max_tokens, Some(1000));
+        assert_eq!(context.current_estimate, Some(400));
+        assert_eq!(context.utilization_percent, Some(40.0));
+        assert_eq!(context.compaction_count, 2);
+        assert_eq!(
+            context.last_compacted_at.as_deref(),
+            Some("2026-06-03T10:30:00Z")
+        );
     }
 }
