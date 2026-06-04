@@ -2,7 +2,8 @@ use std::env;
 
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::KeyValue;
+use opentelemetry::{global, KeyValue};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{SdkTracerProvider, SpanExporter};
 use opentelemetry_sdk::Resource;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -53,6 +54,8 @@ impl TelemetryGuard {
 }
 
 pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
+    install_trace_context_propagator();
+
     let env_filter = with_default_transport_noise_filters(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
     );
@@ -92,6 +95,10 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     Ok(TelemetryGuard {
         tracer_provider: Some(provider),
     })
+}
+
+fn install_trace_context_propagator() {
+    global::set_text_map_propagator(TraceContextPropagator::new());
 }
 
 fn build_tracer_provider_with_batch_exporter<T>(
@@ -216,6 +223,20 @@ mod tests {
             Some(Value::from(env!("CARGO_PKG_VERSION")))
         );
         assert!(resource.get(&Key::new("service.instance.id")).is_some());
+    }
+
+    #[test]
+    fn install_trace_context_propagator_enables_w3c_headers() {
+        install_trace_context_propagator();
+
+        let fields = global::get_text_map_propagator(|propagator| {
+            propagator.fields().map(str::to_string).collect::<Vec<_>>()
+        });
+
+        assert!(
+            fields.iter().any(|field| field == "traceparent"),
+            "traceparent propagation field missing"
+        );
     }
 
     #[test]

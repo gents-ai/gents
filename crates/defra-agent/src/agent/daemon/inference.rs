@@ -106,6 +106,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let workspace_cwd = request_workspace_cwd(request);
+        let deadline_at = request
+            .deadline
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let has_deadline = !deadline_at.is_empty();
+        let workspace_cwd_set = workspace_cwd.is_some();
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
@@ -408,10 +417,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 "inference.attempt",
                 request_id = %request_id,
                 session_id = %session_id,
+                agent_did = %request.agent_did,
                 behavior_id = %behavior_id,
                 backend_id = %backend_id,
                 model_name = %model_name,
+                deadline_at = %deadline_at,
+                has_deadline,
+                subagent_depth = request.subagent_depth,
+                is_subagent = request.subagent_depth > 0
+                    || request.caused_by_parent_request_id.is_some()
+                    || request.caused_by_parent_tool_call_id.is_some(),
+                workspace_cwd_set,
                 attempt = attempt_index,
+                retry_attempt = attempt > 0,
                 max_attempts,
             ))
             .await?;

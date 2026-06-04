@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall};
@@ -668,19 +669,36 @@ async fn resolve_backend_admission_configs(
         if configs.contains_key(backend_id) {
             continue;
         }
-        let backend = backend_registry::lookup_backend(node, backend_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow!(
-                    "behavior {} references missing backend {}",
-                    behavior.behavior_id,
-                    backend_id
-                )
-            })?;
-        configs.insert(
-            backend.backend_id.clone(),
-            BackendAdmissionConfig::from_backend(&backend)?,
-        );
+        let (resolved_backend_id, config) = async {
+            let backend = backend_registry::lookup_backend(node, backend_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "behavior {} references missing backend {}",
+                        behavior.behavior_id,
+                        backend_id
+                    )
+                })?;
+            tracing::Span::current().record("backend_enabled", backend.enabled);
+            tracing::Span::current().record("probe_status", backend.probe_status.as_str());
+            tracing::Span::current().record("max_concurrent", backend.max_concurrent);
+            tracing::Span::current().record("max_queue_depth", backend.max_queue_depth);
+            Ok::<_, anyhow::Error>((
+                backend.backend_id.clone(),
+                BackendAdmissionConfig::from_backend(&backend)?,
+            ))
+        }
+        .instrument(tracing::info_span!(
+            "backend.admission_resolve",
+            behavior_id = %behavior.behavior_id,
+            backend_id = %backend_id,
+            backend_enabled = tracing::field::Empty,
+            probe_status = tracing::field::Empty,
+            max_concurrent = tracing::field::Empty,
+            max_queue_depth = tracing::field::Empty,
+        ))
+        .await?;
+        configs.insert(resolved_backend_id, config);
     }
     Ok(configs)
 }
