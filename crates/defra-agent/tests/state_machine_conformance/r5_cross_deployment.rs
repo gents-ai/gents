@@ -435,9 +435,30 @@ async fn upsert_active_child_behavior_from_default(
         .await
         .expect("load default child behavior")
         .expect("default child behavior");
+    let child_agent_did = behavior.agent_did.clone();
+    // Cross-deployment delegation is deferred behind a default-OFF flag (#377).
+    // The receiver-side trusted-paired-peer claim path now gates on the TARGET
+    // behavior's `subagent_allow_cross_deployment` flag, so the R5 substrate must
+    // opt the target behavior in on the receiving node for the cross-deployment
+    // child to be materialized.
+    let selection_id = format!("{target_behavior_id}-r5-cross-deployment-tools");
+    upsert_tool_selection(
+        node,
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: child_agent_did,
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(60),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("upsert target child tool selection");
     behavior.behavior_id = target_behavior_id.to_string();
     behavior.display_name = Some(target_behavior_id.to_string());
-    behavior.tool_selection_id = None;
+    behavior.tool_selection_id = Some(selection_id);
     upsert_agent_behavior(node, &behavior)
         .await
         .expect("upsert target child behavior");

@@ -169,6 +169,7 @@ pub(crate) fn subagent_spawn_denial(
     target_name: &str,
     await_mode: AwaitMode,
     tool_name: &str,
+    local_did: &str,
 ) -> Option<SubagentAuthorizationDenial> {
     if !authorization.spawn_enabled {
         return Some(SubagentAuthorizationDenial {
@@ -186,11 +187,29 @@ pub(crate) fn subagent_spawn_denial(
         });
     }
 
-    if !authorization.authorizes_target(target_name) {
+    let Some(target) = authorization.resolve_target(target_name) else {
         return Some(SubagentAuthorizationDenial {
             path: "/name",
             requested: target_name.to_string(),
             message: format!("'{target_name}' is not an allowed subagent target for this behavior"),
+        });
+    };
+
+    // Cross-deployment (remote-DID) subagent delegation is deferred behind a
+    // default-OFF flag (#377). When the resolved target is owned by a DID other
+    // than this node's local DID and the parent behavior has not opted in,
+    // refuse the spawn. This single gate covers the recovery path and the
+    // non-trusted receiver fallback (both call `subagent_spawn_denial`); the
+    // trusted-paired-peer receiver branch is gated separately in
+    // `subagent_source`.
+    let target_did = target.agent_did.trim();
+    let local_did = local_did.trim();
+    let target_is_remote = local_did.is_empty() || target_did != local_did;
+    if target_is_remote && !authorization.allow_cross_deployment {
+        return Some(SubagentAuthorizationDenial {
+            path: "/name",
+            requested: target_name.to_string(),
+            message: "cross-deployment subagent delegation is not enabled".to_string(),
         });
     }
 
@@ -1327,6 +1346,21 @@ pub(crate) async fn load_parent_subagent_authorization(
     })
 }
 
+/// Load the `subagent_allow_cross_deployment` flag for a target behavior on
+/// THIS node. Used by the receiver-side trusted-paired-peer claim path (#377)
+/// to gate cross-deployment children on the TARGET behavior's opt-in: the
+/// trusted-peer branch bypasses `subagent_spawn_denial`, so it must consult the
+/// target behavior's flag directly before materializing a cross-deployment
+/// child. Returns false (deny) when the behavior or its selection is absent.
+pub(crate) async fn load_behavior_allow_cross_deployment(
+    node: &EmbeddedNode,
+    behavior_id: &str,
+) -> Result<bool> {
+    Ok(load_subagent_tool_selection(node, behavior_id)
+        .await?
+        .allow_cross_deployment)
+}
+
 pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
     authorization: &ParentSubagentAuthorization,
 ) -> i64 {
@@ -1519,6 +1553,76 @@ mod cross_deployment_timeout_tests {
             effective_cross_deployment_spawn_timeout_seconds(&auth(None)),
             DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS
         );
+    }
+
+    fn auth_with(target_did: &str, allow_cross_deployment: bool) -> ParentSubagentAuthorization {
+        ParentSubagentAuthorization {
+            behavior_id: "parent".to_string(),
+            allowed_targets: vec![SubagentTarget {
+                name: "child".to_string(),
+                agent_did: target_did.to_string(),
+                behavior_id: "child-behavior".to_string(),
+                description: None,
+            }],
+            spawn_enabled: true,
+            background_enabled: true,
+            allow_cross_deployment,
+            cross_deployment_spawn_timeout_seconds: None,
+        }
+    }
+
+    #[test]
+    fn denial_allows_local_target_with_flag_off() {
+        let auth = auth_with("did:key:zLocal", false);
+        assert_eq!(
+            subagent_spawn_denial(
+                &auth,
+                "child",
+                AwaitMode::Background,
+                "spawn_subagent",
+                "did:key:zLocal"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn denial_refuses_remote_target_with_flag_off() {
+        let auth = auth_with("did:key:zRemote", false);
+        let denial = subagent_spawn_denial(
+            &auth,
+            "child",
+            AwaitMode::Background,
+            "spawn_subagent",
+            "did:key:zLocal",
+        )
+        .expect("remote target with flag off must be denied");
+        assert_eq!(denial.path, "/name");
+        assert!(denial.message.contains("cross-deployment"));
+    }
+
+    #[test]
+    fn denial_allows_remote_target_with_flag_on() {
+        let auth = auth_with("did:key:zRemote", true);
+        assert_eq!(
+            subagent_spawn_denial(
+                &auth,
+                "child",
+                AwaitMode::Background,
+                "spawn_subagent",
+                "did:key:zLocal"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn denial_refuses_when_local_did_unknown() {
+        let auth = auth_with("did:key:zRemote", false);
+        let denial =
+            subagent_spawn_denial(&auth, "child", AwaitMode::Background, "spawn_subagent", "")
+                .expect("empty local DID must be treated as remote and denied");
+        assert!(denial.message.contains("cross-deployment"));
     }
 }
 

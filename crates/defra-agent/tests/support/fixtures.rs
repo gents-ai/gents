@@ -46,6 +46,26 @@ pub fn spawn_subagent_source(
     parent_behavior_id: &str,
     child_behavior_id: &str,
 ) -> SubagentSourceGuard {
+    spawn_subagent_source_with_paired_peers(
+        node,
+        agent_did,
+        parent_behavior_id,
+        child_behavior_id,
+        HashSet::new(),
+    )
+}
+
+/// Like [`spawn_subagent_source`] but lets the caller seed the snapshot's
+/// `paired_peer_dids` set. A bridge whose parent `agent_did` is in this set
+/// drives the trusted-paired-peer (cross-deployment receiver) branch in
+/// `SubagentSource`. Used by the #377 receiver-gate tests.
+pub fn spawn_subagent_source_with_paired_peers(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    parent_behavior_id: &str,
+    child_behavior_id: &str,
+    paired_peer_dids: HashSet<String>,
+) -> SubagentSourceGuard {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-source-principal"));
     let principal = test_principal_for(identity, parent_behavior_id);
     let mut child = test_behavior_for_principal(child_behavior_id, principal.clone());
@@ -62,7 +82,7 @@ pub fn spawn_subagent_source(
         generation: 1,
         principal: None,
         local_did: agent_did.to_string(),
-        paired_peer_dids: HashSet::new(),
+        paired_peer_dids,
         default_behavior_id: parent_behavior_id.to_string(),
         behaviors,
         tool_surfaces: HashMap::new(),

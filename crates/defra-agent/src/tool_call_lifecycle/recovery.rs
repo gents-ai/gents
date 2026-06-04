@@ -234,6 +234,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             spawn_args.target_name(),
             row_await_mode,
             tool_name,
+            agent_did,
         ) {
             let failed = fail_unauthorized_orphan_subagent_tool_call(
                 node,

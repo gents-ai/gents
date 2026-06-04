@@ -16,8 +16,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::{
-    fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
-    subagent_tool_not_allowed_payload,
+    fail_running_subagent_tool_call, load_behavior_allow_cross_deployment,
+    load_parent_subagent_authorization, subagent_spawn_denial, subagent_tool_not_allowed_payload,
 };
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::graphql::escape_graphql_string;
@@ -72,6 +72,27 @@ struct ParentRequestRow {
     agent_did: String,
     #[serde(default)]
     subagent_depth: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentTerminalRow {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+}
+
+/// Mirror of `recovery::request_is_terminal`: true when the parent request has
+/// reached a terminal state (interrupted is covered separately by the
+/// interrupt-latch re-check, but is included here for completeness).
+fn parent_request_is_terminal(row: &ParentTerminalRow) -> bool {
+    matches!(
+        row.status.as_deref(),
+        Some("completed" | "error" | "superseded" | "dead" | "interrupted")
+    ) || matches!(
+        row.lifecycle_state.as_deref(),
+        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
+    )
 }
 
 /// Bridge args persisted by the spawn hook. After the named-target redesign
@@ -245,6 +266,38 @@ impl SubagentSource {
         Ok(rows.into_iter().next())
     }
 
+    async fn load_parent_terminal(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ParentTerminalRow>> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{
+                    status
+                    lifecycle_state
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "query parent AgentRequest terminal state for SubagentSource failed: {:?}",
+                response.errors
+            );
+        }
+        let rows: Vec<ParentTerminalRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        Ok(rows.into_iter().next())
+    }
+
     async fn child_request_exists(&self, request_id: &str) -> anyhow::Result<bool> {
         let escaped_request_id = escape_graphql_string(request_id);
         let query = format!(
@@ -340,6 +393,40 @@ impl SubagentSource {
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
+            // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
+            // parent DID is a paired peer, not this node). It bypasses
+            // `subagent_spawn_denial`, so it must gate on the TARGET behavior's
+            // `subagent_allow_cross_deployment` flag directly (#377). With the
+            // flag off (default) we refuse to materialize the cross-deployment
+            // child. The behavior id is the target behavior on THIS node.
+            let allow_cross_deployment = match load_behavior_allow_cross_deployment(
+                &self.node,
+                &spawn_args.behavior_id,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        parent_authoring_did = %parent_authoring_did,
+                        target_behavior_id = %spawn_args.behavior_id,
+                        %error,
+                        "subagent source could not load target behavior cross-deployment flag; refusing cross-deployment child",
+                    );
+                    return Ok(None);
+                }
+            };
+            if !allow_cross_deployment {
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    target_behavior_id = %spawn_args.behavior_id,
+                    "cross-deployment child refused: subagent_allow_cross_deployment is off for target behavior {behavior_id}",
+                    behavior_id = spawn_args.behavior_id,
+                );
+                return Ok(None);
+            }
             tracing::debug!(
                 parent_request_id = %parent_request_id,
                 parent_authoring_did = %parent_authoring_did,
@@ -380,6 +467,7 @@ impl SubagentSource {
                 spawn_args.target_name(),
                 await_mode,
                 tool_name,
+                snapshot.local_did.as_str(),
             ) {
                 let failed = self
                     .fail_unauthorized_tool_call(
@@ -539,12 +627,33 @@ impl SubagentSource {
                 false
             }
         };
-        if bridge_terminal || parent_interrupted {
+        // The parent may have reached a TERMINAL-but-not-interrupted state
+        // (completed/error/superseded/dead) in the materialize window — the
+        // cascade only fires on interrupt, and a terminalized parent would never
+        // cascade to a child that did not yet exist. Re-read the parent's
+        // status/lifecycle_state and interrupt the just-created orphan child if
+        // the parent is terminal (audit Finding F2-a).
+        let parent_terminal = match self.load_parent_terminal(&parent_request_id).await {
+            Ok(Some(row)) => parent_request_is_terminal(&row),
+            // Parent row vanished — treat as terminal so the orphan child is
+            // reclaimed rather than left running uncancellable.
+            Ok(None) => true,
+            Err(error) => {
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    %error,
+                    "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
+                );
+                false
+            }
+        };
+        if bridge_terminal || parent_interrupted || parent_terminal {
             tracing::info!(
                 child_request_id = %request_id,
                 parent_request_id = %parent_request_id,
                 bridge_terminal,
                 parent_interrupted,
+                parent_terminal,
                 "subagent source: parent cancelled/terminal in materialize window; interrupting just-created child",
             );
             if let Err(error) = crate::interrupt::interrupt_request(&self.node, &request_id).await {
