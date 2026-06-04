@@ -321,7 +321,12 @@ that change the shipped scope:
   replicates with**. This is accepted for the **trusted-fleet** deployment model and is
   the reason cross-deployment stays default-off pending ACP / authenticated replication.
   "Disabling cross-deployment by curating targets + not pairing" is NOT enforceable on
-  its own; the default-off flag is the enforceable control.
+  its own; the default-off flag is the enforceable control. The flag gates **both sides**:
+  the orchestrator (spawn rejected at apply/spawn/surfacing) AND the receiver/recovery
+  (the `SubagentSource` trusted-paired-peer claim path and orphan recovery refuse to
+  materialize a cross-deployment child when the target behavior's flag is off). So with
+  the flag off (default), no cross-deployment child is created on spawn, receive, or
+  recovery — even between paired peers.
 
 Audit also fixed (in-branch): a server-startup crash on upgraded DBs (migration ordering),
 two convergence races (cancel-before-materialize orphan; DID-anchored the claim gate so a
