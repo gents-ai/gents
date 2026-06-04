@@ -163,11 +163,12 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     // Best-effort surfacing of the agent's own behaviors (with backend/profile
     // joined) and a context-budget summary. Failures here must not fail /status.
     if body.get("error").is_none() {
-        if let Ok((behaviors, context_budget)) =
+        if let Ok((behaviors, context_budget, context)) =
             load_self_view(&state.graphql, &state.agent_did).await
         {
             if let Some(map) = body.as_object_mut() {
                 map.insert("behaviors".to_string(), json!(behaviors));
+                map.insert("context".to_string(), json!(context));
                 map.insert("context_budget".to_string(), json!(context_budget));
             }
         }

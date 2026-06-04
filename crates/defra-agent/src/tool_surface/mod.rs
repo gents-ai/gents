@@ -19,8 +19,9 @@ use rig::tool::ToolDyn;
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
-    background_tool_names, build_background_tools, build_delegate_tool, build_subagent_tools,
-    subagent_tool_names, CliToolConfig, ToolSet, DELEGATE_TOOL_NAME,
+    background_tool_names, build_background_tools, build_context_budget_tool, build_delegate_tool,
+    build_memory_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
+    CONTEXT_BUDGET_TOOL_NAME, DELEGATE_TOOL_NAME, MEMORY_TOOL_NAME,
 };
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
@@ -81,6 +82,8 @@ impl ToolSurface {
         names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
+        names.push(MEMORY_TOOL_NAME.to_string());
+        names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
@@ -111,6 +114,14 @@ impl ToolSurface {
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
         }
+        tools.push(build_memory_tool(
+            runtime.node.clone(),
+            runtime.agent_did.clone(),
+        ));
+        tools.push(build_context_budget_tool(
+            runtime.node.clone(),
+            runtime.agent_did.clone(),
+        ));
         if self.enable_defra_query {
             tools.push(build_defra_query_tool(
                 runtime.node.clone(),

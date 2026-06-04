@@ -7,6 +7,7 @@ This crate owns the agent-domain `.graphql` files that document-peer consumers
 need to share with defra-agent:
 
 - agent identity, behavior, runtime, and tool selection
+- per-agent memory
 - requests, responses, sessions, conversations, messages, tool calls, and tool
   results
 - compaction, Codex thread projection, tasks, schedules, event triggers, and

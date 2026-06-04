@@ -1,0 +1,7 @@
+type AgentMemory @branchable {
+    memory_id: String @index(unique: true)
+    agent_did: String @index
+    key: String @index
+    value: String
+    updated_at: String @index(direction: DESC)
+}
