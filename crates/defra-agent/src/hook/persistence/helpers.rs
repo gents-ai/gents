@@ -471,7 +471,7 @@ pub(super) fn background_budget_exceeded_payload(current_backgrounded: usize) ->
         ),
         "retryable": false,
         "service_id": "background",
-        "tool_name": BACKGROUND_TOOL_NAME,
+        "tool_name": SPAWN_PROCESS_TOOL_NAME,
         "current_backgrounded": current_backgrounded,
         "max_backgrounded": MAX_BACKGROUNDED_TOOLS_PER_PARENT
     }))

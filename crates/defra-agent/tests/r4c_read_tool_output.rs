@@ -176,7 +176,7 @@ async fn background_tool(
     skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             hook,
-            "background_tool",
+            "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({"tool_name": tool_name, "args": {}}).to_string(),
@@ -189,7 +189,7 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
     skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             hook,
-            "wait_tool",
+            "wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -202,7 +202,7 @@ async fn read_tool_output(hook: &DefraSessionHook, internal_call_id: &str, args:
     skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             hook,
-            "read_tool_output",
+            "read_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &args.to_string(),
@@ -476,7 +476,7 @@ async fn read_tool_output_no_parent_tool_call_row_written() {
     .await;
 
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "read_tool_output").await,
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "read_process").await,
         0
     );
 }

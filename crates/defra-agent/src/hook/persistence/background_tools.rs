@@ -25,13 +25,13 @@ impl DefraSessionHook {
                         deadline_at,
                         seq,
                         internal_call_id,
-                        BACKGROUND_TOOL_NAME,
+                        SPAWN_PROCESS_TOOL_NAME,
                         args,
                         FailureClass::ArgumentInvalid,
                         background_invalid_tool_arguments_payload(
-                            BACKGROUND_TOOL_NAME,
+                            SPAWN_PROCESS_TOOL_NAME,
                             "/",
-                            format!("invalid background_tool arguments: {error}"),
+                            format!("invalid spawn_process arguments: {error}"),
                         ),
                     )
                     .await;
@@ -47,11 +47,11 @@ impl DefraSessionHook {
                     deadline_at,
                     seq,
                     internal_call_id,
-                    BACKGROUND_TOOL_NAME,
+                    SPAWN_PROCESS_TOOL_NAME,
                     args,
                     FailureClass::ArgumentInvalid,
                     background_invalid_tool_arguments_payload(
-                        BACKGROUND_TOOL_NAME,
+                        SPAWN_PROCESS_TOOL_NAME,
                         "/tool_name",
                         "tool_name is required",
                     ),
@@ -67,11 +67,11 @@ impl DefraSessionHook {
                     deadline_at,
                     seq,
                     internal_call_id,
-                    BACKGROUND_TOOL_NAME,
+                    SPAWN_PROCESS_TOOL_NAME,
                     args,
                     FailureClass::ServiceUnavailable,
                     background_tool_not_allowed_payload(
-                        BACKGROUND_TOOL_NAME,
+                        SPAWN_PROCESS_TOOL_NAME,
                         "/tool_name",
                         target_name,
                         format!(
@@ -92,7 +92,7 @@ impl DefraSessionHook {
                     deadline_at,
                     seq,
                     internal_call_id,
-                    BACKGROUND_TOOL_NAME,
+                    SPAWN_PROCESS_TOOL_NAME,
                     args,
                     FailureClass::ArgumentInvalid,
                     background_budget_exceeded_payload(live_count),
@@ -284,9 +284,9 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        WAIT_TOOL_NAME,
+                        WAIT_PROCESS_TOOL_NAME,
                         "/",
-                        format!("invalid wait_tool arguments: {error}"),
+                        format!("invalid wait_process arguments: {error}"),
                     ),
                 ));
             }
@@ -295,7 +295,7 @@ impl DefraSessionHook {
         if background_tool_call_id.is_empty() {
             return Ok(ToolCallHookAction::skip(
                 background_invalid_tool_arguments_payload(
-                    WAIT_TOOL_NAME,
+                    WAIT_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     "tool_call_id is required",
                 ),
@@ -310,7 +310,7 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        WAIT_TOOL_NAME,
+                        WAIT_PROCESS_TOOL_NAME,
                         "/tool_call_id",
                         format!("{error:#}"),
                     ),
@@ -339,9 +339,9 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        LIST_BACKGROUND_TOOLS_TOOL_NAME,
+                        LIST_PROCESSES_TOOL_NAME,
                         "/",
-                        format!("invalid list_background_tools arguments: {error}"),
+                        format!("invalid list_processes arguments: {error}"),
                     ),
                 ));
             }
@@ -373,9 +373,9 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        READ_TOOL_OUTPUT_TOOL_NAME,
+                        READ_PROCESS_TOOL_NAME,
                         "/",
-                        format!("invalid read_tool_output arguments: {error}"),
+                        format!("invalid read_process arguments: {error}"),
                     ),
                 ));
             }
@@ -384,7 +384,7 @@ impl DefraSessionHook {
         if background_tool_call_id.is_empty() {
             return Ok(ToolCallHookAction::skip(
                 background_invalid_tool_arguments_payload(
-                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    READ_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     "tool_call_id is required",
                 ),
@@ -400,14 +400,14 @@ impl DefraSessionHook {
             }
             ReadToolOutputOutcome::NotBackgrounded => Ok(ToolCallHookAction::skip(
                 background_invalid_tool_arguments_payload(
-                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    READ_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     "tool_call_id must identify an ordinary backgrounded tool call",
                 ),
             )),
             ReadToolOutputOutcome::NotAuthorized => Ok(ToolCallHookAction::skip(
                 background_tool_not_allowed_payload(
-                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    READ_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     &background_tool_call_id,
                     "background tool call is not owned by this parent request",
@@ -436,9 +436,9 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        CANCEL_TOOL_NAME,
+                        CANCEL_PROCESS_TOOL_NAME,
                         "/",
-                        format!("invalid cancel_tool arguments: {error}"),
+                        format!("invalid cancel_process arguments: {error}"),
                     ),
                 ));
             }
@@ -447,7 +447,7 @@ impl DefraSessionHook {
         if background_tool_call_id.is_empty() {
             return Ok(ToolCallHookAction::skip(
                 background_invalid_tool_arguments_payload(
-                    CANCEL_TOOL_NAME,
+                    CANCEL_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     "tool_call_id is required",
                 ),
@@ -460,7 +460,7 @@ impl DefraSessionHook {
         {
             return Ok(ToolCallHookAction::skip(
                 background_invalid_tool_arguments_payload(
-                    CANCEL_TOOL_NAME,
+                    CANCEL_PROCESS_TOOL_NAME,
                     "/reason",
                     "reason must be omitted or non-empty",
                 ),
@@ -475,7 +475,7 @@ impl DefraSessionHook {
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(
                     background_invalid_tool_arguments_payload(
-                        CANCEL_TOOL_NAME,
+                        CANCEL_PROCESS_TOOL_NAME,
                         "/tool_call_id",
                         format!("{error:#}"),
                     ),

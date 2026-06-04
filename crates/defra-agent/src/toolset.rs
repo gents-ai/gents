@@ -22,9 +22,9 @@ use cli_tool::CliTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
 use subagent::{
-    BackgroundTool, CancelSubagentTool, CancelTool, ListBackgroundToolsTool, ListSubagentsTool,
-    ReadSubagentTranscriptTool, ReadToolOutputTool, SpawnSubagentTool, SteerSubagentTool,
-    WaitSubagentTool, WaitTool,
+    CancelProcessTool, CancelSubagentTool, ListProcessesTool, ListSubagentsTool, ReadProcessTool,
+    ReadSubagentTranscriptTool, SpawnProcessTool, SpawnSubagentTool, SteerSubagentTool,
+    WaitProcessTool, WaitSubagentTool,
 };
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -48,11 +48,11 @@ pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";
 pub(crate) const READ_SUBAGENT_TRANSCRIPT_TOOL_NAME: &str = "read_subagent_transcript";
 pub(crate) const STEER_SUBAGENT_TOOL_NAME: &str = "steer_subagent";
 pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
-pub(crate) const BACKGROUND_TOOL_NAME: &str = "background_tool";
-pub(crate) const WAIT_TOOL_NAME: &str = "wait_tool";
-pub(crate) const LIST_BACKGROUND_TOOLS_TOOL_NAME: &str = "list_background_tools";
-pub(crate) const READ_TOOL_OUTPUT_TOOL_NAME: &str = "read_tool_output";
-pub(crate) const CANCEL_TOOL_NAME: &str = "cancel_tool";
+pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
+pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
+pub(crate) const LIST_PROCESSES_TOOL_NAME: &str = "list_processes";
+pub(crate) const READ_PROCESS_TOOL_NAME: &str = "read_process";
+pub(crate) const CANCEL_PROCESS_TOOL_NAME: &str = "cancel_process";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {
@@ -448,11 +448,11 @@ pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String
     }
 
     [
-        BACKGROUND_TOOL_NAME,
-        WAIT_TOOL_NAME,
-        LIST_BACKGROUND_TOOLS_TOOL_NAME,
-        READ_TOOL_OUTPUT_TOOL_NAME,
-        CANCEL_TOOL_NAME,
+        SPAWN_PROCESS_TOOL_NAME,
+        WAIT_PROCESS_TOOL_NAME,
+        LIST_PROCESSES_TOOL_NAME,
+        READ_PROCESS_TOOL_NAME,
+        CANCEL_PROCESS_TOOL_NAME,
     ]
     .into_iter()
     .map(str::to_string)
@@ -465,11 +465,11 @@ pub(crate) fn build_background_tools(config: BackgroundToolConfig) -> Vec<Box<dy
     }
 
     vec![
-        Box::new(BackgroundTool::new(config.clone())),
-        Box::new(WaitTool),
-        Box::new(ListBackgroundToolsTool),
-        Box::new(ReadToolOutputTool),
-        Box::new(CancelTool),
+        Box::new(SpawnProcessTool::new(config.clone())),
+        Box::new(WaitProcessTool),
+        Box::new(ListProcessesTool),
+        Box::new(ReadProcessTool),
+        Box::new(CancelProcessTool),
     ]
 }
 

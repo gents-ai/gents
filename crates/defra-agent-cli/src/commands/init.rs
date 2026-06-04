@@ -53,7 +53,7 @@ Work like a strong command-line operator:
 
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
-For long-running commands such as builds, test suites, installs, servers, and log tails, prefer background_tool with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_background_tools, read_tool_output, wait_tool, or cancel_tool to inspect, finish, or stop backgrounded work."#;
+For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());

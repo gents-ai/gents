@@ -865,7 +865,7 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[arg(
         long = "backgroundable-tool-name",
-        help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"
+        help = "Host tool that may be spawned as a background process via spawn_process, e.g. bash_unrestricted"
     )]
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[arg(

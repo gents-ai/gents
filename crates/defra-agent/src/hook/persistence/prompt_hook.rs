@@ -170,7 +170,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 Err(e) => self.on_tool_persistence_error("persist cancel_subagent tool call", &e),
             };
         }
-        if tool_name == BACKGROUND_TOOL_NAME {
+        if tool_name == SPAWN_PROCESS_TOOL_NAME {
             let result = self
                 .persist_background_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -185,10 +185,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => self.on_tool_persistence_error("persist background_tool tool call", &e),
+                Err(e) => self.on_tool_persistence_error("persist spawn_process tool call", &e),
             };
         }
-        if tool_name == WAIT_TOOL_NAME {
+        if tool_name == WAIT_PROCESS_TOOL_NAME {
             let result = self
                 .persist_wait_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -203,10 +203,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => self.on_tool_persistence_error("persist wait_tool tool call", &e),
+                Err(e) => self.on_tool_persistence_error("persist wait_process tool call", &e),
             };
         }
-        if tool_name == LIST_BACKGROUND_TOOLS_TOOL_NAME {
+        if tool_name == LIST_PROCESSES_TOOL_NAME {
             let result = self
                 .persist_list_background_tools_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -221,12 +221,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => {
-                    self.on_tool_persistence_error("persist list_background_tools tool call", &e)
-                }
+                Err(e) => self.on_tool_persistence_error("persist list_processes tool call", &e),
             };
         }
-        if tool_name == READ_TOOL_OUTPUT_TOOL_NAME {
+        if tool_name == READ_PROCESS_TOOL_NAME {
             let result = self
                 .persist_read_tool_output_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -241,10 +239,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => self.on_tool_persistence_error("persist read_tool_output tool call", &e),
+                Err(e) => self.on_tool_persistence_error("persist read_process tool call", &e),
             };
         }
-        if tool_name == CANCEL_TOOL_NAME {
+        if tool_name == CANCEL_PROCESS_TOOL_NAME {
             let result = self
                 .persist_cancel_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -259,7 +257,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => self.on_tool_persistence_error("persist cancel_tool tool call", &e),
+                Err(e) => self.on_tool_persistence_error("persist cancel_process tool call", &e),
             };
         }
 

@@ -960,7 +960,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
         let receipt = skip_reason_json(
             PromptHook::<TranscriptConformanceModel>::on_tool_call(
                 &hook,
-                "background_tool",
+                "spawn_process",
                 None,
                 &internal_call_id,
                 r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -995,7 +995,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     let denied = skip_reason_json(
         PromptHook::<TranscriptConformanceModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-theorem-bg-overflow",
             r#"{"tool_name":"slow_tool","args":{}}"#,

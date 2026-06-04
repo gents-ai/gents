@@ -15,10 +15,10 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
 use super::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
-    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
-    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+    SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
+    WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -29,7 +29,7 @@ pub(super) struct SpawnSubagentTool {
 }
 
 #[derive(Clone)]
-pub(super) struct BackgroundTool {
+pub(super) struct SpawnProcessTool {
     config: BackgroundToolConfig,
 }
 
@@ -91,7 +91,7 @@ impl SpawnSubagentTool {
     }
 }
 
-impl BackgroundTool {
+impl SpawnProcessTool {
     pub(super) fn new(config: BackgroundToolConfig) -> Self {
         Self { config }
     }
@@ -100,14 +100,14 @@ impl BackgroundTool {
         let tool_name = args.tool_name.trim();
         if tool_name.is_empty() {
             return Err(background_invalid_arguments_error(
-                BACKGROUND_TOOL_NAME,
+                SPAWN_PROCESS_TOOL_NAME,
                 "/tool_name",
                 "tool_name is required",
             ));
         }
         if !self.config.allowlist.iter().any(|name| name == tool_name) {
             return Err(background_tool_not_allowed_error(
-                BACKGROUND_TOOL_NAME,
+                SPAWN_PROCESS_TOOL_NAME,
                 "/tool_name",
                 tool_name,
                 format!("tool '{tool_name}' is not allowed for backgrounding by this behavior"),
@@ -134,16 +134,16 @@ pub(super) struct SteerSubagentTool;
 pub(super) struct CancelSubagentTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct WaitTool;
+pub(super) struct WaitProcessTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ListBackgroundToolsTool;
+pub(super) struct ListProcessesTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ReadToolOutputTool;
+pub(super) struct ReadProcessTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct CancelTool;
+pub(super) struct CancelProcessTool;
 
 impl Tool for SpawnSubagentTool {
     const NAME: &'static str = SPAWN_SUBAGENT_TOOL_NAME;
@@ -427,8 +427,8 @@ impl Tool for SteerSubagentTool {
     }
 }
 
-impl Tool for BackgroundTool {
-    const NAME: &'static str = BACKGROUND_TOOL_NAME;
+impl Tool for SpawnProcessTool {
+    const NAME: &'static str = SPAWN_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = BackgroundToolArgs;
@@ -437,7 +437,7 @@ impl Tool for BackgroundTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run an allowlisted backgroundable tool and return a handle immediately."
+            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -445,7 +445,7 @@ impl Tool for BackgroundTool {
                     "tool_name": {
                         "type": "string",
                         "enum": &self.config.allowlist,
-                        "description": "Allowlisted tool name to run in the background."
+                        "description": "Allowlisted tool name to run as a background process."
                     },
                     "args": {
                         "type": "object",
@@ -463,8 +463,8 @@ impl Tool for BackgroundTool {
     }
 }
 
-impl Tool for WaitTool {
-    const NAME: &'static str = WAIT_TOOL_NAME;
+impl Tool for WaitProcessTool {
+    const NAME: &'static str = WAIT_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = WaitToolArgs;
@@ -473,14 +473,13 @@ impl Tool for WaitTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for an existing backgrounded tool call to reach a terminal state."
-                .to_string(),
+            description: "Wait for a background process to reach a terminal state.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool."
+                        "description": "Process handle returned by spawn_process."
                     }
                 },
                 "required": ["tool_call_id"]
@@ -489,13 +488,13 @@ impl Tool for WaitTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        validate_tool_call_id(WAIT_TOOL_NAME, &args.tool_call_id)?;
+        validate_tool_call_id(WAIT_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         Err(background_not_yet_executable_error(Self::NAME))
     }
 }
 
-impl Tool for ListBackgroundToolsTool {
-    const NAME: &'static str = LIST_BACKGROUND_TOOLS_TOOL_NAME;
+impl Tool for ListProcessesTool {
+    const NAME: &'static str = LIST_PROCESSES_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ListBackgroundToolsArgs;
@@ -504,7 +503,7 @@ impl Tool for ListBackgroundToolsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this parent request's visible background tool calls.".to_string(),
+            description: "List this request's background processes.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -512,7 +511,7 @@ impl Tool for ListBackgroundToolsTool {
                         "type": "string",
                         "enum": ["running", "terminal", "all"],
                         "default": "running",
-                        "description": "Filter background tool calls by lifecycle state."
+                        "description": "Filter background processes by lifecycle state."
                     },
                     "limit": {
                         "type": "integer",
@@ -532,8 +531,8 @@ impl Tool for ListBackgroundToolsTool {
     }
 }
 
-impl Tool for ReadToolOutputTool {
-    const NAME: &'static str = READ_TOOL_OUTPUT_TOOL_NAME;
+impl Tool for ReadProcessTool {
+    const NAME: &'static str = READ_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ReadToolOutputArgs;
@@ -542,14 +541,13 @@ impl Tool for ReadToolOutputTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read stdout and stderr snapshots for a visible background tool call."
-                .to_string(),
+            description: "Read a background process's stdout/stderr.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool or list_background_tools."
+                        "description": "Process handle returned by spawn_process or list_processes."
                     },
                     "max_bytes_per_stream": {
                         "type": "integer",
@@ -571,8 +569,8 @@ impl Tool for ReadToolOutputTool {
     }
 }
 
-impl Tool for CancelTool {
-    const NAME: &'static str = CANCEL_TOOL_NAME;
+impl Tool for CancelProcessTool {
+    const NAME: &'static str = CANCEL_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = CancelToolArgs;
@@ -581,13 +579,13 @@ impl Tool for CancelTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Cancel an existing backgrounded tool call.".to_string(),
+            description: "Cancel a running background process.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool."
+                        "description": "Process handle returned by spawn_process."
                     },
                     "reason": {
                         "type": "string",
@@ -600,14 +598,14 @@ impl Tool for CancelTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        validate_tool_call_id(CANCEL_TOOL_NAME, &args.tool_call_id)?;
+        validate_tool_call_id(CANCEL_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         if args
             .reason
             .as_deref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
             return Err(background_invalid_arguments_error(
-                CANCEL_TOOL_NAME,
+                CANCEL_PROCESS_TOOL_NAME,
                 "/reason",
                 "reason must be omitted or non-empty",
             ));
@@ -718,7 +716,7 @@ fn background_invalid_arguments_error(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name
     }))
 }
@@ -736,7 +734,7 @@ fn background_tool_not_allowed_error(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name,
         "requested_tool_name": requested,
         "allowed_backgroundable_tool_names": allowed_targets
@@ -748,9 +746,9 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
         "ok": false,
         "failure_class": "service_unavailable",
         "path": "/",
-        "message": format!("{tool_name} is registered but requires the R6 background-tool hook runtime path before direct execution"),
+        "message": format!("{tool_name} is registered but requires the R6 process hook runtime path before direct execution"),
         "retryable": true,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name
     }))
 }

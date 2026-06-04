@@ -269,7 +269,7 @@ fn command_execution_display(tool: &DefraToolCallProgress) -> String {
         return command;
     }
     if tool.args.trim().is_empty() {
-        return format!("background_tool {}", tool.tool_name);
+        return format!("spawn_process {}", tool.tool_name);
     }
     format!("{} {}", tool.tool_name, tool.args.trim())
 }
