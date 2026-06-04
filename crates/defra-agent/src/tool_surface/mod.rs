@@ -20,9 +20,11 @@ use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TO
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_context_budget_tool, build_delegate_tool,
-    build_memory_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
-    CONTEXT_BUDGET_TOOL_NAME, DELEGATE_TOOL_NAME, MEMORY_TOOL_NAME,
+    build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet, CONTEXT_BUDGET_TOOL_NAME,
+    DELEGATE_TOOL_NAME,
 };
+#[cfg(feature = "agent-memory")]
+use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
@@ -35,6 +37,7 @@ pub struct ToolSurface {
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
+    pub(super) enable_memory: bool,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
 }
@@ -82,7 +85,10 @@ impl ToolSurface {
         names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
-        names.push(MEMORY_TOOL_NAME.to_string());
+        #[cfg(feature = "agent-memory")]
+        if self.enable_memory {
+            names.push(MEMORY_TOOL_NAME.to_string());
+        }
         names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
@@ -114,10 +120,13 @@ impl ToolSurface {
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
         }
-        tools.push(build_memory_tool(
-            runtime.node.clone(),
-            runtime.agent_did.clone(),
-        ));
+        #[cfg(feature = "agent-memory")]
+        if self.enable_memory {
+            tools.push(build_memory_tool(
+                runtime.node.clone(),
+                runtime.agent_did.clone(),
+            ));
+        }
         tools.push(build_context_budget_tool(
             runtime.node.clone(),
             runtime.agent_did.clone(),
@@ -149,6 +158,7 @@ impl std::fmt::Debug for ToolSurface {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
+            .field("enable_memory", &self.enable_memory)
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .finish()

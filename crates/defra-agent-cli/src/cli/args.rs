@@ -993,6 +993,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[arg(
         long,
+        help = "Enable or disable the feature-gated memory tool: --enable-memory true|false. Omit to leave the existing document setting unchanged (default is disabled)"
+    )]
+    pub(crate) enable_memory: Option<bool>,
+    #[arg(
+        long,
         help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
     )]
     pub(crate) enable_defra_query: Option<bool>,
@@ -1210,6 +1215,12 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete live-only desired-state documents absent from the manifest, routed through the proven ApplyReconcile delete-safety model"
+    )]
+    pub(crate) prune: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -1742,6 +1753,19 @@ mod tests {
         );
         assert_eq!(
             parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn enable_memory_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_memory, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-memory", "false"]).enable_memory,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-memory", "true"]).enable_memory,
             Some(true)
         );
     }

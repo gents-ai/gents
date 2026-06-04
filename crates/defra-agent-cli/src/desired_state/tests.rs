@@ -51,6 +51,178 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
     manifest
 }
 
+fn behavior_with(id: &str, backend_id: Option<&str>) -> DesiredAgentBehavior {
+    DesiredAgentBehavior {
+        behavior_id: id.to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        display_name: None,
+        system_prompt: None,
+        backend_id: backend_id.map(|s| s.to_string()),
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
+    }
+}
+
+fn backend(id: &str) -> DesiredInferenceBackend {
+    DesiredInferenceBackend {
+        backend_id: id.to_string(),
+        name: id.to_string(),
+        provider_kind: Default::default(),
+        endpoint: "http://localhost:1234".to_string(),
+        api_key: None,
+        api_key_env_var: None,
+        max_concurrent: 1,
+        max_queue_depth: 1,
+        enabled: true,
+        models: Vec::new(),
+    }
+}
+
+fn deletes_contain(
+    deletes: &[defra_agent::apply_model::DocRef],
+    collection: defra_agent::Collection,
+    id: &str,
+) -> bool {
+    deletes
+        .iter()
+        .any(|d| d.collection == collection && d.id == id)
+}
+
+#[test]
+fn prune_deletes_unreferenced_orphan_backend() {
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.inference_backends.push(backend("k-orphan"));
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::InferenceBackend,
+        "k-orphan"
+    ));
+}
+
+#[test]
+fn prune_blocks_backend_referenced_by_behavior() {
+    // Both live-only; the behavior references the backend.
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.inference_backends.push(backend("k1"));
+    live.agent_behaviors.push(behavior_with("b1", Some("k1")));
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    // The referrer (behavior) is deletable; the referenced backend is NOT.
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::AgentBehavior,
+        "b1"
+    ));
+    assert!(
+        !deletes_contain(&deletes, defra_agent::Collection::InferenceBackend, "k1"),
+        "backend referenced by a live behavior must not be pruned"
+    );
+}
+
+#[test]
+fn prune_blocks_behavior_referenced_by_task() {
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.agent_behaviors.push(behavior_with("b1", None));
+    let mut task = sample_task("t1");
+    task.behavior_id = "b1".to_string();
+    live.tasks.push(task);
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::Task,
+        "t1"
+    ));
+    assert!(
+        !deletes_contain(&deletes, defra_agent::Collection::AgentBehavior, "b1"),
+        "behavior referenced by a live task must not be pruned"
+    );
+}
+
+#[test]
+fn prune_blocks_task_referenced_by_schedule_and_trigger() {
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    let mut task = sample_task("t1");
+    task.behavior_id = "b1".to_string();
+    live.agent_behaviors.push(behavior_with("b1", None));
+    live.tasks.push(task);
+    live.schedules.push(sample_schedule("s1", "t1"));
+    live.event_triggers
+        .push(sample_event_trigger_for("e1", "t1"));
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    // schedule + trigger reference the task; task must be protected.
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::Schedule,
+        "s1"
+    ));
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::EventTrigger,
+        "e1"
+    ));
+    assert!(
+        !deletes_contain(&deletes, defra_agent::Collection::Task, "t1"),
+        "task referenced by a live schedule/trigger must not be pruned"
+    );
+}
+
+#[test]
+fn diff_manifests_prune_records_deletes_in_collection_diff() {
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.inference_backends.push(backend("k-orphan"));
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+        true,
+    );
+    assert_eq!(
+        report.collections.inference_backends.delete,
+        vec!["k-orphan".to_string()]
+    );
+    // Pruned doc moves out of live_only.
+    assert!(report.collections.inference_backends.live_only.is_empty());
+}
+
+#[test]
+fn diff_manifests_without_prune_records_no_deletes() {
+    let desired = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.inference_backends.push(backend("k-orphan"));
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert!(report.collections.inference_backends.delete.is_empty());
+    assert_eq!(
+        report.collections.inference_backends.live_only,
+        vec!["k-orphan".to_string()]
+    );
+}
+
 fn sample_task(task_id: &str) -> DesiredTask {
     DesiredTask {
         task_id: task_id.to_string(),
@@ -82,6 +254,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
+        enable_memory: false,
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
     }
@@ -91,7 +264,10 @@ fn sample_schedule(schedule_id: &str, task_id: &str) -> DesiredSchedule {
     DesiredSchedule {
         schedule_id: schedule_id.to_string(),
         task_id: task_id.to_string(),
-        interval_secs: 3600,
+        interval_secs: Some(3600),
+        cron: None,
+        timezone: None,
+        missed_run_policy: None,
         enabled: true,
         concurrency: "serial".to_string(),
     }
@@ -511,6 +687,7 @@ fn diff_manifests_creates_task_when_live_is_empty() {
         &desired,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(report.collections.tasks.create, vec!["summarize-inbox"]);
@@ -537,6 +714,7 @@ fn diff_manifests_creates_schedule_when_live_is_empty() {
         &desired,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(
@@ -568,6 +746,7 @@ fn diff_manifests_marks_task_update_when_prompt_changes() {
         &desired,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(report.collections.tasks.update, vec!["summarize-inbox"]);
@@ -593,6 +772,7 @@ fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
         &desired,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(
@@ -608,7 +788,7 @@ fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
 fn diff_manifests_marks_schedule_update_when_interval_changes() {
     let mut desired = empty_manifest("did:defra-agent:test");
     let mut desired_schedule = sample_schedule("summarize-inbox-hourly", "summarize-inbox");
-    desired_schedule.interval_secs = 7200;
+    desired_schedule.interval_secs = Some(7200);
     desired.schedules.push(desired_schedule);
 
     let mut live = empty_manifest("did:defra-agent:test");
@@ -621,6 +801,7 @@ fn diff_manifests_marks_schedule_update_when_interval_changes() {
         &desired,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(
@@ -643,6 +824,7 @@ fn diff_manifests_creates_event_trigger_when_live_is_empty() {
         &manifest,
         Some(&live.agent_principal),
         &live,
+        false,
     );
 
     assert_eq!(
@@ -669,6 +851,7 @@ fn diff_manifests_marks_event_trigger_update_when_filter_changes() {
         &manifest,
         Some(&live_manifest.agent_principal),
         &live_manifest,
+        false,
     );
 
     assert_eq!(
@@ -774,7 +957,7 @@ fn validate_rejects_schedule_interval_zero_or_negative() {
     let mut manifest = manifest_with_default_behavior();
     manifest.tasks.push(sample_task("summarize-inbox"));
     let mut schedule = sample_schedule("hourly", "summarize-inbox");
-    schedule.interval_secs = 0;
+    schedule.interval_secs = Some(0);
     manifest.schedules.push(schedule);
 
     let errors = validation_errors(&manifest);
@@ -783,6 +966,85 @@ fn validate_rejects_schedule_interval_zero_or_negative() {
             .iter()
             .any(|message| message.contains("hourly") && message.contains("interval_secs")),
         "expected interval_secs >= 1 rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_cron_schedule_with_timezone() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("weekday-digest", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("America/Los_Angeles".to_string());
+    schedule.missed_run_policy = Some("latest_only".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.is_empty(),
+        "expected valid cron schedule, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_malformed_cron_schedule() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("bad-cron", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * *".to_string());
+    schedule.timezone = Some("UTC".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("bad-cron")
+                && message.contains("invalid cron schedule")
+                && message.contains("exactly 5 fields")
+        }),
+        "expected malformed cron rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_invalid_cron_timezone() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("bad-zone", "summarize-inbox");
+    schedule.interval_secs = None;
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("Mars/Olympus".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("bad-zone")
+                && message.contains("invalid cron schedule")
+                && message.contains("invalid IANA timezone")
+        }),
+        "expected invalid timezone rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_with_interval_and_cron() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("double-cadence", "summarize-inbox");
+    schedule.cron = Some("30 3 * * MON".to_string());
+    schedule.timezone = Some("UTC".to_string());
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("double-cadence")
+                && message.contains("exactly one of interval_secs or cron")
+        }),
+        "expected double cadence rejection, got {errors:?}"
     );
 }
 
@@ -1040,9 +1302,12 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
     manifest
         .schedules
         .push(sample_schedule("beta-hourly", "beta-task"));
-    manifest
-        .schedules
-        .push(sample_schedule("alpha-hourly", "alpha-task"));
+    let mut cron_schedule = sample_schedule("alpha-weekday", "alpha-task");
+    cron_schedule.interval_secs = None;
+    cron_schedule.cron = Some("30 3 * * MON".to_string());
+    cron_schedule.timezone = Some("America/Los_Angeles".to_string());
+    cron_schedule.missed_run_policy = Some("latest_only".to_string());
+    manifest.schedules.push(cron_schedule);
 
     let bundle =
         export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
@@ -1065,7 +1330,7 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
         .iter()
         .map(|schedule| schedule.schedule_id.as_str())
         .collect();
-    assert_eq!(schedule_ids, vec!["alpha-hourly", "beta-hourly"]);
+    assert_eq!(schedule_ids, vec!["alpha-weekday", "beta-hourly"]);
 
     let mut expected_tasks = manifest.tasks.clone();
     expected_tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));

@@ -366,6 +366,9 @@ pub(crate) fn tool_selection_from_document(
             .backgroundable_tool_names
             .clone()
             .unwrap_or_default(),
+        // This opt-in is intentionally default-off. The memory tool is also
+        // behind the non-default `agent-memory` Cargo feature.
+        enable_memory: selection.enable_memory.unwrap_or(false),
         // The `defra_query` read tool defaults on with all collections; an
         // operator can disable it or restrict its collection scope per behavior
         // via the ToolSelection document. (A built-in guard always blocks

@@ -39,6 +39,7 @@ pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
+pub mod schedule_cron;
 pub mod schema;
 pub mod session;
 pub mod skills;
@@ -104,16 +105,18 @@ pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunR
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
-    ResolvedTask,
+    ResolvedTask, ScheduleCadence,
 };
+#[cfg(feature = "agent-memory")]
+pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
-    AGENT_CONVERSATION_SCHEMA, AGENT_MEMORY_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA,
-    AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA,
-    AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA, CODEX_THREAD_PROJECTION_SCHEMA,
-    COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
-    INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
-    TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
+    AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
+    AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
+    AGENT_TOOL_RESULT_SCHEMA, CODEX_THREAD_PROJECTION_SCHEMA, COMPACTION_ENTRY_SCHEMA,
+    INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA,
+    TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
+    TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
 pub use session::{

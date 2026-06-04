@@ -105,6 +105,7 @@ pub(crate) struct ToolSelectionView {
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
+    pub enable_memory: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +169,9 @@ pub(crate) struct ScheduleView {
     pub schedule_id: String,
     pub task_id: Option<String>,
     pub interval_secs: Option<i64>,
+    pub cron: Option<String>,
+    pub timezone: Option<String>,
+    pub missed_run_policy: Option<String>,
     pub enabled: Option<bool>,
     pub concurrency: Option<String>,
     pub next_run_at: Option<String>,

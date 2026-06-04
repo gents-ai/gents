@@ -455,6 +455,12 @@ pub struct ScheduleRow {
     #[serde(default)]
     pub interval_secs: Option<i64>,
     #[serde(default)]
+    pub cron: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub missed_run_policy: Option<String>,
+    #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
     pub concurrency: Option<String>,
@@ -559,6 +565,8 @@ pub struct ToolSelectionRow {
     pub subagent_background_enabled: Option<bool>,
     #[serde(default)]
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
+    #[serde(default)]
+    pub enable_memory: Option<bool>,
     #[serde(default)]
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
@@ -792,7 +800,8 @@ mod tests {
             "subagent_spawn_enabled": true,
             "subagent_steering_enabled": true,
             "subagent_background_enabled": true,
-            "cross_deployment_spawn_timeout_seconds": 45
+            "cross_deployment_spawn_timeout_seconds": 45,
+            "enable_memory": true
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert_eq!(row.subagent_targets, vec!["amy-research".to_string()]);
@@ -800,6 +809,7 @@ mod tests {
         assert_eq!(row.subagent_steering_enabled, Some(true));
         assert_eq!(row.subagent_background_enabled, Some(true));
         assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
+        assert_eq!(row.enable_memory, Some(true));
 
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");

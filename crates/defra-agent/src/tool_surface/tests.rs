@@ -24,6 +24,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -81,6 +82,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -112,6 +114,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -143,6 +146,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -172,6 +176,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -199,6 +204,7 @@ fn selection_without_root_inherits_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -239,6 +245,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -276,6 +283,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -316,6 +324,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             ],
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -344,6 +353,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: vec!["bash".to_string(), "bash".to_string()],
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -372,6 +382,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -408,6 +419,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         },
@@ -456,4 +468,50 @@ async fn defra_query_tool_gated_by_selection() {
     .await
     .unwrap();
     assert!(!disabled.tool_names().contains(&"defra_query".to_string()));
+}
+
+#[test]
+fn memory_tool_defaults_disabled() {
+    assert!(!ToolSelection::default().enable_memory);
+}
+
+#[cfg(feature = "agent-memory")]
+#[tokio::test]
+async fn memory_tool_requires_selection_opt_in() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let disabled = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_memory: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(!disabled
+        .tool_names()
+        .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
+
+    let enabled = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_memory: true,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(enabled
+        .tool_names()
+        .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
 }

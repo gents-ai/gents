@@ -53,6 +53,8 @@ pub struct ToolSelection {
     pub allowed_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
+    /// Enable the feature-gated, per-agent persistent key-value memory tool.
+    pub enable_memory: bool,
     /// Enable the read-only `defra_query` structured query tool.
     pub enable_defra_query: bool,
     /// Optional allowlist of collections `defra_query` may read. Empty = all.
@@ -71,6 +73,7 @@ impl Default for ToolSelection {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
         }

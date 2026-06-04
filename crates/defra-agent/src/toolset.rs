@@ -15,6 +15,7 @@ mod context_budget;
 mod delegate;
 mod denial;
 mod file_tools;
+#[cfg(feature = "agent-memory")]
 mod memory;
 mod native_runner;
 mod shared;
@@ -40,6 +41,7 @@ pub use context_budget::{
     CONTEXT_BUDGET_TOOL_NAME,
 };
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+#[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};

@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -93,13 +93,22 @@ impl TriggerSource for ScheduleSource {
                     {
                         Ok(Some(s)) => s,
                         Ok(None) => {
-                            // Seed `next_run_at = now` on first-seen. The
-                            // apply/reconcile path never writes runtime-owned
-                            // fields, so this value starts null until the
-                            // engine initializes it here. Treat as due on
-                            // this very tick so first-fire latency stays
-                            // below one full interval.
-                            let seeded = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+                            // Seed `next_run_at` on first-seen. Interval
+                            // schedules retain their existing immediate
+                            // first-fire behavior; cron schedules seed to
+                            // their next wall-clock match in their timezone.
+                            let seeded_dt = match resolved.cadence.seed_next_run_at(now) {
+                                Ok(next) => next,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        schedule_id = %schedule_id,
+                                        error = %e,
+                                        "failed to compute initial Schedule.next_run_at; skipping this tick"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let seeded = seeded_dt.to_rfc3339_opts(SecondsFormat::Secs, true);
                             if let Err(e) = update_schedule_runtime_fields(
                                 &self.node,
                                 schedule_id,
@@ -171,8 +180,20 @@ impl TriggerSource for ScheduleSource {
                     // behind still advance on a single-interval cadence. The
                     // DB write itself happens in the `on_result` callback
                     // below, off the engine's dispatch path.
-                    let advanced_next_run_at =
-                        parsed + ChronoDuration::seconds(resolved.interval_secs);
+                    let advanced_next_run_at = match resolved
+                        .cadence
+                        .advance_next_run_at(parsed, now)
+                    {
+                        Ok(next) => next,
+                        Err(e) => {
+                            tracing::warn!(
+                                schedule_id = %schedule_id,
+                                error = %e,
+                                "failed to compute advanced Schedule.next_run_at; skipping this tick"
+                            );
+                            continue;
+                        }
+                    };
                     let advanced_next_run_at_str =
                         advanced_next_run_at.to_rfc3339_opts(SecondsFormat::Secs, true);
                     let last_attempt_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);

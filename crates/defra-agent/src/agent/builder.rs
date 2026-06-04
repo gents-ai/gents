@@ -287,6 +287,11 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_memory(mut self, enable_memory: bool) -> Self {
+        self.behavior.tool_selection.enable_memory = enable_memory;
+        self
+    }
+
     pub fn defra_query_collections<I, S>(mut self, collections: I) -> Self
     where
         I: IntoIterator<Item = S>,

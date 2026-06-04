@@ -229,11 +229,14 @@ pub(crate) async fn save_tool_selection_config(
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_defra_query: Some(true),
+            defra_query_collections: Vec::new(),
             subagent_targets: Vec::new(),
             subagent_spawn_enabled: Some(false),
             subagent_steering_enabled: Some(false),
             subagent_background_enabled: Some(false),
             cross_deployment_spawn_timeout_seconds: None,
+            enable_memory: Some(false),
         });
     row.agent_did = Some(agent_did);
     row.display_name = Some(display_name);
@@ -297,6 +300,7 @@ pub(crate) async fn save_tool_selection_config(
         .subagent_background_enabled
         .or(row.subagent_background_enabled);
     row.cross_deployment_spawn_timeout_seconds = request.cross_deployment_spawn_timeout_seconds;
+    row.enable_memory = request.enable_memory.or(row.enable_memory);
     core.save_tool_selection(&row).await?;
     Ok(())
 }
