@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -75,8 +76,27 @@ impl ToolSelectionDocument {
             for (i, target) in targets.iter().enumerate() {
                 if target.is_empty() {
                     return Err(anyhow::anyhow!(
-                        "subagent_targets[{}] is empty; behavior IDs must be non-empty strings",
+                        "subagent_targets[{}] is empty; each entry must be a valid SubagentTarget JSON object",
                         i
+                    ));
+                }
+                // Every non-empty entry must be parseable as a SubagentTarget JSON
+                // object AND pass structural validation (all fields non-empty).
+                // Bare behavior-id strings are not valid — the runtime silently
+                // drops them, which entrenches a silent misconfiguration. Reject
+                // them here with a clear diagnostic.
+                let parsed = SubagentTarget::parse(target).map_err(|e| {
+                    anyhow::anyhow!(
+                        "subagent_targets[{i}] is not a valid SubagentTarget JSON object \
+                         (got {target:?}): {e}; \
+                         use subagent_target_entry(name, agent_did, behavior_id, description) \
+                         to build a valid entry"
+                    )
+                })?;
+                if !parsed.is_structurally_valid() {
+                    return Err(anyhow::anyhow!(
+                        "subagent_targets[{i}] parsed as SubagentTarget but is not structurally \
+                         valid (name, agent_did, and behavior_id must all be non-empty): {target:?}"
                     ));
                 }
             }

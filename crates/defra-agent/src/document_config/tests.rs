@@ -161,14 +161,60 @@ async fn agent_behavior_description_and_summary_round_trip() {
 
 #[test]
 fn validate_accepts_well_formed_subagent_targets() {
+    // Bare behavior-id strings like "amy-code" are NOT valid SubagentTarget
+    // entries — the runtime silently drops them. Proper entries are JSON
+    // objects built with subagent_target_entry().
+    let code_entry = subagent_target_entry(
+        "amy-code",
+        "did:key:zParent",
+        "did:key:zParent:amy-code",
+        Some("Code assistant".to_string()),
+    );
+    let research_entry = subagent_target_entry(
+        "amy-research",
+        "did:key:zParent",
+        "did:key:zParent:amy-research",
+        None,
+    );
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
-        subagent_targets: Some(vec!["amy-code".to_string(), "amy-research".to_string()]),
+        subagent_targets: Some(vec![code_entry, research_entry]),
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(true),
         ..Default::default()
     };
-    assert!(doc.validate().is_ok());
+    assert!(
+        doc.validate().is_ok(),
+        "well-formed JSON SubagentTarget entries must be accepted"
+    );
+}
+
+#[test]
+fn validate_rejects_bare_string_subagent_target() {
+    // A bare behavior-id string is NOT a valid SubagentTarget JSON entry.
+    // The runtime silently drops non-JSON entries, so validate() must catch
+    // this misconfiguration early with a clear error.
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        subagent_targets: Some(vec!["amy-code".to_string()]),
+        subagent_spawn_enabled: Some(true),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(
+        result.is_err(),
+        "bare behavior-id string must be rejected by validate()"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("subagent_targets"),
+        "error must mention subagent_targets; got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("SubagentTarget JSON"),
+        "error must mention SubagentTarget JSON; got: {err_msg}"
+    );
 }

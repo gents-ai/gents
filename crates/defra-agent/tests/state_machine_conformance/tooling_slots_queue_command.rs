@@ -1079,7 +1079,12 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
