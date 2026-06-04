@@ -12,7 +12,9 @@ use crate::document_config::{
 };
 use crate::runtime_snapshot::{
     ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
+    ScheduleCadence,
 };
+use crate::schedule_cron::{validate_cron_schedule, CronMissedRunPolicy};
 use crate::tool_surface::ToolSelection;
 
 use super::{validate_subagent_targets_resolve, DocumentRuntimeView};
@@ -429,6 +431,14 @@ fn resolve_schedules(
             continue;
         }
 
+        let cadence = match resolve_schedule_cadence(schedule) {
+            Ok(cadence) => cadence,
+            Err(_) => {
+                unavailable_schedules.insert(schedule_id);
+                continue;
+            }
+        };
+
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
             name: task.name.clone(),
@@ -440,7 +450,7 @@ fn resolve_schedules(
             schedule_id: schedule.schedule_id.clone(),
             task_id: schedule.task_id.clone().unwrap_or_default(),
             task: resolved_task,
-            interval_secs: schedule.interval_secs.unwrap_or(0),
+            cadence,
             enabled: schedule.enabled,
             concurrency,
         };
@@ -448,6 +458,46 @@ fn resolve_schedules(
     }
 
     (active_schedules, unavailable_schedules)
+}
+
+fn resolve_schedule_cadence(
+    schedule: &crate::document_config::Schedule,
+) -> Result<ScheduleCadence> {
+    let cron = schedule
+        .cron
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let interval = schedule.interval_secs;
+
+    match (interval, cron) {
+        (Some(interval_secs), None) if interval_secs >= 1 => {
+            Ok(ScheduleCadence::Interval { interval_secs })
+        }
+        (Some(_), Some(_)) => Err(anyhow!(
+            "schedule cannot define both interval_secs and cron"
+        )),
+        (Some(interval_secs), None) => Err(anyhow!(
+            "schedule interval_secs must be >= 1; got {interval_secs}"
+        )),
+        (None, Some(expression)) => {
+            let timezone = schedule
+                .timezone
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("cron schedule requires timezone"))?;
+            let missed_run_policy =
+                CronMissedRunPolicy::parse(schedule.missed_run_policy.as_deref())?;
+            validate_cron_schedule(expression, timezone, schedule.missed_run_policy.as_deref())?;
+            Ok(ScheduleCadence::Cron {
+                expression: expression.to_string(),
+                timezone: timezone.to_string(),
+                missed_run_policy,
+            })
+        }
+        (None, None) => Err(anyhow!("schedule must define interval_secs or cron")),
+    }
 }
 
 /// Classify every `EventTrigger` in `view` into either `active_event_triggers`

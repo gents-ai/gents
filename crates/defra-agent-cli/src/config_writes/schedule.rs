@@ -11,7 +11,8 @@ use super::common::{query_documents_by_unique_value, select_existing_document};
 /// CRITICAL: `Schedule` is the boundary between apply-owned desired state
 /// and runtime-owned live state. This writer must ONLY read, write, or
 /// compare apply-owned fields: `schedule_id`, `task_id`, `interval_secs`,
-/// `enabled`, `concurrency`, `created_at`, `updated_at`.
+/// `cron`, `timezone`, `missed_run_policy`, `enabled`, `concurrency`,
+/// `created_at`, `updated_at`.
 ///
 /// Runtime-owned fields — `next_run_at`, `last_attempt_at`, `last_status`,
 /// `last_error`, `fire_count` — are the scheduler's responsibility. They are
@@ -184,6 +185,9 @@ async fn query_schedule_rows(
                 schedule_id
                 task_id
                 interval_secs
+                cron
+                timezone
+                missed_run_policy
                 enabled
                 concurrency
                 created_at

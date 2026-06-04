@@ -103,6 +103,9 @@ pub(crate) async fn save_schedule_config(
             schedule_id: schedule_id.clone(),
             task_id: Some(task_id.clone()),
             interval_secs: None,
+            cron: None,
+            timezone: None,
+            missed_run_policy: None,
             enabled: Some(true),
             concurrency: Some("serial".to_string()),
             next_run_at: None,
@@ -115,6 +118,9 @@ pub(crate) async fn save_schedule_config(
         });
     row.task_id = Some(task_id);
     row.interval_secs = request.interval_secs;
+    row.cron = trim_optional(request.cron);
+    row.timezone = trim_optional(request.timezone);
+    row.missed_run_policy = trim_optional(request.missed_run_policy);
     row.enabled = request.enabled.or(row.enabled).or(Some(true));
     row.concurrency = trim_optional(request.concurrency).or_else(|| Some("serial".to_string()));
     core.save_schedule(&row).await?;

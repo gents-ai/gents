@@ -11,6 +11,7 @@ mod args;
 mod bash_tools;
 mod cancellable;
 mod cli_tool;
+mod context_budget;
 mod delegate;
 mod denial;
 mod file_tools;
@@ -33,6 +34,10 @@ use subagent::{
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
+pub use context_budget::{
+    build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
+    CONTEXT_BUDGET_TOOL_NAME,
+};
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};

@@ -442,6 +442,12 @@ pub struct ScheduleRow {
     #[serde(default)]
     pub interval_secs: Option<i64>,
     #[serde(default)]
+    pub cron: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub missed_run_policy: Option<String>,
+    #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
     pub concurrency: Option<String>,

@@ -1210,6 +1210,12 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete live-only desired-state documents absent from the manifest, routed through the proven ApplyReconcile delete-safety model"
+    )]
+    pub(crate) prune: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
