@@ -1213,7 +1213,7 @@ pub(crate) struct ConfigApplyArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Delete live-only desired-state documents that are absent from the manifest"
+        help = "Delete live-only desired-state documents absent from the manifest, routed through the proven ApplyReconcile delete-safety model"
     )]
     pub(crate) prune: bool,
 }

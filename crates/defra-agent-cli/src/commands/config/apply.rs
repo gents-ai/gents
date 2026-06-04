@@ -61,23 +61,14 @@ pub(crate) async fn apply_bound_desired_manifest(
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;
-    let planned = if prune {
-        desired_state::diff_manifests_with_prune(
-            root,
-            access.mode(),
-            desired_manifest,
-            live_principal.as_ref(),
-            &live_manifest,
-        )
-    } else {
-        desired_state::diff_manifests(
-            root,
-            access.mode(),
-            desired_manifest,
-            live_principal.as_ref(),
-            &live_manifest,
-        )
-    };
+    let planned = desired_state::diff_manifests(
+        root,
+        access.mode(),
+        desired_manifest,
+        live_principal.as_ref(),
+        &live_manifest,
+        prune,
+    );
 
     let (applied, pruned) = {
         let txn = access
@@ -115,6 +106,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         desired_manifest,
         remaining_principal.as_ref(),
         &remaining_manifest,
+        prune,
     );
 
     let changed = config_apply_counts_changed(&applied) || config_apply_counts_changed(&pruned);

@@ -3,6 +3,7 @@ pub(crate) mod convert;
 pub(crate) mod diff;
 pub(crate) mod load;
 pub(crate) mod normalize;
+pub(crate) mod prune;
 #[cfg(test)]
 mod tests;
 pub(crate) mod validate;
@@ -13,7 +14,7 @@ pub(crate) use convert::{
     export_bundle_from_manifest, manifest_from_export_bundle,
     normalize_tool_service_registry_storage_fields,
 };
-pub(crate) use diff::{diff_manifests, diff_manifests_with_prune};
+pub(crate) use diff::diff_manifests;
 pub(crate) use load::load_manifest_root;
 pub(crate) use normalize::strip_deprecated_inference_backend_fields;
 pub(crate) use write::write_manifest_root;
@@ -349,7 +350,7 @@ impl DesiredStateDiffCollections {
         }
     }
 
-    pub(crate) fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
+    fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
         match collection {
             Collection::AgentPrincipal => &mut self.agent_principal,
             Collection::AgentBehavior => &mut self.agent_behaviors,
@@ -361,6 +362,19 @@ impl DesiredStateDiffCollections {
             Collection::Task => &mut self.tasks,
             Collection::Schedule => &mut self.schedules,
             Collection::EventTrigger => &mut self.event_triggers,
+        }
+    }
+
+    /// Record proven-safe prune deletes: move each pruned id from its
+    /// collection's `live_only` into `delete`. The deletes come from
+    /// `prune::prune_safe_deletes`, i.e. `apply_model::diff_prune`.
+    pub(crate) fn record_prune_deletes(&mut self, deletes: &[defra_agent::apply_model::DocRef]) {
+        for doc in deletes {
+            let diff = self.get_mut(doc.collection);
+            diff.live_only.retain(|id| id != &doc.id);
+            if !diff.delete.contains(&doc.id) {
+                diff.delete.push(doc.id.clone());
+            }
         }
     }
 

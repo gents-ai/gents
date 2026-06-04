@@ -40,5 +40,6 @@ pub(crate) async fn diff_bound_desired_manifest(
         desired_manifest,
         live_principal.as_ref(),
         &live_manifest,
+        false,
     ))
 }
