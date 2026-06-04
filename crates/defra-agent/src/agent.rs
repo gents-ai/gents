@@ -15,6 +15,7 @@ use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
+use crate::migration;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::{
@@ -120,6 +121,11 @@ impl DefraAgent {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
+        // Run the AgentBehavior migration before any behavior read so that
+        // desktops, embedders, and CLI serve paths all see description/summary
+        // even when the DB was created before branch #377. This is idempotent
+        // (field-presence-checked) and cheap on already-migrated DBs.
+        migration::ensure_agent_behavior_migrations(node.clone()).await?;
         let document_runtime_context = DocumentResolveContext {
             identity: identity.clone(),
             tool_ceiling: options.tool_ceiling.clone(),

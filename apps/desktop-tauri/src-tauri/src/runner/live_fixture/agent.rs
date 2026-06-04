@@ -8,8 +8,8 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
-    ToolCeiling,
+    subagent_target_entry, upsert_agent_behavior, AgentIdentity, DefraAgent,
+    DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
 };
 use defra_agent_desktop_core::client::ClientCore;
 use defra_agent_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
@@ -141,7 +141,12 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
-        subagent_targets: vec![subagent_behavior_id.clone()],
+        subagent_targets: vec![subagent_target_entry(
+            "repo-audit-subagent",
+            agent_did,
+            &subagent_behavior_id,
+            Some("Local repository audit subagent for the desktop live fixture".to_string()),
+        )],
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),

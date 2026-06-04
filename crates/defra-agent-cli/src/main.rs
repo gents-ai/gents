@@ -470,13 +470,30 @@ pub(crate) async fn resolve_config_access(
     let data_dir = default_data_dir(&home_dir);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let node = persistent_node_builder(&data_dir)
-        .build()
-        .await
-        .with_context(|| format!("building embedded defra node from {}", data_dir.display()))?;
-    if ensure_local_schemas {
-        ensure_runtime_schemas(&node).await?;
-    }
+    let node = {
+        use std::sync::Arc;
+        let node_arc = Arc::new(
+            persistent_node_builder(&data_dir)
+                .build()
+                .await
+                .with_context(|| {
+                    format!("building embedded defra node from {}", data_dir.display())
+                })?,
+        );
+        if ensure_local_schemas {
+            ensure_runtime_schemas(&node_arc).await?;
+        }
+        // Run the AgentBehavior migration so that offline config diff/apply/export
+        // against an upgraded DB does not fail with "unknown field" errors when
+        // querying description/summary (introduced in #377). Idempotent and cheap.
+        defra_agent::migration::ensure_agent_behavior_migrations(node_arc.clone()).await?;
+        // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
+        // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable
+        // but required by the type system.
+        Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
+            unreachable!("node_arc had exactly one strong reference at this point")
+        })
+    };
     Ok((ConfigAccess::Local(node), home_dir))
 }
 
