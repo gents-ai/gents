@@ -928,7 +928,7 @@ mod live_tests {
                     subagent_spawn_enabled: Some(true),
                     subagent_steering_enabled: Some(true),
                     subagent_background_enabled: Some(true),
-                    subagent_allow_cross_deployment: None,
+                    subagent_allow_cross_deployment: Some(true),
                     cross_deployment_spawn_timeout_seconds: Some(90),
                 }],
                 inference_backends: Vec::new(),
@@ -995,6 +995,11 @@ mod live_tests {
             live_sel.subagent_background_enabled,
             Some(true),
             "subagent_background_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must persist through apply"
         );
         assert_eq!(
             live_sel.cross_deployment_spawn_timeout_seconds,

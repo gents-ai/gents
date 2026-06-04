@@ -80,9 +80,10 @@ impl ToolSurface {
     /// Local-DID targets (whose `agent_did` equals the agent's own DID) are
     /// retain-filtered against the active local behavior set, since a missing
     /// local behavior means the target genuinely cannot resolve. Remote-DID
-    /// targets always survive: their behavior lives on another node and is
-    /// reached out-of-band via P2P replication, so the orchestrator must NOT
-    /// require local resolution. This removes the cross-node delegation seam.
+    /// targets are retained ONLY when `subagent_allow_cross_deployment` is true;
+    /// when the flag is false (the default), remote-DID targets are dropped
+    /// upstream in `resolve_with_available_subagent_targets` before this method
+    /// is called, so this pass sees none of them.
     pub(crate) fn retain_subagent_targets(
         &mut self,
         own_agent_did: &str,

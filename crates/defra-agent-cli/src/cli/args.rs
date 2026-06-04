@@ -1134,7 +1134,12 @@ one direction of replication toward --peer:\n\
 Replication is directional. For bidirectional delegation (the child writes \
 AgentRequests/AgentToolCalls that the parent reads, and the parent writes \
 AgentResponses/AgentMessages that the child reads) you must run `p2p pair` on \
-BOTH servers, each with --peer set to the other's listen address."
+BOTH servers, each with --peer set to the other's listen address.\n\
+\n\
+NOTE: replication alone does NOT enable cross-deployment delegation. \
+Cross-deployment delegation is off by default and DEFERRED — to opt in, \
+set `subagent_allow_cross_deployment: true` on the relevant behaviors' tool \
+selections on BOTH the orchestrator and the target server (trusted-fleet only)."
     )]
     Pair(P2pPairArgs),
 }

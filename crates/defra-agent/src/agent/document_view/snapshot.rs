@@ -232,8 +232,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     for (behavior, mut tool_surface) in behavior_surfaces {
         // Warn for every LOCAL target that is about to be dropped because its
         // target behavior did not make it into the active set (either disabled,
-        // or its backend/MCP resolution failed). Remote-DID targets are always
-        // retained — they resolve out-of-band via P2P.
+        // or its backend/MCP resolution failed). Remote-DID targets are retained
+        // ONLY when `subagent_allow_cross_deployment` is true; with the flag off
+        // (the default) they are dropped in `resolve_with_available_subagent_targets`
+        // before this pass, so none appear here.
         for target in tool_surface.subagent_targets() {
             if target.agent_did == own_agent_did
                 && !active_behavior_ids.contains(&target.behavior_id)
