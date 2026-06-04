@@ -187,11 +187,18 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
     );
     assert!(case.single_deployment_fallback, "{}", case.name);
 
-    let (parent_db, hook, parent_session_id, _parent_behavior_id) =
+    let (parent_db, hook, parent_session_id, parent_behavior_id) =
         setup_parent_hook(case, true).await;
-    // A local target behavior makes spawn_subagent materialize the child
-    // synchronously in the production hook, so no SubagentSource runtime is
-    // needed for the single-deployment fallback row.
+    // After spawn convergence (#377) the child AgentRequest is materialized by
+    // SubagentSource, not synchronously by the hook.  Start a standalone source
+    // against the parent node so it can observe the bridge row and materialize
+    // the child before we assert on wait_for_child_request.
+    let _source = super::support::fixtures::spawn_subagent_source(
+        parent_db.node.clone(),
+        PARENT_AGENT_DID,
+        &parent_behavior_id,
+        &case.target_behavior_id,
+    );
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
 
     let bridge = fetch_tool_call(
@@ -272,12 +279,28 @@ async fn setup_parent_hook_on_db(
     let parent_session_id = format!("{}-session", case.parent_request_id);
     let selection_id = format!("{parent_behavior_id}-tools");
 
+    // The target's owning DID is the parent (local case) or the child
+    // deployment (cross case). The friendly target name equals the behavior id
+    // so the spawn args (which pass `name`) resolve.
+    let target_owner_did = if target_is_local {
+        PARENT_AGENT_DID.to_string()
+    } else {
+        test_identity(&format!("{}-child", case.name))
+            .did()
+            .to_string()
+    };
+
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: PARENT_AGENT_DID.to_string(),
-            subagent_targets: Some(vec![case.target_behavior_id.clone()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                case.target_behavior_id.clone(),
+                target_owner_did,
+                case.target_behavior_id.clone(),
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
@@ -364,7 +387,7 @@ async fn spawn_from_parent_hook(
     hook: &DefraSessionHook,
 ) -> String {
     let args = json!({
-        "behavior_id": case.target_behavior_id.as_str(),
+        "name": case.target_behavior_id.as_str(),
         "prompt": format!("child prompt for {}", case.name),
         "await_mode": case.await_mode.as_str()
     })

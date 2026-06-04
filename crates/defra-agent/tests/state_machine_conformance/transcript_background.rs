@@ -198,7 +198,19 @@ async fn setup_background_spawn_fixture(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(targets.into_iter().map(str::to_string).collect()),
+            subagent_targets: Some(
+                targets
+                    .into_iter()
+                    .map(|behavior_id| {
+                        defra_agent::subagent_target_entry(
+                            behavior_id,
+                            AGENT_DID,
+                            behavior_id,
+                            None,
+                        )
+                    })
+                    .collect(),
+            ),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(background_enabled),
             ..Default::default()
@@ -455,22 +467,65 @@ async fn fetch_background_theorem_child_request(
     first_row(&node.execute(&query).await, "AgentRequest")
 }
 
+async fn fetch_background_theorem_child_request_optional(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Option<BackgroundTheoremChildRequestRow> {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
+                execution_origin
+                created_at
+                deadline
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+                status
+                lifecycle_state
+            }}
+        }}"#
+    );
+    first_optional_row(&node.execute(&query).await, "AgentRequest")
+}
+
 async fn wait_for_background_theorem_child_lifecycle_state(
     node: &EmbeddedNode,
     child_request_id: &str,
     expected_state: &str,
 ) -> BackgroundTheoremChildRequestRow {
-    let timeout_at = tokio::time::Instant::now() + Duration::from_secs(3);
+    let timeout_at = tokio::time::Instant::now() + Duration::from_secs(10);
 
     loop {
-        let row = fetch_background_theorem_child_request(node, child_request_id).await;
-        if row.lifecycle_state.as_deref() == Some(expected_state) {
-            return row;
-        }
+        if let Some(row) =
+            fetch_background_theorem_child_request_optional(node, child_request_id).await
+        {
+            if row.lifecycle_state.as_deref() == Some(expected_state) {
+                return row;
+            }
 
-        if tokio::time::Instant::now() >= timeout_at {
+            if tokio::time::Instant::now() >= timeout_at {
+                panic!(
+                    "timed out waiting for child {child_request_id} lifecycle_state={expected_state}; last row: {row:?}"
+                );
+            }
+        } else if tokio::time::Instant::now() >= timeout_at {
             panic!(
-                "timed out waiting for child {child_request_id} lifecycle_state={expected_state}; last row: {row:?}"
+                "timed out waiting for child {child_request_id} to be materialized (expected lifecycle_state={expected_state})"
             );
         }
 
@@ -994,8 +1049,17 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         true,
     )
     .await;
+    // After spawn convergence (#377) the child AgentRequest is materialized by
+    // SubagentSource, not synchronously by the hook.  Hold a standalone source
+    // for the lifetime of this test so the bridge row produces a child request.
+    let _source = super::support::fixtures::spawn_subagent_source(
+        db.node.clone(),
+        AGENT_DID,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+    );
     let args = json!({
-        "behavior_id": BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+        "name": BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
         "prompt": "child for cascade theorem witness",
         "await_mode": "background"
     })
@@ -1027,7 +1091,14 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         Some(child_request_id.as_str())
     );
 
-    let child = fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
+    // Wait for SubagentSource to materialize the child (post-convergence #377:
+    // the child is no longer created synchronously by the hook).
+    let child = wait_for_background_theorem_child_lifecycle_state(
+        db.node.as_ref(),
+        &child_request_id,
+        "pending",
+    )
+    .await;
     assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
     let mut child_lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
