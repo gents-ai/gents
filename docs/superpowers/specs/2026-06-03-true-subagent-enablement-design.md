@@ -257,6 +257,49 @@ deployment correctness is proven in simulation first.
   read-only "list my allowed targets" tool worth it too? (Leaning: context injection only,
   to stay clear of anything resembling dynamic discovery.)
 
+## Addendum (implemented) — named delegation targets + cross-node
+
+During implementation, live e2e testing surfaced that the original C4/C5 model
+(bare `behavior_id` targets resolved against locally-owned behaviors) could not
+express or reach a *remote* target: the runtime filtered behaviors by the local
+DID, so a cross-node `subagent_target` never resolved and the orchestrator never
+reached `ready`. The targeting model was revised:
+
+- **A delegation target is a named `(agent_did, behavior_id)` pair with a
+  description.** Each `subagent_targets` entry is the JSON of a
+  `SubagentTarget { name, agent_did, behavior_id, description }` (encoded in the
+  existing `[String]` field — no new collection, no Lean change). The model only
+  ever uses the friendly `name`; the runtime maps name → `(did, behavior)` and
+  hides the addressing. The preamble lists `name: description`.
+- **`spawn_subagent` takes `name`.** The runtime resolves it and writes the child
+  `AgentRequest` **locally with the target's `agent_did`**. Local vs remote is a
+  pure DID comparison (no behavior-doc lookup). For a remote target, out-of-band
+  P2P replication carries the child to the owning node, which runs it; the
+  response replicates back. This **removes the local-resolution requirement** —
+  `validate_subagent_targets_resolve`/`retain_subagent_targets` keep well-formed
+  remote-DID targets; apply-time validation checks target *structure*, not local
+  resolution.
+- **Replication is out-of-band** (operator/infra), surfaced by a new
+  `defra-agent p2p pair --peer <addr> [--profile chat-requests]` convenience
+  command composing connect + collection subscription + replicator install. Run
+  on both servers for bidirectional delegation replication. The `chat-requests`
+  collection set (`AgentRequest`/`AgentToolCall`/`AgentResponse`/`AgentMessage`/
+  `AgentSession`/…) is sufficient — `AgentBehavior`/`AgentPrincipal` need NOT
+  replicate, since the orchestrator no longer resolves the remote behavior doc.
+- **Spawn-path convergence** (Task 6 here): local and remote spawns unified into
+  one "write the bridge → `SubagentSource` creates the child" path;
+  `SubagentSource` is the sole child creator. Behavior-preserving for local;
+  enables the remote case. One benign change: the local background receipt's
+  `child_session_id` is now `null` (matching cross-deployment); all follow-up
+  tools address by `child_request_id`.
+- **Validated live** (DeepSeek-V4-Flash): local delegation and cross-node
+  delegation over real in-process P2P both produce real results, ignore-gated
+  behind `DEFRA_AGENT_LIVE_SUBAGENT=1`.
+
+This supersedes the C4 "static allowlist of behavior_ids" and the C5/open-question
+wording about local-only resolution; the static-allowlist principle stands, now as
+named `(did, behavior)` entries.
+
 ## Related
 
 #377 (this) · #378 (workflow orchestration, unblocked) · #9 (principal/behavior/
