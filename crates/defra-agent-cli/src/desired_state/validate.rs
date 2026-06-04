@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, CommandExecutionMode, CommandNetworkMode, VariableRef,
+    parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
+    CommandNetworkMode, VariableRef,
 };
 
 use super::DesiredStateManifest;
@@ -350,12 +351,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
-        if schedule.interval_secs < 1 {
-            errors.push(format!(
-                "schedule {} in schedules manifest must contain an interval_secs >= 1",
-                schedule.schedule_id
-            ));
-        }
+        validate_schedule_cadence(schedule, errors);
 
         match schedule.concurrency.trim() {
             "parallel" | "serial" | "latest_only" => {}
@@ -472,6 +468,53 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 }
             }
         }
+    }
+}
+
+fn validate_schedule_cadence(schedule: &super::DesiredSchedule, errors: &mut Vec<String>) {
+    let interval_secs = schedule.interval_secs;
+    let cron = schedule
+        .cron
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (interval_secs, cron) {
+        (Some(interval_secs), None) if interval_secs >= 1 => {}
+        (Some(_), Some(_)) => errors.push(format!(
+            "schedule {} in schedules manifest must contain exactly one of interval_secs or cron",
+            schedule.schedule_id
+        )),
+        (Some(_), None) => errors.push(format!(
+            "schedule {} in schedules manifest must contain an interval_secs >= 1",
+            schedule.schedule_id
+        )),
+        (None, Some(expression)) => {
+            let timezone = schedule
+                .timezone
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let Some(timezone) = timezone else {
+                errors.push(format!(
+                    "schedule {} in schedules manifest must contain a timezone when cron is set",
+                    schedule.schedule_id
+                ));
+                return;
+            };
+            if let Err(error) =
+                validate_cron_schedule(expression, timezone, schedule.missed_run_policy.as_deref())
+            {
+                errors.push(format!(
+                    "schedule {} in schedules manifest has invalid cron schedule: {}",
+                    schedule.schedule_id, error
+                ));
+            }
+        }
+        (None, None) => errors.push(format!(
+            "schedule {} in schedules manifest must contain exactly one of interval_secs or cron",
+            schedule.schedule_id
+        )),
     }
 }
 

@@ -960,7 +960,10 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     assert_eq!(resolved.task_id, "task-resolve-active");
     assert_eq!(resolved.task.behavior_id, default_behavior_id);
     assert_eq!(resolved.task.prompt_template, "do the thing");
-    assert_eq!(resolved.interval_secs, 60);
+    assert_eq!(
+        resolved.cadence,
+        crate::runtime_snapshot::ScheduleCadence::Interval { interval_secs: 60 }
+    );
     assert!(resolved.enabled);
 }
 
