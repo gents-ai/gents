@@ -24,7 +24,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     })
     .await?
     .require_valid()?;
-    let report = apply_bound_desired_manifest(&args.root, &access, &bound).await?;
+    let report = apply_bound_desired_manifest(&args.root, &access, &bound, args.prune).await?;
     print_json(&serde_json::to_value(&report)?)?;
     if report.ok {
         Ok(())
@@ -37,6 +37,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     root: &Path,
     access: &ConfigAccess,
     bound: &super::binding::BoundDesiredManifest,
+    prune: bool,
 ) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
@@ -65,6 +66,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         desired_manifest,
         live_principal.as_ref(),
         &live_manifest,
+        prune,
     );
 
     let applied = {
@@ -99,6 +101,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         desired_manifest,
         remaining_principal.as_ref(),
         &remaining_manifest,
+        prune,
     );
 
     let report = ConfigApplyReport {

@@ -12,13 +12,14 @@ pub(crate) fn diff_manifests(
     desired: &DesiredStateManifest,
     live_principal: Option<&DesiredAgentPrincipal>,
     live: &DesiredStateManifest,
+    prune: bool,
 ) -> DesiredStateDiffReport {
     let agent_principal = diff_single(
         &desired.agent_principal.agent_did,
         Some(&desired.agent_principal),
         live_principal,
     );
-    let collections = DesiredStateDiffCollections {
+    let mut collections = DesiredStateDiffCollections {
         agent_principal,
         agent_behaviors: diff_manifest_collection(&desired.agent_behaviors, &live.agent_behaviors),
         skills: diff_manifest_collection(&desired.skills, &live.skills),
@@ -39,6 +40,11 @@ pub(crate) fn diff_manifests(
         schedules: diff_manifest_collection(&desired.schedules, &live.schedules),
         event_triggers: diff_manifest_collection(&desired.event_triggers, &live.event_triggers),
     };
+
+    if prune {
+        let deletes = super::prune::prune_safe_deletes(desired, live);
+        collections.record_prune_deletes(&deletes);
+    }
 
     let counts = collections.counts();
     let ok = counts.is_exact_match();
