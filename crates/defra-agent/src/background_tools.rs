@@ -28,8 +28,8 @@ use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
-    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse, ReadToolOutputArgs,
-    ReadToolOutputResponse, ReadToolOutputStream, SteerSubagentResponse,
+    ReadSubagentArgs, ReadSubagentResponse, ReadToolOutputArgs, ReadToolOutputResponse,
+    SteerSubagentResponse,
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
@@ -576,17 +576,36 @@ pub(crate) async fn handle_list_background_tools(
     })
 }
 
-pub(crate) async fn handle_read_subagent_transcript(
+pub(crate) async fn handle_read_subagent(
     node: &EmbeddedNode,
     caller_request_id: &str,
-    args: ReadSubagentTranscriptArgs,
-) -> Result<Option<ReadSubagentTranscriptResponse>> {
+    args: ReadSubagentArgs,
+) -> Result<Option<ReadSubagentResponse>> {
     let child_request_id = args.child_request_id.trim();
     let Some(edge) =
         load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
     else {
         return Ok(None);
     };
+
+    // Project the child's terminal status so the model knows whether to keep
+    // polling once it has drained the transcript.
+    let (terminal, lifecycle_state) =
+        match load_child_terminal_row(node, &edge.child_request_id).await? {
+            Some(row) => match child_terminal_state_name(&row) {
+                Some(state) => (true, state),
+                None => (
+                    false,
+                    row.lifecycle_state
+                        .as_deref()
+                        .or(row.status.as_deref())
+                        .filter(|state| !state.trim().is_empty())
+                        .unwrap_or("running")
+                        .to_string(),
+                ),
+            },
+            None => (false, "running".to_string()),
+        };
 
     let escaped_session_id = escape_graphql_string(&edge.child_session_id);
     let messages_query = format!(
@@ -604,7 +623,7 @@ pub(crate) async fn handle_read_subagent_transcript(
     let messages_response = node.execute(&messages_query).await;
     if messages_response.has_errors() {
         anyhow::bail!(
-            "read_subagent_transcript AgentMessage query failed: {:?}",
+            "read_subagent AgentMessage query failed: {:?}",
             messages_response.errors
         );
     }
@@ -627,7 +646,7 @@ pub(crate) async fn handle_read_subagent_transcript(
     let tool_calls_response = node.execute(&tool_calls_query).await;
     if tool_calls_response.has_errors() {
         anyhow::bail!(
-            "read_subagent_transcript AgentToolCall query failed: {:?}",
+            "read_subagent AgentToolCall query failed: {:?}",
             tool_calls_response.errors
         );
     }
@@ -646,13 +665,15 @@ pub(crate) async fn handle_read_subagent_transcript(
         },
     );
 
-    Ok(Some(ReadSubagentTranscriptResponse {
+    Ok(Some(ReadSubagentResponse {
         child_request_id: edge.child_request_id,
         child_session_id: edge.child_session_id,
         from_sequence: rendered.from_sequence,
         through_sequence: rendered.through_sequence,
         next_sequence: rendered.next_sequence,
-        truncated: rendered.truncated,
+        has_more: rendered.has_more,
+        terminal,
+        lifecycle_state,
         transcript: rendered.transcript,
     }))
 }
@@ -852,31 +873,89 @@ pub(crate) async fn handle_read_tool_output(
         .filter(|state| !state.trim().is_empty())
         .unwrap_or("running")
         .to_string();
-    let max_bytes = args.validated_max_bytes() as usize;
-    let result = if status == "running" {
-        ""
-    } else {
+    let exited = status != "running";
+    let max_bytes = args.validated_max_bytes();
+    let result = if exited {
         row.result.as_deref().unwrap_or_default()
+    } else {
+        ""
     };
     let persisted = persisted_tool_output_streams(&row.tool_name, result);
-    let stdout = read_tool_output_stream(
-        &persisted.stdout,
-        max_bytes,
-        persisted.stdout_total_bytes_seen,
-    );
-    let stderr = read_tool_output_stream(
-        &persisted.stderr,
-        max_bytes,
-        persisted.stderr_total_bytes_seen,
-    );
+    // Merge stdout + stderr into a single logical buffer behind one byte cursor.
+    // The capture stores the two streams separately with no preserved interleave
+    // order, so combining them with a stable labeled boundary (stdout first,
+    // then `STDERR_BOUNDARY`, then stderr) is the cleanest honest single-cursor
+    // model: an orchestrator pages through ALL output gap-free from `offset`.
+    let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
+    let slice = read_combined_output_slice(&combined, args.offset, max_bytes);
+
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
         tool_name: row.tool_name,
         status,
-        stdout,
-        stderr,
+        output: slice.output,
+        next_offset: slice.next_offset,
+        total_bytes: slice.total_bytes,
+        has_more: slice.has_more,
+        exited,
         exit_code: persisted.exit_code,
     }))
+}
+
+/// Boundary inserted between captured stdout and stderr in the combined buffer.
+/// Only present when BOTH streams have content, so single-stream output is
+/// served verbatim.
+const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
+
+/// Concatenate captured stdout and stderr into one logical buffer behind a
+/// single byte cursor. stdout first; if both streams are non-empty a labeled
+/// boundary separates them; if only one is non-empty it is served verbatim.
+fn combine_output_streams(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}{STDERR_BOUNDARY}{stderr}"),
+    }
+}
+
+struct CombinedOutputSlice {
+    output: String,
+    next_offset: u64,
+    total_bytes: u64,
+    has_more: bool,
+}
+
+/// Read a contiguous byte slice of the combined buffer starting at `offset`,
+/// capped at `max_bytes`. Pages are contiguous from the cursor (no head/tail
+/// drop): `next_offset = offset + bytes_returned`, `has_more` is true iff
+/// `next_offset < total_bytes`. `offset` past the end yields an empty slice
+/// with `next_offset == total_bytes` and `has_more == false`.
+fn read_combined_output_slice(
+    combined: &str,
+    offset: u64,
+    max_bytes: usize,
+) -> CombinedOutputSlice {
+    let bytes = combined.as_bytes();
+    let total_bytes = bytes.len() as u64;
+    let start = (offset.min(total_bytes)) as usize;
+    let mut start = start;
+    // Snap forward to a UTF-8 char boundary so slicing never splits a codepoint.
+    while start < bytes.len() && !combined.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(max_bytes).min(bytes.len());
+    while end > start && !combined.is_char_boundary(end) {
+        end -= 1;
+    }
+    let output = combined[start..end].to_string();
+    let next_offset = end as u64;
+    CombinedOutputSlice {
+        output,
+        next_offset,
+        total_bytes,
+        has_more: next_offset < total_bytes,
+    }
 }
 
 pub(crate) async fn load_steer_subagent_target(
@@ -1130,15 +1209,12 @@ struct PersistedToolOutputStreams {
     stdout: String,
     stderr: String,
     exit_code: Option<i32>,
-    stdout_total_bytes_seen: Option<u64>,
-    stderr_total_bytes_seen: Option<u64>,
 }
 
 fn persisted_tool_output_streams(tool_name: &str, result: &str) -> PersistedToolOutputStreams {
     parse_native_command_output_streams(tool_name, result).unwrap_or_else(|| {
         PersistedToolOutputStreams {
             stdout: result.to_string(),
-            stdout_total_bytes_seen: Some(result.as_bytes().len() as u64),
             ..Default::default()
         }
     })
@@ -1160,8 +1236,6 @@ fn parse_native_command_output_streams(
     let (stdout, stderr) = body.rsplit_once("\nstderr:\n")?;
     let stdout = persisted_stream_body(stdout);
     let stderr = persisted_stream_body(stderr);
-    let stdout_total_bytes_seen = stream_total_seen(&metadata, "stdout_truncation", &stdout);
-    let stderr_total_bytes_seen = stream_total_seen(&metadata, "stderr_truncation", &stderr);
     let exit_code = metadata
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -1171,8 +1245,6 @@ fn parse_native_command_output_streams(
         stdout,
         stderr,
         exit_code,
-        stdout_total_bytes_seen: Some(stdout_total_bytes_seen),
-        stderr_total_bytes_seen: Some(stderr_total_bytes_seen),
     })
 }
 
@@ -1182,41 +1254,6 @@ fn persisted_stream_body(value: &str) -> String {
     } else {
         value.to_string()
     }
-}
-
-fn stream_total_seen(metadata: &Value, key: &str, returned: &str) -> u64 {
-    metadata
-        .get(key)
-        .and_then(|value| value.get("total_chars"))
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| returned.as_bytes().len() as u64)
-        .max(returned.as_bytes().len() as u64)
-}
-
-fn read_tool_output_stream(
-    value: &str,
-    max_bytes: usize,
-    total_bytes_seen: Option<u64>,
-) -> ReadToolOutputStream {
-    let value_bytes = value.as_bytes().len() as u64;
-    let total_bytes_seen = total_bytes_seen.unwrap_or(value_bytes).max(value_bytes);
-    let (bytes, truncated) = truncate_utf8_tail(value, max_bytes);
-    ReadToolOutputStream {
-        bytes,
-        truncated,
-        total_bytes_seen,
-    }
-}
-
-fn truncate_utf8_tail(value: &str, max_bytes: usize) -> (String, bool) {
-    if value.len() <= max_bytes {
-        return (value.to_string(), false);
-    }
-    let mut start = value.len().saturating_sub(max_bytes);
-    while start < value.len() && !value.is_char_boundary(start) {
-        start += 1;
-    }
-    (value[start..].to_string(), true)
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {

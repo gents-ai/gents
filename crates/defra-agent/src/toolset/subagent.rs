@@ -3,7 +3,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
 use crate::background_tools::r4c_args::{
-    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentArgs, ReadToolOutputArgs,
     SteerSubagentArgs,
 };
 use crate::background_tools::{
@@ -16,7 +16,7 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 use super::shared::ToolError;
 use super::{
     CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
-    LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+    LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TOOL_NAME,
     SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
     WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
@@ -125,7 +125,7 @@ pub(super) struct WaitSubagentTool;
 pub(super) struct ListSubagentsTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ReadSubagentTranscriptTool;
+pub(super) struct ReadSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct SteerSubagentTool;
@@ -317,18 +317,24 @@ impl Tool for ListSubagentsTool {
     }
 }
 
-impl Tool for ReadSubagentTranscriptTool {
-    const NAME: &'static str = READ_SUBAGENT_TRANSCRIPT_TOOL_NAME;
+impl Tool for ReadSubagentTool {
+    const NAME: &'static str = READ_SUBAGENT_TOOL_NAME;
 
     type Error = ToolError;
-    type Args = ReadSubagentTranscriptArgs;
+    type Args = ReadSubagentArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read a compact transcript snapshot from a visible background subagent."
-                .to_string(),
+            description:
+                "Read an incremental transcript slice from a visible background subagent. \
+Paging is cursor-based and content-honest: pass `since_sequence` to resume, and the response \
+returns `next_sequence` (the exact cursor to pass next), `has_more` (true when the token budget \
+capped the read and more messages remain past `next_sequence`), and `terminal`/`lifecycle_state` \
+(whether the subagent has finished). Output is never silently dropped: when `has_more` is true, \
+read again with `since_sequence = next_sequence` to continue gap-free."
+                    .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -340,21 +346,14 @@ impl Tool for ReadSubagentTranscriptTool {
                         "type": "integer",
                         "minimum": 0,
                         "default": 0,
-                        "description": "First transcript sequence to include."
+                        "description": "Resume cursor: first transcript sequence to include (0 = from start). Pass the prior response's `next_sequence` to continue."
                     },
-                    "limit": {
+                    "max_tokens": {
                         "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "default": 20,
-                        "description": "Maximum rendered message blocks to return."
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "minimum": 64,
-                        "maximum": 24000,
-                        "default": 6000,
-                        "description": "Maximum rendered transcript characters to return."
+                        "minimum": 16,
+                        "maximum": 6000,
+                        "default": 1500,
+                        "description": "Token budget for the returned transcript slice (estimated as chars/4). When the budget caps the read, `has_more` is true and `next_sequence` marks the resume point."
                     },
                     "include_user_messages": {
                         "type": "boolean",
@@ -374,7 +373,7 @@ impl Tool for ReadSubagentTranscriptTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         validate_child_request_id(Self::NAME, &args.child_request_id)?;
-        let _ = args.validated_limit();
+        let _ = args.validated_max_tokens();
         let _ = args.validated_max_chars();
         Err(not_yet_executable_error(Self::NAME))
     }
@@ -541,7 +540,15 @@ impl Tool for ReadProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read a background process's stdout/stderr.".to_string(),
+            description: "Read an incremental, byte-addressed slice of a background process's \
+captured output. stdout and stderr are merged in capture order behind a single byte cursor \
+(stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
+gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
+bytes returned; the exact cursor to pass next), `total_bytes` (total captured so far), `has_more` \
+(true when `next_offset < total_bytes`), and `exited`/`exit_code` (whether the process finished). \
+To read everything, start at offset 0 and loop with `offset = next_offset` until `has_more` is \
+false. Pages are contiguous from the cursor; nothing in the middle is dropped."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -549,12 +556,18 @@ impl Tool for ReadProcessTool {
                         "type": "string",
                         "description": "Process handle returned by spawn_process or list_processes."
                     },
-                    "max_bytes_per_stream": {
+                    "offset": {
                         "type": "integer",
-                        "minimum": 256,
-                        "maximum": 262144,
-                        "default": 16384,
-                        "description": "Maximum bytes to return per stream."
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "Byte cursor into the combined output (0 = from start). Reads forward from here. Pass the prior response's `next_offset` to continue gap-free."
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 65536,
+                        "default": 4096,
+                        "description": "Token budget for the returned slice (estimated as chars/4). When the budget caps the slice, `has_more` is true and `next_offset` marks the resume point."
                     }
                 },
                 "required": ["tool_call_id"]

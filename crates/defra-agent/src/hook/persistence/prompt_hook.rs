@@ -114,9 +114,9 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 Err(e) => self.on_tool_persistence_error("persist list_subagents tool call", &e),
             };
         }
-        if tool_name == READ_SUBAGENT_TRANSCRIPT_TOOL_NAME {
+        if tool_name == READ_SUBAGENT_TOOL_NAME {
             let result = self
-                .persist_read_subagent_transcript_tool_call(tool_call_id, internal_call_id, args)
+                .persist_read_subagent_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
                     "tool.call",
                     tool_name = %tool_name,
@@ -129,9 +129,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     self.record_success();
                     action
                 }
-                Err(e) => {
-                    self.on_tool_persistence_error("persist read_subagent_transcript tool call", &e)
-                }
+                Err(e) => self.on_tool_persistence_error("persist read_subagent tool call", &e),
             };
         }
         if tool_name == STEER_SUBAGENT_TOOL_NAME {

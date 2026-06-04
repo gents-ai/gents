@@ -5,12 +5,21 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 50;
-const DEFAULT_TRANSCRIPT_LIMIT: u32 = 20;
 const MAX_TRANSCRIPT_LIMIT: u32 = 100;
-const DEFAULT_TRANSCRIPT_MAX_CHARS: u32 = 6000;
-const MAX_TRANSCRIPT_MAX_CHARS: u32 = 24000;
-const DEFAULT_READ_TOOL_OUTPUT_BYTES: u32 = 16384;
-const MAX_READ_TOOL_OUTPUT_BYTES: u32 = 262144;
+
+/// Token budget for `read_subagent`. The runtime estimates tokens with the
+/// codebase-wide `chars ≈ 4 × tokens` approximation (see
+/// `crate::compaction::estimate_tokens`); the rendered transcript is capped at
+/// `max_tokens × CHARS_PER_TOKEN_ESTIMATE` characters and `has_more`/
+/// `next_sequence` always describe where to resume when the budget caps a read.
+pub(crate) const CHARS_PER_TOKEN_ESTIMATE: u32 = 4;
+const DEFAULT_TRANSCRIPT_MAX_TOKENS: u32 = 1500;
+const MAX_TRANSCRIPT_MAX_TOKENS: u32 = 6000;
+const MIN_TRANSCRIPT_MAX_TOKENS: u32 = 16;
+/// Token budget for `read_process`. Same `chars ≈ 4 × tokens` approximation.
+const DEFAULT_READ_PROCESS_MAX_TOKENS: u32 = 4096;
+const MAX_READ_PROCESS_MAX_TOKENS: u32 = 65536;
+const MIN_READ_PROCESS_MAX_TOKENS: u32 = 64;
 
 pub(crate) const PER_TOOL_RESULT_SNIPPET_BYTES: usize = 256;
 
@@ -65,53 +74,74 @@ impl ListBackgroundToolsArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ReadSubagentTranscriptArgs {
+pub(crate) struct ReadSubagentArgs {
     pub(crate) child_request_id: String,
+    /// Resume cursor: first transcript sequence to include (default 0 = start).
     #[serde(default)]
     pub(crate) since_sequence: u64,
-    #[serde(default = "default_transcript_limit")]
-    pub(crate) limit: u32,
-    #[serde(default = "default_transcript_max_chars")]
-    pub(crate) max_chars: u32,
+    /// Token budget for the returned transcript slice. Honest: when the budget
+    /// caps the read, the response sets `has_more = true` and `next_sequence`
+    /// points at the exact resume cursor (no gap, no overlap).
+    #[serde(default = "default_transcript_max_tokens")]
+    pub(crate) max_tokens: u32,
     #[serde(default)]
     pub(crate) include_user_messages: bool,
     #[serde(default)]
     pub(crate) include_tool_results: bool,
 }
 
-fn default_transcript_limit() -> u32 {
-    DEFAULT_TRANSCRIPT_LIMIT
+fn default_transcript_max_tokens() -> u32 {
+    DEFAULT_TRANSCRIPT_MAX_TOKENS
 }
 
-fn default_transcript_max_chars() -> u32 {
-    DEFAULT_TRANSCRIPT_MAX_CHARS
-}
-
-impl ReadSubagentTranscriptArgs {
+impl ReadSubagentArgs {
+    /// Message-block ceiling per page. Kept internal (no longer a model-facing
+    /// knob) so the token budget is the single honest cap; this just bounds the
+    /// per-page block count so one read can't materialize an unbounded slice.
     pub(crate) fn validated_limit(&self) -> u32 {
-        self.limit.clamp(1, MAX_TRANSCRIPT_LIMIT)
+        MAX_TRANSCRIPT_LIMIT
     }
 
+    pub(crate) fn validated_max_tokens(&self) -> u32 {
+        self.max_tokens
+            .clamp(MIN_TRANSCRIPT_MAX_TOKENS, MAX_TRANSCRIPT_MAX_TOKENS)
+    }
+
+    /// Byte budget derived from the token budget via the codebase-wide
+    /// `chars ≈ 4 × tokens` approximation.
     pub(crate) fn validated_max_chars(&self) -> u32 {
-        self.max_chars.clamp(64, MAX_TRANSCRIPT_MAX_CHARS)
+        self.validated_max_tokens()
+            .saturating_mul(CHARS_PER_TOKEN_ESTIMATE)
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ReadToolOutputArgs {
     pub(crate) tool_call_id: String,
-    #[serde(default = "default_read_tool_output_bytes")]
-    pub(crate) max_bytes_per_stream: u32,
+    /// Byte cursor into the captured combined output (default 0 = from start).
+    /// Reads forward from `offset`; pages are contiguous (no head/tail drop).
+    #[serde(default)]
+    pub(crate) offset: u64,
+    /// Token budget for the returned slice. The byte budget is derived via the
+    /// codebase-wide `chars ≈ 4 × tokens` approximation.
+    #[serde(default = "default_read_process_max_tokens")]
+    pub(crate) max_tokens: u32,
 }
 
-fn default_read_tool_output_bytes() -> u32 {
-    DEFAULT_READ_TOOL_OUTPUT_BYTES
+fn default_read_process_max_tokens() -> u32 {
+    DEFAULT_READ_PROCESS_MAX_TOKENS
 }
 
 impl ReadToolOutputArgs {
-    pub(crate) fn validated_max_bytes(&self) -> u32 {
-        self.max_bytes_per_stream
-            .clamp(256, MAX_READ_TOOL_OUTPUT_BYTES)
+    pub(crate) fn validated_max_tokens(&self) -> u32 {
+        self.max_tokens
+            .clamp(MIN_READ_PROCESS_MAX_TOKENS, MAX_READ_PROCESS_MAX_TOKENS)
+    }
+
+    /// Byte budget derived from the token budget via the codebase-wide
+    /// `chars ≈ 4 × tokens` approximation.
+    pub(crate) fn validated_max_bytes(&self) -> usize {
+        (self.validated_max_tokens() as usize).saturating_mul(CHARS_PER_TOKEN_ESTIMATE as usize)
     }
 }
 
@@ -168,21 +198,24 @@ pub(crate) struct ListBackgroundToolsResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ReadSubagentTranscriptResponse {
+pub(crate) struct ReadSubagentResponse {
     pub(crate) child_request_id: String,
     pub(crate) child_session_id: String,
     pub(crate) from_sequence: u64,
     pub(crate) through_sequence: u64,
+    /// Resume cursor: pass as `since_sequence` on the next read to continue
+    /// gap-free from exactly where this page stopped.
     pub(crate) next_sequence: u64,
-    pub(crate) truncated: bool,
+    /// True when the token budget (or per-page block ceiling) capped this read
+    /// and more messages exist at or after `next_sequence`.
+    pub(crate) has_more: bool,
+    /// True when the subagent has reached a terminal lifecycle state and will
+    /// produce no further transcript output (stop polling once drained).
+    pub(crate) terminal: bool,
+    /// The subagent's current lifecycle state (e.g. "running", "completed",
+    /// "failed"), so the model can decide whether to keep polling.
+    pub(crate) lifecycle_state: String,
     pub(crate) transcript: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ReadToolOutputStream {
-    pub(crate) bytes: String,
-    pub(crate) truncated: bool,
-    pub(crate) total_bytes_seen: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,8 +223,21 @@ pub(crate) struct ReadToolOutputResponse {
     pub(crate) tool_call_id: String,
     pub(crate) tool_name: String,
     pub(crate) status: String,
-    pub(crate) stdout: ReadToolOutputStream,
-    pub(crate) stderr: ReadToolOutputStream,
+    /// The contiguous output slice starting at the requested `offset`. The
+    /// captured stdout and stderr are concatenated in capture order behind a
+    /// single byte cursor (stdout first, then a labeled `\n--- stderr ---\n`
+    /// boundary, then stderr) so an orchestrator pages through ALL output
+    /// gap-free with one cursor.
+    pub(crate) output: String,
+    /// Resume cursor = `offset` + bytes returned in `output`. Pass as `offset`
+    /// on the next read to continue with no gap and no overlap.
+    pub(crate) next_offset: u64,
+    /// Total bytes captured so far across the combined stdout/stderr buffer.
+    pub(crate) total_bytes: u64,
+    /// True when `next_offset < total_bytes` (more output remains to be paged).
+    pub(crate) has_more: bool,
+    /// True when the process has reached a terminal state (finished).
+    pub(crate) exited: bool,
     pub(crate) exit_code: Option<i32>,
 }
 
@@ -254,33 +300,48 @@ mod tests {
     }
 
     #[test]
-    fn read_subagent_transcript_args_round_trip_and_defaults() {
-        let defaults: ReadSubagentTranscriptArgs = serde_json::from_value(json!({
+    fn read_subagent_args_round_trip_and_defaults() {
+        let defaults: ReadSubagentArgs = serde_json::from_value(json!({
             "child_request_id": "child-1"
         }))
         .expect("parse defaults");
         assert_eq!(defaults.child_request_id, "child-1");
         assert_eq!(defaults.since_sequence, 0);
-        assert_eq!(defaults.limit, DEFAULT_TRANSCRIPT_LIMIT);
-        assert_eq!(defaults.max_chars, DEFAULT_TRANSCRIPT_MAX_CHARS);
+        assert_eq!(defaults.max_tokens, DEFAULT_TRANSCRIPT_MAX_TOKENS);
         assert!(!defaults.include_user_messages);
         assert!(!defaults.include_tool_results);
+        // Token budget -> byte budget via the 4x approximation.
+        assert_eq!(
+            defaults.validated_max_chars(),
+            DEFAULT_TRANSCRIPT_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE
+        );
 
-        let explicit: ReadSubagentTranscriptArgs = serde_json::from_value(json!({
+        let explicit: ReadSubagentArgs = serde_json::from_value(json!({
             "child_request_id": "child-2",
             "since_sequence": 7,
-            "limit": 200,
-            "max_chars": 30000,
+            "max_tokens": 999999,
             "include_user_messages": true,
             "include_tool_results": true
         }))
         .expect("parse explicit");
         assert_eq!(explicit.child_request_id, "child-2");
         assert_eq!(explicit.since_sequence, 7);
-        assert_eq!(explicit.validated_limit(), MAX_TRANSCRIPT_LIMIT);
-        assert_eq!(explicit.validated_max_chars(), MAX_TRANSCRIPT_MAX_CHARS);
+        // Token budget is capped, and the byte budget tracks the capped tokens.
+        assert_eq!(explicit.validated_max_tokens(), MAX_TRANSCRIPT_MAX_TOKENS);
+        assert_eq!(
+            explicit.validated_max_chars(),
+            MAX_TRANSCRIPT_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE
+        );
         assert!(explicit.include_user_messages);
         assert!(explicit.include_tool_results);
+
+        // Floor: tiny budgets clamp up to the minimum.
+        let tiny: ReadSubagentArgs = serde_json::from_value(json!({
+            "child_request_id": "child-3",
+            "max_tokens": 1
+        }))
+        .expect("parse tiny");
+        assert_eq!(tiny.validated_max_tokens(), MIN_TRANSCRIPT_MAX_TOKENS);
     }
 
     #[test]
@@ -290,18 +351,34 @@ mod tests {
         }))
         .expect("parse defaults");
         assert_eq!(defaults.tool_call_id, "tool-1");
+        assert_eq!(defaults.offset, 0);
+        assert_eq!(defaults.max_tokens, DEFAULT_READ_PROCESS_MAX_TOKENS);
         assert_eq!(
-            defaults.max_bytes_per_stream,
-            DEFAULT_READ_TOOL_OUTPUT_BYTES
+            defaults.validated_max_bytes(),
+            DEFAULT_READ_PROCESS_MAX_TOKENS as usize * CHARS_PER_TOKEN_ESTIMATE as usize
         );
 
         let explicit: ReadToolOutputArgs = serde_json::from_value(json!({
             "tool_call_id": "tool-2",
-            "max_bytes_per_stream": 1
+            "offset": 512,
+            "max_tokens": 1
         }))
         .expect("parse explicit");
         assert_eq!(explicit.tool_call_id, "tool-2");
-        assert_eq!(explicit.validated_max_bytes(), 256);
+        assert_eq!(explicit.offset, 512);
+        // Token floor applies.
+        assert_eq!(explicit.validated_max_tokens(), MIN_READ_PROCESS_MAX_TOKENS);
+        assert_eq!(
+            explicit.validated_max_bytes(),
+            MIN_READ_PROCESS_MAX_TOKENS as usize * CHARS_PER_TOKEN_ESTIMATE as usize
+        );
+
+        let capped: ReadToolOutputArgs = serde_json::from_value(json!({
+            "tool_call_id": "tool-3",
+            "max_tokens": 999999999
+        }))
+        .expect("parse capped");
+        assert_eq!(capped.validated_max_tokens(), MAX_READ_PROCESS_MAX_TOKENS);
     }
 
     #[test]

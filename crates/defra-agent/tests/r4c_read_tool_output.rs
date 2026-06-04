@@ -284,9 +284,11 @@ async fn read_tool_output_running_returns_empty_live_stream_without_ring_buffer(
     .await;
     assert_eq!(result["status"].as_str(), Some("running"));
     assert_eq!(result["tool_name"].as_str(), Some("slow_tool"));
-    assert_eq!(result["stdout"]["bytes"].as_str(), Some(""));
-    assert_eq!(result["stdout"]["truncated"].as_bool(), Some(false));
-    assert_eq!(result["stdout"]["total_bytes_seen"].as_u64(), Some(0));
+    assert_eq!(result["output"].as_str(), Some(""));
+    assert_eq!(result["next_offset"].as_u64(), Some(0));
+    assert_eq!(result["total_bytes"].as_u64(), Some(0));
+    assert_eq!(result["has_more"].as_bool(), Some(false));
+    assert_eq!(result["exited"].as_bool(), Some(false));
     assert!(result["exit_code"].is_null());
 }
 
@@ -315,8 +317,11 @@ async fn read_tool_output_terminal_reads_persisted_result() {
     )
     .await;
     assert_eq!(result["status"].as_str(), Some("completed"));
-    assert_eq!(result["stdout"]["bytes"].as_str(), Some("done\n"));
-    assert_eq!(result["stdout"]["total_bytes_seen"].as_u64(), Some(5));
+    assert_eq!(result["output"].as_str(), Some("done\n"));
+    assert_eq!(result["total_bytes"].as_u64(), Some(5));
+    assert_eq!(result["next_offset"].as_u64(), Some(5));
+    assert_eq!(result["has_more"].as_bool(), Some(false));
+    assert_eq!(result["exited"].as_bool(), Some(true));
     assert!(result["exit_code"].is_null());
 }
 
@@ -359,21 +364,24 @@ async fn read_tool_output_terminal_parses_native_command_streams() {
         json!({ "tool_call_id": tool_call_id }),
     )
     .await;
-    assert_eq!(result["stdout"]["bytes"].as_str(), Some("matches"));
-    assert_eq!(result["stdout"]["total_bytes_seen"].as_u64(), Some(7));
-    assert_eq!(
-        result["stderr"]["bytes"].as_str(),
-        Some("grep: invalid option -- P")
-    );
-    assert_eq!(result["stderr"]["total_bytes_seen"].as_u64(), Some(25));
+    // stdout + labeled boundary + stderr behind a single cursor.
+    let output = result["output"].as_str().unwrap();
+    assert_eq!(output, "matches\n--- stderr ---\ngrep: invalid option -- P");
+    assert_eq!(result["total_bytes"].as_u64(), Some(output.len() as u64));
+    assert_eq!(result["next_offset"].as_u64(), Some(output.len() as u64));
+    assert_eq!(result["has_more"].as_bool(), Some(false));
+    assert_eq!(result["exited"].as_bool(), Some(true));
     assert_eq!(result["exit_code"].as_i64(), Some(2));
 }
 
 #[tokio::test]
-async fn read_tool_output_truncated_flag_on_overflow() {
-    let large = format!("{}tail", "prefix".repeat(60));
+async fn read_tool_output_pages_gap_free_across_budget() {
+    // Output larger than one budget; read incrementally from the cursor and
+    // reassemble. Pages must be contiguous (no head/tail drop) and cover the
+    // whole buffer exactly once, with honest has_more/next_offset/total_bytes.
+    let large = format!("{}tail", "prefix".repeat(60)); // 364 bytes
     let (_db, hook, _session_id, _request_id) = setup_hook(
-        "r4c-read-output-truncate",
+        "r4c-read-output-paging",
         registry(
             vec![Box::new(StaticTool {
                 name: "large_tool",
@@ -388,26 +396,79 @@ async fn read_tool_output_truncated_flag_on_overflow() {
     let waited = wait_tool(&hook, "wait-large", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
 
-    let result = read_tool_output(
+    // First page from offset 0 with the smallest budget (64 tokens -> 256 bytes).
+    let first = read_tool_output(
         &hook,
-        "read-large",
+        "read-page-0",
         json!({
             "tool_call_id": tool_call_id,
-            "max_bytes_per_stream": 256
+            "offset": 0,
+            "max_tokens": 64
         }),
     )
     .await;
-    assert_eq!(result["stdout"]["truncated"].as_bool(), Some(true));
+    assert_eq!(first["total_bytes"].as_u64(), Some(large.len() as u64));
     assert_eq!(
-        result["stdout"]["total_bytes_seen"].as_u64(),
-        Some(large.len() as u64)
+        first["has_more"].as_bool(),
+        Some(true),
+        "first page must signal more"
     );
-    assert_eq!(result["stdout"]["bytes"].as_str().unwrap().len(), 256);
-    assert!(result["stdout"]["bytes"]
-        .as_str()
-        .unwrap()
-        .ends_with("tail"));
-    assert_ne!(result["stdout"]["bytes"].as_str().unwrap(), &large[..256]);
+    assert_eq!(first["exited"].as_bool(), Some(true));
+    let first_output = first["output"].as_str().unwrap().to_string();
+    assert_eq!(
+        first_output.len(),
+        256,
+        "budget caps the slice at 256 bytes"
+    );
+    let next_offset = first["next_offset"].as_u64().unwrap();
+    assert_eq!(next_offset, 256, "cursor = offset + bytes returned");
+    // Page is contiguous from the start (NOT a tail-drop).
+    assert_eq!(first_output, &large[..256]);
+
+    // Walk the cursor to the end, reassembling gap-free.
+    let mut reassembled = first_output;
+    let mut cursor = next_offset;
+    let mut has_more = first["has_more"].as_bool().unwrap();
+    let mut pages = 1;
+    while has_more {
+        let page = read_tool_output(
+            &hook,
+            &format!("read-page-{pages}"),
+            json!({
+                "tool_call_id": tool_call_id,
+                "offset": cursor,
+                "max_tokens": 64
+            }),
+        )
+        .await;
+        let out = page["output"].as_str().unwrap();
+        assert!(!out.is_empty(), "non-final pages must make progress");
+        reassembled.push_str(out);
+        let next = page["next_offset"].as_u64().unwrap();
+        assert_eq!(next, cursor + out.len() as u64, "no gap, no overlap");
+        cursor = next;
+        has_more = page["has_more"].as_bool().unwrap();
+        pages += 1;
+        assert!(pages < 20, "paging did not terminate");
+    }
+    // Final state: cursor at total_bytes, full buffer reassembled byte-for-byte.
+    assert_eq!(cursor, large.len() as u64);
+    assert_eq!(reassembled, large);
+    assert!(pages >= 2, "should take more than one page");
+
+    // Reading at/after the end yields an empty, terminal slice.
+    let past_end = read_tool_output(
+        &hook,
+        "read-past-end",
+        json!({
+            "tool_call_id": tool_call_id,
+            "offset": large.len() as u64
+        }),
+    )
+    .await;
+    assert_eq!(past_end["output"].as_str(), Some(""));
+    assert_eq!(past_end["has_more"].as_bool(), Some(false));
+    assert_eq!(past_end["next_offset"].as_u64(), Some(large.len() as u64));
 }
 
 #[tokio::test]

@@ -9,14 +9,14 @@ use serde_json::json;
 use tracing::Instrument;
 
 use crate::background_tools::r4c_args::{
-    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentArgs, ReadToolOutputArgs,
     SteerSubagentArgs,
 };
 use crate::background_tools::{
     active_session_request_id, append_steering_request, child_request_completed,
     context_allowed_target_names, drain_automated_wakeups_returning_ids,
     effective_context_cross_deployment_spawn_timeout_seconds, handle_list_background_tools,
-    handle_list_subagents, handle_read_subagent_transcript, handle_read_tool_output,
+    handle_list_subagents, handle_read_subagent, handle_read_tool_output,
     load_authorized_child_edge, load_child_final_response, load_child_terminal_row,
     load_parent_subagent_context, load_steer_subagent_target, pending_automated_wakeup_request_ids,
     project_child_terminal, resolve_context_target, try_load_authorized_child_edge,
@@ -35,7 +35,7 @@ use crate::tool_call_lifecycle::{
 use crate::toolset::{
     CommandPolicyDenial, CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME,
     LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
-    READ_SUBAGENT_TRANSCRIPT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    READ_SUBAGENT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
     STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};

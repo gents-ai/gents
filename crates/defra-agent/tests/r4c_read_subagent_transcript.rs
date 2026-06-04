@@ -261,7 +261,7 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 async fn read_transcript(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
     let action = PromptHook::<TestModel>::on_tool_call(
         hook,
-        "read_subagent_transcript",
+        "read_subagent",
         Some(format!("model-{internal_call_id}")),
         internal_call_id,
         &args.to_string(),
@@ -407,6 +407,24 @@ async fn create_background_tool_call(
     assert!(
         !response.has_errors(),
         "create background AgentToolCall failed: {:?}",
+        response.errors
+    );
+}
+
+async fn mark_child_completed(node: &EmbeddedNode, child_request_id: &str) {
+    let request_id = escape_graphql_string(child_request_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ status: "completed", lifecycle_state: "completed" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "mark child completed failed: {:?}",
         response.errors
     );
 }
@@ -581,53 +599,97 @@ async fn read_transcript_cursor_advances_cleanly() {
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cursor", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
+    // Pad each turn so a small token budget caps the read after a few blocks.
+    let pad = "x".repeat(120);
     for sequence in 1..=10 {
         append_message(
             db.node.as_ref(),
             child_session_id,
             sequence,
             "assistant",
-            &format!("turn {sequence}"),
+            &format!("turn {sequence} {pad}"),
         )
         .await;
     }
 
-    let first = read_transcript(
-        &hook,
-        "read-cursor-first",
-        json!({
-            "child_request_id": child_request_id,
-            "limit": 5
-        }),
-    )
-    .await;
-    assert_eq!(first["truncated"].as_bool(), Some(true));
-    assert_eq!(first["through_sequence"].as_u64(), Some(5));
-    let next = first["next_sequence"].as_u64().unwrap();
-    assert_eq!(next, 6);
-
-    let second = read_transcript(
-        &hook,
-        "read-cursor-second",
-        json!({
-            "child_request_id": child_request_id,
-            "since_sequence": next,
-            "limit": 5
-        }),
-    )
-    .await;
-    assert_eq!(second["through_sequence"].as_u64(), Some(10));
-    let combined = format!(
-        "{}\n{}",
-        first["transcript"].as_str().unwrap(),
-        second["transcript"].as_str().unwrap()
-    );
-    for sequence in 1..=10 {
+    // Walk the cursor across the whole transcript with a tiny token budget and
+    // assert every turn is visited exactly once, gap-free, with honest has_more.
+    let mut cursor = 0u64;
+    let mut pages = 0;
+    let mut seen = Vec::new();
+    loop {
+        let page = read_transcript(
+            &hook,
+            &format!("read-cursor-{pages}"),
+            json!({
+                "child_request_id": child_request_id,
+                "since_sequence": cursor,
+                "max_tokens": 40
+            }),
+        )
+        .await;
+        let transcript = page["transcript"].as_str().unwrap();
+        for sequence in 1..=10 {
+            if transcript.contains(&format!("turn {sequence} ")) {
+                seen.push(sequence);
+            }
+        }
+        let next = page["next_sequence"].as_u64().unwrap();
+        let has_more = page["has_more"].as_bool().unwrap();
+        if !has_more {
+            break;
+        }
         assert!(
-            combined.contains(&format!("turn {sequence}")),
-            "missing turn {sequence}"
+            next > cursor,
+            "cursor must advance: next={next} cursor={cursor}"
         );
+        cursor = next;
+        pages += 1;
+        assert!(pages < 50, "paging did not terminate");
     }
+    assert!(pages >= 1, "small budget should force more than one page");
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=10).collect::<Vec<u64>>(), "gap-free coverage");
+}
+
+#[tokio::test]
+async fn read_transcript_terminal_flag_tracks_child_lifecycle() {
+    let (db, _source) = setup_db("r4c-read-terminal").await;
+    let hook = create_parent_hook(&db, "parent-terminal", "session-terminal").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "assistant",
+        "working",
+    )
+    .await;
+
+    // While the child is still running (set up as "processing"), terminal=false.
+    let running = read_transcript(
+        &hook,
+        "read-running",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(running["terminal"].as_bool(), Some(false));
+    // Child is materialized in the "pending" lifecycle state by SubagentSource.
+    assert_eq!(running["lifecycle_state"].as_str(), Some("pending"));
+
+    // Flip the child to a completed terminal state and re-read.
+    mark_child_completed(db.node.as_ref(), child_request_id).await;
+    let done = read_transcript(
+        &hook,
+        "read-done",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(done["terminal"].as_bool(), Some(true));
+    assert_eq!(done["lifecycle_state"].as_str(), Some("completed"));
+    assert_eq!(done["has_more"].as_bool(), Some(false));
 }
 
 #[tokio::test]
@@ -663,12 +725,7 @@ async fn read_transcript_no_parent_tool_call_row_written() {
     )
     .await;
     assert_eq!(
-        count_tool_calls_by_name(
-            db.node.as_ref(),
-            parent_session_id,
-            "read_subagent_transcript"
-        )
-        .await,
+        count_tool_calls_by_name(db.node.as_ref(), parent_session_id, "read_subagent").await,
         0
     );
 }

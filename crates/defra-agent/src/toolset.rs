@@ -23,8 +23,8 @@ use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, 
 use shared::ToolContext;
 use subagent::{
     CancelProcessTool, CancelSubagentTool, ListProcessesTool, ListSubagentsTool, ReadProcessTool,
-    ReadSubagentTranscriptTool, SpawnProcessTool, SpawnSubagentTool, SteerSubagentTool,
-    WaitProcessTool, WaitSubagentTool,
+    ReadSubagentTool, SpawnProcessTool, SpawnSubagentTool, SteerSubagentTool, WaitProcessTool,
+    WaitSubagentTool,
 };
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -45,7 +45,7 @@ const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";
-pub(crate) const READ_SUBAGENT_TRANSCRIPT_TOOL_NAME: &str = "read_subagent_transcript";
+pub(crate) const READ_SUBAGENT_TOOL_NAME: &str = "read_subagent";
 pub(crate) const STEER_SUBAGENT_TOOL_NAME: &str = "steer_subagent";
 pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
 pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
@@ -409,7 +409,7 @@ pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
     .map(str::to_string)
     .collect::<Vec<_>>();
     if config.steering_tools_enabled() {
-        names.insert(3, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string());
+        names.insert(3, READ_SUBAGENT_TOOL_NAME.to_string());
     }
     if config.steer_subagent_enabled() {
         let insert_at = if config.steering_tools_enabled() {
@@ -433,7 +433,7 @@ pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn To
         Box::new(ListSubagentsTool),
     ];
     if config.steering_tools_enabled() {
-        tools.push(Box::new(ReadSubagentTranscriptTool));
+        tools.push(Box::new(ReadSubagentTool));
     }
     if config.steer_subagent_enabled() {
         tools.push(Box::new(SteerSubagentTool));

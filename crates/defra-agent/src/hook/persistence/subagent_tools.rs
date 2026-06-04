@@ -112,7 +112,7 @@ impl DefraSessionHook {
         Ok(ToolCallHookAction::skip(json_string(result)))
     }
 
-    pub(super) async fn persist_read_subagent_transcript_tool_call(
+    pub(super) async fn persist_read_subagent_tool_call(
         &self,
         tool_call_id: Option<String>,
         internal_call_id: &str,
@@ -126,39 +126,36 @@ impl DefraSessionHook {
             tool_call_id.as_deref(),
         );
 
-        let parsed = match serde_json::from_str::<ReadSubagentTranscriptArgs>(args) {
+        let parsed = match serde_json::from_str::<ReadSubagentArgs>(args) {
             Ok(args) => args,
             Err(error) => {
                 return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
-                    READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                    READ_SUBAGENT_TOOL_NAME,
                     "/",
-                    format!("invalid read_subagent_transcript arguments: {error}"),
+                    format!("invalid read_subagent arguments: {error}"),
                 )));
             }
         };
         let child_request_id = parsed.child_request_id.trim().to_string();
         if child_request_id.is_empty() {
             return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
-                READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                READ_SUBAGENT_TOOL_NAME,
                 "/child_request_id",
                 "child_request_id is required",
             )));
         }
 
-        let Some(response) =
-            handle_read_subagent_transcript(&self.node, &request_id, parsed).await?
-        else {
+        let Some(response) = handle_read_subagent(&self.node, &request_id, parsed).await? else {
             return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
-                READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                READ_SUBAGENT_TOOL_NAME,
                 "/child_request_id",
                 &child_request_id,
                 "child is not a background subagent owned by this parent request",
                 Vec::new(),
             )));
         };
-        let result = serde_json::to_value(response).map_err(|error| {
-            anyhow::anyhow!("serialize read_subagent_transcript response: {error}")
-        })?;
+        let result = serde_json::to_value(response)
+            .map_err(|error| anyhow::anyhow!("serialize read_subagent response: {error}"))?;
         Ok(ToolCallHookAction::skip(json_string(result)))
     }
 
