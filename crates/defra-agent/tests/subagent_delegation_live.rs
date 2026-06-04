@@ -155,6 +155,9 @@ async fn live_local_subagent_delegation() -> Result<()> {
         }],
         /* spawn */ true,
         /* background */ true,
+        // Local (same-DID) target: cross-deployment stays off (default).
+        /* allow_cross_deployment */
+        false,
     )
     .await;
 
@@ -331,6 +334,11 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         }],
         /* spawn */ true,
         /* background */ true,
+        // Cross-deployment subagent delegation is deferred/flag-gated by default
+        // pending ACP (#377). This cross-node test exercises the substrate behind
+        // the opt-in flag; the REMOTE (DID-B) target requires it set true.
+        /* allow_cross_deployment */
+        true,
     )
     .await;
 
@@ -635,6 +643,7 @@ async fn authorize_subagents(
     subagent_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
+    allow_cross_deployment: bool,
 ) {
     let selection_id = format!("{behavior_id}-subagent-tools");
     let target_entries = subagent_targets
@@ -649,6 +658,7 @@ async fn authorize_subagents(
             subagent_targets: Some(target_entries),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
+            subagent_allow_cross_deployment: Some(allow_cross_deployment),
             // Keep the orchestrator's toolset focused on delegation so the live
             // model reliably reaches for spawn_subagent rather than defra_query.
             enable_meta_tools: Some(false),

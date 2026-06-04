@@ -47,6 +47,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections: Some(args.defra_query_collections.clone()),

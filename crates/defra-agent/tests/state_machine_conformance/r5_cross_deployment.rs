@@ -303,6 +303,9 @@ async fn setup_parent_hook_on_db(
             )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
+            // Cross-deployment delegation is deferred behind a default-OFF flag
+            // (#377). The R5 substrate stays proven by opting in here.
+            subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
             enable_defra_query: None,
             defra_query_collections: None,

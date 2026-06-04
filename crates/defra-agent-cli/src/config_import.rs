@@ -1606,6 +1606,7 @@ mod lean_apply_write_boundary_tests {
             subagent_spawn_enabled: None,
             subagent_steering_enabled: None,
             subagent_background_enabled: None,
+            subagent_allow_cross_deployment: None,
             cross_deployment_spawn_timeout_seconds: None,
         }
     }

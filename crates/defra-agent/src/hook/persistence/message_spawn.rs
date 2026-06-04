@@ -332,6 +332,33 @@ impl DefraSessionHook {
 
         let await_mode = parsed.await_mode.as_await_mode();
         let target_host = self.subagent_target_host(&target);
+        // Cross-deployment (remote-DID) subagent delegation is deferred behind a
+        // default-OFF flag (#377). When the parent behavior has not opted in,
+        // reject ANY remote spawn (both await modes). Remote targets should not
+        // even be surfaced to the model in this case (see tool_surface), so a
+        // remote spawn here means a stale/forged target name.
+        if target_host == SubagentTargetHost::Remote
+            && !parent_context.subagent_allow_cross_deployment
+        {
+            return self
+                .fail_spawn_subagent_tool_call(
+                    session_id,
+                    request_id,
+                    parent_context.request_deadline_at,
+                    seq,
+                    internal_call_id,
+                    args,
+                    FailureClass::ServiceUnavailable,
+                    tool_not_allowed_payload(
+                        SPAWN_SUBAGENT_TOOL_NAME,
+                        "/name",
+                        name,
+                        "cross-deployment subagent delegation is not enabled",
+                        context_allowed_target_names(&parent_context),
+                    ),
+                )
+                .await;
+        }
         if target_host == SubagentTargetHost::Remote && await_mode == AwaitMode::Foreground {
             return self
                 .fail_spawn_subagent_tool_call(

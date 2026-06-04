@@ -174,6 +174,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     subagent_spawn_enabled: row.subagent_spawn_enabled,
                     subagent_steering_enabled: row.subagent_steering_enabled,
                     subagent_background_enabled: row.subagent_background_enabled,
+                    subagent_allow_cross_deployment: row.subagent_allow_cross_deployment,
                     cross_deployment_spawn_timeout_seconds: row
                         .cross_deployment_spawn_timeout_seconds,
                 })

@@ -535,6 +535,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub subagent_background_enabled: Option<bool>,
     #[serde(default)]
+    pub subagent_allow_cross_deployment: Option<bool>,
+    #[serde(default)]
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     #[serde(default)]
     pub enable_defra_query: Option<bool>,
@@ -759,6 +761,7 @@ mod tests {
             "subagent_spawn_enabled": true,
             "subagent_steering_enabled": true,
             "subagent_background_enabled": true,
+            "subagent_allow_cross_deployment": true,
             "cross_deployment_spawn_timeout_seconds": 45
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
@@ -766,6 +769,7 @@ mod tests {
         assert_eq!(row.subagent_spawn_enabled, Some(true));
         assert_eq!(row.subagent_steering_enabled, Some(true));
         assert_eq!(row.subagent_background_enabled, Some(true));
+        assert_eq!(row.subagent_allow_cross_deployment, Some(true));
         assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
 
         let re: String = serde_json::to_string(&row).expect("serialize");

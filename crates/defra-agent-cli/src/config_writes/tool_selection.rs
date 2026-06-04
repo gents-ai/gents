@@ -61,6 +61,7 @@ mod tests {
             subagent_targets: Some(vec!["amy-research".to_string()]),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
             ..Default::default()
         };
@@ -96,6 +97,11 @@ mod tests {
             loaded.subagent_background_enabled,
             Some(true),
             "subagent_background_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must persist"
         );
         assert_eq!(
             loaded.cross_deployment_spawn_timeout_seconds,
@@ -180,6 +186,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             optional_bool_field(
                 "subagent_background_enabled",
                 selection.subagent_background_enabled,
+            ),
+            optional_bool_field(
+                "subagent_allow_cross_deployment",
+                selection.subagent_allow_cross_deployment,
             ),
             selection
                 .cross_deployment_spawn_timeout_seconds

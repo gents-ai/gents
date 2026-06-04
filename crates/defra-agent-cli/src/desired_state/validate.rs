@@ -138,6 +138,8 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         );
         validate_subagent_targets(
             &selection.selection_id,
+            selection.agent_did.trim(),
+            selection.subagent_allow_cross_deployment.unwrap_or(false),
             selection.subagent_targets.as_deref().unwrap_or(&[]),
             errors,
         );
@@ -634,7 +636,13 @@ fn validate_argv_prefixes(
 /// model-facing `name` must be unique within the selection. Remote targets are
 /// NOT resolved against local AgentBehavior docs (they legitimately do not
 /// resolve locally and reach the owning node via P2P).
-fn validate_subagent_targets(selection_id: &str, entries: &[String], errors: &mut Vec<String>) {
+fn validate_subagent_targets(
+    selection_id: &str,
+    selection_agent_did: &str,
+    allow_cross_deployment: bool,
+    entries: &[String],
+    errors: &mut Vec<String>,
+) {
     let mut seen_names: HashSet<String> = HashSet::new();
     for entry in entries {
         let target = match SubagentTarget::parse(entry) {
@@ -655,6 +663,18 @@ fn validate_subagent_targets(selection_id: &str, entries: &[String], errors: &mu
         if !seen_names.insert(target.name.trim().to_string()) {
             errors.push(format!(
                 "tool selection {selection_id} has a duplicate subagent target name {:?}",
+                target.name
+            ));
+        }
+        // Cross-deployment (remote-DID) delegation is deferred behind an opt-in
+        // flag. When the flag is false (default), reject any target whose DID
+        // differs from the selection's own agent_did.
+        if !allow_cross_deployment
+            && !selection_agent_did.is_empty()
+            && target.agent_did.trim() != selection_agent_did
+        {
+            errors.push(format!(
+                "cross-deployment subagent delegation is deferred; remote target {} requires subagent_allow_cross_deployment=true (trusted-fleet only).",
                 target.name
             ));
         }
@@ -747,6 +767,7 @@ mod live_tests {
                 subagent_spawn_enabled: Some(true),
                 subagent_steering_enabled: None,
                 subagent_background_enabled: None,
+                subagent_allow_cross_deployment: None,
                 cross_deployment_spawn_timeout_seconds: None,
             }],
             inference_backends: Vec::new(),
@@ -907,6 +928,7 @@ mod live_tests {
                     subagent_spawn_enabled: Some(true),
                     subagent_steering_enabled: Some(true),
                     subagent_background_enabled: Some(true),
+                    subagent_allow_cross_deployment: None,
                     cross_deployment_spawn_timeout_seconds: Some(90),
                 }],
                 inference_backends: Vec::new(),

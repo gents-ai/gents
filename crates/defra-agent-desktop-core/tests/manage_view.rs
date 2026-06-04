@@ -81,6 +81,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
+        subagent_allow_cross_deployment: Some(true),
         cross_deployment_spawn_timeout_seconds: Some(45),
         enable_defra_query: Some(false),
         defra_query_collections: Vec::new(),
@@ -157,6 +158,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(tools.subagent_spawn_enabled, Some(true));
     assert_eq!(tools.subagent_steering_enabled, Some(true));
     assert_eq!(tools.subagent_background_enabled, Some(true));
+    assert_eq!(tools.subagent_allow_cross_deployment, Some(true));
     assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
     assert!(snapshot
         .behaviors

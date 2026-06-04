@@ -111,6 +111,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: false,
         steering_enabled: false,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&disabled).is_empty());
 
@@ -119,6 +120,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&no_targets).is_empty());
 
@@ -127,6 +129,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        allow_cross_deployment: false,
     };
     let names = subagent_tool_names(&enabled);
     assert_eq!(
@@ -146,6 +149,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: false,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert_eq!(
         subagent_tool_names(&steering_disabled),
@@ -162,6 +166,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert_eq!(
         subagent_tool_names(&steering_and_background),
@@ -220,6 +225,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
     let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
@@ -252,6 +258,7 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
     let spawn_def = tools[0].definition(String::new()).await;

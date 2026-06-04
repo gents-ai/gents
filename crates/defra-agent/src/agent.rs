@@ -403,6 +403,7 @@ pub(crate) fn subagent_tool_config_from_document(
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
     }
 }
 

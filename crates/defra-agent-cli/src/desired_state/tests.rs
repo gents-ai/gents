@@ -87,6 +87,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         subagent_spawn_enabled: None,
         subagent_steering_enabled: None,
         subagent_background_enabled: None,
+        subagent_allow_cross_deployment: None,
         cross_deployment_spawn_timeout_seconds: None,
     }
 }
@@ -789,6 +790,84 @@ fn validate_rejects_duplicate_subagent_target_name() {
             .iter()
             .any(|msg| msg.contains("duplicate subagent target name") && msg.contains("dup")),
         "expected duplicate-name rejection, got {errors:?}"
+    );
+}
+
+// ── cross-deployment delegation flag (deferred, default-OFF) #377 ────────────
+
+#[test]
+fn validate_rejects_remote_did_target_when_cross_deployment_off() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    // Flag defaults to None (== false): cross-deployment is OFF.
+    sel.subagent_allow_cross_deployment = None;
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "remote-researcher",
+        "did:defra-agent:OTHER-deployment",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("cross-deployment subagent delegation is deferred")
+                && msg.contains("remote-researcher")
+                && msg.contains("subagent_allow_cross_deployment=true")
+        }),
+        "expected remote-DID rejection when flag is off, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_remote_did_target_when_cross_deployment_on() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_allow_cross_deployment = Some(true);
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "remote-researcher",
+        "did:defra-agent:OTHER-deployment",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("cross-deployment subagent delegation is deferred")),
+        "expected no cross-deployment rejection when flag is on, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_local_did_target_when_cross_deployment_off() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_allow_cross_deployment = None;
+    // Same DID as the selection -> local target, allowed even with flag off.
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "local-researcher",
+        "did:defra-agent:test",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("cross-deployment subagent delegation is deferred")),
+        "expected no cross-deployment rejection for local target, got {errors:?}"
     );
 }
 

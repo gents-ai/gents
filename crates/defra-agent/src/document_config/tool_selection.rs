@@ -59,6 +59,7 @@ pub struct ToolSelectionDocument {
     pub subagent_spawn_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
+    pub subagent_allow_cross_deployment: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
     pub enable_defra_query: Option<bool>,
     #[serde(
@@ -140,6 +141,7 @@ pub(crate) async fn load_tool_selection_record(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -191,6 +193,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -242,6 +245,7 @@ pub(crate) async fn list_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -287,6 +291,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -378,6 +383,10 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            selection.subagent_allow_cross_deployment,
+        ),
         selection
             .cross_deployment_spawn_timeout_seconds
             .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
@@ -460,6 +469,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            selection.subagent_allow_cross_deployment,
         ),
         selection
             .cross_deployment_spawn_timeout_seconds

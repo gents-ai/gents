@@ -737,6 +737,209 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     running.booted.shutdown().await;
 }
 
+/// Change 2 (#377): DID-anchored single-creator gate. On the non-trusted path a
+/// node must NOT materialize a child whose resolved target DID is not its own
+/// local DID. The peer that owns the target DID is the single creator.
+#[tokio::test]
+async fn subagent_source_skips_child_when_resolved_did_is_remote() {
+    let db = test_db("r3-subagent-source-did-anchor").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-did-anchor"));
+    let agent_did = identity.did().to_string();
+    let behavior_id = default_behavior_id_for_agent(&agent_did);
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        db.node.as_ref(),
+        &agent_did,
+        "backend-did-anchor",
+        endpoint.endpoint(),
+    )
+    .await;
+
+    // Authorize a target named "remote-target" owned by a DIFFERENT (remote) DID.
+    // Cross-deployment is enabled so the spawn is authorized; the DID-anchor gate
+    // in SubagentSource is what must prevent this (non-owning) node from creating
+    // the child.
+    let remote_did = "did:key:zRemotePeerNotUs";
+    let selection_id = format!("{behavior_id}-r3-did-anchor-tools");
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: agent_did.clone(),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                "remote-target",
+                remote_did,
+                "remote-behavior",
+                None,
+            )]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut behavior = AgentBehaviorDocument {
+        behavior_id: behavior_id.clone(),
+        agent_did: agent_did.clone(),
+        display_name: Some(behavior_id.clone()),
+        description: None,
+        summary: None,
+        system_prompt: None,
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: Some(selection_id.clone()),
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        created_at: Some("2026-06-04T00:00:00Z".to_string()),
+    };
+    if let Some(existing) = load_agent_behavior(db.node.as_ref(), &behavior_id)
+        .await
+        .unwrap()
+    {
+        behavior = existing;
+        behavior.tool_selection_id = Some(selection_id.clone());
+    }
+    upsert_agent_behavior(db.node.as_ref(), &behavior)
+        .await
+        .unwrap();
+
+    let agent = DefraAgent::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+    let booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
+
+    let parent_request_id = "r3-parent-did-anchor";
+    let parent_tool_call_id = "r3-tc-did-anchor";
+    let child_request_id = "r3-child-did-anchor";
+    create_runtime_request(
+        db.node.as_ref(),
+        &agent_did,
+        &behavior_id,
+        parent_request_id,
+        "r3-session-did-anchor",
+        "parent prompt",
+    )
+    .await;
+
+    // Bridge args carry the RESOLVED remote target DID, as the spawn hook writes.
+    let args = serde_json::json!({
+        "name": "remote-target",
+        "agent_did": remote_did,
+        "behavior_id": "remote-behavior",
+        "prompt": "child prompt that should not run here"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        "r3-session-did-anchor".to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    // This node does not own the remote DID, so it must not create the child.
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(800),
+    )
+    .await;
+
+    booted.shutdown().await;
+}
+
+/// Change 3 (#377): orphan-child-escapes-cancel race. If the parent is
+/// interrupted before `SubagentSource` materializes the child, the source must
+/// re-check after the create and interrupt the just-created child so it does not
+/// run uncancellable.
+#[tokio::test]
+async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
+    let db = test_db("r3-subagent-source-orphan-cancel").await;
+    let running = boot_agent(&db, "r3-subagent-source-orphan-cancel").await;
+    let parent_request_id = "r3-parent-orphan-cancel";
+    let parent_tool_call_id = "r3-tc-orphan-cancel";
+    let child_request_id = "r3-child-orphan-cancel";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        "r3-session-orphan-cancel",
+        "parent prompt",
+    )
+    .await;
+
+    // Latch the parent interrupt BEFORE writing the running bridge, so by the time
+    // SubagentSource creates the child the parent is already interrupted. The
+    // post-create re-check must then interrupt the orphan child.
+    interrupt_request(db.node.as_ref(), parent_request_id)
+        .await
+        .unwrap();
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "child prompt racing a parent cancel"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        "r3-session-orphan-cancel".to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    // The child gets materialized, then immediately interrupted by the source.
+    let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "child was created but never interrupted despite parent cancel-before-materialize",
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    running.booted.shutdown().await;
+}
+
 #[tokio::test]
 async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() {
     let db = test_db("r3-subagent-source-orphan-recovery").await;

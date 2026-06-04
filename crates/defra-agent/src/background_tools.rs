@@ -120,6 +120,9 @@ pub(crate) struct ParentSubagentContext {
     pub allowed_targets: Vec<SubagentTarget>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
+    /// When false (default), cross-deployment (remote-DID) subagent spawns are
+    /// rejected at runtime. Cross-deployment is deferred pending ACP.
+    pub subagent_allow_cross_deployment: bool,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
@@ -129,6 +132,7 @@ pub(crate) struct ParentSubagentAuthorization {
     pub allowed_targets: Vec<SubagentTarget>,
     pub spawn_enabled: bool,
     pub background_enabled: bool,
+    pub allow_cross_deployment: bool,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
@@ -227,6 +231,8 @@ struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
     subagent_spawn_enabled: Option<bool>,
     subagent_background_enabled: Option<bool>,
+    #[serde(default)]
+    subagent_allow_cross_deployment: Option<bool>,
     cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
@@ -1247,6 +1253,7 @@ pub(crate) async fn load_parent_subagent_context(
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
         subagent_background_enabled: selection.background_enabled,
+        subagent_allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
@@ -1297,6 +1304,7 @@ pub(crate) async fn load_parent_subagent_authorization(
         allowed_targets: selection.allowed_targets,
         spawn_enabled: selection.spawn_enabled,
         background_enabled: selection.background_enabled,
+        allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
@@ -1346,6 +1354,7 @@ struct SubagentToolSelection {
     allowed_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
+    allow_cross_deployment: bool,
     cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
@@ -1409,6 +1418,7 @@ async fn load_subagent_tool_selection(
                 allowed_targets: Vec::new(),
                 spawn_enabled: false,
                 background_enabled: false,
+                allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
             });
         }
@@ -1424,6 +1434,7 @@ async fn load_subagent_tool_selection(
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
             }}
         }}"#
@@ -1442,6 +1453,7 @@ async fn load_subagent_tool_selection(
             allowed_targets: Vec::new(),
             spawn_enabled: false,
             background_enabled: false,
+            allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
         });
     };
@@ -1450,6 +1462,7 @@ async fn load_subagent_tool_selection(
         allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
@@ -1469,6 +1482,7 @@ mod cross_deployment_timeout_tests {
             }],
             spawn_enabled: true,
             background_enabled: true,
+            allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: timeout,
         }
     }

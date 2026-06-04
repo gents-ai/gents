@@ -104,6 +104,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "subagent_background_enabled",
             row.subagent_background_enabled,
         )),
+        Some(graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            row.subagent_allow_cross_deployment,
+        )),
         Some(graphql_optional_int_field(
             "cross_deployment_spawn_timeout_seconds",
             row.cross_deployment_spawn_timeout_seconds,
@@ -180,6 +184,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_bool_field(
             "subagent_background_enabled",
             row.subagent_background_enabled,
+        )),
+        Some(graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            row.subagent_allow_cross_deployment,
         )),
         Some(graphql_optional_int_field(
             "cross_deployment_spawn_timeout_seconds",

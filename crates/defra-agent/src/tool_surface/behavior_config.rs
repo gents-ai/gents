@@ -111,6 +111,7 @@ impl BehaviorToolConfig {
                 spawn_enabled: subagent_tools.spawn_enabled,
                 steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
+                allow_cross_deployment: subagent_tools.allow_cross_deployment,
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
@@ -184,9 +185,10 @@ impl BehaviorToolConfig {
     }
 
     /// Resolve the tool surface, dropping local-DID subagent targets whose
-    /// behavior is not in the active local set. Remote-DID targets always
-    /// survive (they resolve out-of-band via P2P), removing the cross-node
-    /// delegation seam.
+    /// behavior is not in the active local set. Remote-DID targets survive only
+    /// when cross-deployment delegation is enabled (`allow_cross_deployment`);
+    /// when it is false (the default, #377) remote-DID targets are filtered out
+    /// so the model is never told about targets a runtime spawn would reject.
     pub(crate) async fn resolve_with_available_subagent_targets(
         &self,
         node: &EmbeddedNode,
@@ -194,11 +196,13 @@ impl BehaviorToolConfig {
         active_behavior_ids: &HashSet<String>,
     ) -> Result<ToolSurface> {
         let mut subagent_tools = self.subagent_tools.clone();
+        let allow_cross_deployment = subagent_tools.allow_cross_deployment;
         subagent_tools.targets.retain(|target| {
             if target.agent_did == own_agent_did {
                 active_behavior_ids.contains(&target.behavior_id)
             } else {
-                true
+                // Remote-DID target: only surface when cross-deployment is enabled.
+                allow_cross_deployment
             }
         });
         self.resolve_with_subagent_tools(node, subagent_tools).await

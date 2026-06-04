@@ -20,6 +20,7 @@ type ToolSelection {
     subagent_spawn_enabled: Boolean
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
+    subagent_allow_cross_deployment: Boolean
     cross_deployment_spawn_timeout_seconds: Int
     enable_defra_query: Boolean
     defra_query_collections: [String]

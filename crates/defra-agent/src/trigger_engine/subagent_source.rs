@@ -415,6 +415,42 @@ impl SubagentSource {
             return Ok(None);
         }
 
+        // The child is owned by the RESOLVED target's `agent_did` carried in the
+        // bridge args (#377). Legacy fixtures that omit `agent_did` fall back to
+        // the parent's DID.
+        let resolved_target_did = spawn_args
+            .agent_did
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        // DID-anchored single-creator gate (audit Finding 2). On the non-trusted
+        // path a node may ONLY materialize a child addressed to its OWN DID.
+        // `request_id` is `@index` (not unique), so without this anchor two peers
+        // that both replicate the bridge could each create the same child. The
+        // trusted-paired-peer path is the explicit, vetted cross-deployment
+        // exception and keeps taking local ownership below.
+        if !trusted_paired_peer {
+            let local_did = snapshot.local_did.trim();
+            let target_owner_did = resolved_target_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| parent.agent_did.trim());
+            if local_did.is_empty() || target_owner_did != local_did {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    target_name = %spawn_args.target_name(),
+                    target_owner_did = %target_owner_did,
+                    local_did = %local_did,
+                    "subagent source skipping spawn: this node does not own the target DID (single-creator gate)",
+                );
+                return Ok(None);
+            }
+        }
+
         if self.child_request_exists(&child_request_id).await? {
             self.processed_tool_calls.insert(processed_key);
             return Ok(None);
@@ -426,16 +462,9 @@ impl SubagentSource {
             .unwrap_or(0);
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
-        // The child is owned by the RESOLVED target's `agent_did` carried in the
-        // bridge args (#377). The trusted-paired-peer claiming path keeps the
-        // historical behavior of taking local ownership. Legacy fixtures that
-        // omit `agent_did` fall back to the parent's DID.
-        let resolved_target_did = spawn_args
-            .agent_did
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
+        // The trusted-paired-peer claiming path takes local ownership; otherwise
+        // the child is owned by the RESOLVED target DID (which the single-creator
+        // gate above has already confirmed equals our local DID).
         let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
             snapshot.local_did.clone()
         } else {
@@ -468,6 +497,64 @@ impl SubagentSource {
             )
             .await?
         };
+
+        // Orphan-child-escapes-cancel race (audit Finding 1). The parent may have
+        // been cancelled/interrupted in the window between the spawn hook writing
+        // the `running` bridge and this child create. The cascade's
+        // `interrupt_request(child_request_id)` would have no-oped because the
+        // child did not exist yet. Re-read the bridge `lifecycle_state` and the
+        // parent's `interrupt_requested_at` AFTER the create; if either indicates
+        // cancellation/termination, immediately interrupt the just-created child
+        // so it does not run uncancellable.
+        let bridge_terminal = match self.load_tool_call(doc_id).await {
+            Ok(Some(latest)) => latest
+                .lifecycle_state
+                .as_deref()
+                .is_some_and(|state| state != "running"),
+            // Bridge row vanished (e.g. terminalized + GC'd) — treat as no longer
+            // running so the orphan child is reclaimed.
+            Ok(None) => true,
+            Err(error) => {
+                tracing::warn!(
+                    child_request_id = %request_id,
+                    %error,
+                    "subagent source failed to re-read bridge lifecycle after child create; assuming still running",
+                );
+                false
+            }
+        };
+        let parent_interrupted = match crate::interrupt::fetch_interrupt_requested_at(
+            &self.node,
+            &parent_request_id,
+        )
+        .await
+        {
+            Ok(value) => value.is_some(),
+            Err(error) => {
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    %error,
+                    "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
+                );
+                false
+            }
+        };
+        if bridge_terminal || parent_interrupted {
+            tracing::info!(
+                child_request_id = %request_id,
+                parent_request_id = %parent_request_id,
+                bridge_terminal,
+                parent_interrupted,
+                "subagent source: parent cancelled/terminal in materialize window; interrupting just-created child",
+            );
+            if let Err(error) = crate::interrupt::interrupt_request(&self.node, &request_id).await {
+                tracing::warn!(
+                    child_request_id = %request_id,
+                    %error,
+                    "subagent source failed to interrupt orphaned child after cancel-before-materialize race",
+                );
+            }
+        }
 
         self.processed_tool_calls.insert(processed_key);
         let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
