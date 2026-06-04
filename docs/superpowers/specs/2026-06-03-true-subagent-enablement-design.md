@@ -334,6 +334,51 @@ node only materializes children for its own DID), and fail-safety/hygiene (silen
 target-drop warn, reject-on-deleted-local-behavior, timeout field type, apply `created_at`,
 `list_subagents` surfaces the friendly name).
 
+## Addendum 3 — clean agent tool surface (verb × noun)
+
+Reviewing the model-facing tool surface (prompted by the `delegate_to_agent` vs
+`spawn_subagent` overlap) found the agent-delegation / async-work area had sprawled into
+**three overlapping families** (subagent, background-tool, delegate) with duplicated
+wait/cancel/list verbs and "background" meaning both a mode and a family. The cleanup
+applies one principle: **one verb vocabulary, two non-overlapping nouns.** The model
+learns `<verb>_<noun>` once and applies it to either noun.
+
+The surface (only the delegation/async area changes; file/bash/cli/`defra_query`/MCP
+`discover|describe|call` are untouched):
+
+```
+spawn_subagent · wait_subagent · cancel_subagent · list_subagents · read_subagent · steer_subagent
+spawn_process  · wait_process  · cancel_process  · list_processes · read_process
+```
+
+- **noun `subagent`** = a child agent (lineage + cascade). **noun `process`** = a
+  backgrounded long-running tool — shell `bash` today; the `spawn_process(tool_name,
+  args)` shape keeps "any long tool" open, **MCP tools explicitly out of scope** for now.
+- **`delegate_to_agent` is REMOVED**, folded into `spawn_subagent` (the named
+  `(did,behavior)` allowlist is the one door to "have an agent do work"). The
+  `delegate_to` config field is removed.
+- Renames: `background_tool→spawn_process`, `wait_tool→wait_process`,
+  `cancel_tool→cancel_process`, `list_background_tools→list_processes`,
+  `read_tool_output→read_process`, `read_subagent_transcript→read_subagent`. Internal
+  `BackgroundedKind::Tool→Process` (use an internal name like `BackgroundProcess` so it's
+  not confused with the runtime **Process Lifecycle** state machine — different layer).
+- `steer` exists only on `subagent` (you steer an agent, not a command). A future
+  `write_process` (stdin to a running process) is the deferred process-analog of
+  `steer_subagent`.
+
+**`read_` is context-honest and content-honest** (both nouns): a token budget + a resume
+cursor + an honest "what's left" envelope — it never silently swallows output.
+- `read_process(id, offset?, max_tokens?)` → chunk · `next_offset` · `total_bytes` ·
+  `has_more` · `exited`/exit_code. Pages through *all* stdout/stderr gap-free (no
+  head/tail middle-drop).
+- `read_subagent(id, since_sequence?, max_tokens?, include_user_messages?,
+  include_tool_results?)` → messages · `next_sequence` · `has_more` · terminal-state.
+  (`max_tokens` replaces the old `max_chars` — tokens are model-native.)
+Symmetry: cursor + `max_tokens` + a "resume-here / has-more / done" envelope on both; only
+the noun-specific knobs differ (`offset`↔`since_sequence`, stream budget ↔ include flags).
+
+This addendum is implemented on the #382 branch (folded in before merge, per decision).
+
 ## Related
 
 #377 (this) · #378 (workflow orchestration, unblocked) · #9 (principal/behavior/
