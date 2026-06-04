@@ -39,6 +39,21 @@ pub fn validate_cron_schedule(
     Ok(())
 }
 
+/// Next UTC instant strictly after `after_utc` at which `expression` fires in
+/// `timezone`. Walks forward minute-by-minute, matching the local wall-clock
+/// time, so DST handling falls out for free:
+/// - **Spring-forward gap** (local times that never occur) is skipped to the
+///   next valid local occurrence — a `30 2 * * *` schedule simply does not fire
+///   on the day clocks jump 02:00 → 03:00.
+/// - **Fall-back repeat** (local times that occur twice) fires at *each*
+///   occurrence; the earlier UTC instant is returned first, the later one on the
+///   subsequent call.
+///
+/// Restart / missed-run semantics: on load a schedule re-seeds `next_run_at`
+/// from `next_cron_run_after(.., now)`, so windows that fully elapsed while the
+/// runtime was down are **not** backfilled — the next future occurrence fires.
+/// With the `latest_only` policy any accumulated backlog collapses to a single
+/// fire. This is deterministic and independent of restart timing.
 pub fn next_cron_run_after(
     expression: &str,
     timezone: &str,
@@ -368,5 +383,30 @@ mod tests {
         assert_eq!(local.day(), 1);
         assert_eq!(local.hour(), 0);
         assert_eq!(local.minute(), 30);
+    }
+
+    #[test]
+    fn dst_spring_forward_skips_nonexistent_local_time() {
+        // 2024-03-10 America/Los_Angeles: clocks jump 02:00 PST -> 03:00 PDT, so
+        // local 02:30 never occurs that day. A `30 2 * * *` schedule must skip
+        // 03-10 and fire on 03-11 at 02:30 PDT (= 09:30 UTC).
+        let after = Utc.with_ymd_and_hms(2024, 3, 10, 0, 0, 0).unwrap();
+        let next = next_cron_run_after("30 2 * * *", "America/Los_Angeles", after).unwrap();
+        assert_eq!(next, Utc.with_ymd_and_hms(2024, 3, 11, 9, 30, 0).unwrap());
+        let local = next.with_timezone(&parse_timezone("America/Los_Angeles").unwrap());
+        assert_eq!((local.day(), local.hour(), local.minute()), (11, 2, 30));
+    }
+
+    #[test]
+    fn dst_fall_back_fires_at_each_repeated_local_time() {
+        // 2024-11-03 America/Los_Angeles: clocks fall 02:00 PDT -> 01:00 PST, so
+        // local 01:30 occurs twice. The first call returns the earlier UTC
+        // instant (01:30 PDT = 08:30 UTC); a follow-up call returns the second
+        // occurrence (01:30 PST = 09:30 UTC) before moving to the next day.
+        let after = Utc.with_ymd_and_hms(2024, 11, 3, 0, 0, 0).unwrap();
+        let first = next_cron_run_after("30 1 * * *", "America/Los_Angeles", after).unwrap();
+        assert_eq!(first, Utc.with_ymd_and_hms(2024, 11, 3, 8, 30, 0).unwrap());
+        let second = next_cron_run_after("30 1 * * *", "America/Los_Angeles", first).unwrap();
+        assert_eq!(second, Utc.with_ymd_and_hms(2024, 11, 3, 9, 30, 0).unwrap());
     }
 }
