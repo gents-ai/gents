@@ -107,7 +107,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
 #[test]
 fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let disabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: false,
         steering_enabled: false,
         background_enabled: true,
@@ -123,7 +123,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     assert!(subagent_tool_names(&no_targets).is_empty());
 
     let enabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
@@ -142,7 +142,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     assert!(!names.contains(&"steer_subagent".to_string()));
 
     let steering_disabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: false,
         background_enabled: true,
@@ -158,7 +158,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     );
 
     let steering_and_background = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
@@ -216,7 +216,7 @@ fn background_tool_names_are_gated_by_allowlist() {
 #[tokio::test]
 async fn subagent_tool_definitions_register_expected_surface() {
     let config = SubagentToolConfig {
-        targets: vec!["research".to_string()],
+        targets: subagent_targets("research"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
@@ -236,7 +236,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
 
     let spawn_def = tools[0].definition(String::new()).await;
     assert_eq!(
-        spawn_def.parameters["properties"]["behavior_id"]["enum"],
+        spawn_def.parameters["properties"]["name"]["enum"],
         serde_json::json!(["research"])
     );
     assert_eq!(
@@ -248,7 +248,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
 #[tokio::test]
 async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
     let config = SubagentToolConfig {
-        targets: vec!["research".to_string()],
+        targets: subagent_targets("research"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
@@ -260,6 +260,17 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
         spawn_def.parameters["properties"]["await_mode"]["enum"],
         serde_json::json!(["foreground", "background"])
     );
+}
+
+/// Build a single-target list for subagent tool tests. `name` doubles as the
+/// behavior id; the agent_did is a fixed local placeholder.
+fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTarget> {
+    vec![crate::document_config::SubagentTarget {
+        name: name.to_string(),
+        agent_did: "did:key:zTest".to_string(),
+        behavior_id: name.to_string(),
+        description: None,
+    }]
 }
 
 fn temp_root(name: &str) -> PathBuf {

@@ -74,14 +74,35 @@ struct ParentRequestRow {
     subagent_depth: Option<i64>,
 }
 
+/// Bridge args persisted by the spawn hook. After the named-target redesign
+/// (#377) these carry both the model-facing `name` and the RESOLVED target
+/// `(agent_did, behavior_id)`, so the claiming node never needs to re-resolve
+/// the friendly name. The `target`/`target_behavior_id` aliases keep older
+/// fixtures that wrote a bare behavior id under `behavior_id` working.
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
+    #[serde(default)]
+    name: Option<String>,
+    /// Resolved owning DID of the target behavior. Absent on legacy fixtures.
+    #[serde(default)]
+    agent_did: Option<String>,
     #[serde(alias = "target", alias = "target_behavior_id")]
     behavior_id: String,
     #[serde(alias = "message", alias = "content")]
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
+}
+
+impl SpawnArgs {
+    /// Model-facing target name for authorization/error reporting. Falls back to
+    /// the behavior id for legacy fixtures that omit a name.
+    fn target_name(&self) -> &str {
+        self.name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&self.behavior_id)
+    }
 }
 
 impl SubagentSource {
@@ -336,8 +357,8 @@ impl SubagentSource {
                     let failed = self
                         .fail_unauthorized_tool_call(
                             &row,
-                            "/behavior_id",
-                            &spawn_args.behavior_id,
+                            "/name",
+                            spawn_args.target_name(),
                             "subagent authorization could not be verified for this behavior",
                             &[],
                         )
@@ -346,7 +367,7 @@ impl SubagentSource {
                     tracing::warn!(
                         parent_request_id = %parent_request_id,
                         parent_tool_call_id = %parent_tool_call_id,
-                        target_behavior_id = %spawn_args.behavior_id,
+                        target_name = %spawn_args.target_name(),
                         failed_tool_call = failed,
                         %error,
                         "subagent source could not verify parent subagent authorization; rejecting spawn",
@@ -356,7 +377,7 @@ impl SubagentSource {
             };
             if let Some(denial) = subagent_spawn_denial(
                 &authorization,
-                &spawn_args.behavior_id,
+                spawn_args.target_name(),
                 await_mode,
                 tool_name,
             ) {
@@ -366,7 +387,7 @@ impl SubagentSource {
                         denial.path,
                         &denial.requested,
                         denial.message,
-                        &authorization.allowed_targets,
+                        &authorization.allowed_target_names(),
                     )
                     .await?;
                 self.processed_tool_calls.insert(processed_key);
@@ -374,7 +395,7 @@ impl SubagentSource {
                     parent_request_id = %parent_request_id,
                     parent_behavior_id = %authorization.behavior_id,
                     parent_tool_call_id = %parent_tool_call_id,
-                    target_behavior_id = %spawn_args.behavior_id,
+                    target_name = %spawn_args.target_name(),
                     await_mode = %await_mode.as_str(),
                     failed_tool_call = failed,
                     "subagent source rejected unauthorized subagent spawn",
@@ -387,6 +408,7 @@ impl SubagentSource {
             tracing::warn!(
                 parent_request_id = %parent_request_id,
                 parent_tool_call_id = %parent_tool_call_id,
+                target_name = %spawn_args.target_name(),
                 target_behavior_id = %spawn_args.behavior_id,
                 "subagent source target behavior is not in the active runtime snapshot; skipping spawn",
             );
@@ -404,10 +426,20 @@ impl SubagentSource {
             .unwrap_or(0);
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
+        // The child is owned by the RESOLVED target's `agent_did` carried in the
+        // bridge args (#377). The trusted-paired-peer claiming path keeps the
+        // historical behavior of taking local ownership. Legacy fixtures that
+        // omit `agent_did` fall back to the parent's DID.
+        let resolved_target_did = spawn_args
+            .agent_did
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
         let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
             snapshot.local_did.clone()
         } else {
-            parent.agent_did
+            resolved_target_did.unwrap_or_else(|| parent.agent_did.clone())
         };
         let request_id = if trusted_paired_peer {
             create_subagent_request_with_trusted_parent_request_id(

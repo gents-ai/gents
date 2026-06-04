@@ -105,7 +105,12 @@ async fn setup_fixture(test_name: &str) -> (support::TestDb, String, String) {
         &ToolSelectionDocument {
             selection_id: format!("{test_name}-tools"),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -234,7 +239,7 @@ async fn create_child_and_bridge(
         message_sequence,
         "spawn_subagent".to_string(),
         serde_json::json!({
-            "behavior_id": CHILD_BEHAVIOR_ID,
+            "name": CHILD_BEHAVIOR_ID,
             "prompt": format!("prompt for {tool_call_id}"),
             "await_mode": await_mode.as_str()
         })
@@ -669,7 +674,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         .await;
 
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "background child can complete quickly",
         "await_mode": "background"
     })

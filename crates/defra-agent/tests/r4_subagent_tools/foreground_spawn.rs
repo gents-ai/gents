@@ -15,7 +15,7 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
     let parent_deadline = fixture.parent_deadline;
     let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child prompt",
         "deadline": (parent_deadline - chrono::Duration::minutes(1)).to_rfc3339()
     })
@@ -75,7 +75,7 @@ async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will exceed parent deadline"
     })
     .to_string();
@@ -108,7 +108,7 @@ async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_w
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will be cancelled"
     })
     .to_string();
@@ -179,7 +179,7 @@ async fn foreground_spawn_subagent_user_backgrounding_returns_background_receipt
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will be backgrounded"
     })
     .to_string();
@@ -247,7 +247,7 @@ async fn foreground_spawn_subagent_maps_child_terminal_failures() {
         let hook = fixture.hook.clone();
         let session_id = fixture.session_id.clone();
         let args = json!({
-            "behavior_id": CHILD_BEHAVIOR_ID,
+            "name": CHILD_BEHAVIOR_ID,
             "prompt": format!("foreground child terminal {child_state}")
         })
         .to_string();

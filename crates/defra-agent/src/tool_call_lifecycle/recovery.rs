@@ -63,12 +63,27 @@ struct ParentRequestRow {
 
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
+    #[serde(default)]
+    name: Option<String>,
+    /// Resolved owning DID of the target behavior (#377). Absent on legacy
+    /// fixtures, which fall back to the parent's DID.
+    #[serde(default)]
+    agent_did: Option<String>,
     #[serde(alias = "target", alias = "target_behavior_id")]
     behavior_id: String,
     #[serde(alias = "message", alias = "content")]
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
+}
+
+impl SpawnArgs {
+    fn target_name(&self) -> &str {
+        self.name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&self.behavior_id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,8 +207,8 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                 let failed = fail_unauthorized_orphan_subagent_tool_call(
                     node,
                     &row,
-                    "/behavior_id",
-                    &spawn_args.behavior_id,
+                    "/name",
+                    spawn_args.target_name(),
                     "subagent authorization could not be verified for this behavior",
                     &[],
                 )
@@ -204,7 +219,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                     session_id = %row.session_id,
                     tool_call_id = %row.tool_call_id,
                     child_request_id = %child_request_id,
-                    target_behavior_id = %spawn_args.behavior_id,
+                    target_name = %spawn_args.target_name(),
                     failed_tool_call = failed,
                     error = %error,
                     "cannot materialize orphan subagent child because parent authorization could not be verified"
@@ -216,7 +231,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
         let tool_name = subagent_tool_name(&row);
         if let Some(denial) = subagent_spawn_denial(
             &authorization,
-            &spawn_args.behavior_id,
+            spawn_args.target_name(),
             row_await_mode,
             tool_name,
         ) {
@@ -226,7 +241,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                 denial.path,
                 &denial.requested,
                 denial.message,
-                &authorization.allowed_targets,
+                &authorization.allowed_target_names(),
             )
             .await?;
             tracing::warn!(
@@ -236,7 +251,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                 tool_call_id = %row.tool_call_id,
                 child_request_id = %child_request_id,
                 parent_behavior_id = %authorization.behavior_id,
-                target_behavior_id = %spawn_args.behavior_id,
+                target_name = %spawn_args.target_name(),
                 await_mode = %row_await_mode.as_str(),
                 failed_tool_call = failed,
                 "cannot materialize orphan subagent child because spawn is not authorized"
@@ -244,13 +259,20 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
+        let child_agent_did = spawn_args
+            .agent_did
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| parent.agent_did.clone());
         if let Err(error) = create_subagent_request_with_request_id(
             node,
             child_request_id.clone(),
             parent_request_id.clone(),
             row.tool_call_id.clone(),
             parent_depth,
-            parent.agent_did,
+            child_agent_did,
             spawn_args.behavior_id,
             spawn_args.prompt,
             deadline,

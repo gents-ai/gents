@@ -52,8 +52,8 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling,
-    ToolSelectionDocument,
+    AgentBehaviorDocument, AgentIdentity, DefraAgent, DocumentRuntimeOptions, SubagentTarget,
+    ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -65,6 +65,8 @@ const DEFAULT_LIVE_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 const DEFAULT_LIVE_MODEL: &str = "d4f";
 const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
+/// Friendly, model-facing subagent target name (the model never sees behavior ids).
+const RESEARCHER_TARGET_NAME: &str = "researcher";
 
 fn live_enabled() -> bool {
     std::env::var("DEFRA_AGENT_LIVE_SUBAGENT").as_deref() == Ok("1")
@@ -140,7 +142,12 @@ async fn live_local_subagent_delegation() -> Result<()> {
         db.node.as_ref(),
         &agent_did,
         &orchestrator_behavior_id,
-        vec![RESEARCHER_BEHAVIOR_ID.to_string()],
+        vec![SubagentTarget {
+            name: RESEARCHER_TARGET_NAME.to_string(),
+            agent_did: agent_did.clone(),
+            behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
+            description: Some("Researches factual questions.".to_string()),
+        }],
         /* spawn */ true,
         /* background */ true,
     )
@@ -315,7 +322,15 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         db_a.node.as_ref(),
         &did_a,
         &orchestrator_behavior_id,
-        vec![RESEARCHER_BEHAVIOR_ID.to_string()],
+        // The researcher target is owned by DID-B: a REMOTE delegation target.
+        // The named (agent_did, behavior_id) pair lets A author the bridge
+        // without resolving B's behavior locally.
+        vec![SubagentTarget {
+            name: RESEARCHER_TARGET_NAME.to_string(),
+            agent_did: did_b.clone(),
+            behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
+            description: Some("Researches factual questions.".to_string()),
+        }],
         /* spawn */ true,
         /* background */ true,
     )
@@ -498,15 +513,15 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You have a research subagent \
-available with behavior_id `live-researcher`. For ANY research or factual lookup the user asks for, you \
-MUST delegate it by calling the `spawn_subagent` tool with behavior_id exactly \"live-researcher\" and a \
+available named `researcher`. For ANY research or factual lookup the user asks for, you \
+MUST delegate it by calling the `spawn_subagent` tool with name exactly \"researcher\" and a \
 `prompt` describing the question. Do not answer factual questions yourself; always delegate them. After \
 the subagent returns its answer, relay that answer to the user.";
 
 const CROSS_NODE_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You have a remote \
-research subagent available with behavior_id `live-researcher`. For ANY research or factual lookup the \
-user asks for, you MUST delegate it by calling the `spawn_subagent` tool with behavior_id exactly \
-\"live-researcher\", await_mode exactly \"background\", and a `prompt` describing the question. The \
+research subagent available named `researcher`. For ANY research or factual lookup the \
+user asks for, you MUST delegate it by calling the `spawn_subagent` tool with name exactly \
+\"researcher\", await_mode exactly \"background\", and a `prompt` describing the question. The \
 subagent runs on a different node, so you MUST use await_mode=\"background\" (foreground is rejected). Do \
 not answer factual questions yourself; always delegate them.";
 
@@ -640,17 +655,21 @@ async fn authorize_subagents(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
-    subagent_targets: Vec<String>,
+    subagent_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
 ) {
     let selection_id = format!("{behavior_id}-subagent-tools");
+    let target_entries = subagent_targets
+        .iter()
+        .map(SubagentTarget::to_entry)
+        .collect();
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(subagent_targets),
+            subagent_targets: Some(target_entries),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             // Keep the orchestrator's toolset focused on delegation so the live

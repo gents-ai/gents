@@ -16,7 +16,7 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     let parent_deadline = fixture.parent_deadline;
     let child_deadline = parent_deadline - chrono::Duration::minutes(1);
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "child prompt from spawn tool",
         "await_mode": "background",
         "deadline": child_deadline.to_rfc3339()
@@ -51,7 +51,15 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-1").await;
     assert_eq!(tool.request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(tool.tool_name.as_deref(), Some("spawn_subagent"));
-    assert_eq!(tool.args.as_deref(), Some(args.as_str()));
+    // Spawn-by-name (#377): the persisted bridge args are normalized to carry
+    // the RESOLVED target (agent_did + behavior_id) alongside the model-facing
+    // name, so SubagentSource can write the child without re-resolving the name.
+    let persisted_args: serde_json::Value =
+        serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
+    assert_eq!(persisted_args["name"], CHILD_BEHAVIOR_ID);
+    assert_eq!(persisted_args["behavior_id"], CHILD_BEHAVIOR_ID);
+    assert_eq!(persisted_args["agent_did"], fixture.agent_did);
+    assert_eq!(persisted_args["prompt"], "child prompt from spawn tool");
     assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
     assert_eq!(tool.cancel_policy.as_deref(), Some("cascade"));
@@ -133,7 +141,7 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     .unwrap();
 
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "remote child prompt from spawn tool",
         "await_mode": "background"
     })
@@ -196,7 +204,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "remote child prompt",
         "await_mode": "background"
     })
@@ -270,7 +278,7 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "local child prompt",
         "await_mode": "background"
     })

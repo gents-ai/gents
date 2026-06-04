@@ -82,8 +82,7 @@ impl RuntimeContext {
         let tool_names = tool_surface.tool_names();
         let api_key = behavior.completion_client_api_key()?;
         let allowed_targets =
-            tool_surface::resolve_subagent_target_descriptions(&self.node, tool_surface.as_ref())
-                .await;
+            tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
         let prompt_builder =
             LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
         let preamble = prompt_builder.preamble().to_string();

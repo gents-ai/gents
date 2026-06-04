@@ -379,8 +379,27 @@ pub(crate) fn tool_selection_from_document(
 pub(crate) fn subagent_tool_config_from_document(
     selection: &crate::document_config::ToolSelectionDocument,
 ) -> SubagentToolConfig {
+    let targets = selection
+        .subagent_targets
+        .iter()
+        .flatten()
+        .filter_map(
+            |entry| match crate::document_config::SubagentTarget::parse(entry) {
+                Ok(target) => Some(target),
+                Err(error) => {
+                    tracing::warn!(
+                        selection_id = %selection.selection_id,
+                        entry = %entry,
+                        %error,
+                        "skipping malformed subagent_targets entry"
+                    );
+                    None
+                }
+            },
+        )
+        .collect();
     SubagentToolConfig {
-        targets: selection.subagent_targets.clone().unwrap_or_default(),
+        targets,
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),

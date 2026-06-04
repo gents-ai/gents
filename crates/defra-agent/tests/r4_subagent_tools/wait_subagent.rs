@@ -14,7 +14,7 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "background child for wait_subagent",
         "await_mode": "background"
     })
@@ -147,7 +147,7 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         let hook = fixture.hook.clone();
         let session_id = fixture.session_id.clone();
         let spawn_args = json!({
-            "behavior_id": CHILD_BEHAVIOR_ID,
+            "name": CHILD_BEHAVIOR_ID,
             "prompt": format!("background child terminal {child_state}"),
             "await_mode": "background"
         })
@@ -294,7 +294,7 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     let parent_deadline = fixture.parent_deadline;
     let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "background child for resumed wait cancellation",
         "await_mode": "background"
     })
@@ -398,7 +398,7 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let spawn_args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "background child for wait backgrounding",
         "await_mode": "background"
     })

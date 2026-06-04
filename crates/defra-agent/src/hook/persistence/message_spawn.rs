@@ -251,7 +251,7 @@ impl DefraSessionHook {
         };
 
         let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
-        if parsed.behavior_id.trim().is_empty() {
+        if parsed.name.trim().is_empty() {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,
@@ -263,8 +263,8 @@ impl DefraSessionHook {
                     FailureClass::ArgumentInvalid,
                     invalid_tool_arguments_payload(
                         SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        "behavior_id is required",
+                        "/name",
+                        "name is required",
                     ),
                 )
                 .await;
@@ -302,13 +302,13 @@ impl DefraSessionHook {
                         "/",
                         SPAWN_SUBAGENT_TOOL_NAME,
                         "subagent spawning is not enabled for this behavior",
-                        parent_context.allowed_targets.clone(),
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
         }
-        let behavior_id = parsed.behavior_id.trim();
-        if !target_is_allowed(&parent_context, behavior_id) {
+        let name = parsed.name.trim();
+        let Some(target) = resolve_context_target(&parent_context, name).cloned() else {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,
@@ -320,19 +320,18 @@ impl DefraSessionHook {
                     FailureClass::ServiceUnavailable,
                     tool_not_allowed_payload(
                         SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        behavior_id,
-                        format!(
-                            "behavior '{behavior_id}' is not allowed as a subagent target for this behavior"
-                        ),
-                        parent_context.allowed_targets.clone(),
+                        "/name",
+                        name,
+                        format!("'{name}' is not an allowed subagent target for this behavior"),
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
-        }
+        };
+        let behavior_id = target.behavior_id.as_str();
 
         let await_mode = parsed.await_mode.as_await_mode();
-        let target_host = self.subagent_target_host(behavior_id).await?;
+        let target_host = self.subagent_target_host(&target);
         if target_host == SubagentTargetHost::Remote && await_mode == AwaitMode::Foreground {
             return self
                 .fail_spawn_subagent_tool_call(
@@ -366,7 +365,7 @@ impl DefraSessionHook {
                         "/await_mode",
                         "background",
                         "background subagent spawning is not enabled for this behavior",
-                        parent_context.allowed_targets.clone(),
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
@@ -408,6 +407,24 @@ impl DefraSessionHook {
                 .await;
         }
 
+        // Persist a normalized bridge args payload that carries the RESOLVED
+        // target `(agent_did, behavior_id)` alongside the model-facing `name`.
+        // `SubagentSource` reads these resolved fields directly, so the child
+        // `AgentRequest` is written with the TARGET's agent_did + behavior_id
+        // -- for a remote target this is the remote DID, and out-of-band
+        // replication carries the child to the owning node. The claiming
+        // deployment never needs to re-resolve the friendly name (it has no
+        // access to the parent's target table), which is what removes the
+        // resolution seam.
+        let bridge_args = serde_json::json!({
+            "name": name,
+            "agent_did": target.agent_did,
+            "behavior_id": target.behavior_id,
+            "prompt": parsed.prompt,
+            "deadline": parsed.deadline,
+        })
+        .to_string();
+
         let child_request_id = uuid::Uuid::new_v4().to_string();
         let mut lifecycle = ToolCallLifecycle::new_subagent(
             self.node.clone(),
@@ -416,7 +433,7 @@ impl DefraSessionHook {
             internal_call_id.to_string(),
             seq,
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
-            args.to_string(),
+            bridge_args,
             parent_context.request_deadline_at,
             await_mode,
             CancelPolicy::Cascade,
@@ -468,17 +485,15 @@ impl DefraSessionHook {
         Ok(ToolCallHookAction::skip(result))
     }
 
-    pub(super) async fn subagent_target_host(
-        &self,
-        behavior_id: &str,
-    ) -> anyhow::Result<SubagentTargetHost> {
-        let Some(behavior) = load_agent_behavior(&self.node, behavior_id).await? else {
-            return Ok(SubagentTargetHost::Remote);
-        };
-        if behavior.agent_did == self.agent_did {
-            Ok(SubagentTargetHost::Local)
+    /// Classify a resolved target as local or remote by comparing the target's
+    /// `agent_did` to this deployment's own DID. No behavior DB lookup is
+    /// needed: the target carries the owning agent's DID directly, which is
+    /// also what removes the cross-node resolution seam.
+    pub(super) fn subagent_target_host(&self, target: &SubagentTarget) -> SubagentTargetHost {
+        if target.agent_did == self.agent_did {
+            SubagentTargetHost::Local
         } else {
-            Ok(SubagentTargetHost::Remote)
+            SubagentTargetHost::Remote
         }
     }
 }

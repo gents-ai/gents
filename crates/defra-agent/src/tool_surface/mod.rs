@@ -17,7 +17,7 @@ use anyhow::Result;
 use rig::tool::ToolDyn;
 
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
-use crate::document_config::load_agent_behavior;
+use crate::document_config::SubagentTarget;
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_delegate_tool, build_subagent_tools,
@@ -63,7 +63,7 @@ impl ToolSurface {
 
     /// Returns the statically-allowed spawn targets when spawn is enabled,
     /// or an empty slice when spawn is disabled.
-    pub(crate) fn subagent_targets(&self) -> &[String] {
+    pub(crate) fn subagent_targets(&self) -> &[SubagentTarget] {
         if self.subagent_tools.spawn_enabled {
             &self.subagent_tools.targets
         } else {
@@ -75,10 +75,26 @@ impl ToolSurface {
         &self.background_tools
     }
 
-    pub(crate) fn retain_subagent_targets(&mut self, active_behavior_ids: &HashSet<String>) {
-        self.subagent_tools
-            .targets
-            .retain(|target| active_behavior_ids.contains(target));
+    /// Drop subagent targets that cannot resolve.
+    ///
+    /// Local-DID targets (whose `agent_did` equals the agent's own DID) are
+    /// retain-filtered against the active local behavior set, since a missing
+    /// local behavior means the target genuinely cannot resolve. Remote-DID
+    /// targets always survive: their behavior lives on another node and is
+    /// reached out-of-band via P2P replication, so the orchestrator must NOT
+    /// require local resolution. This removes the cross-node delegation seam.
+    pub(crate) fn retain_subagent_targets(
+        &mut self,
+        own_agent_did: &str,
+        active_behavior_ids: &HashSet<String>,
+    ) {
+        self.subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                true
+            }
+        });
     }
 
     pub fn tool_names(&self) -> Vec<String> {
@@ -155,46 +171,18 @@ impl std::fmt::Debug for ToolSurface {
     }
 }
 
-/// Resolves `(behavior_id, description)` pairs for the agent's spawnable
-/// subagent targets. Uses `description` if set, then `summary`, then an empty
-/// string. Lookup failures are logged and skipped and never prevent the runtime
-/// path from starting.
-pub(crate) async fn resolve_subagent_target_descriptions(
-    node: &defra_node::EmbeddedNode,
+/// Resolves `(name, description)` pairs for the agent's spawnable subagent
+/// targets. The description comes directly from the configured
+/// [`SubagentTarget`] -- there is no DB lookup, so this works identically for
+/// local and remote (cross-node) targets and never blocks runtime startup.
+pub(crate) fn resolve_subagent_target_descriptions(
     tool_surface: &ToolSurface,
 ) -> Vec<(String, String)> {
-    let targets = tool_surface.subagent_targets();
-    if targets.is_empty() {
-        return Vec::new();
-    }
-
-    let mut result = Vec::with_capacity(targets.len());
-    for target_id in targets {
-        let description = match load_agent_behavior(node, target_id).await {
-            Ok(Some(behavior)) => behavior
-                .description
-                .filter(|s| !s.is_empty())
-                .or_else(|| behavior.summary.filter(|s| !s.is_empty()))
-                .unwrap_or_default(),
-            Ok(None) => {
-                tracing::warn!(
-                    target_behavior_id = %target_id,
-                    "subagent target behavior not found; using empty description in preamble"
-                );
-                String::new()
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target_behavior_id = %target_id,
-                    error = %error,
-                    "failed to load subagent target behavior; using empty description in preamble"
-                );
-                String::new()
-            }
-        };
-        result.push((target_id.clone(), description));
-    }
-    result
+    tool_surface
+        .subagent_targets()
+        .iter()
+        .map(|target| (target.name.clone(), target.description_text().to_string()))
+        .collect()
 }
 
 pub fn cli_tool(

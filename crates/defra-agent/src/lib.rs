@@ -75,9 +75,10 @@ pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, load_tool_selection, upsert_agent_behavior, upsert_agent_principal,
-    upsert_inference_profile, upsert_tool_selection, AgentBehavior as AgentBehaviorDocument,
-    InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    load_inference_profile, load_tool_selection, subagent_target_entry, upsert_agent_behavior,
+    upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
+    ToolSelectionDocument,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,

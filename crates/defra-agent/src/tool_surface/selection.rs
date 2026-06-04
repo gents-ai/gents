@@ -7,11 +7,12 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
+use crate::document_config::SubagentTarget;
 use crate::toolset::CommandExecutionPolicy;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubagentToolConfig {
-    pub targets: Vec<String>,
+    pub targets: Vec<SubagentTarget>,
     pub spawn_enabled: bool,
     pub steering_enabled: bool,
     pub background_enabled: bool,

@@ -132,7 +132,20 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
-            subagent_targets: Some(vec!["researcher".to_string(), "researcher".to_string()]),
+            subagent_targets: Some(vec![
+                crate::document_config::subagent_target_entry(
+                    "researcher",
+                    &did,
+                    "researcher",
+                    None,
+                ),
+                crate::document_config::subagent_target_entry(
+                    "researcher",
+                    &did,
+                    "researcher",
+                    None,
+                ),
+            ]),
             subagent_spawn_enabled: Some(true),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
@@ -204,7 +217,13 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
         ["did:defra-agent:amy-code".to_string()]
     );
     assert_eq!(
-        behavior.tools.subagent_tools().targets,
+        behavior
+            .tools
+            .subagent_tools()
+            .targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect::<Vec<_>>(),
         ["researcher".to_string()]
     );
     assert!(behavior.tools.subagent_tools().spawn_enabled);
@@ -253,7 +272,12 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             enable_meta_tools: Some(false),
-            subagent_targets: Some(vec!["disabled-researcher".to_string()]),
+            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
+                "disabled-researcher",
+                &did,
+                "disabled-researcher",
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -348,7 +372,12 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             enable_meta_tools: Some(false),
-            subagent_targets: Some(vec!["missing-behavior".to_string()]),
+            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
+                "missing-behavior",
+                &did,
+                "missing-behavior",
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()

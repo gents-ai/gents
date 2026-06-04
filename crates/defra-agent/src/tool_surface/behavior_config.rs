@@ -6,8 +6,8 @@ use defra_node::EmbeddedNode;
 use crate::toolset::ToolSet;
 
 use super::build::{
-    build_host_tools, dedupe_strings, downgrade_bash, downgrade_file_tools,
-    has_registered_mcp_services,
+    build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
+    downgrade_file_tools, has_registered_mcp_services,
 };
 use super::modes::ToolCeiling;
 use super::selection::{
@@ -107,7 +107,7 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
             delegate_to: dedupe_strings(delegate_to),
             subagent_tools: SubagentToolConfig {
-                targets: dedupe_strings(subagent_tools.targets),
+                targets: dedupe_subagent_targets(subagent_tools.targets),
                 spawn_enabled: subagent_tools.spawn_enabled,
                 steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
@@ -183,15 +183,24 @@ impl BehaviorToolConfig {
         })
     }
 
+    /// Resolve the tool surface, dropping local-DID subagent targets whose
+    /// behavior is not in the active local set. Remote-DID targets always
+    /// survive (they resolve out-of-band via P2P), removing the cross-node
+    /// delegation seam.
     pub(crate) async fn resolve_with_available_subagent_targets(
         &self,
         node: &EmbeddedNode,
+        own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
     ) -> Result<ToolSurface> {
         let mut subagent_tools = self.subagent_tools.clone();
-        subagent_tools
-            .targets
-            .retain(|target| active_behavior_ids.contains(target));
+        subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                true
+            }
+        });
         self.resolve_with_subagent_tools(node, subagent_tools).await
     }
 }

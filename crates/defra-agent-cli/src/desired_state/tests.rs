@@ -754,7 +754,12 @@ fn validate_accepts_subagent_spawn_enabled_with_targets() {
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
     sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_targets = Some(vec!["amy-research".to_string()]);
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "researcher",
+        "did:defra-agent:test",
+        "amy-research",
+        None,
+    )]);
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -763,6 +768,27 @@ fn validate_accepts_subagent_spawn_enabled_with_targets() {
             .iter()
             .any(|msg| msg.contains("subagent_targets") || msg.contains("subagent_spawn_enabled")),
         "expected no subagent rejections for valid config, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_subagent_target_name() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec![
+        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
+        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
+    ]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|msg| msg.contains("duplicate subagent target name") && msg.contains("dup")),
+        "expected duplicate-name rejection, got {errors:?}"
     );
 }
 

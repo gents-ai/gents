@@ -100,12 +100,26 @@ async fn ensure_parent_subagent_authorization(
     background_enabled: bool,
 ) {
     let selection_id = format!("{behavior_id}-r3-subagent-tools");
+    // Each bare behavior id becomes a named local target whose `name` equals the
+    // behavior id (so the model-facing spawn args, which carry `behavior_id`
+    // / fall back to it as the name, still match an allowed target).
+    let target_entries = subagent_targets
+        .into_iter()
+        .map(|target_behavior_id| {
+            defra_agent::subagent_target_entry(
+                target_behavior_id.clone(),
+                agent_did,
+                target_behavior_id,
+                None,
+            )
+        })
+        .collect();
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(subagent_targets),
+            subagent_targets: Some(target_entries),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             ..Default::default()
@@ -365,7 +379,7 @@ async fn subagent_source_rejects_unauthorized_target_without_child_request() {
     )
     .await;
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
-    assert_tool_call_not_allowed(&tool, "/behavior_id", &running.behavior_id);
+    assert_tool_call_not_allowed(&tool, "/name", &running.behavior_id);
 
     running.booted.shutdown().await;
 }
@@ -417,7 +431,7 @@ async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_activ
     )
     .await;
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
-    assert_tool_call_not_allowed(&tool, "/behavior_id", target_behavior_id);
+    assert_tool_call_not_allowed(&tool, "/name", target_behavior_id);
 
     running.booted.shutdown().await;
 }
@@ -830,7 +844,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
     .await;
 
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
-    assert_tool_call_not_allowed(&tool, "/behavior_id", support::AGENT_NAME);
+    assert_tool_call_not_allowed(&tool, "/name", support::AGENT_NAME);
 }
 
 #[tokio::test]

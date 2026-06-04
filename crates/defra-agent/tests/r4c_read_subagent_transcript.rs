@@ -61,7 +61,12 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -197,7 +202,7 @@ async fn spawn_background_child(
     prompt: &str,
 ) -> Value {
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": prompt,
         "await_mode": "background"
     })
@@ -309,7 +314,7 @@ async fn append_assistant_tool_call_message(
                 call_id: Some(tool_call_id.to_string()),
                 function: ToolFunction {
                     name: tool_name.to_string(),
-                    arguments: json!({"behavior_id": CHILD_BEHAVIOR_ID}),
+                    arguments: json!({"name": CHILD_BEHAVIOR_ID}),
                 },
                 signature: None,
                 additional_params: None,

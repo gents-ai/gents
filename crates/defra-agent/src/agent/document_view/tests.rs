@@ -374,12 +374,21 @@ async fn apply_control_update_rejects_tool_selection_with_missing_subagent_targe
     let selection_id = "missing-targets-selection";
     let escaped_selection_id = escape_graphql_string(selection_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    // A LOCAL-DID target (own agent_did) naming a behavior that does not exist
+    // locally must be rejected; remote targets are exempt (handled elsewhere).
+    let target_entry = crate::document_config::subagent_target_entry(
+        "missing-behavior",
+        agent_did,
+        "missing-behavior",
+        None,
+    );
+    let escaped_target_entry = escape_graphql_string(&target_entry);
     let mutation = format!(
         r#"mutation {{
             create_ToolSelection(input: {{
                 selection_id: "{escaped_selection_id}",
                 agent_did: "{escaped_agent_did}",
-                subagent_targets: ["missing-behavior"],
+                subagent_targets: ["{escaped_target_entry}"],
                 subagent_spawn_enabled: true
             }}) {{ _docID }}
         }}"#

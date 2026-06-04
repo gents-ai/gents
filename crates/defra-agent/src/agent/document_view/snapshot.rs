@@ -204,6 +204,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
+    let own_agent_did = context.identity.did().to_string();
     let candidate_behavior_ids = behaviors
         .iter()
         .map(|behavior| behavior.behavior_id.clone())
@@ -212,7 +213,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     for behavior in behaviors {
         match behavior
             .tools
-            .resolve_with_available_subagent_targets(node, &candidate_behavior_ids)
+            .resolve_with_available_subagent_targets(node, &own_agent_did, &candidate_behavior_ids)
             .await
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
@@ -229,7 +230,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
-        tool_surface.retain_subagent_targets(&active_behavior_ids);
+        tool_surface.retain_subagent_targets(&own_agent_did, &active_behavior_ids);
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);
     }

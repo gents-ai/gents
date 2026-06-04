@@ -56,7 +56,12 @@ async fn boot_self_spawn_agent(db: &support::TestDb, test_name: &str) -> Running
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
-            subagent_targets: Some(vec![behavior_id.clone()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                behavior_id.clone(),
+                &agent_did,
+                behavior_id.clone(),
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()

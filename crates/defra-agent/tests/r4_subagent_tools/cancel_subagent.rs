@@ -10,7 +10,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     let parent_deadline = fixture.parent_deadline;
     let agent_did = fixture.agent_did.clone();
     let spawn_args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "background child for cancel_subagent",
         "await_mode": "background"
     })

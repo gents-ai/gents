@@ -14,7 +14,7 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
     let session_id = fixture.session_id.clone();
     let parent_deadline = fixture.parent_deadline;
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "child prompt for transcript",
         "await_mode": "background",
         "deadline": (parent_deadline - chrono::Duration::minutes(1)).to_rfc3339()
@@ -91,7 +91,7 @@ async fn spawn_subagent_rejects_unauthorized_target_without_child_request() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn",
         "await_mode": "background"
     })
@@ -141,7 +141,7 @@ async fn spawn_subagent_rejects_when_spawn_disabled_without_child_request() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn",
         "await_mode": "background"
     })
@@ -184,7 +184,7 @@ async fn spawn_subagent_rejects_background_when_background_disabled_without_chil
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "should not spawn in background",
         "await_mode": "background"
     })
@@ -224,7 +224,7 @@ async fn spawn_subagent_rejects_deadline_after_parent_without_child_request() {
     let session_id = fixture.session_id.clone();
     let parent_deadline = fixture.parent_deadline;
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "deadline too late",
         "await_mode": "background",
         "deadline": (parent_deadline + chrono::Duration::seconds(1)).to_rfc3339()
@@ -266,7 +266,7 @@ async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "too deep",
         "await_mode": "background"
     })

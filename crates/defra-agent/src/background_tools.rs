@@ -13,6 +13,7 @@ use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::document_config::SubagentTarget;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
     drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
@@ -36,7 +37,9 @@ use self::transcript_render::{
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
-    pub behavior_id: String,
+    /// Friendly, model-facing name of an allowed subagent target. The runtime
+    /// maps this name to the target's `(agent_did, behavior_id)`.
+    pub name: String,
     pub prompt: String,
     #[serde(default)]
     pub await_mode: AwaitModeArg,
@@ -114,7 +117,7 @@ pub(crate) struct ParentSubagentContext {
     pub behavior_id: String,
     pub subagent_depth: u32,
     pub request_deadline_at: DateTime<Utc>,
-    pub allowed_targets: Vec<String>,
+    pub allowed_targets: Vec<SubagentTarget>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
@@ -123,17 +126,30 @@ pub(crate) struct ParentSubagentContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParentSubagentAuthorization {
     pub behavior_id: String,
-    pub allowed_targets: Vec<String>,
+    pub allowed_targets: Vec<SubagentTarget>,
     pub spawn_enabled: bool,
     pub background_enabled: bool,
     pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
 impl ParentSubagentAuthorization {
-    pub(crate) fn authorizes_target(&self, target_behavior_id: &str) -> bool {
+    /// Resolve a model-facing target `name` to its configured [`SubagentTarget`].
+    pub(crate) fn resolve_target(&self, name: &str) -> Option<&SubagentTarget> {
         self.allowed_targets
             .iter()
-            .any(|target| target == target_behavior_id)
+            .find(|target| target.name == name)
+    }
+
+    pub(crate) fn authorizes_target(&self, name: &str) -> bool {
+        self.resolve_target(name).is_some()
+    }
+
+    /// Model-facing names the parent is allowed to spawn (for error payloads).
+    pub(crate) fn allowed_target_names(&self) -> Vec<String> {
+        self.allowed_targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect()
     }
 }
 
@@ -146,7 +162,7 @@ pub(crate) struct SubagentAuthorizationDenial {
 
 pub(crate) fn subagent_spawn_denial(
     authorization: &ParentSubagentAuthorization,
-    target_behavior_id: &str,
+    target_name: &str,
     await_mode: AwaitMode,
     tool_name: &str,
 ) -> Option<SubagentAuthorizationDenial> {
@@ -166,13 +182,11 @@ pub(crate) fn subagent_spawn_denial(
         });
     }
 
-    if !authorization.authorizes_target(target_behavior_id) {
+    if !authorization.authorizes_target(target_name) {
         return Some(SubagentAuthorizationDenial {
-            path: "/behavior_id",
-            requested: target_behavior_id.to_string(),
-            message: format!(
-                "behavior '{target_behavior_id}' is not allowed as a subagent target for this behavior"
-            ),
+            path: "/name",
+            requested: target_name.to_string(),
+            message: format!("'{target_name}' is not an allowed subagent target for this behavior"),
         });
     }
 
@@ -1303,18 +1317,59 @@ pub(crate) fn effective_context_cross_deployment_spawn_timeout_seconds(
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
 }
 
-pub(crate) fn target_is_allowed(context: &ParentSubagentContext, target_behavior_id: &str) -> bool {
+/// Resolve a model-facing target `name` to its configured [`SubagentTarget`]
+/// within the parent context's allowed set.
+pub(crate) fn resolve_context_target<'a>(
+    context: &'a ParentSubagentContext,
+    name: &str,
+) -> Option<&'a SubagentTarget> {
     context
         .allowed_targets
         .iter()
-        .any(|target| target == target_behavior_id)
+        .find(|target| target.name == name)
+}
+
+pub(crate) fn target_is_allowed(context: &ParentSubagentContext, name: &str) -> bool {
+    resolve_context_target(context, name).is_some()
+}
+
+/// Model-facing target names allowed by the parent context (for error payloads).
+pub(crate) fn context_allowed_target_names(context: &ParentSubagentContext) -> Vec<String> {
+    context
+        .allowed_targets
+        .iter()
+        .map(|target| target.name.clone())
+        .collect()
 }
 
 struct SubagentToolSelection {
-    allowed_targets: Vec<String>,
+    allowed_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
     cross_deployment_spawn_timeout_seconds: Option<u32>,
+}
+
+/// Parse the `subagent_targets` `[String]` JSON entries into structured
+/// targets, deduping by `name` and dropping malformed/invalid entries.
+fn parse_subagent_targets(entries: Vec<String>) -> Vec<SubagentTarget> {
+    let mut seen = HashSet::new();
+    let mut targets = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match SubagentTarget::parse(&entry) {
+            Ok(target) if target.is_structurally_valid() => {
+                if seen.insert(target.name.trim().to_string()) {
+                    targets.push(target);
+                }
+            }
+            Ok(_) => {
+                tracing::warn!(entry = %entry, "skipping structurally invalid subagent target");
+            }
+            Err(error) => {
+                tracing::warn!(entry = %entry, %error, "skipping malformed subagent target entry");
+            }
+        }
+    }
+    targets
 }
 
 async fn load_subagent_tool_selection(
@@ -1392,7 +1447,7 @@ async fn load_subagent_tool_selection(
     };
 
     Ok(SubagentToolSelection {
-        allowed_targets: dedupe_non_empty(selection.subagent_targets.unwrap_or_default()),
+        allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
@@ -1406,7 +1461,12 @@ mod cross_deployment_timeout_tests {
     fn auth(timeout: Option<u32>) -> ParentSubagentAuthorization {
         ParentSubagentAuthorization {
             behavior_id: "parent".to_string(),
-            allowed_targets: vec!["child".to_string()],
+            allowed_targets: vec![SubagentTarget {
+                name: "child".to_string(),
+                agent_did: "did:key:zParent".to_string(),
+                behavior_id: "child".to_string(),
+                description: None,
+            }],
             spawn_enabled: true,
             background_enabled: true,
             cross_deployment_spawn_timeout_seconds: timeout,

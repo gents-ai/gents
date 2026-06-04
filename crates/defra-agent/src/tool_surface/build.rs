@@ -209,6 +209,25 @@ pub(super) fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf>
     Ok(resolved)
 }
 
+/// Dedupe subagent targets by their model-facing `name`, dropping structurally
+/// invalid entries. Keeps the first occurrence of each name.
+pub(super) fn dedupe_subagent_targets(
+    values: Vec<crate::document_config::SubagentTarget>,
+) -> Vec<crate::document_config::SubagentTarget> {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(values.len());
+    for target in values {
+        if !target.is_structurally_valid() {
+            continue;
+        }
+        if seen.insert(target.name.trim().to_string()) {
+            deduped.push(target);
+        }
+    }
+    deduped
+}
+
 pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
     use std::collections::HashSet;
     let mut seen = HashSet::new();

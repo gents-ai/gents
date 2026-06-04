@@ -168,7 +168,21 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
-            subagent_targets: Some(targets.into_iter().map(str::to_string).collect()),
+            // Each target's friendly `name` equals its behavior id so the spawn
+            // args (which pass `name`) resolve. agent_did is the local owner.
+            subagent_targets: Some(
+                targets
+                    .into_iter()
+                    .map(|behavior_id| {
+                        defra_agent::subagent_target_entry(
+                            behavior_id,
+                            &agent_did,
+                            behavior_id,
+                            None,
+                        )
+                    })
+                    .collect(),
+            ),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             ..Default::default()

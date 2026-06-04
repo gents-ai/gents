@@ -39,28 +39,21 @@ impl SpawnSubagentTool {
     }
 
     fn validate(&self, args: &SpawnSubagentArgs) -> Result<(), ToolError> {
-        let behavior_id = args.behavior_id.trim();
-        if behavior_id.is_empty() {
+        let name = args.name.trim();
+        if name.is_empty() {
             return Err(invalid_arguments_error(
                 SPAWN_SUBAGENT_TOOL_NAME,
-                "/behavior_id",
-                "behavior_id is required",
+                "/name",
+                "name is required",
             ));
         }
-        if !self
-            .config
-            .targets
-            .iter()
-            .any(|target| target == behavior_id)
-        {
+        if !self.config.targets.iter().any(|target| target.name == name) {
             return Err(tool_not_allowed_error(
                 SPAWN_SUBAGENT_TOOL_NAME,
-                "/behavior_id",
-                behavior_id,
-                format!(
-                    "behavior '{behavior_id}' is not allowed as a subagent target for this behavior"
-                ),
-                self.config.targets.clone(),
+                "/name",
+                name,
+                format!("'{name}' is not an allowed subagent target for this behavior"),
+                self.allowed_target_names(),
             ));
         }
         if args.prompt.trim().is_empty() {
@@ -80,12 +73,21 @@ impl SpawnSubagentTool {
                     "/await_mode",
                     "background",
                     "background subagent spawning is not enabled for this behavior",
-                    self.config.targets.clone(),
+                    self.allowed_target_names(),
                 ));
             }
         }
 
         Ok(())
+    }
+
+    /// Model-facing names of the configured subagent targets.
+    fn allowed_target_names(&self) -> Vec<String> {
+        self.config
+            .targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect()
     }
 }
 
@@ -157,17 +159,20 @@ impl Tool for SpawnSubagentTool {
             vec!["foreground"]
         };
 
+        let allowed_names = self.allowed_target_names();
+        let name_description = subagent_target_name_description(&self.config.targets);
+
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Spawn an authorized behavior as a child subagent. Foreground is the default await mode; background is available only when enabled for this behavior."
+            description: "Spawn an authorized subagent by its friendly name. Foreground is the default await mode; background is available only when enabled for this behavior."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "behavior_id": {
+                    "name": {
                         "type": "string",
-                        "enum": &self.config.targets,
-                        "description": "Target behavior ID from this behavior's allowed subagent target set."
+                        "enum": allowed_names,
+                        "description": name_description
                     },
                     "prompt": {
                         "type": "string",
@@ -185,7 +190,7 @@ impl Tool for SpawnSubagentTool {
                         "description": "Optional RFC3339 deadline for the child, bounded by the parent request deadline."
                     }
                 },
-                "required": ["behavior_id", "prompt"]
+                "required": ["name", "prompt"]
             }),
         }
     }
@@ -609,6 +614,31 @@ impl Tool for CancelTool {
         }
         Err(background_not_yet_executable_error(Self::NAME))
     }
+}
+
+/// Build a model-facing description listing each allowed subagent target name
+/// with its description, so the model can pick the right `name`.
+fn subagent_target_name_description(targets: &[crate::document_config::SubagentTarget]) -> String {
+    let mut description = String::from(
+        "Friendly name of the subagent to spawn, from this behavior's allowed targets.",
+    );
+    let entries: Vec<String> = targets
+        .iter()
+        .map(|target| {
+            let desc = target.description_text();
+            if desc.is_empty() {
+                format!("'{}'", target.name)
+            } else {
+                format!("'{}': {}", target.name, desc)
+            }
+        })
+        .collect();
+    if !entries.is_empty() {
+        description.push_str(" Available: ");
+        description.push_str(&entries.join("; "));
+        description.push('.');
+    }
+    description
 }
 
 fn validate_child_request_id(tool_name: &str, child_request_id: &str) -> Result<(), ToolError> {
