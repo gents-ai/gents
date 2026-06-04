@@ -38,7 +38,7 @@ const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id messag
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
-const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
+const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
 const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
 const TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled cross_deployment_spawn_timeout_seconds";
 const INFERENCE_BACKEND_FIELDS: &str = "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
@@ -244,7 +244,7 @@ pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<ScheduleRow>> {
     load_rows(
         node,
         "Schedule",
-        "query { Schedule { schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at } }",
+        "query { Schedule { schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at } }",
     )
     .await
 }
@@ -627,7 +627,7 @@ query DesktopRemoteSnapshot {
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
-  Schedule { schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }
+  Schedule { schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }
   EventTrigger { trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }
   ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled cross_deployment_spawn_timeout_seconds }
   InferenceBackend { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }

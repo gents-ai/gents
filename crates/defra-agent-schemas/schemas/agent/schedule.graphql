@@ -2,6 +2,9 @@ type Schedule @branchable {
     schedule_id: String @index(unique: true)
     task_id: String @index
     interval_secs: Int
+    cron: String
+    timezone: String @index
+    missed_run_policy: String @index
     enabled: Boolean @index
     concurrency: String @index
     next_run_at: DateTime @index(direction: ASC)

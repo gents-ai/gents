@@ -134,7 +134,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
                 schedule_id: "s1".to_string(),
                 task_id: "t1".to_string(),
                 task: task.clone(),
-                interval_secs: 60,
+                cadence: ScheduleCadence::Interval { interval_secs: 60 },
                 enabled: true,
                 concurrency: ConcurrencyMode::Serial,
             },
