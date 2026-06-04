@@ -131,7 +131,6 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
-            delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
             subagent_targets: Some(vec![
                 crate::document_config::subagent_target_entry(
                     "researcher",
@@ -212,10 +211,6 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     assert_eq!(behavior.behavior_id, default_behavior_id);
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
-    assert_eq!(
-        behavior.tools.delegate_to(),
-        ["did:defra-agent:amy-code".to_string()]
-    );
     assert_eq!(
         behavior
             .tools

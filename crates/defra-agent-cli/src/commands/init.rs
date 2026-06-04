@@ -556,7 +556,6 @@ fn standard_tool_selection(
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Some(Vec::new()),
-        delegate_to: Some(Vec::new()),
         backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_ceiling)),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),

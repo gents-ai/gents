@@ -863,8 +863,6 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_meta_tools: bool,
     #[arg(long = "allowed-mcp-service-id")]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
-    #[arg(long = "delegate-to")]
-    pub(crate) delegate_to: Vec<String>,
     #[arg(
         long = "backgroundable-tool-name",
         help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"

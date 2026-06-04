@@ -46,11 +46,6 @@ pub struct ToolSelectionDocument {
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
-    pub delegate_to: Option<Vec<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
-    )]
     pub backgroundable_tool_names: Option<Vec<String>>,
     #[serde(
         default,
@@ -155,7 +150,6 @@ pub(crate) async fn load_tool_selection_record(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
@@ -207,7 +201,6 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
@@ -259,7 +252,6 @@ pub(crate) async fn list_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
@@ -305,7 +297,6 @@ pub(crate) async fn list_all_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
@@ -382,7 +373,6 @@ pub async fn upsert_tool_selection(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
         ),
-        graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),
@@ -469,7 +459,6 @@ pub async fn upsert_tool_selection(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
         ),
-        graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),

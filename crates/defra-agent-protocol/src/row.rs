@@ -522,6 +522,7 @@ pub struct ToolSelectionRow {
     pub enable_meta_tools: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub allowed_mcp_service_ids: Vec<String>,
+    /// Deprecated: delegate_to_agent removed; field retained for schema-compat, never read.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub delegate_to: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]

@@ -20,8 +20,8 @@ use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TO
 use crate::document_config::SubagentTarget;
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
-    background_tool_names, build_background_tools, build_delegate_tool, build_subagent_tools,
-    subagent_tool_names, CliToolConfig, ToolSet, DELEGATE_TOOL_NAME,
+    background_tool_names, build_background_tools, build_subagent_tools, subagent_tool_names,
+    CliToolConfig, ToolSet,
 };
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
@@ -31,7 +31,6 @@ pub struct ToolSurface {
     host_tools: ToolSet,
     include_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
-    delegate_to: Vec<String>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
@@ -50,10 +49,6 @@ impl ToolSurface {
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
-    }
-
-    pub fn delegate_to(&self) -> &[String] {
-        &self.delegate_to
     }
 
     #[allow(dead_code)]
@@ -103,9 +98,6 @@ impl ToolSurface {
         if self.include_meta_tools {
             names.extend(META_TOOL_NAMES.iter().map(|name| (*name).to_string()));
         }
-        if !self.delegate_to.is_empty() {
-            names.push(DELEGATE_TOOL_NAME.to_string());
-        }
         names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
@@ -117,12 +109,6 @@ impl ToolSurface {
 
     pub fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
         let mut tools = self.host_tools.build_native_tools()?;
-        if !self.delegate_to.is_empty() {
-            tools.push(build_delegate_tool(
-                runtime.node.clone(),
-                self.delegate_to.clone(),
-            ));
-        }
         if self.include_meta_tools {
             tools.extend(build_meta_tools(
                 runtime.node.clone(),
@@ -155,7 +141,6 @@ impl std::fmt::Debug for ToolSurface {
             .field("host_tools", &self.host_tools)
             .field("include_meta_tools", &self.include_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
-            .field("delegate_to", &self.delegate_to)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
             .field(

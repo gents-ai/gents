@@ -13,14 +13,12 @@ fn tool_selection_document_accepts_empty_string_arrays() {
         "bash_mode": "disabled",
         "cli_tool_names": "",
         "enable_meta_tools": false,
-        "allowed_mcp_service_ids": "",
-        "delegate_to": ""
+        "allowed_mcp_service_ids": ""
     }))
     .expect("empty string arrays should deserialize");
 
     assert_eq!(document.cli_tool_names, Some(Vec::new()));
     assert_eq!(document.allowed_mcp_service_ids, Some(Vec::new()));
-    assert_eq!(document.delegate_to, Some(Vec::new()));
 }
 
 #[test]
@@ -36,8 +34,7 @@ fn tool_selection_document_accepts_string_array_values() {
         "bash_mode": "disabled",
         "cli_tool_names": ["rg"],
         "enable_meta_tools": false,
-        "allowed_mcp_service_ids": ["x-data"],
-        "delegate_to": ["did:defra-agent:other"]
+        "allowed_mcp_service_ids": ["x-data"]
     }))
     .expect("string arrays should deserialize");
 
@@ -45,10 +42,6 @@ fn tool_selection_document_accepts_string_array_values() {
     assert_eq!(
         document.allowed_mcp_service_ids,
         Some(vec!["x-data".to_string()])
-    );
-    assert_eq!(
-        document.delegate_to,
-        Some(vec!["did:defra-agent:other".to_string()])
     );
 }
 

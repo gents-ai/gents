@@ -127,9 +127,8 @@ pub use tool_surface::{
     ToolRuntimeContext, ToolSelection, ToolSurface,
 };
 pub use toolset::{
-    build_delegate_tool, build_native_tools, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
-    DELEGATE_TOOL_NAME,
+    build_native_tools, CliToolConfig, CommandExecutionMode, CommandExecutionPolicy,
+    CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::subagent_source::SubagentSource;

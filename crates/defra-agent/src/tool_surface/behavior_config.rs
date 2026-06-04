@@ -20,7 +20,6 @@ pub struct BehaviorToolConfig {
     host_tools: ToolSet,
     enable_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
-    delegate_to: Vec<String>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
@@ -34,7 +33,6 @@ impl BehaviorToolConfig {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
-            delegate_to: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
@@ -73,7 +71,6 @@ impl BehaviorToolConfig {
             cli_tool_names,
             enable_meta_tools,
             allowed_mcp_service_ids,
-            delegate_to,
             backgroundable_tool_names,
             enable_defra_query,
             defra_query_collections,
@@ -105,7 +102,6 @@ impl BehaviorToolConfig {
             host_tools,
             enable_meta_tools,
             allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
-            delegate_to: dedupe_strings(delegate_to),
             subagent_tools: SubagentToolConfig {
                 targets: dedupe_subagent_targets(subagent_tools.targets),
                 spawn_enabled: subagent_tools.spawn_enabled,
@@ -132,10 +128,6 @@ impl BehaviorToolConfig {
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
-    }
-
-    pub fn delegate_to(&self) -> &[String] {
-        &self.delegate_to
     }
 
     #[allow(dead_code)]
@@ -175,7 +167,6 @@ impl BehaviorToolConfig {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
-            delegate_to: self.delegate_to.clone(),
             subagent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
@@ -221,7 +212,6 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
-            .field("delegate_to", &self.delegate_to)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
             .field(

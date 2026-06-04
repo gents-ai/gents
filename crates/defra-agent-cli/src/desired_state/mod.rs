@@ -124,8 +124,6 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
-    pub(crate) delegate_to: Vec<String>,
-    #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,

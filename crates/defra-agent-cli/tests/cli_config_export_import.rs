@@ -158,8 +158,7 @@ fn write_simple_manifest_root(
                 "enable_bash": false,
                 "bash_mode": "ReadOnly",
                 "cli_tool_names": [],
-                "enable_meta_tools": false,
-                "delegate_to": []
+                "enable_meta_tools": false
             }),
         )?;
     }

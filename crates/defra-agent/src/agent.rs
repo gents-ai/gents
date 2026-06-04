@@ -365,7 +365,6 @@ pub(crate) fn tool_selection_from_document(
             .allowed_mcp_service_ids
             .clone()
             .unwrap_or_default(),
-        delegate_to: selection.delegate_to.clone().unwrap_or_default(),
         backgroundable_tool_names: selection
             .backgroundable_tool_names
             .clone()

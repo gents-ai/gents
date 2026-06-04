@@ -1,9 +1,7 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 use std::collections::HashMap;
 
@@ -11,7 +9,6 @@ mod args;
 mod bash_tools;
 mod cancellable;
 mod cli_tool;
-mod delegate;
 mod denial;
 mod file_tools;
 mod native_runner;
@@ -22,7 +19,6 @@ mod tests;
 
 use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
-use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
 use subagent::{
@@ -46,9 +42,6 @@ const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 const DEFAULT_MAX_MATCHES: usize = 200;
 const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
-const DELEGATE_POLL_INTERVAL_MS: u64 = 200;
-const DELEGATE_WAIT_TIMEOUT_SECS: u64 = 30;
-pub const DELEGATE_TOOL_NAME: &str = "delegate_to_agent";
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";
@@ -399,13 +392,6 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .bash_read_only()
         .build()
         .build_native_tools()
-}
-
-pub fn build_delegate_tool(
-    node: Arc<EmbeddedNode>,
-    allowed_target_dids: Vec<String>,
-) -> Box<dyn ToolDyn> {
-    Box::new(DelegateToAgentTool::new(node, allowed_target_dids))
 }
 
 pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {

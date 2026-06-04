@@ -307,16 +307,6 @@ impl BehaviorBuilder {
         self
     }
 
-    pub fn delegate_to<I, S>(mut self, delegate_to: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.behavior.tool_selection.delegate_to =
-            delegate_to.into_iter().map(Into::into).collect();
-        self
-    }
-
     pub fn custom_tool<T>(mut self, tool: T) -> Self
     where
         T: ToolDyn + Clone + Send + Sync + 'static,

@@ -57,7 +57,6 @@ pub struct ToolSelection {
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
-    pub delegate_to: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
     /// Enable the read-only `defra_query` structured query tool.
     pub enable_defra_query: bool,
@@ -75,7 +74,6 @@ impl Default for ToolSelection {
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
-            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),

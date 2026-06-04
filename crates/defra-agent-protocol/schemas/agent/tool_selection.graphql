@@ -14,6 +14,7 @@ type ToolSelection {
     cli_tool_names: [String]
     enable_meta_tools: Boolean
     allowed_mcp_service_ids: [String]
+    # deprecated: delegate_to_agent removed; field retained for schema-compat, unused.
     delegate_to: [String]
     backgroundable_tool_names: [String]
     subagent_targets: [String]

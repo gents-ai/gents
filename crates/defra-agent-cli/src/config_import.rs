@@ -1598,7 +1598,6 @@ mod lean_apply_write_boundary_tests {
                 })
                 .map(|reference| reference.id.clone())
                 .collect(),
-            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
