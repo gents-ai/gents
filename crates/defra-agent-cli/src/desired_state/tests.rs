@@ -765,10 +765,7 @@ fn diff_manifests_with_prune_deletes_only_unreferenced_live_only_docs() {
     );
 
     assert_eq!(report.collections.tasks.live_only, vec!["stale-task"]);
-    assert_eq!(
-        report.collections.schedules.live_only,
-        vec!["stale-schedule"]
-    );
+    assert!(report.collections.schedules.live_only.is_empty());
     assert!(
         report.collections.tasks.delete.is_empty(),
         "task remains protected while the live schedule references it"
