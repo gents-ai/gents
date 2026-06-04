@@ -139,7 +139,11 @@ fn prune_blocks_behavior_referenced_by_task() {
     live.tasks.push(task);
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
-    assert!(deletes_contain(&deletes, defra_agent::Collection::Task, "t1"));
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::Task,
+        "t1"
+    ));
     assert!(
         !deletes_contain(&deletes, defra_agent::Collection::AgentBehavior, "b1"),
         "behavior referenced by a live task must not be pruned"
@@ -155,11 +159,16 @@ fn prune_blocks_task_referenced_by_schedule_and_trigger() {
     live.agent_behaviors.push(behavior_with("b1", None));
     live.tasks.push(task);
     live.schedules.push(sample_schedule("s1", "t1"));
-    live.event_triggers.push(sample_event_trigger_for("e1", "t1"));
+    live.event_triggers
+        .push(sample_event_trigger_for("e1", "t1"));
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
     // schedule + trigger reference the task; task must be protected.
-    assert!(deletes_contain(&deletes, defra_agent::Collection::Schedule, "s1"));
+    assert!(deletes_contain(
+        &deletes,
+        defra_agent::Collection::Schedule,
+        "s1"
+    ));
     assert!(deletes_contain(
         &deletes,
         defra_agent::Collection::EventTrigger,

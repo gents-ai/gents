@@ -129,7 +129,10 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
 
     // Leaf dependencies (no outgoing structural references for prune safety).
     for s in &m.skills {
-        desired.insert(doc(Collection::Skill, &s.skill_id), DesiredFields::opaque(""));
+        desired.insert(
+            doc(Collection::Skill, &s.skill_id),
+            DesiredFields::opaque(""),
+        );
     }
     for b in &m.inference_backends {
         desired.insert(
@@ -172,7 +175,10 @@ fn manifest_from_desired(m: &DesiredStateManifest) -> Manifest {
         );
     }
     for s in &m.skills {
-        docs.insert(doc(Collection::Skill, &s.skill_id), DesiredFields::opaque(""));
+        docs.insert(
+            doc(Collection::Skill, &s.skill_id),
+            DesiredFields::opaque(""),
+        );
     }
     for ts in &m.tool_selections {
         docs.insert(

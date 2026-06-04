@@ -368,10 +368,7 @@ impl DesiredStateDiffCollections {
     /// Record proven-safe prune deletes: move each pruned id from its
     /// collection's `live_only` into `delete`. The deletes come from
     /// `prune::prune_safe_deletes`, i.e. `apply_model::diff_prune`.
-    pub(crate) fn record_prune_deletes(
-        &mut self,
-        deletes: &[defra_agent::apply_model::DocRef],
-    ) {
+    pub(crate) fn record_prune_deletes(&mut self, deletes: &[defra_agent::apply_model::DocRef]) {
         for doc in deletes {
             let diff = self.get_mut(doc.collection);
             diff.live_only.retain(|id| id != &doc.id);
