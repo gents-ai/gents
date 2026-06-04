@@ -186,6 +186,9 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
         Some(&PersistedResponseState {
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
+            agent_did: None,
+            behavior_id: None,
+            session_id: None,
             content: String::new(),
             status: "streaming".to_string(),
             token_count: 0,

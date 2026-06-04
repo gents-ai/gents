@@ -18,6 +18,10 @@ use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
+use crate::runtime_trace::{
+    record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
+    RequestTraceAttrs,
+};
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
@@ -124,16 +128,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 }
             };
 
-            let request_id = request.request_id.clone();
-            let session_id = request.session_id.clone();
-            let agent_did = request.agent_did.clone();
-            let requested_behavior_id = request
-                .behavior_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|behavior_id| !behavior_id.is_empty())
-                .unwrap_or("")
-                .to_string();
+            let trace_attrs = RequestTraceAttrs::from_request(&request);
             let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
             let execution_origin = crate::lifecycle::ExecutionOrigin::from_persisted(
@@ -143,13 +138,26 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             self.process_request(request, shutdown.clone())
                 .instrument(tracing::info_span!(
                     "agent.request",
-                    request_id = %request_id,
-                    session_id = %session_id,
-                    agent_did = %agent_did,
+                    request_doc_id = %trace_attrs.request_doc_id,
+                    request_id = %trace_attrs.request_id,
+                    session_id = %trace_attrs.session_id,
+                    agent_did = %trace_attrs.agent_did,
                     behavior_id = %behavior_id,
-                    requested_behavior_id = %requested_behavior_id,
+                    requested_behavior_id = %trace_attrs.requested_behavior_id,
                     backend_id = %backend_id,
                     execution_origin = %execution_origin.as_str(),
+                    persisted_execution_origin = %trace_attrs.execution_origin,
+                    deadline_at = %trace_attrs.deadline_at,
+                    has_deadline = trace_attrs.has_deadline,
+                    subagent_depth = trace_attrs.subagent_depth,
+                    is_subagent = trace_attrs.is_subagent,
+                    parent_request_id = %trace_attrs.parent_request_id,
+                    parent_tool_call_id = %trace_attrs.parent_tool_call_id,
+                    selected_skill_count = trace_attrs.selected_skill_count,
+                    workspace_cwd_set = trace_attrs.workspace_cwd_set,
+                    claim_outcome = tracing::field::Empty,
+                    request_outcome = tracing::field::Empty,
+                    failure_class = tracing::field::Empty,
                 ))
                 .await;
         }
@@ -170,9 +178,24 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             self.behavior.backend_id.clone().unwrap_or_default(),
         );
 
-        match lifecycle.claim_with_identity().await {
-            Ok(ClaimOutcome::Claimed) => {}
+        let claim_result = lifecycle
+            .claim_with_identity()
+            .instrument(tracing::info_span!(
+                "request.claim",
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                agent_did = %request.agent_did,
+                behavior_id = %self.behavior.behavior_id,
+            ))
+            .await;
+
+        match claim_result {
+            Ok(ClaimOutcome::Claimed) => {
+                record_current_claim_outcome("claimed");
+            }
             Ok(ClaimOutcome::Queued) => {
+                record_current_claim_outcome("queued");
+                record_current_request_outcome("queued");
                 tracing::info!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -182,6 +205,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 return;
             }
             Ok(ClaimOutcome::Interrupted) => {
+                record_current_claim_outcome("interrupted");
+                record_current_request_outcome("interrupted_pre_claim");
                 tracing::info!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -192,6 +217,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 return;
             }
             Ok(ClaimOutcome::Expired) => {
+                record_current_claim_outcome("expired");
+                record_current_request_outcome("expired_pre_claim");
                 tracing::info!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -202,6 +229,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 return;
             }
             Err(error) => {
+                record_current_claim_outcome("error");
+                record_current_request_outcome("claim_error");
+                record_current_failure_class(&error);
                 tracing::warn!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -224,6 +254,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     requested_behavior_id,
                     self.behavior.behavior_id
                 );
+                record_current_request_outcome("rejected_behavior_mismatch");
+                record_current_failure_class(&error);
                 tracing::warn!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -254,7 +286,19 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
         }
 
-        if let Err(error) = lifecycle.prepare_session_with_identity().await {
+        if let Err(error) = lifecycle
+            .prepare_session_with_identity()
+            .instrument(tracing::info_span!(
+                "request.prepare_session",
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                agent_did = %request.agent_did,
+                behavior_id = %lifecycle.behavior_id(),
+            ))
+            .await
+        {
+            record_current_request_outcome("session_prepare_error");
+            record_current_failure_class(&error);
             tracing::error!(
                 behavior_id = %self.behavior.behavior_id,
                 request_id = %request.request_id,
@@ -301,9 +345,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
+                record_current_request_outcome("completed");
                 let _ = lifecycle.complete().await;
             }
             Ok(HandleRequestOutcome::Interrupted) => {
+                record_current_request_outcome("interrupted");
                 tracing::info!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -314,6 +360,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 // Do NOT call lifecycle.complete() or fail() — transition_to_interrupted already ran.
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
+                record_current_request_outcome("failed_after_response");
+                record_current_failure_class(&error);
                 tracing::error!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,
@@ -324,6 +372,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 let _ = lifecycle.fail().await;
             }
             Err(error) => {
+                record_current_request_outcome("failed");
+                record_current_failure_class(&error);
                 tracing::error!(
                     behavior_id = %self.behavior.behavior_id,
                     request_id = %request.request_id,

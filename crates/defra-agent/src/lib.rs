@@ -39,6 +39,7 @@ pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
+pub(crate) mod runtime_trace;
 pub mod schema;
 pub mod session;
 pub mod skills;
