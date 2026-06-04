@@ -948,6 +948,17 @@ fn read_combined_output_slice(
     while end > start && !combined.is_char_boundary(end) {
         end -= 1;
     }
+    // Progress guard: if snapping back a multi-byte codepoint collapses the
+    // slice to empty yet more bytes remain, advance `end` past that one
+    // codepoint so every read makes progress.  In practice the 256-byte floor
+    // in `validated_max_bytes` makes this unreachable today, but the guard
+    // keeps the invariant explicit and safe against future budget changes.
+    if end == start && start < bytes.len() {
+        end = start + 1;
+        while end < bytes.len() && !combined.is_char_boundary(end) {
+            end += 1;
+        }
+    }
     let output = combined[start..end].to_string();
     let next_offset = end as u64;
     CombinedOutputSlice {

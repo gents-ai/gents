@@ -81,6 +81,22 @@ pub(crate) fn render_transcript(
         };
         let projected_len = transcript.len() + block.len() + usize::from(!transcript.is_empty());
         if included_count + 1 > opts.limit || projected_len > opts.max_chars as usize {
+            // Always emit the first eligible block on this page even when it
+            // exceeds the budget: skipping it silently violates the
+            // content-honest contract and produces a non-advancing cursor.
+            if included_count == 0 {
+                // Force-emit the oversized block so the page always makes
+                // progress. `capped` stays true and `has_more` will be set
+                // correctly from the remaining messages after the cursor
+                // advances past this block.
+                if !transcript.is_empty() {
+                    transcript.push('\n');
+                }
+                transcript.push_str(&block);
+                included_count += 1;
+                first_included.get_or_insert(msg.sequence);
+                last_included = msg.sequence;
+            }
             capped = true;
             break;
         }
@@ -386,6 +402,41 @@ mod tests {
         let page2 = render_transcript(&msgs, page1.next_sequence, opts);
         assert_eq!(page2.through_sequence, 2);
         assert!(!page2.has_more, "no renderable message past the cursor");
+    }
+
+    #[test]
+    fn oversized_single_block_is_always_emitted_not_silently_dropped() {
+        // A single assistant turn whose rendered block exceeds max_chars must
+        // still be returned — never silently dropped.  The cursor must advance
+        // past it so a subsequent read terminates honestly.
+        let big_body = "y".repeat(500);
+        let msgs = vec![assistant(1, &big_body), assistant(2, "small")];
+        let opts = RenderOptions {
+            max_chars: 50, // far smaller than the 500-char block
+            ..OPTS_DEFAULT
+        };
+        // Page 1: the oversized block must appear despite the budget.
+        let page1 = render_transcript(&msgs, 0, opts);
+        assert!(
+            page1.transcript.contains("[assistant seq=1]"),
+            "oversized first block must be emitted: {:?}",
+            page1.transcript
+        );
+        assert!(
+            page1.through_sequence >= 1,
+            "cursor must advance past sequence 1"
+        );
+        assert!(
+            page1.next_sequence >= 2,
+            "next_sequence must point past the emitted block"
+        );
+        // Page 2: resume cursor picks up the second (small) message.
+        let page2 = render_transcript(&msgs, page1.next_sequence, opts);
+        assert!(
+            page2.transcript.contains("[assistant seq=2]"),
+            "page 2 must emit the second message"
+        );
+        assert!(!page2.has_more, "no more messages after page 2");
     }
 
     #[test]

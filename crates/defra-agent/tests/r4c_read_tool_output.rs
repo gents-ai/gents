@@ -472,6 +472,217 @@ async fn read_tool_output_pages_gap_free_across_budget() {
 }
 
 #[tokio::test]
+async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
+    // Build a buffer where multi-byte codepoints (3-byte UTF-8 sequences,
+    // U+2019 RIGHT SINGLE QUOTATION MARK = 0xE2 0x80 0x99) are dense enough
+    // that a budget boundary will often fall inside a codepoint.  Assert that
+    // every page returned by the API is valid UTF-8 (no panic), that pages
+    // concatenate byte-for-byte to the original, and that no page is empty
+    // unless it is the terminal read-past-the-end.
+    let char_3byte: char = '\u{2019}'; // 3-byte UTF-8: 0xE2 0x80 0x99
+                                       // 64 repetitions × 3 bytes = 192 bytes.  With a 64-token (~256-byte)
+                                       // budget, every page boundary is near codepoint edges.
+    let raw: String = std::iter::repeat(char_3byte).take(64).collect();
+    assert_eq!(
+        raw.len(),
+        192,
+        "sanity: each char is exactly 3 bytes in UTF-8"
+    );
+
+    let (_db, hook, _session_id, _request_id) = setup_hook(
+        "r4c-read-utf8-page-boundary",
+        registry(
+            vec![Box::new(StaticTool {
+                name: "utf8_tool",
+                result: raw.clone(),
+            })],
+            &["utf8_tool"],
+        ),
+    )
+    .await;
+    let handle = background_tool(&hook, "bg-utf8", "utf8_tool").await;
+    let tool_call_id = handle["tool_call_id"].as_str().unwrap();
+    let waited = wait_tool(&hook, "wait-utf8", tool_call_id).await;
+    assert_eq!(waited["status"].as_str(), Some("completed"));
+
+    // Page through with a budget deliberately misaligned with 3-byte chars.
+    // max_tokens=64 → 256 bytes; 256 / 3 = 85.33, so the raw boundary at 256
+    // bytes is not a char boundary for 3-byte sequences.
+    let mut reassembled = String::new();
+    let mut cursor = 0u64;
+    let mut pages = 0;
+    loop {
+        let page = read_tool_output(
+            &hook,
+            &format!("read-utf8-page-{pages}"),
+            json!({
+                "tool_call_id": tool_call_id,
+                "offset": cursor,
+                "max_tokens": 64
+            }),
+        )
+        .await;
+        let out = page["output"].as_str().expect("output must be a string");
+        // Valid UTF-8 is guaranteed by the API contract; if it were violated
+        // `serde_json` deserialization above would have already failed.
+        assert!(
+            std::str::from_utf8(out.as_bytes()).is_ok(),
+            "page output is not valid UTF-8"
+        );
+        let next = page["next_offset"].as_u64().unwrap();
+        let has_more = page["has_more"].as_bool().unwrap();
+        if has_more {
+            assert!(!out.is_empty(), "non-final pages must make progress");
+            assert!(next > cursor, "cursor must advance");
+        }
+        reassembled.push_str(out);
+        cursor = next;
+        pages += 1;
+        if !has_more {
+            break;
+        }
+        assert!(pages < 30, "paging did not terminate");
+    }
+    assert_eq!(
+        reassembled, raw,
+        "pages must reassemble to the original byte-for-byte"
+    );
+    assert_eq!(cursor, raw.len() as u64, "final cursor equals total_bytes");
+}
+
+#[tokio::test]
+async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
+    // Build a result that has both stdout and stderr so the combined buffer
+    // contains the STDERR_BOUNDARY separator.  Walk the cursor across the full
+    // combined buffer (including the boundary) with a small budget and assert:
+    //   - pages are contiguous (no gap, no overlap),
+    //   - total_bytes and next_offset stay honest across every page,
+    //   - the full reassembly equals the combined string byte-for-byte.
+    // The native result format is detected by the `persisted_tool_output_streams`
+    // parser; we use the plain (non-native) path by returning a string that
+    // does NOT start with "defra_exec: " — in that case stdout == result and
+    // stderr == "".  To exercise the stdout+stderr path we need the native
+    // format.  The native format is:
+    //   defra_exec: <json>\nstdout:\n<stdout>\nstderr:\n<stderr>
+    let stdout_body = "A".repeat(200);
+    let stderr_body = "B".repeat(200);
+    let native_result = format!(
+        concat!(
+            "defra_exec: {{\"ok\":true,\"status\":\"success\",",
+            "\"command\":\"echo\",\"argv\":[\"echo\"],",
+            "\"cwd\":\".\",\"exit_code\":0,\"timed_out\":false,\"duration_ms\":1,",
+            "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
+            "\"network_mode\":\"inherit\",\"sandbox\":\"policy_read_only\",",
+            "\"stdout_truncation\":{{\"returned_chars\":{stdout_len},\"total_chars\":{stdout_len},",
+            "\"max_chars\":16000,\"truncated\":false}},",
+            "\"stderr_truncation\":{{\"returned_chars\":{stderr_len},\"total_chars\":{stderr_len},",
+            "\"max_chars\":16000,\"truncated\":false}}}}\n",
+            "stdout:\n",
+            "{stdout}\n",
+            "stderr:\n",
+            "{stderr}"
+        ),
+        stdout_len = stdout_body.len(),
+        stderr_len = stderr_body.len(),
+        stdout = stdout_body,
+        stderr = stderr_body,
+    );
+
+    // The native parser only fires for the "bash" tool name.
+    let (_db, hook, _session_id, _request_id) = setup_hook(
+        "r4c-read-stdout-stderr-paging",
+        registry(
+            vec![Box::new(StaticTool {
+                name: "bash",
+                result: native_result,
+            })],
+            &["bash"],
+        ),
+    )
+    .await;
+    let handle = background_tool(&hook, "bg-dual", "bash").await;
+    let tool_call_id = handle["tool_call_id"].as_str().unwrap();
+    let waited = wait_tool(&hook, "wait-dual", tool_call_id).await;
+    assert_eq!(waited["status"].as_str(), Some("completed"));
+
+    // Read the first page to learn total_bytes, then walk all pages and
+    // reassemble.  total_bytes must stay constant across all pages.
+    let first = read_tool_output(
+        &hook,
+        "read-dual-page-0",
+        json!({
+            "tool_call_id": tool_call_id,
+            "offset": 0,
+            "max_tokens": 64  // 256 bytes per page
+        }),
+    )
+    .await;
+    let total_bytes = first["total_bytes"].as_u64().expect("total_bytes");
+    // The native parser extracts stdout and stderr from the result; the
+    // combined buffer is stdout + STDERR_BOUNDARY ("\n--- stderr ---\n") +
+    // stderr = 200 + 16 + 200 = 416 bytes.
+    let stderr_boundary_len = "\n--- stderr ---\n".len(); // 16
+    let expected_combined_len = stdout_body.len() + stderr_boundary_len + stderr_body.len();
+    assert_eq!(
+        total_bytes, expected_combined_len as u64,
+        "total_bytes must cover stdout + boundary + stderr"
+    );
+
+    let mut reassembled = first["output"].as_str().unwrap().to_string();
+    let mut cursor = first["next_offset"].as_u64().unwrap();
+    let mut has_more = first["has_more"].as_bool().unwrap();
+    let mut pages = 1usize;
+    while has_more {
+        let page = read_tool_output(
+            &hook,
+            &format!("read-dual-page-{pages}"),
+            json!({
+                "tool_call_id": tool_call_id,
+                "offset": cursor,
+                "max_tokens": 64
+            }),
+        )
+        .await;
+        let out = page["output"].as_str().unwrap();
+        let next = page["next_offset"].as_u64().unwrap();
+        assert_eq!(
+            page["total_bytes"].as_u64().unwrap(),
+            total_bytes,
+            "total_bytes must be constant across all pages"
+        );
+        assert_eq!(
+            next,
+            cursor + out.len() as u64,
+            "no gap and no overlap between pages"
+        );
+        assert!(!out.is_empty(), "non-final pages must make progress");
+        reassembled.push_str(out);
+        cursor = next;
+        has_more = page["has_more"].as_bool().unwrap();
+        pages += 1;
+        assert!(pages < 30, "paging did not terminate");
+    }
+    assert_eq!(cursor, total_bytes, "final cursor must equal total_bytes");
+    assert!(
+        reassembled.contains(&stdout_body),
+        "reassembled output must contain stdout"
+    );
+    assert!(
+        reassembled.contains("--- stderr ---"),
+        "reassembled output must contain the stderr boundary"
+    );
+    assert!(
+        reassembled.contains(&stderr_body),
+        "reassembled output must contain stderr"
+    );
+    assert_eq!(
+        reassembled.len() as u64,
+        total_bytes,
+        "reassembled length must equal total_bytes"
+    );
+}
+
+#[tokio::test]
 async fn read_tool_output_rejects_non_backgrounded() {
     let (db, hook, session_id, request_id) = setup_hook(
         "r4c-read-output-foreground",

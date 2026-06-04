@@ -435,7 +435,7 @@ pub(super) fn background_invalid_tool_arguments_payload(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name
     }))
 }
@@ -453,7 +453,7 @@ pub(super) fn background_tool_not_allowed_payload(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name,
         "requested_tool_name": requested,
         "allowed_backgroundable_tool_names": allowed_targets
@@ -470,7 +470,7 @@ pub(super) fn background_budget_exceeded_payload(current_backgrounded: usize) ->
             "parent request has reached the concurrent backgrounded tool ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"
         ),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": SPAWN_PROCESS_TOOL_NAME,
         "current_backgrounded": current_backgrounded,
         "max_backgrounded": MAX_BACKGROUNDED_TOOLS_PER_PARENT
