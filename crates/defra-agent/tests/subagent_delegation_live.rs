@@ -16,35 +16,25 @@
 //! - `DEFRA_AGENT_LIVE_SUBAGENT_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
 //! - `DEFRA_AGENT_LIVE_SUBAGENT_MODEL` (default `d4f`)
 //!
-//! ## Cross-node delegation seam (Test 2)
+//! ## Cross-node delegation (Test 2)
 //!
 //! `live_cross_node_subagent_delegation` exercises orchestrator-on-A delegating
-//! to a behavior hosted on B. Against the current runtime it detects, and
-//! gracefully reports (returning `Ok`), a production seam rather than fully
-//! driving the round-trip:
+//! to a behavior hosted on B over REAL in-process P2P replication (the proven
+//! `test_p2p_db` + `install_one_way_replicator` pattern from the R5
+//! cross-deployment conformance harness — no test "pump").
 //!
-//! The runtime document view loads behaviors via `list_agent_behavior_records`,
-//! which is strictly DID-scoped (`agent_did _eq <local did>`). A replicated
-//! remote-DID `AgentBehavior` (the target `live-researcher` owned by DID-B) is
-//! therefore invisible to node A's `view.behaviors`. Two consequences:
-//!   1. `validate_subagent_targets_resolve` bails — the orchestrator behavior is
-//!      marked unavailable and node A never reaches `ready` ("subagent_targets
-//!      entry \"live-researcher\" does not resolve to an AgentBehavior").
-//!   2. Even past validation, `retain_subagent_targets` keeps only targets in
-//!      node A's *active* (DID-A) behaviors, so the `spawn_subagent` tool is
-//!      never surfaced to the live model for a remote target.
-//!
-//! The #377 design spec C1 ("subagent_targets entries resolve to a known
-//! AgentBehavior — local OR replicated") anticipates this; the replicated case
-//! is not yet wired. When that lands, this test's seam-detection short-circuit
-//! drops out and the full assertions (bridge on A -> child materialized + run on
-//! B -> terminal replicated back to A) take over. Test 1 (local delegation)
-//! runs the full live round-trip today.
+//! Subagent targets are named `(agent_did, behavior_id)` pairs. The orchestrator
+//! on A writes the child `AgentRequest` LOCALLY stamped with the TARGET's
+//! `agent_did` (= DID-B). Bidirectional replication carries that child to B,
+//! where B's daemon + SubagentSource claim and run it against the live model;
+//! the terminal child request + its response replicate back to A. The full
+//! assertions (bridge on A -> child materialized + run on B with a non-empty
+//! live answer -> terminal replicated back to A) all run live.
 
 mod support;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
@@ -59,7 +49,7 @@ use serde::Deserialize;
 
 use support::fixtures::test_identity;
 use support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use support::{first_optional_row, test_db, TestDb};
+use support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
 const DEFAULT_LIVE_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 const DEFAULT_LIVE_MODEL: &str = "d4f";
@@ -67,6 +57,21 @@ const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 /// Friendly, model-facing subagent target name (the model never sees behavior ids).
 const RESEARCHER_TARGET_NAME: &str = "researcher";
+
+/// The `chat-requests` P2P collection profile (matches the `p2p pair`
+/// chat-requests profile in `defra-agent-cli`). These carry the full delegation
+/// round-trip: the child `AgentRequest` + bridge `AgentToolCall` A->B and the
+/// terminal child + its response/messages B->A.
+const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
+    "AgentConversation",
+    "AgentRequest",
+    "AgentResponse",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentMessage",
+    "AgentToolCall",
+    "CompactionEntry",
+];
 
 fn live_enabled() -> bool {
     std::env::var("DEFRA_AGENT_LIVE_SUBAGENT").as_deref() == Ok("1")
@@ -265,9 +270,9 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let model = live_model();
     assert_endpoint_reachable(&endpoint).await;
 
-    // Two nodes, two distinct DIDs.
-    let db_a = test_db("subagent-live-a").await;
-    let db_b = test_db("subagent-live-b").await;
+    // Two REAL P2P-enabled nodes, two distinct DIDs.
+    let db_a = test_p2p_db("subagent-live-a").await;
+    let db_b = test_p2p_db("subagent-live-b").await;
     let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-live-a"));
     let identity_b: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-live-b"));
     let did_a = identity_a.did().to_string();
@@ -309,22 +314,15 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // For A's `subagent_target_host` to classify `live-researcher` as REMOTE,
-    // B's AgentBehavior doc (owned by DID-B) must exist on A. Mirror it.
-    mirror_agent_behavior(
-        db_b.node.as_ref(),
-        db_a.node.as_ref(),
-        RESEARCHER_BEHAVIOR_ID,
-    )
-    .await;
-
+    // The named (agent_did, behavior_id) target is owned by DID-B: a REMOTE
+    // delegation target. Post-AB-fix, A authors the bridge + writes the child
+    // request LOCALLY stamped with DID-B WITHOUT resolving B's behavior locally,
+    // so we do NOT mirror B's AgentBehavior onto A. Replication carries the
+    // child to B.
     authorize_subagents(
         db_a.node.as_ref(),
         &did_a,
         &orchestrator_behavior_id,
-        // The researcher target is owned by DID-B: a REMOTE delegation target.
-        // The named (agent_did, behavior_id) pair lets A author the bridge
-        // without resolving B's behavior locally.
         vec![SubagentTarget {
             name: RESEARCHER_TARGET_NAME.to_string(),
             agent_did: did_b.clone(),
@@ -341,52 +339,28 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     write_pairing(db_a.node.as_ref(), "peer-b", &did_b).await;
     write_pairing(db_b.node.as_ref(), "peer-a", &did_a).await;
 
-    // Replication pump: mirror the relevant collections both directions until
-    // the test ends. Simple, idempotent upsert-by-id mirror (a test pump, not P2P).
-    let pump_cancel = tokio_util::sync::CancellationToken::new();
-    let _pump = spawn_replication_pump(db_a.node.clone(), db_b.node.clone(), pump_cancel.clone());
+    // REAL bidirectional in-process P2P replication for the chat-requests
+    // collection set, installed BEFORE the request is submitted. A->B carries
+    // the child request + bridge tool call so B materializes + runs the child;
+    // B->A carries the terminal child request + response/messages so A's
+    // BackgroundCompletionObserver can project completion back onto the parent.
+    install_one_way_replicator(
+        db_a.node.as_ref(),
+        db_b.node.as_ref(),
+        CHAT_REQUEST_COLLECTIONS,
+    )
+    .await;
+    install_one_way_replicator(
+        db_b.node.as_ref(),
+        db_a.node.as_ref(),
+        CHAT_REQUEST_COLLECTIONS,
+    )
+    .await;
 
-    // Boot full agents on both nodes.
+    // Boot full agents on both nodes. B owns DID-B: its daemon + SubagentSource
+    // claim and run the replicated child request against the live model.
     let agent_b = boot_document_agent(&db_b, identity_b).await?;
-
-    // Boot A with a non-panicking readiness wait so we can detect the
-    // remote-DID subagent-target resolution seam (see the module note below)
-    // and report it gracefully rather than hanging/aborting the suite.
-    let agent_a = {
-        let agent = DefraAgent::from_default_behavior_documents(
-            db_a.node.clone(),
-            identity_a,
-            DocumentRuntimeOptions {
-                tool_ceiling: ToolCeiling::meta_only(),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let handle = tokio::spawn(agent.run(shutdown_rx));
-        BootedAgent::new(shutdown_tx, handle, did_a.clone())
-    };
-
-    if !wait_until_runtime_ready(db_a.node.as_ref(), &did_a, Duration::from_secs(15)).await {
-        let snap = support::snapshots::fetch_runtime_snapshot(db_a.node.as_ref(), &did_a).await;
-        eprintln!(
-            "[live-cross] DONE_WITH_CONCERNS: orchestrator on node A never reached ready. \
-             This is the known production seam: the runtime document view \
-             (list_agent_behavior_records) is DID-scoped, so a replicated remote-DID \
-             AgentBehavior ('{RESEARCHER_BEHAVIOR_ID}' owned by DID-B) is invisible to A's \
-             view.behaviors. That makes validate_subagent_targets_resolve fail (orchestrator \
-             marked unavailable) and retain_subagent_targets strip the target (spawn tool never \
-             surfaced). Cross-node live delegation needs the design-spec C1 'local OR replicated' \
-             target resolution to land first. node A snapshot = {snap:?}"
-        );
-        pump_cancel.cancel();
-        // A's `run()` returned Err (no runnable behaviors at startup), so the
-        // strict `shutdown()` join-assert would panic. Drop A (Drop aborts the
-        // task) and cleanly shut down B.
-        drop(agent_a);
-        agent_b.shutdown().await;
-        return Ok(());
-    }
+    let agent_a = boot_document_agent(&db_a, identity_a).await?;
 
     let request_id = "req-live-cross-node";
     let session_id = "session-live-cross-node";
@@ -411,9 +385,10 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
                 let snap =
                     support::snapshots::fetch_runtime_snapshot(db_a.node.as_ref(), &did_a).await;
                 eprintln!("[live-cross] node A runtime snapshot = {snap:?}");
-                pump_cancel.cancel();
                 agent_a.shutdown().await;
                 agent_b.shutdown().await;
+                db_a.node.shutdown().await;
+                db_b.node.shutdown().await;
                 panic!("orchestrator on A did not create a spawn_subagent bridge tool call");
             }
         };
@@ -502,9 +477,11 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         "orchestrator request on A must terminalize; got {parent_terminal_a}"
     );
 
-    pump_cancel.cancel();
     agent_a.shutdown().await;
     agent_b.shutdown().await;
+    // BootedAgent only stops DefraAgent::run; P2P belongs to the embedded node.
+    db_a.node.shutdown().await;
+    db_b.node.shutdown().await;
     Ok(())
 }
 
@@ -904,21 +881,88 @@ async fn wait_for_assistant_answer(
 // Cross-node helpers (Test 2)
 // ---------------------------------------------------------------------------
 
-/// Non-panicking variant of the support `wait_for_runtime_ready`: returns
-/// `true` if the runtime reaches `ready` within `timeout`, `false` otherwise.
-async fn wait_until_runtime_ready(node: &EmbeddedNode, agent_did: &str, timeout: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + timeout;
+/// Connect two P2P nodes and install a sender->receiver replicator for
+/// `collections`. Mirrors the proven R5 cross-deployment harness pattern: add
+/// the collections to both nodes' P2P sets and register the replicator on both
+/// the sender (push target) and receiver (authorization) sides. Call it both
+/// directions (A->B and B->A) for bidirectional replication.
+async fn install_one_way_replicator(
+    sender: &EmbeddedNode,
+    receiver: &EmbeddedNode,
+    collections: &[&str],
+) {
+    let sender_addr = wait_for_listen_addr(sender).await;
+    let receiver_addr = wait_for_listen_addr(receiver).await;
+    let sender_p2p = sender.p2p().expect("sender p2p");
+    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+
+    sender_p2p
+        .connect_peer(&receiver_addr)
+        .await
+        .expect("connect sender to receiver");
+    wait_for_connected_peer(sender).await;
+    wait_for_connected_peer(receiver).await;
+
+    let collection_names = collections
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    sender_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add sender p2p collections");
+    receiver_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add receiver p2p collections");
+    receiver_p2p
+        .add_replicator(
+            collection_names.clone(),
+            Some(&sender_addr),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("authorize sender as receiver-side replicator");
+    sender_p2p
+        .add_replicator(collection_names, Some(&receiver_addr), Vec::new(), None)
+        .await
+        .expect("install sender to receiver replicator");
+}
+
+async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Some(snapshot) = support::snapshots::fetch_runtime_snapshot(node, agent_did).await {
-            if snapshot.process_state == "ready"
-                && snapshot.reconcile_phase == "idle"
-                && snapshot.runnable_behavior_count >= 1
-            {
-                return true;
-            }
+        let addrs = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .listen_addresses()
+            .await
+            .expect("listen addresses");
+        if let Some(addr) = addrs.first() {
+            return addr.clone();
         }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
+        if Instant::now() >= deadline {
+            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_connected_peer(node: &EmbeddedNode) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let peers = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .connected_peers()
+            .await
+            .expect("connected peers");
+        if !peers.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("node never reported a connected peer; last_peers={peers:?}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -951,18 +995,6 @@ async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_did: &str) {
         "write pairing failed: {:?}",
         resp.errors
     );
-}
-
-/// Copy the `AgentBehavior` doc for `behavior_id` from `from` to `to`,
-/// preserving its `agent_did` (so it is REMOTE on the destination node).
-async fn mirror_agent_behavior(from: &EmbeddedNode, to: &EmbeddedNode, behavior_id: &str) {
-    let behavior = load_agent_behavior(from, behavior_id)
-        .await
-        .expect("load behavior to mirror")
-        .expect("behavior must exist on source node");
-    upsert_agent_behavior(to, &behavior)
-        .await
-        .expect("mirror behavior to destination node");
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1046,134 +1078,4 @@ async fn wait_for_request_on_node(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-}
-
-/// Spawn a background task that mirrors the subagent-relevant collections both
-/// directions A<->B every ~250ms. Idempotent upsert-by-unique-id; a test pump.
-fn spawn_replication_pump(
-    node_a: Arc<EmbeddedNode>,
-    node_b: Arc<EmbeddedNode>,
-    cancel: tokio_util::sync::CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_millis(250));
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => return,
-                _ = tick.tick() => {
-                    // A -> B: parent requests + bridge tool calls so B can
-                    // materialize + run the child.
-                    let _ = mirror_collection(&node_a, &node_b, "AgentRequest").await;
-                    let _ = mirror_collection(&node_a, &node_b, "AgentToolCall").await;
-                    // B -> A: terminal child request + its response/messages so
-                    // A's BackgroundCompletionObserver can project completion.
-                    let _ = mirror_collection(&node_b, &node_a, "AgentRequest").await;
-                    let _ = mirror_collection(&node_b, &node_a, "AgentToolCall").await;
-                    let _ = mirror_collection(&node_b, &node_a, "AgentResponse").await;
-                    let _ = mirror_collection(&node_b, &node_a, "AgentMessage").await;
-                }
-            }
-        }
-    })
-}
-
-/// Mirror every row of `collection` from `from` to `to` via collection-specific
-/// upserts. Best-effort: errors are swallowed (the pump retries next tick).
-async fn mirror_collection(from: &EmbeddedNode, to: &EmbeddedNode, collection: &str) -> Result<()> {
-    let fields = match collection {
-        "AgentRequest" => {
-            "request_id agent_did behavior_id session_id retry_parent_request retry_root_request \
-             superseded_by_request content status lifecycle_state backend_id execution_origin \
-             metadata failure_reason created_at deadline retry_count max_retries subagent_depth \
-             caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id \
-             caused_by_trigger_kind interrupt_requested_at valid_until"
-        }
-        "AgentToolCall" => {
-            "tool_call_key request_id session_id message_sequence tool_name tool_call_id args \
-             result status lifecycle_state started_at deadline_at completed_at await_mode \
-             cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at \
-             cancel_pending_remote_ack stuck_since cancel_cause tool_failure_class"
-        }
-        "AgentResponse" => {
-            "response_key request_id agent_did behavior_id session_id content reasoning status \
-             error_message token_count progress_seq materialized_message_sequence materialized_at \
-             created_at completed_at"
-        }
-        "AgentMessage" => "message_key session_id sequence role content timestamp",
-        other => anyhow::bail!("unsupported mirror collection {other}"),
-    };
-    let query = format!("{{ {collection}({}) {{ {fields} }} }}", "limit: 200");
-    let resp = from.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("mirror read {collection} failed: {:?}", resp.errors);
-    }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get(collection))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    for row in rows {
-        let _ = upsert_mirrored_row(to, collection, &row).await;
-    }
-    Ok(())
-}
-
-/// Build a collection-specific upsert from a JSON row and execute it on `to`.
-async fn upsert_mirrored_row(
-    to: &EmbeddedNode,
-    collection: &str,
-    row: &serde_json::Value,
-) -> Result<()> {
-    let (key_field, filter_field) = match collection {
-        "AgentRequest" => ("request_id", "request_id"),
-        "AgentToolCall" => ("tool_call_key", "tool_call_key"),
-        "AgentResponse" => ("response_key", "response_key"),
-        "AgentMessage" => ("message_key", "message_key"),
-        other => anyhow::bail!("unsupported upsert collection {other}"),
-    };
-    let key_value = match row.get(key_field).and_then(|v| v.as_str()) {
-        Some(v) if !v.is_empty() => v,
-        _ => return Ok(()),
-    };
-    let escaped_key = escape_graphql_string(key_value);
-
-    // Build the field literal list from the row's present scalar fields.
-    let mut literals = Vec::new();
-    if let Some(obj) = row.as_object() {
-        for (field, value) in obj {
-            if field == "_docID" {
-                continue;
-            }
-            match value {
-                serde_json::Value::String(s) => {
-                    literals.push(format!(r#"{field}: "{}""#, escape_graphql_string(s)));
-                }
-                serde_json::Value::Number(n) => {
-                    literals.push(format!("{field}: {n}"));
-                }
-                serde_json::Value::Bool(b) => {
-                    literals.push(format!("{field}: {b}"));
-                }
-                serde_json::Value::Null => {}
-                _ => {}
-            }
-        }
-    }
-    let body = literals.join(", ");
-    let mutation = format!(
-        r#"mutation {{
-            upsert_{collection}(
-                filter: {{ {filter_field}: {{ _eq: "{escaped_key}" }} }},
-                add: {{ {body} }},
-                update: {{ {body} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = to.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!("upsert {collection} failed: {:?}", resp.errors);
-    }
-    Ok(())
 }
