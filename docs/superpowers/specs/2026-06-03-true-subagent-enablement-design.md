@@ -300,6 +300,35 @@ This supersedes the C4 "static allowlist of behavior_ids" and the C5/open-questi
 wording about local-only resolution; the static-allowlist principle stands, now as
 named `(did, behavior)` entries.
 
+## Addendum 2 (post-audit) — cross-deployment DEFERRED; security posture
+
+A deep adversarial security/correctness audit of the branch produced two decisions
+that change the shipped scope:
+
+- **Cross-deployment is deferred behind a default-OFF flag.** `ToolSelection` gains
+  `subagent_allow_cross_deployment` (default `false`). When false (the default and the
+  only production posture for now), remote-DID targets are rejected at apply-time, the
+  spawn is rejected at runtime, and remote targets are not surfaced to the model — so a
+  node ships **local-only** subagent delegation. The named-target substrate + the R5
+  cross-deployment conformance + the live cross-node test remain (the latter set the flag
+  true), so re-enabling is a flag flip plus the security work below. `#382` ships
+  local-only; cross-deployment is its own follow-up track.
+- **Security model is replication-trust, not authorization (accepted, documented).** The
+  audit confirmed the execution gate has no per-document authorization: a node runs any
+  replicated `AgentRequest` whose `agent_did` matches its own (unsigned; DefraDB ACP not
+  wired), and the pairing check keys on a document field rather than the authenticated
+  peer. The entire cross-deployment boundary therefore reduces to **which peers a node
+  replicates with**. This is accepted for the **trusted-fleet** deployment model and is
+  the reason cross-deployment stays default-off pending ACP / authenticated replication.
+  "Disabling cross-deployment by curating targets + not pairing" is NOT enforceable on
+  its own; the default-off flag is the enforceable control.
+
+Audit also fixed (in-branch): a server-startup crash on upgraded DBs (migration ordering),
+two convergence races (cancel-before-materialize orphan; DID-anchored the claim gate so a
+node only materializes children for its own DID), and fail-safety/hygiene (silent
+target-drop warn, reject-on-deleted-local-behavior, timeout field type, apply `created_at`,
+`list_subagents` surfaces the friendly name).
+
 ## Related
 
 #377 (this) · #378 (workflow orchestration, unblocked) · #9 (principal/behavior/
