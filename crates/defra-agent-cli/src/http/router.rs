@@ -207,7 +207,9 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
     };
 
     match load_self_view(&state.graphql, &state.agent_did).await {
-        Ok((behaviors, context_budget)) => {
+        // `/self` already returns the full `context_budget`; the compact context
+        // indicator (third tuple element, surfaced on `/status`) is redundant here.
+        Ok((behaviors, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
                 &health,
