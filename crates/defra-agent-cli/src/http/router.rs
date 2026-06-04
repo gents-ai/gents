@@ -164,11 +164,12 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     // Best-effort surfacing of the agent's own behaviors (with backend/profile
     // joined) and a context-budget summary. Failures here must not fail /status.
     if body.get("error").is_none() {
-        if let Ok((behaviors, context_budget)) =
+        if let Ok((behaviors, context_budget, context)) =
             load_self_view(&state.graphql, &state.agent_did).await
         {
             if let Some(map) = body.as_object_mut() {
                 map.insert("behaviors".to_string(), json!(behaviors));
+                map.insert("context".to_string(), json!(context));
                 map.insert("context_budget".to_string(), json!(context_budget));
             }
         }
@@ -206,7 +207,9 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
     };
 
     match load_self_view(&state.graphql, &state.agent_did).await {
-        Ok((behaviors, context_budget)) => {
+        // `/self` already returns the full `context_budget`; the compact context
+        // indicator (third tuple element, surfaced on `/status`) is redundant here.
+        Ok((behaviors, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
                 &health,
