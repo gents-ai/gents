@@ -203,6 +203,7 @@ async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<
     if resp.has_errors() {
         bail!("reading agent memory failed: {:?}", resp.errors);
     }
+    tracing::debug!(agent_did, key, "agent memory read");
 
     let row = resp
         .data
@@ -266,6 +267,12 @@ async fn write_memory(
     if resp.has_errors() {
         bail!("writing agent memory failed: {:?}", resp.errors);
     }
+    tracing::debug!(
+        agent_did,
+        key,
+        value_chars = value.chars().count(),
+        "agent memory write"
+    );
 
     Ok(MemoryOutput {
         action: "write",
@@ -384,5 +391,89 @@ mod tests {
         .await
         .expect_err("missing values must fail");
         assert!(error.to_string().contains("requires `value`"));
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_key_and_value() {
+        let node = seeded_node().await;
+        let tool = MemoryTool::new(node, "did:key:z-memory");
+
+        let error = Tool::call(
+            &tool,
+            MemoryParams {
+                action: MemoryAction::Write,
+                key: "k".repeat(MAX_KEY_CHARS + 1),
+                value: Some("x".to_string()),
+            },
+        )
+        .await
+        .expect_err("oversized keys must fail");
+        assert!(error.to_string().contains("memory key exceeds"));
+
+        let error = Tool::call(
+            &tool,
+            MemoryParams {
+                action: MemoryAction::Write,
+                key: "valid".to_string(),
+                value: Some("v".repeat(MAX_VALUE_CHARS + 1)),
+            },
+        )
+        .await
+        .expect_err("oversized values must fail");
+        assert!(error.to_string().contains("memory value exceeds"));
+    }
+
+    #[tokio::test]
+    async fn read_missing_key_for_same_agent_returns_not_found() {
+        let node = seeded_node().await;
+        let tool = MemoryTool::new(node, "did:key:z-memory");
+
+        let output = Tool::call(
+            &tool,
+            MemoryParams {
+                action: MemoryAction::Read,
+                key: "never-written".to_string(),
+                value: None,
+            },
+        )
+        .await
+        .expect("read memory");
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["found"], false);
+        assert_eq!(parsed["value"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn write_updates_value_in_place() {
+        let node = seeded_node().await;
+        let tool = MemoryTool::new(node, "did:key:z-memory");
+
+        for value in ["first", "second"] {
+            Tool::call(
+                &tool,
+                MemoryParams {
+                    action: MemoryAction::Write,
+                    key: "k".to_string(),
+                    value: Some(value.to_string()),
+                },
+            )
+            .await
+            .expect("write memory");
+        }
+
+        let output = Tool::call(
+            &tool,
+            MemoryParams {
+                action: MemoryAction::Read,
+                key: "k".to_string(),
+                value: None,
+            },
+        )
+        .await
+        .expect("read memory");
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        // upsert overwrites rather than duplicating: the re-written value wins.
+        assert_eq!(parsed["found"], true);
+        assert_eq!(parsed["value"], "second");
     }
 }
