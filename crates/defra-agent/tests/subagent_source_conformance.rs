@@ -1238,41 +1238,43 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     running.booted.shutdown().await;
 }
 
-/// Change 3 (#377), parent-terminal-not-interrupted variant: the parent reaches
-/// a TERMINAL state (completed/error/superseded/dead) — NOT interrupted — in the
-/// materialize window. The cascade only fires on interrupt, so the source's
-/// post-create re-check must detect the terminal parent and interrupt the
-/// just-created orphan child.
+/// Change 3 (#377), parent reached a CANCEL-WORTHY terminal without setting the
+/// interrupt latch: the parent reaches `dead`/`error` (NOT clean `completed`) in
+/// the materialize window. The cascade only fires on the interrupt latch, and a
+/// parent that errored/died would never cascade to a child that did not yet
+/// exist. Mirroring the recovery cascade (which drives a Cascade child to
+/// `.interrupted` on any cancel-worthy terminal parent), the source's post-create
+/// re-check MUST interrupt the just-created Cascade orphan child.
 #[tokio::test]
-async fn subagent_source_interrupts_child_when_parent_terminal_not_interrupted() {
-    let db = test_db("r3-subagent-source-orphan-parent-terminal").await;
-    let running = boot_agent(&db, "r3-subagent-source-orphan-parent-terminal").await;
-    let parent_request_id = "r3-parent-orphan-terminal";
-    let parent_tool_call_id = "r3-tc-orphan-terminal";
-    let child_request_id = "r3-child-orphan-terminal";
+async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_terminal() {
+    let db = test_db("r3-subagent-source-orphan-parent-dead").await;
+    let running = boot_agent(&db, "r3-subagent-source-orphan-parent-dead").await;
+    let parent_request_id = "r3-parent-orphan-dead";
+    let parent_tool_call_id = "r3-tc-orphan-dead";
+    let child_request_id = "r3-child-orphan-dead";
     create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
         parent_request_id,
-        "r3-session-orphan-terminal",
+        "r3-session-orphan-dead",
         "parent prompt",
     )
     .await;
 
-    // Terminalize the parent WITHOUT interrupting it (completed). No interrupt
-    // latch is set, so only the parent-terminal re-check can catch this.
-    mark_request_completed(db.node.as_ref(), parent_request_id).await;
+    // Terminalize the parent to a CANCEL-WORTHY terminal (dead) WITHOUT setting
+    // the interrupt latch. Only the parent-terminal re-check can catch this.
+    mark_request_dead(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt racing a parent terminalization"
+        "prompt": "child prompt racing a parent death"
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
-        "r3-session-orphan-terminal".to_string(),
+        "r3-session-orphan-dead".to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1296,10 +1298,126 @@ async fn subagent_source_interrupts_child_when_parent_terminal_not_interrupted()
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "child created but never interrupted despite terminal (non-interrupted) parent",
+            "Cascade child created but never interrupted despite dead (cancel-worthy) parent",
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    running.booted.shutdown().await;
+}
+
+/// Regression guard for the #377 over-broad re-check: a CASCADE child whose
+/// parent completed NORMALLY must NOT be interrupted. A cleanly-completed parent
+/// does not cascade-cancel its tools anywhere else (live cascade fires only on
+/// `.cancelled`; recovery cascade fires on cancel-worthy terminals, not clean
+/// completion). A background subagent of a completed parent must keep running.
+#[tokio::test]
+async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_normally() {
+    let db = test_db("r3-subagent-source-cascade-parent-completed").await;
+    let running = boot_agent(&db, "r3-subagent-source-cascade-parent-completed").await;
+    let parent_request_id = "r3-parent-cascade-completed";
+    let parent_tool_call_id = "r3-tc-cascade-completed";
+    let child_request_id = "r3-child-cascade-completed";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        "r3-session-cascade-completed",
+        "parent prompt",
+    )
+    .await;
+
+    // Parent completes NORMALLY (no interrupt latch). This is NOT a cancel signal.
+    mark_request_completed(db.node.as_ref(), parent_request_id).await;
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "background child whose parent finished cleanly"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        "r3-session-cascade-completed".to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_child_not_interrupted(
+        db.node.as_ref(),
+        child_request_id,
+        Duration::from_millis(800),
+    )
+    .await;
+
+    running.booted.shutdown().await;
+}
+
+/// A DETACHED (cancel_policy != Cascade) child outlives its parent and must NOT
+/// be interrupted by the source's post-create re-check, EVEN when the parent is
+/// interrupted in the materialize window. Mirrors `bridge_cancel_cascade`
+/// (`if self.cancel_policy != CancelPolicy::Cascade { return None } // detached`)
+/// and `recovery::is_detached_subagent_tool` (no cascade on interrupt).
+#[tokio::test]
+async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupted() {
+    let db = test_db("r3-subagent-source-detached-parent-interrupted").await;
+    let running = boot_agent(&db, "r3-subagent-source-detached-parent-interrupted").await;
+    let parent_request_id = "r3-parent-detached-interrupted";
+    let parent_tool_call_id = "r3-tc-detached-interrupted";
+    let child_request_id = "r3-child-detached-interrupted";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        "r3-session-detached-interrupted",
+        "parent prompt",
+    )
+    .await;
+
+    // Latch the parent interrupt BEFORE the bridge — the strongest cancel signal.
+    // A Cascade child would be interrupted here; a DETACHED child must survive.
+    interrupt_request(db.node.as_ref(), parent_request_id)
+        .await
+        .unwrap();
+    mark_request_interrupted(db.node.as_ref(), parent_request_id).await;
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "detached child that must outlive an interrupted parent"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        "r3-session-detached-interrupted".to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Detach,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_child_not_interrupted(
+        db.node.as_ref(),
+        child_request_id,
+        Duration::from_millis(800),
+    )
+    .await;
 
     running.booted.shutdown().await;
 }
@@ -1515,6 +1633,45 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
 /// moment to open its subscription before writing the bridge.
 async fn wait_for_subagent_source_subscription() {
     tokio::time::sleep(Duration::from_millis(250)).await;
+}
+
+/// Settle, then assert the child request was NOT interrupted. Used to verify a
+/// detached child (or a Cascade child of a normally-completed parent) is left
+/// running by the source's post-create re-check.
+async fn assert_child_not_interrupted(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    settle: Duration,
+) {
+    tokio::time::sleep(settle).await;
+    let interrupt = fetch_interrupt_requested_at(node, child_request_id)
+        .await
+        .unwrap();
+    assert!(
+        interrupt.is_none(),
+        "child {child_request_id} was unexpectedly interrupted (interrupt_requested_at = {interrupt:?})",
+    );
+}
+
+async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                input: {{
+                    status: "dead",
+                    lifecycle_state: "dead"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "mark_request_dead failed: {:?}",
+        response.errors
+    );
 }
 
 async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {

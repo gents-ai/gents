@@ -25,7 +25,9 @@ use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTa
 use crate::tool_call_lifecycle::subagent_request::{
     create_subagent_request_with_request_id, create_subagent_request_with_trusted_parent_request_id,
 };
-use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
+use crate::tool_call_lifecycle::{
+    AwaitMode, CancelPolicy, FailureClass, IllegalToolCallTransition, ToolCallState,
+};
 use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
@@ -64,7 +66,21 @@ struct ToolCallRow {
     #[serde(default)]
     await_mode: Option<String>,
     #[serde(default)]
+    cancel_policy: Option<String>,
+    #[serde(default)]
     child_request_id: Option<String>,
+}
+
+impl ToolCallRow {
+    /// Resolve the bridge `cancel_policy`, defaulting to `Cascade` to match
+    /// `recovery::cancel_policy` (an absent/unknown policy is treated as the
+    /// cascade default everywhere else).
+    fn cancel_policy(&self) -> CancelPolicy {
+        self.cancel_policy
+            .as_deref()
+            .and_then(CancelPolicy::from_persisted)
+            .unwrap_or(CancelPolicy::Cascade)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,16 +98,22 @@ struct ParentTerminalRow {
     lifecycle_state: Option<String>,
 }
 
-/// Mirror of `recovery::request_is_terminal`: true when the parent request has
-/// reached a terminal state (interrupted is covered separately by the
-/// interrupt-latch re-check, but is included here for completeness).
-fn parent_request_is_terminal(row: &ParentTerminalRow) -> bool {
+/// True when the parent request reached a CANCEL-WORTHY terminal state — the
+/// states for which the live cascade (`transition/bridge.rs`) and recovery
+/// cascade (`recovery.rs`) drive a Cascade child to `.interrupted`.
+///
+/// This is `recovery::request_is_terminal` MINUS clean `completed`: a parent that
+/// completed NORMALLY does not cascade-cancel its tools anywhere else, so a
+/// background/detached child whose parent simply finished must be allowed to keep
+/// running. We treat `error | superseded | dead | interrupted` (status) and
+/// `failed | superseded | dead | interrupted` (lifecycle_state) as cancel-worthy.
+fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
     matches!(
         row.status.as_deref(),
-        Some("completed" | "error" | "superseded" | "dead" | "interrupted")
+        Some("error" | "superseded" | "dead" | "interrupted")
     ) || matches!(
         row.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
+        Some("failed" | "superseded" | "dead" | "interrupted")
     )
 }
 
@@ -214,6 +236,7 @@ impl SubagentSource {
                     started_at
                     deadline_at
                     await_mode
+                    cancel_policy
                     child_request_id
                 }}
             }}"#
@@ -590,78 +613,106 @@ impl SubagentSource {
         // been cancelled/interrupted in the window between the spawn hook writing
         // the `running` bridge and this child create. The cascade's
         // `interrupt_request(child_request_id)` would have no-oped because the
-        // child did not exist yet. Re-read the bridge `lifecycle_state` and the
-        // parent's `interrupt_requested_at` AFTER the create; if either indicates
-        // cancellation/termination, immediately interrupt the just-created child
-        // so it does not run uncancellable.
-        let bridge_terminal = match self.load_tool_call(doc_id).await {
-            Ok(Some(latest)) => latest
-                .lifecycle_state
-                .as_deref()
-                .is_some_and(|state| state != "running"),
-            // Bridge row vanished (e.g. terminalized + GC'd) — treat as no longer
-            // running so the orphan child is reclaimed.
-            Ok(None) => true,
-            Err(error) => {
-                tracing::warn!(
-                    child_request_id = %request_id,
-                    %error,
-                    "subagent source failed to re-read bridge lifecycle after child create; assuming still running",
-                );
-                false
-            }
-        };
-        let parent_interrupted = match crate::interrupt::fetch_interrupt_requested_at(
-            &self.node,
-            &parent_request_id,
-        )
-        .await
-        {
-            Ok(value) => value.is_some(),
-            Err(error) => {
-                tracing::warn!(
-                    parent_request_id = %parent_request_id,
-                    %error,
-                    "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
-                );
-                false
-            }
-        };
-        // The parent may have reached a TERMINAL-but-not-interrupted state
-        // (completed/error/superseded/dead) in the materialize window — the
-        // cascade only fires on interrupt, and a terminalized parent would never
-        // cascade to a child that did not yet exist. Re-read the parent's
-        // status/lifecycle_state and interrupt the just-created orphan child if
-        // the parent is terminal (audit Finding F2-a).
-        let parent_terminal = match self.load_parent_terminal(&parent_request_id).await {
-            Ok(Some(row)) => parent_request_is_terminal(&row),
-            // Parent row vanished — treat as terminal so the orphan child is
-            // reclaimed rather than left running uncancellable.
-            Ok(None) => true,
-            Err(error) => {
-                tracing::warn!(
-                    parent_request_id = %parent_request_id,
-                    %error,
-                    "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
-                );
-                false
-            }
-        };
-        if bridge_terminal || parent_interrupted || parent_terminal {
-            tracing::info!(
+        // child did not exist yet, so we re-check AFTER the create and interrupt
+        // the just-created child if a genuine cancel signal is present.
+        //
+        // CRUCIALLY, this re-check must be consistent with the live cascade
+        // (`transition/bridge.rs::bridge_cancel_cascade`) and the recovery cascade
+        // (`recovery.rs::cascade_child_request_id`): BOTH gate the child interrupt
+        // on `cancel_policy == Cascade` and refuse to cascade for detached
+        // children (`if self.cancel_policy != CancelPolicy::Cascade { return None }`
+        // / `cascade_child_request_id` returns `None` unless Cascade). A
+        // DETACHED/background-detached child outlives its parent. So we ONLY
+        // interrupt when the bridge policy is Cascade AND a real cancel signal is
+        // present. A parent that completed NORMALLY is NOT a cancel signal — a
+        // cleanly-completed parent never cascade-cancels its tools anywhere else.
+        let bridge_cancel_policy = row.cancel_policy();
+        if bridge_cancel_policy != CancelPolicy::Cascade {
+            // Detached/background-detached: the child is intentionally decoupled
+            // from parent lifetime and must survive parent completion/cancel.
+            tracing::debug!(
                 child_request_id = %request_id,
                 parent_request_id = %parent_request_id,
-                bridge_terminal,
-                parent_interrupted,
-                parent_terminal,
-                "subagent source: parent cancelled/terminal in materialize window; interrupting just-created child",
+                cancel_policy = bridge_cancel_policy.as_str(),
+                "subagent source: detached child, skipping orphan cancel re-check (child outlives parent)",
             );
-            if let Err(error) = crate::interrupt::interrupt_request(&self.node, &request_id).await {
-                tracing::warn!(
+        } else {
+            // A bridge that itself reached `.cancelled` is a genuine cancel signal
+            // (the live cascade cancels the bridge then drives the child). Other
+            // non-running bridge states (e.g. `completed`/`failed`) are NOT cancel
+            // signals on their own. A vanished bridge is treated as cancel-worthy
+            // so a truly orphaned child is reclaimed rather than left running
+            // uncancellable.
+            let bridge_cancelled = match self.load_tool_call(doc_id).await {
+                Ok(Some(latest)) => {
+                    latest.lifecycle_state.as_deref() == Some(ToolCallState::Cancelled.as_str())
+                }
+                Ok(None) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        child_request_id = %request_id,
+                        %error,
+                        "subagent source failed to re-read bridge lifecycle after child create; assuming not cancelled",
+                    );
+                    false
+                }
+            };
+            // Parent interrupt latch — the exact signal the live cascade fires on.
+            let parent_interrupted = match crate::interrupt::fetch_interrupt_requested_at(
+                &self.node,
+                &parent_request_id,
+            )
+            .await
+            {
+                Ok(value) => value.is_some(),
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        %error,
+                        "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
+                    );
+                    false
+                }
+            };
+            // The parent may have reached a CANCEL-WORTHY terminal state
+            // (error/superseded/dead/interrupted — NOT clean `completed`) in the
+            // materialize window without setting the interrupt latch. Recovery's
+            // cascade treats these as Failed/Cancelled and interrupts the Cascade
+            // child; mirror that here. A vanished parent row is treated as
+            // cancel-worthy so the orphan is reclaimed.
+            let parent_cancel_worthy_terminal = match self
+                .load_parent_terminal(&parent_request_id)
+                .await
+            {
+                Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
+                Ok(None) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        %error,
+                        "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
+                    );
+                    false
+                }
+            };
+            if bridge_cancelled || parent_interrupted || parent_cancel_worthy_terminal {
+                tracing::info!(
                     child_request_id = %request_id,
-                    %error,
-                    "subagent source failed to interrupt orphaned child after cancel-before-materialize race",
+                    parent_request_id = %parent_request_id,
+                    bridge_cancelled,
+                    parent_interrupted,
+                    parent_cancel_worthy_terminal,
+                    "subagent source: Cascade bridge with real cancel signal in materialize window; interrupting just-created orphan child",
                 );
+                if let Err(error) =
+                    crate::interrupt::interrupt_request(&self.node, &request_id).await
+                {
+                    tracing::warn!(
+                        child_request_id = %request_id,
+                        %error,
+                        "subagent source failed to interrupt orphaned child after cancel-before-materialize race",
+                    );
+                }
             }
         }
 

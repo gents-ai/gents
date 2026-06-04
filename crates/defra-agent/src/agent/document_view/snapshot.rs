@@ -262,7 +262,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let (active_event_triggers, unavailable_event_triggers) =
         resolve_event_triggers(view, &unavailable_behaviors);
     let active_tasks = resolve_tasks(view, &unavailable_behaviors);
-    let paired_peer_dids = load_paired_peer_dids(node).await?;
+    let paired_peer_dids = load_paired_peer_dids(node, context.identity.did()).await?;
 
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
@@ -285,7 +285,7 @@ struct PeerPairingDesiredDidRow {
     agent_did: Option<String>,
 }
 
-async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
+async fn load_paired_peer_dids(node: &EmbeddedNode, local_did: &str) -> Result<HashSet<String>> {
     let query = r#"{
         PeerPairingDesired {
             peer_id
@@ -305,6 +305,11 @@ async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
         .and_then(|d| d.get("PeerPairingDesired"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
+    // Never treat this node's OWN DID as a trusted PEER (see
+    // `startup::load_startup_paired_peer_dids`): a self-referential pairing row
+    // would mis-route a LOCAL spawn into the trusted-paired-peer branch and
+    // wrongly deny it when cross-deployment is off. Empty/blank DIDs are dropped.
+    let local_did = local_did.trim();
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -318,6 +323,7 @@ async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
                     peer_id.starts_with("did:").then(|| peer_id.to_string())
                 })
         })
+        .filter(|did| !did.trim().is_empty() && did.trim() != local_did)
         .collect())
 }
 

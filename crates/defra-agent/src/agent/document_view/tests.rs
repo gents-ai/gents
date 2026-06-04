@@ -279,6 +279,90 @@ async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
     assert!(!snapshot.paired_peer_dids.contains("peer-b"));
 }
 
+/// A `PeerPairingDesired` row carrying this node's OWN DID must NOT land in
+/// `paired_peer_dids`: a self-referential pairing would mis-route a LOCAL spawn
+/// into the trusted-paired-peer (cross-deployment) branch and, with the
+/// cross-deployment flag off, wrongly deny it.
+#[tokio::test]
+async fn runtime_snapshot_excludes_own_did_from_paired_peers() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-own-did-paired"));
+    let local_did = identity.did().to_string();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        &local_did,
+        "backend-own-did-paired",
+        "http://localhost:18181/v1",
+    )
+    .await;
+
+    // A self-referential pairing row (our own DID) AND a legitimate remote peer.
+    let mutation = format!(
+        r#"mutation {{
+            create_PeerPairingDesired(input: {{
+                peer_id: "self-peer",
+                agent_did: "{}",
+                collections: ["AgentRequest"],
+                replicator_addresses: [],
+                created_at: "2026-06-04T00:00:00Z",
+                updated_at: "2026-06-04T00:00:00Z"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&local_did)
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create self PeerPairingDesired failed: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(
+            r#"mutation {
+                create_PeerPairingDesired(input: {
+                    peer_id: "peer-remote",
+                    agent_did: "did:defra-agent:peer-remote",
+                    collections: ["AgentRequest"],
+                    replicator_addresses: [],
+                    created_at: "2026-06-04T00:00:00Z",
+                    updated_at: "2026-06-04T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create remote PeerPairingDesired failed: {:?}",
+        response.errors
+    );
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot should resolve");
+
+    assert!(
+        !snapshot.paired_peer_dids.contains(&local_did),
+        "own DID must not be a trusted paired peer: {:?}",
+        snapshot.paired_peer_dids
+    );
+    assert!(
+        snapshot
+            .paired_peer_dids
+            .contains("did:defra-agent:peer-remote"),
+        "legitimate remote peer should still be present: {:?}",
+        snapshot.paired_peer_dids
+    );
+}
+
 /// Insert a ToolSelection row with an empty string in `subagent_targets` and
 /// return its `_docID`.  DefraDB schema has no non-empty constraint on
 /// `[String]` fields, so the document writes successfully.  The validator
