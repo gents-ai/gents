@@ -212,7 +212,11 @@ pub(crate) fn manifest_from_export_bundle(
                         "behavior_id",
                         "projection_id",
                         "policy_id",
+                        "staged_policy_id",
+                        "previous_policy_id",
                         "resource_map_json",
+                        "publication_status",
+                        "published_at",
                         "enabled",
                     ],
                 )

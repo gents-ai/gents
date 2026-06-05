@@ -309,7 +309,15 @@ pub(crate) struct DesiredProjectionAcpBinding {
     pub(crate) projection_id: Option<String>,
     pub(crate) policy_id: String,
     #[serde(default)]
+    pub(crate) staged_policy_id: Option<String>,
+    #[serde(default)]
+    pub(crate) previous_policy_id: Option<String>,
+    #[serde(default)]
     pub(crate) resource_map_json: Option<String>,
+    #[serde(default)]
+    pub(crate) publication_status: Option<String>,
+    #[serde(default)]
+    pub(crate) published_at: Option<String>,
     pub(crate) enabled: bool,
 }
 

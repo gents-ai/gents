@@ -79,7 +79,11 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         normalize_optional_string(&mut binding.agent_did);
         normalize_optional_string(&mut binding.behavior_id);
         normalize_optional_string(&mut binding.projection_id);
+        normalize_optional_string(&mut binding.staged_policy_id);
+        normalize_optional_string(&mut binding.previous_policy_id);
         normalize_optional_string(&mut binding.resource_map_json);
+        normalize_optional_string(&mut binding.publication_status);
+        normalize_optional_string(&mut binding.published_at);
     }
 }
 

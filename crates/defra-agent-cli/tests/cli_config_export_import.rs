@@ -408,7 +408,11 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
                 "behavior_id": behavior_id,
                 "projection_id": "codex_thread",
                 "policy_id": format!("policy-{}", agent_name),
+                "staged_policy_id": format!("policy-{}-next", agent_name),
+                "previous_policy_id": format!("policy-{}-prev", agent_name),
                 "resource_map_json": "{\"AgentRequest\":\"AgentRequest\",\"AgentMessage\":\"AgentMessage\"}",
+                "publication_status": "rotating",
+                "published_at": "2026-06-05T00:00:00Z",
                 "enabled": true
             }),
         )?;
@@ -550,6 +554,8 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         .iter()
         .find(|b| b.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str()))
         .ok_or_else(|| anyhow!("projection ACP binding {binding_id} not found in export root"))?;
+    let staged_policy_id = format!("policy-{agent_name}-next");
+    let previous_policy_id = format!("policy-{agent_name}-prev");
     assert_eq!(
         binding_doc.get("projection_id").and_then(Value::as_str),
         Some("codex_thread")
@@ -557,6 +563,26 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     assert_eq!(
         binding_doc.get("behavior_id").and_then(Value::as_str),
         Some(behavior_id.as_str())
+    );
+    assert_eq!(
+        binding_doc.get("staged_policy_id").and_then(Value::as_str),
+        Some(staged_policy_id.as_str())
+    );
+    assert_eq!(
+        binding_doc
+            .get("previous_policy_id")
+            .and_then(Value::as_str),
+        Some(previous_policy_id.as_str())
+    );
+    assert_eq!(
+        binding_doc
+            .get("publication_status")
+            .and_then(Value::as_str),
+        Some("rotating")
+    );
+    assert_eq!(
+        binding_doc.get("published_at").and_then(Value::as_str),
+        Some("2026-06-05T00:00:00Z")
     );
     assert!(
         binding_doc.get("created_at").is_none() && binding_doc.get("updated_at").is_none(),
@@ -656,10 +682,10 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         reexported_bindings
             .iter()
             .find(|b| b.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str()))
-            .and_then(|b| b.get("binding_id"))
+            .and_then(|b| b.get("staged_policy_id"))
             .and_then(Value::as_str),
-        Some(binding_id.as_str()),
-        "expected projection ACP binding {binding_id} in re-exported root"
+        Some(staged_policy_id.as_str()),
+        "expected projection ACP binding {binding_id} staged policy in re-exported root"
     );
 
     assert_eq!(

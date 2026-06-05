@@ -1896,7 +1896,11 @@ mod lean_apply_write_boundary_tests {
             behavior_id: ref_id(doc, Collection::AgentBehavior),
             projection_id: Some(format!("projection-{}", doc.id)),
             policy_id: format!("policy-{}", doc.content),
+            staged_policy_id: None,
+            previous_policy_id: None,
             resource_map_json: Some(r#"{"AgentRequest":"AgentRequest"}"#.to_string()),
+            publication_status: Some("published".to_string()),
+            published_at: None,
             enabled: true,
         }
     }

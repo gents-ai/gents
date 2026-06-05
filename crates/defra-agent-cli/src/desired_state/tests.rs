@@ -661,7 +661,11 @@ mod load_manifest_root {
                 "behavior_id": "default",
                 "projection_id": "codex_thread",
                 "policy_id": "policy-codex-read",
+                "staged_policy_id": "policy-codex-read-next",
+                "previous_policy_id": "policy-codex-read-prev",
                 "resource_map_json": "{\"AgentRequest\":\"AgentRequest\"}",
+                "publication_status": "rotating",
+                "published_at": "2026-06-05T00:00:00Z",
                 "enabled": true,
             }))
             .unwrap(),
@@ -681,6 +685,18 @@ mod load_manifest_root {
             manifest.projection_acp_bindings[0].projection_id.as_deref(),
             Some("codex_thread")
         );
+        assert_eq!(
+            manifest.projection_acp_bindings[0]
+                .staged_policy_id
+                .as_deref(),
+            Some("policy-codex-read-next")
+        );
+        assert_eq!(
+            manifest.projection_acp_bindings[0]
+                .publication_status
+                .as_deref(),
+            Some("rotating")
+        );
 
         let mut invalid = manifest.clone();
         invalid.projection_acp_bindings[0].resource_map_json =
@@ -691,6 +707,37 @@ mod load_manifest_root {
                 .iter()
                 .any(|error| error.contains("resource_map_json must map non-empty")),
             "expected resource-map validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].staged_policy_id = Some("policy-codex-read".to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("staged_policy_id must differ")),
+            "expected staged-policy validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].staged_policy_id = None;
+        invalid.projection_acp_bindings[0].publication_status = Some("rotating".to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("publication_status rotating requires staged_policy_id")
+            }),
+            "expected rotating-status validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].publication_status = Some("archived".to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("invalid publication_status")),
+            "expected publication-status validation error, got {errors:?}"
         );
 
         let out = tempdir().unwrap();
@@ -707,6 +754,18 @@ mod load_manifest_root {
                 .get("binding_id")
                 .and_then(serde_json::Value::as_str),
             Some("codex-read")
+        );
+        assert_eq!(
+            written
+                .get("staged_policy_id")
+                .and_then(serde_json::Value::as_str),
+            Some("policy-codex-read-next")
+        );
+        assert_eq!(
+            written
+                .get("publication_status")
+                .and_then(serde_json::Value::as_str),
+            Some("rotating")
         );
         assert!(written.get("created_at").is_none());
         assert!(written.get("updated_at").is_none());

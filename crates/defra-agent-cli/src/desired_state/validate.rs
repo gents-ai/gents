@@ -348,6 +348,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
 
+        validate_projection_policy_lifecycle(binding, errors);
         validate_projection_resource_map_json(binding, errors);
     }
 
@@ -566,6 +567,58 @@ fn validate_projection_resource_map_json(
             ));
             break;
         }
+    }
+}
+
+fn validate_projection_policy_lifecycle(
+    binding: &super::DesiredProjectionAcpBinding,
+    errors: &mut Vec<String>,
+) {
+    let policy_id = binding.policy_id.trim();
+    let staged_policy_id = non_empty(&binding.staged_policy_id);
+    let previous_policy_id = non_empty(&binding.previous_policy_id);
+    if let Some(staged_policy_id) = staged_policy_id {
+        if staged_policy_id == policy_id {
+            errors.push(format!(
+                "projection ACP binding {} staged_policy_id must differ from active policy_id",
+                binding.binding_id
+            ));
+        }
+        if previous_policy_id == Some(staged_policy_id) {
+            errors.push(format!(
+                "projection ACP binding {} staged_policy_id must differ from previous_policy_id",
+                binding.binding_id
+            ));
+        }
+    }
+    if previous_policy_id == Some(policy_id) {
+        errors.push(format!(
+            "projection ACP binding {} previous_policy_id must differ from active policy_id",
+            binding.binding_id
+        ));
+    }
+
+    let Some(status) = non_empty(&binding.publication_status) else {
+        return;
+    };
+    match status {
+        "draft" | "staged" | "published" | "rotating" | "retired" => {}
+        _ => errors.push(format!(
+            "projection ACP binding {} has invalid publication_status {}; expected draft, staged, published, rotating, or retired",
+            binding.binding_id, status
+        )),
+    }
+    if status == "rotating" && staged_policy_id.is_none() {
+        errors.push(format!(
+            "projection ACP binding {} publication_status rotating requires staged_policy_id",
+            binding.binding_id
+        ));
+    }
+    if status == "published" && staged_policy_id.is_some() {
+        errors.push(format!(
+            "projection ACP binding {} publication_status published must not keep staged_policy_id; promote it to policy_id",
+            binding.binding_id
+        ));
     }
 }
 

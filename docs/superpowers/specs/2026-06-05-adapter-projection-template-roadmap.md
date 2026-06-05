@@ -665,6 +665,12 @@ Started after the adapter-driven reframing:
   resource-map validation, timestamp stripping, prune safety for
   `behavior_id`, Lean apply-order parity, and real-binary export/apply
   roundtrip coverage.
+- `ProjectionAcpBinding` documents now carry policy lifecycle metadata:
+  `staged_policy_id`, `previous_policy_id`, `publication_status`, and
+  `published_at`. Manifest validation rejects collapsed active/staged/previous
+  policy ids, invalid publication states, and rotating bindings without a
+  staged policy; real-binary apply/export coverage proves those fields survive
+  config publication and re-export.
 - An ignored live-inference binary E2E test runs a real tool-backed request
   against the configured OpenAI-compatible endpoint, then exports the persisted
   run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
@@ -676,8 +682,9 @@ Started after the adapter-driven reframing:
 Still pending for the adapter-driven slice:
 
 - Broader native ACP lifecycle coverage beyond projection binding
-  validate/apply/export and explicit `--acp-policy-id` GraphQL paths,
-  especially policy/resource creation, rotation, and publication workflows.
+  validate/apply/export/lifecycle metadata and explicit `--acp-policy-id`
+  GraphQL paths, especially direct DefraDB policy/resource creation and
+  publication API workflows.
 - Broader multi-agent captures for additional Microsoft Agent Framework or
   CrewAI process shapes, if those expose compatibility issues beyond the
   current AutoGen round-robin, AutoGen Swarm handoff, CrewAI sequential

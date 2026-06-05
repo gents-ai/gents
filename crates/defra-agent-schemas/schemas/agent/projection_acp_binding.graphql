@@ -4,7 +4,11 @@ type ProjectionAcpBinding {
     behavior_id: String @index
     projection_id: String @index
     policy_id: String @index
+    staged_policy_id: String @index
+    previous_policy_id: String @index
     resource_map_json: String
+    publication_status: String @index
+    published_at: String @index(direction: DESC)
     enabled: Boolean @index
     created_at: String @index(direction: DESC)
     updated_at: String @index(direction: DESC)
