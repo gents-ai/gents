@@ -28,6 +28,55 @@ fn read_schema_snapshot(relative_path: &str) -> Result<Value> {
     serde_json::from_str::<Value>(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
+fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
+    read_schema_snapshot(&format!(
+        "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.{suffix}.json"
+    ))
+}
+
+fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
+    let validator =
+        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
+    let errors = validator
+        .iter_errors(instance)
+        .map(|error| format!("{}: {error}", error.instance_path()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        errors.is_empty(),
+        "{label} failed JSON Schema validation:\n{}",
+        errors.join("\n")
+    );
+    Ok(())
+}
+
+fn assert_projection_json_matches_schema(snapshot_name: &str, projection: &Value) -> Result<()> {
+    assert_json_schema_valid(
+        &adapter_schema_snapshot(snapshot_name, "schema")?,
+        projection,
+        &format!("{snapshot_name} JSON projection"),
+    )
+}
+
+fn assert_projection_records_match_schema(
+    snapshot_name: &str,
+    suffix: &str,
+    records: &[Value],
+) -> Result<()> {
+    let schema = adapter_schema_snapshot(snapshot_name, suffix)?;
+    anyhow::ensure!(
+        !records.is_empty(),
+        "{snapshot_name} {suffix} should produce records"
+    );
+    for (index, record) in records.iter().enumerate() {
+        assert_json_schema_valid(
+            &schema,
+            record,
+            &format!("{snapshot_name} {suffix} record {index}"),
+        )?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -432,6 +481,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
 
     let home = agent_home.to_str().context("agent home utf8")?;
     let openai = trace_project_json(tempdir.path(), home, "openai-codex", "public")?;
+    assert_projection_json_matches_schema("openai_codex_run_trace", &openai)?;
     assert_eq!(
         openai.get("projection_id").and_then(Value::as_str),
         Some("openai_codex_run_trace")
@@ -454,6 +504,11 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         "public adapter projection should show redaction markers: {openai:#}"
     );
     let openai_jsonl = trace_project_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
+    assert_projection_records_match_schema(
+        "openai_codex_run_trace",
+        "jsonl-record.schema",
+        &openai_jsonl,
+    )?;
     assert!(
         !openai_jsonl.is_empty(),
         "expected openai-codex JSONL projection records"
@@ -470,6 +525,11 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     );
     let openai_training_jsonl =
         trace_project_training_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
+    assert_projection_records_match_schema(
+        "openai_codex_run_trace",
+        "training-jsonl-record.schema",
+        &openai_training_jsonl,
+    )?;
     assert!(
         !openai_training_jsonl.is_empty(),
         "expected openai-codex training JSONL records"
@@ -492,7 +552,30 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         !serialized_openai_training_jsonl.contains("Inspect the repo and show README.md"),
         "public training JSONL adapter projection leaked request content: {openai_training_jsonl:#?}"
     );
+    for projection in ["openai-codex", "langgraph", "multi-agent"] {
+        let training_safe = trace_project_json(tempdir.path(), home, projection, "training-safe")?;
+        let serialized_training_safe = serde_json::to_string(&training_safe)?;
+        assert_eq!(
+            training_safe.get("redaction_mode").and_then(Value::as_str),
+            Some("training_safe"),
+            "{projection} should record training-safe redaction mode"
+        );
+        assert!(
+            serialized_training_safe.contains("[training_safe_redacted]"),
+            "{projection} training-safe projection should include training-safe redaction markers: {training_safe:#}"
+        );
+        for sensitive_text in [
+            "Inspect the repo and show README.md",
+            "reviewer private child response",
+        ] {
+            assert!(
+                !serialized_training_safe.contains(sensitive_text),
+                "{projection} training-safe projection leaked sensitive text {sensitive_text:?}: {training_safe:#}"
+            );
+        }
+    }
     let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
+    assert_projection_json_matches_schema("openai_codex_run_trace", &openai_full)?;
     assert!(
         serde_json::to_string(&openai_full)?.contains("reviewer private child response"),
         "unscoped full projection should include child-agent response content: {openai_full:#}"
@@ -534,6 +617,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     );
 
     let langgraph = trace_project_json(tempdir.path(), home, "langgraph", "full")?;
+    assert_projection_json_matches_schema("langgraph_state_history", &langgraph)?;
     assert_eq!(
         langgraph.get("projection_id").and_then(Value::as_str),
         Some("langgraph_state_history")
@@ -553,8 +637,47 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         }),
         "langgraph projection missing child request edge: {langgraph:#}"
     );
+    let langgraph_jsonl = trace_project_jsonl_lines(tempdir.path(), home, "langgraph", "full")?;
+    assert_projection_records_match_schema(
+        "langgraph_state_history",
+        "jsonl-record.schema",
+        &langgraph_jsonl,
+    )?;
+    assert!(
+        langgraph_jsonl.iter().any(|record| {
+            record.get("record_kind").and_then(Value::as_str) == Some("langgraph_edge")
+                && record.pointer("/value/kind").and_then(Value::as_str) == Some("child_request")
+                && record.pointer("/value/to").and_then(Value::as_str) == Some("request:req-child")
+        }),
+        "langgraph JSONL projection missing child request edge record: {langgraph_jsonl:#?}"
+    );
+    let langgraph_training_jsonl =
+        trace_project_training_jsonl_lines(tempdir.path(), home, "langgraph", "full")?;
+    assert_projection_records_match_schema(
+        "langgraph_state_history",
+        "training-jsonl-record.schema",
+        &langgraph_training_jsonl,
+    )?;
+    assert!(
+        langgraph_training_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("task")
+                && record.get("tool_name").and_then(Value::as_str) == Some("bash")
+        }),
+        "langgraph training JSONL projection missing task sample: {langgraph_training_jsonl:#?}"
+    );
+    assert!(
+        langgraph_training_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("state_transition")
+                && record
+                    .pointer("/metadata/kind")
+                    .and_then(Value::as_str)
+                    == Some("child_request")
+        }),
+        "langgraph training JSONL projection missing child transition sample: {langgraph_training_jsonl:#?}"
+    );
 
     let multi_agent = trace_project_json(tempdir.path(), home, "multi-agent", "full")?;
+    assert_projection_json_matches_schema("multi_agent_task", &multi_agent)?;
     assert_eq!(
         multi_agent.get("projection_id").and_then(Value::as_str),
         Some("multi_agent_task")
@@ -576,8 +699,33 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         }),
         "multi-agent projection missing child delegation: {multi_agent:#}"
     );
+    let multi_agent_jsonl = trace_project_jsonl_lines(tempdir.path(), home, "multi-agent", "full")?;
+    assert_projection_records_match_schema(
+        "multi_agent_task",
+        "jsonl-record.schema",
+        &multi_agent_jsonl,
+    )?;
+    assert!(
+        multi_agent_jsonl.iter().any(|record| {
+            record.get("record_kind").and_then(Value::as_str) == Some("multi_agent_delegation")
+                && record
+                    .pointer("/value/parent_request_id")
+                    .and_then(Value::as_str)
+                    == Some("req-1")
+                && record
+                    .pointer("/value/child_request_id")
+                    .and_then(Value::as_str)
+                    == Some("req-child")
+        }),
+        "multi-agent JSONL projection missing delegation record: {multi_agent_jsonl:#?}"
+    );
     let multi_agent_training_jsonl =
         trace_project_training_jsonl_lines(tempdir.path(), home, "multi-agent", "full")?;
+    assert_projection_records_match_schema(
+        "multi_agent_task",
+        "training-jsonl-record.schema",
+        &multi_agent_training_jsonl,
+    )?;
     assert!(
         multi_agent_training_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("delegation")

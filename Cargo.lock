@@ -4442,6 +4442,7 @@ dependencies = [
  "futures-util",
  "hostname",
  "identity",
+ "jsonschema",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
