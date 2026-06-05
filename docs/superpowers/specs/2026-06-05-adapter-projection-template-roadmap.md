@@ -16,23 +16,135 @@ The product promise is that customers can use familiar protocol and framework
 surfaces while Defra Agent remains the durable, permissioned, document-native
 source of truth for identity, work, tools, state, lineage, and audit.
 
+The projection layer should be adapter-driven, not designed in isolation. The
+shared layer is justified only by real interoperability work. Build the first
+three customer-facing adapter projections first, then keep only the common
+projection machinery those adapters actually need.
+
 This roadmap treats the following as required product capabilities:
 
+- projections for run timelines, trace/event export, training/eval extraction,
+  catalogs, provenance, and shared memory;
+- interoperability adapters for OpenAI/Codex-style traces, LangGraph-style
+  state/history, and multi-agent task frameworks such as AutoGen or CrewAI;
 - protocol adapters for A2A, external ACP, MCP, and ANP-style discovery;
-- projections for run timelines, trace/event export, catalogs, provenance, and
-  shared memory;
 - pattern templates for common orchestration shapes customers know from
   LangGraph, CrewAI, OpenAI Agents SDK, and Microsoft Agent Framework.
 
 ## Prioritization principle
 
-Build the lowest-risk surfaces first: projections over existing Defra documents,
-then protocol adapters over those projections, then higher-level templates.
+Build the lowest-risk surfaces first, but make them prove real interop:
+
+1. Reconstruct Defra-native run timelines from persisted runtime documents.
+2. Project the same timeline into the first three external adapter shapes:
+   OpenAI/Codex-style run traces, LangGraph-style state/history, and
+   multi-agent task/delegation views.
+3. Extract the shared projection layer only from those concrete adapters.
+4. Add protocol adapters and pattern templates over the proven projection
+   layer.
 
 This avoids creating protocol-specific business logic. The runtime remains
 Defra-native; adapters translate edge shapes into the same `AgentRequest`,
 `AgentMessage`, `AgentToolCall`, `AgentResponse`, session, task, and behavior
 documents.
+
+## Projection framework acceptance criteria
+
+The first shared projection framework should exist only when the three initial
+adapters need the same behavior. Required shared pieces:
+
+- projection identity and versioning;
+- request/session/conversation selectors;
+- common runtime row bundle loading;
+- projection context with actor identity;
+- redaction modes for full, training-safe, and public outputs;
+- provenance metadata linking exported rows back to Defra runtime documents;
+- JSON and JSONL writers;
+- schema or snapshot validation for each adapter output;
+- binary E2E coverage using the real `defra-agent` executable;
+- optional live-inference coverage that validates persisted state and adapter
+  output without depending on exact model prose.
+
+## Adapter-driven first three
+
+### 1. OpenAI/Codex-style run trace adapter
+
+Purpose:
+
+- customer-familiar trace/event output;
+- training/eval trajectory extraction;
+- proof that messages, tool calls, responses, reasoning-ish fields, errors,
+  and JSON/JSONL exports can be reconstructed from Defra documents.
+
+Definition of done:
+
+- output is generated from the run timeline projection;
+- full and redacted modes are tested;
+- tool calls preserve arguments, outputs, status, and child-run linkage where
+  the actor is allowed to see them;
+- binary E2E test runs the real CLI against embedded persisted rows;
+- optional live-inference test persists a real run and verifies the adapter
+  shape without asserting exact model wording.
+
+### 2. LangGraph-style state/history adapter
+
+Purpose:
+
+- test graph/task/state projection;
+- prove Defra documents can represent node execution, transitions,
+  checkpoints, retries, and child runs without importing LangGraph as the core
+  runtime model.
+
+Definition of done:
+
+- request/message/tool/response rows become graph nodes or state history
+  entries;
+- parent/child request lineage becomes graph edges;
+- final state/checkpoint values are generated from persisted rows;
+- binary E2E validates the shape against seeded runtime rows;
+- external-system integration is dependency-light by default and only uses
+  Docker or Python package installs behind an ignored/env-gated test when that
+  catches compatibility bugs a fixture cannot.
+
+### 3. Multi-agent task adapter
+
+Purpose:
+
+- test distributed coordination, handoffs, delegation, roles, task ownership,
+  and access boundaries;
+- give CrewAI/AutoGen/Microsoft-style users a familiar task/team view without
+  making Defra core framework-specific.
+
+Definition of done:
+
+- participants derive from `agent_did` and `behavior_id`;
+- delegations derive from parent/child requests and child-request tool calls;
+- messages and tool events retain provenance and redaction behavior;
+- binary E2E validates task, participant, delegation, and tool-event output;
+- external-system integration uses lightweight contract fixtures first, with
+  Docker/live-framework gates only where they provide real interoperability
+  signal.
+
+## Integration test strategy
+
+Default CI should not require Docker, Python environments, or external cloud
+credentials. The base proof should stay close to the product runtime:
+
+- pure Rust projection unit tests for deterministic mapping behavior;
+- real-binary E2E tests that create a temporary `agent-home`, boot an embedded
+  Defra node, install runtime schemas, persist rows, run `defra-agent`, and
+  validate adapter JSON;
+- fixture/contract tests for external adapter shapes using minimal checked-in
+  JSON examples or schema validators where practical;
+- ignored/env-gated tests for Dockerized or live external frameworks when a
+  real framework runtime catches issues fixtures cannot;
+- ignored/env-gated live-inference tests that assert persisted runtime rows and
+  projection invariants, not exact generated prose.
+
+External-system tests should be additive proof, not required local setup. If a
+framework has a stable CLI/server image, use Docker only in the gated suite. If
+the framework is primarily a library, prefer a tiny fixture generator or schema
+validator over pulling the full stack into normal Rust tests.
 
 ## Phase 0: mapping contracts and conformance
 
@@ -422,17 +534,26 @@ Definition of done:
 ## Recommended first implementation slice
 
 1. Run timeline projection.
-2. A2A Agent Card projection.
-3. A2A task lifecycle adapter.
-4. Approval/review record shape.
-5. Handoff specialist and manager-as-tools templates.
+2. OpenAI/Codex-style run trace projection.
+3. LangGraph-style state/history projection.
+4. Multi-agent task/delegation projection.
+5. Extract the common projection framework only from the behavior shared by
+   items 1-4.
+6. A2A Agent Card projection.
+7. A2A task lifecycle adapter.
+8. Approval/review record shape.
+9. Handoff specialist and manager-as-tools templates.
 
 This slice gives customers the clearest proof of the Defra thesis:
 
-- agents can be discovered;
-- work can enter through a standard protocol;
-- runtime state remains Defra-native;
-- approvals and lineage are visible;
+- one persisted Defra runtime can produce familiar outputs for three different
+  external ecosystems;
+- runtime state remains Defra-native while adapter views stay customer
+  familiar;
+- redaction and provenance are part of projection behavior, not downstream
+  cleanup scripts;
+- delegation and lineage are visible;
+- agents can later be discovered and invoked through standard protocols;
 - familiar orchestration patterns exist without replacing Defra's document
   substrate.
 
@@ -457,3 +578,26 @@ Still pending for item 1:
 - Explicit adapter-facing event views for A2A task events and ACP run events.
 - Stricter multi-request session scoping rules if future adapters need a
   narrower view than the current request/session reconstruction.
+
+Started after the adapter-driven reframing:
+
+- `crates/defra-agent/src/adapter_projection.rs` defines the first common
+  adapter projection envelope, projection kind/version metadata, provenance,
+  projection context, redaction modes, and three initial adapter DTOs.
+- The first adapter DTOs are OpenAI/Codex-style run trace,
+  LangGraph-style state/history, and multi-agent task/delegation.
+- `defra-agent trace project --projection ... --request-id REQUEST_ID` exports
+  those adapter views from the same run timeline reconstruction path.
+- Binary E2E coverage validates all three adapter views from embedded
+  persisted runtime rows and checks public redaction behavior.
+
+Still pending for the adapter-driven slice:
+
+- JSON schema or snapshot files that external consumers can pin.
+- Training/eval-specific JSONL projections.
+- Actual DefraDB ACP subject scoping in projection loaders beyond the current
+  actor/redaction context.
+- Dependency-light contract tests against real external adapter fixtures.
+- Ignored/env-gated Docker or live-framework interoperability tests.
+- Optional live-inference projection test that asserts persisted state and
+  adapter invariants.

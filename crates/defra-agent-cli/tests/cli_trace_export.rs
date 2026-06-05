@@ -323,6 +323,120 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
+#[tokio::test]
+async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let agent_home = tempdir.path().join("agent-home");
+    let data_dir = agent_home.join("data");
+
+    {
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await
+            .context("opening embedded node")?;
+        ensure_runtime_schemas(&node).await?;
+        seed_trace_export_rows(&node).await?;
+    }
+
+    let home = agent_home.to_str().context("agent home utf8")?;
+    let openai = trace_project_json(tempdir.path(), home, "openai-codex", "public")?;
+    assert_eq!(
+        openai.get("projection_id").and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+    assert_eq!(
+        openai.get("redaction_mode").and_then(Value::as_str),
+        Some("public")
+    );
+    assert_eq!(
+        openai.pointer("/output/adapter").and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+    let serialized_openai = serde_json::to_string(&openai)?;
+    assert!(
+        !serialized_openai.contains("Inspect the repo and show README.md"),
+        "public adapter projection leaked request content: {openai:#}"
+    );
+    assert!(
+        serialized_openai.contains("[redacted]"),
+        "public adapter projection should show redaction markers: {openai:#}"
+    );
+
+    let langgraph = trace_project_json(tempdir.path(), home, "langgraph", "full")?;
+    assert_eq!(
+        langgraph.get("projection_id").and_then(Value::as_str),
+        Some("langgraph_state_history")
+    );
+    assert_eq!(
+        langgraph.pointer("/output/adapter").and_then(Value::as_str),
+        Some("langgraph_state_history")
+    );
+    let edges = langgraph
+        .pointer("/output/projection/edges")
+        .and_then(Value::as_array)
+        .context("langgraph edges")?;
+    assert!(
+        edges.iter().any(|edge| {
+            edge.get("kind").and_then(Value::as_str) == Some("child_request")
+                && edge.get("to").and_then(Value::as_str) == Some("request:req-child")
+        }),
+        "langgraph projection missing child request edge: {langgraph:#}"
+    );
+
+    let multi_agent = trace_project_json(tempdir.path(), home, "multi-agent", "full")?;
+    assert_eq!(
+        multi_agent.get("projection_id").and_then(Value::as_str),
+        Some("multi_agent_task")
+    );
+    assert_eq!(
+        multi_agent
+            .pointer("/output/adapter")
+            .and_then(Value::as_str),
+        Some("multi_agent_task")
+    );
+    let delegations = multi_agent
+        .pointer("/output/projection/delegations")
+        .and_then(Value::as_array)
+        .context("multi-agent delegations")?;
+    assert!(
+        delegations.iter().any(|delegation| {
+            delegation.get("parent_request_id").and_then(Value::as_str) == Some("req-1")
+                && delegation.get("child_request_id").and_then(Value::as_str) == Some("req-child")
+        }),
+        "multi-agent projection missing child delegation: {multi_agent:#}"
+    );
+
+    Ok(())
+}
+
+fn trace_project_json(
+    cwd: &std::path::Path,
+    home: &str,
+    projection: &str,
+    redaction: &str,
+) -> Result<Value> {
+    let output = run_cli_text(
+        cwd,
+        &[
+            "trace",
+            "project",
+            "--home",
+            home,
+            "--request-id",
+            "req-1",
+            "--projection",
+            projection,
+            "--redaction",
+            redaction,
+            "--actor-did",
+            "did:defra-agent:test-viewer",
+        ],
+    )?;
+    serde_json::from_str::<Value>(&output).context("parsing adapter projection JSON")
+}
+
 async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
@@ -390,6 +504,28 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 failure_reason: "",
                 created_at: "2026-05-04T12:00:01Z",
                 retry_count: 0
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentRequest(input: {
+                request_id: "req-child",
+                agent_did: "did:defra-agent:reviewer",
+                behavior_id: "reviewer",
+                session_id: "session-1",
+                content: "Review the README finding",
+                metadata: "",
+                status: "completed",
+                lifecycle_state: "complete",
+                backend_id: "studios-cluster",
+                failure_reason: "",
+                created_at: "2026-05-04T12:00:04Z",
+                retry_count: 0,
+                caused_by_parent_request_id: "req-1",
+                caused_by_parent_tool_call_id: "call-fail"
             }) { _docID }
         }"#,
     )

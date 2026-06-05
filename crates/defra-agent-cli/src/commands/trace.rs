@@ -2,9 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 
 use anyhow::{Context, Result};
+use defra_agent::adapter_projection::{
+    build_adapter_projection, AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
+};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::run_timeline::{
-    build_run_timeline, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
+    build_run_timeline, RunTimeline, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
     TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use defra_agent::trace_export::{
@@ -15,7 +18,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::cli::args::{TraceCommand, TraceExportArgs, TraceTimelineArgs};
+use crate::cli::args::{
+    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectionArg,
+    TraceProjectionRedactionArg, TraceTimelineArgs,
+};
 use crate::config_writes::ConfigAccess;
 use crate::{
     graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal, print_json,
@@ -26,54 +32,14 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
     match command {
         TraceCommand::Export(args) => trace_export(args).await,
         TraceCommand::Timeline(args) => trace_timeline(args).await,
+        TraceCommand::Project(args) => trace_project(args).await,
     }
 }
 
 async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
-    let request = load_timeline_request_by_id(&access, &args.request_id).await?;
-    let session_id = request.session_id.as_deref();
-
-    let mut requests = match session_id {
-        Some(session_id) => load_timeline_requests_for_session(&access, session_id).await?,
-        None => Vec::new(),
-    };
-    merge_timeline_request(&mut requests, request.clone());
-    for child in load_timeline_child_requests(&access, &request.request_id).await? {
-        merge_timeline_request(&mut requests, child);
-    }
-
-    let messages = match session_id {
-        Some(session_id) => load_timeline_messages_for_session(&access, session_id).await?,
-        None => Vec::new(),
-    };
-    let tool_calls = match session_id {
-        Some(session_id) => load_timeline_tool_calls_for_session(&access, session_id).await?,
-        None => Vec::new(),
-    };
-    let responses = match session_id {
-        Some(session_id) => load_timeline_responses_for_session(&access, session_id).await?,
-        None => load_timeline_responses_for_request(&access, &request.request_id).await?,
-    };
-    let session = match session_id {
-        Some(session_id) => load_timeline_session(&access, session_id).await?,
-        None => None,
-    };
-    let conversation = match session_id {
-        Some(session_id) => load_timeline_conversation(&access, session_id).await?,
-        None => None,
-    };
-
-    let timeline = build_run_timeline(RunTimelineRows {
-        request,
-        session,
-        conversation,
-        requests,
-        messages,
-        tool_calls,
-        responses,
-    });
+    let timeline = load_run_timeline(&access, &args.request_id).await?;
     let value = serde_json::to_value(&timeline)?;
     if let Some(path) = args.output_file.as_deref() {
         write_json_output_file(path, &value)?;
@@ -81,6 +47,89 @@ async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
         print_json(&value)?;
     }
     Ok(())
+}
+
+async fn trace_project(args: TraceProjectArgs) -> Result<()> {
+    let (access, _home_dir) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let timeline = load_run_timeline(&access, &args.request_id).await?;
+    let context = ProjectionContext {
+        actor_did: args.actor_did,
+        redaction_mode: projection_redaction_mode(args.redaction),
+    };
+    let projection = build_adapter_projection(
+        adapter_projection_kind(args.projection),
+        &timeline,
+        &context,
+    );
+    let value = serde_json::to_value(&projection)?;
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &value)?;
+    } else {
+        print_json(&value)?;
+    }
+    Ok(())
+}
+
+async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
+    let request = load_timeline_request_by_id(access, request_id).await?;
+    let session_id = request.session_id.as_deref();
+
+    let mut requests = match session_id {
+        Some(session_id) => load_timeline_requests_for_session(access, session_id).await?,
+        None => Vec::new(),
+    };
+    merge_timeline_request(&mut requests, request.clone());
+    for child in load_timeline_child_requests(access, &request.request_id).await? {
+        merge_timeline_request(&mut requests, child);
+    }
+
+    let messages = match session_id {
+        Some(session_id) => load_timeline_messages_for_session(access, session_id).await?,
+        None => Vec::new(),
+    };
+    let tool_calls = match session_id {
+        Some(session_id) => load_timeline_tool_calls_for_session(access, session_id).await?,
+        None => Vec::new(),
+    };
+    let responses = match session_id {
+        Some(session_id) => load_timeline_responses_for_session(access, session_id).await?,
+        None => load_timeline_responses_for_request(access, &request.request_id).await?,
+    };
+    let session = match session_id {
+        Some(session_id) => load_timeline_session(access, session_id).await?,
+        None => None,
+    };
+    let conversation = match session_id {
+        Some(session_id) => load_timeline_conversation(access, session_id).await?,
+        None => None,
+    };
+
+    Ok(build_run_timeline(RunTimelineRows {
+        request,
+        session,
+        conversation,
+        requests,
+        messages,
+        tool_calls,
+        responses,
+    }))
+}
+
+fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {
+    match arg {
+        TraceProjectionArg::OpenaiCodex => AdapterProjectionKind::OpenAiCodexRunTrace,
+        TraceProjectionArg::Langgraph => AdapterProjectionKind::LangGraphStateHistory,
+        TraceProjectionArg::MultiAgent => AdapterProjectionKind::MultiAgentTask,
+    }
+}
+
+fn projection_redaction_mode(arg: TraceProjectionRedactionArg) -> ProjectionRedactionMode {
+    match arg {
+        TraceProjectionRedactionArg::Full => ProjectionRedactionMode::Full,
+        TraceProjectionRedactionArg::TrainingSafe => ProjectionRedactionMode::TrainingSafe,
+        TraceProjectionRedactionArg::Public => ProjectionRedactionMode::Public,
+    }
 }
 
 async fn trace_export(args: TraceExportArgs) -> Result<()> {

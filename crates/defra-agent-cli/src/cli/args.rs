@@ -705,6 +705,11 @@ pub(crate) enum TraceCommand {
         about = "Export a reconstructed run timeline for one AgentRequest"
     )]
     Timeline(TraceTimelineArgs),
+    #[command(
+        name = "project",
+        about = "Project a reconstructed run into an adapter-facing interop shape"
+    )]
+    Project(TraceProjectArgs),
 }
 
 #[derive(clap::Args)]
@@ -741,6 +746,46 @@ pub(crate) struct TraceTimelineArgs {
     pub(crate) request_id: String,
     #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
     pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceProjectArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id", help = "Request id to reconstruct and project")]
+    pub(crate) request_id: String,
+    #[arg(long, value_enum, help = "Adapter projection to export")]
+    pub(crate) projection: TraceProjectionArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionRedactionArg::Full,
+        help = "Redaction policy to apply before serializing adapter output"
+    )]
+    pub(crate) redaction: TraceProjectionRedactionArg,
+    #[arg(
+        long = "actor-did",
+        help = "Actor identity used for projection provenance"
+    )]
+    pub(crate) actor_did: Option<String>,
+    #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionArg {
+    OpenaiCodex,
+    Langgraph,
+    MultiAgent,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionRedactionArg {
+    Full,
+    TrainingSafe,
+    Public,
 }
 
 #[derive(Subcommand)]

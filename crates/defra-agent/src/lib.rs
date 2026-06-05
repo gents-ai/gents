@@ -3,6 +3,7 @@
 //! This crate preserves the current agent runtime pieces while
 //! `agent-daemon` remains the first consumer during the extraction phase.
 
+pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
 pub mod apply_model;
@@ -57,6 +58,11 @@ pub mod watcher;
 
 pub use collection::Collection;
 
+pub use adapter_projection::{
+    build_adapter_projection, AdapterProjection, AdapterProjectionEnvelope, AdapterProjectionKind,
+    LangGraphStateHistoryProjection, MultiAgentTaskProjection, OpenAiCodexRunTraceProjection,
+    ProjectionContext, ProjectionRedactionMode,
+};
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
