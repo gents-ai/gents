@@ -110,6 +110,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 ));
             }
         }
+        for (index, target) in selection.subagent_targets.iter().enumerate() {
+            if target.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {} has empty subagent_targets[{index}]",
+                    selection.selection_id
+                ));
+            }
+        }
         if let Some(mode) = selection.command_network_mode.as_deref() {
             if let Err(error) = CommandNetworkMode::parse(mode) {
                 errors.push(format!(
@@ -139,17 +147,12 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         validate_subagent_targets(
             &selection.selection_id,
             selection.agent_did.trim(),
-            selection.subagent_allow_cross_deployment.unwrap_or(false),
-            selection.subagent_targets.as_deref().unwrap_or(&[]),
+            selection.subagent_allow_cross_deployment,
+            &selection.subagent_targets,
             errors,
         );
-        if selection.subagent_spawn_enabled == Some(true) {
-            let targets_empty = selection
-                .subagent_targets
-                .as_ref()
-                .map(|t| t.is_empty())
-                .unwrap_or(true);
-            if targets_empty {
+        if selection.subagent_spawn_enabled {
+            if selection.subagent_targets.is_empty() {
                 errors.push(format!(
                     "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
                     selection.selection_id
@@ -856,14 +859,15 @@ mod live_tests {
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
+                delegate_to: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
                 enable_defra_query: true,
                 defra_query_collections: Vec::new(),
-                subagent_targets: Some(targets),
-                subagent_spawn_enabled: Some(true),
-                subagent_steering_enabled: None,
-                subagent_background_enabled: None,
-                subagent_allow_cross_deployment: None,
+                subagent_targets: targets,
+                subagent_spawn_enabled: true,
+                subagent_steering_enabled: false,
+                subagent_background_enabled: false,
+                subagent_allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
             }],
             inference_backends: Vec::new(),
@@ -1011,20 +1015,21 @@ mod live_tests {
                     cli_tool_names: Vec::new(),
                     enable_meta_tools: false,
                     allowed_mcp_service_ids: Vec::new(),
+                    delegate_to: Vec::new(),
                     backgroundable_tool_names: Vec::new(),
                     enable_defra_query: true,
                     defra_query_collections: Vec::new(),
-                    subagent_targets: Some(vec![SubagentTarget {
+                    subagent_targets: vec![SubagentTarget {
                         name: "researcher".to_string(),
                         agent_did: "did:key:test-subagent-idempotency".to_string(),
                         behavior_id: "amy-research".to_string(),
                         description: None,
                     }
-                    .to_entry()]),
-                    subagent_spawn_enabled: Some(true),
-                    subagent_steering_enabled: Some(true),
-                    subagent_background_enabled: Some(true),
-                    subagent_allow_cross_deployment: Some(true),
+                    .to_entry()],
+                    subagent_spawn_enabled: true,
+                    subagent_steering_enabled: true,
+                    subagent_background_enabled: true,
+                    subagent_allow_cross_deployment: true,
                     cross_deployment_spawn_timeout_seconds: Some(90),
                 }],
                 inference_backends: Vec::new(),
@@ -1069,33 +1074,29 @@ mod live_tests {
 
         assert_eq!(
             live_sel.subagent_targets,
-            Some(vec![SubagentTarget {
+            vec![SubagentTarget {
                 name: "researcher".to_string(),
                 agent_did: "did:key:test-subagent-idempotency".to_string(),
                 behavior_id: "amy-research".to_string(),
                 description: None,
             }
-            .to_entry()]),
+            .to_entry()],
             "subagent_targets must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_spawn_enabled,
-            Some(true),
+            live_sel.subagent_spawn_enabled, true,
             "subagent_spawn_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_steering_enabled,
-            Some(true),
+            live_sel.subagent_steering_enabled, true,
             "subagent_steering_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_background_enabled,
-            Some(true),
+            live_sel.subagent_background_enabled, true,
             "subagent_background_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_allow_cross_deployment,
-            Some(true),
+            live_sel.subagent_allow_cross_deployment, true,
             "subagent_allow_cross_deployment must persist through apply"
         );
         assert_eq!(

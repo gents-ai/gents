@@ -150,6 +150,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let default_behavior_id = default_behavior_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -272,14 +273,19 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
-    // Seed an AgentRequest (so the agent's session resolves) plus a
-    // CompactionEntry in that session, so the agent-scoped context budget has
-    // something to aggregate. This exercises the agent -> session -> compaction
-    // path end-to-end against the live schema.
+    // Seed an AgentRequest (so the agent's session resolves), an AgentSession
+    // and AgentMessage for /sessions, plus a CompactionEntry so the
+    // agent-scoped context budget has something to aggregate.
     for mutation in [
+        format!(
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", agent_name: "{}", behavior_id: "{}", started: "2026-06-02T09:59:00Z", status: "active" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&agent_name),
+            escape_graphql_string(&default_behavior_id),
+        ),
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", status: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
+        r#"mutation { create_AgentMessage(input: { message_key: "self-budget-session:1", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
     ] {
         let seed = client
@@ -315,7 +321,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
                 && behavior
-                    .get("endpoint")
+                    .get("backend_endpoint")
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| !endpoint.is_empty())
         }),
@@ -333,6 +339,45 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         budget.get("latest_original_tokens").and_then(Value::as_i64),
         Some(1234),
         "expected context_budget latest tokens from the seeded compaction: {self_view}"
+    );
+
+    let sessions_response = client
+        .get(format!("http://127.0.0.1:{port}/sessions?limit=1"))
+        .send()
+        .await
+        .context("fetching /sessions")?;
+    assert!(
+        sessions_response.status().is_success(),
+        "unexpected /sessions response: {sessions_response:?}"
+    );
+    let sessions: Value = sessions_response
+        .json()
+        .await
+        .context("reading /sessions body")?;
+    assert_eq!(
+        sessions.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    let session = sessions
+        .get("sessions")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .unwrap_or_else(|| panic!("expected /sessions to include the seeded row: {sessions}"));
+    assert_eq!(
+        session.get("session_id").and_then(Value::as_str),
+        Some("self-budget-session")
+    );
+    assert_eq!(
+        session.get("request_count").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        session.get("message_count").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        session.get("compaction_count").and_then(Value::as_i64),
+        Some(1)
     );
 
     // /fleet reshapes per-agent_did runtime + request counts.
@@ -355,6 +400,88 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
                     && agent.get("process_state").and_then(Value::as_str) == Some("ready")
             })),
         "expected /fleet to list this agent in ready state: {fleet}"
+    );
+
+    // /mcp/pool joins registered MCP services with this agent's persisted
+    // health state, including the last observed tool count.
+    let escaped_agent_did = escape_graphql_string(&agent_did);
+    for mutation in [
+        r#"mutation {
+            create_ToolServiceRegistry(input: {
+                service_id: "runtime-mcp-pool-obs",
+                display_name: "Runtime Observability",
+                description: "Runtime endpoint fixture",
+                hostname: "studio-1",
+                tailscale_ip: "100.64.0.10",
+                lan_ip: "192.168.1.10",
+                mcp_port: 9201,
+                mcp_path: "/mcp",
+                send_agent_did: true,
+                status: "online",
+                version: "test",
+                updated_at: "2026-06-05T00:00:00Z"
+            }) { _docID }
+        }"#
+        .to_string(),
+        format!(
+            r#"mutation {{
+                create_ToolServiceHealthState(input: {{
+                    service_id: "runtime-mcp-pool-obs",
+                    agent_did: "{escaped_agent_did}",
+                    endpoint: "http://100.64.0.10:9201/mcp",
+                    status: "healthy",
+                    tool_count: 3,
+                    failure_count: 0,
+                    k_max: 3,
+                    last_probe_at: "2026-06-05T00:00:00Z",
+                    last_seen: "2026-06-05T00:00:00Z",
+                    updated_at: "2026-06-05T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    ] {
+        graphql_query(&graphql, &mutation)
+            .await
+            .context("seeding MCP pool fixtures")?;
+    }
+
+    let mcp_pool_response = client
+        .get(format!("http://127.0.0.1:{port}/mcp/pool"))
+        .send()
+        .await
+        .context("fetching /mcp/pool")?;
+    assert!(
+        mcp_pool_response.status().is_success(),
+        "unexpected /mcp/pool response: {mcp_pool_response:?}"
+    );
+    let mcp_pool: Value = mcp_pool_response
+        .json()
+        .await
+        .context("reading /mcp/pool body")?;
+    assert_eq!(
+        mcp_pool.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        mcp_pool.pointer("/totals/online").and_then(Value::as_i64),
+        Some(1),
+        "expected /mcp/pool totals to count the seeded online service: {mcp_pool}"
+    );
+    assert_eq!(
+        mcp_pool.pointer("/totals/healthy").and_then(Value::as_i64),
+        Some(1),
+        "expected /mcp/pool totals to count the seeded healthy service: {mcp_pool}"
+    );
+    assert!(
+        mcp_pool
+            .get("services")
+            .and_then(Value::as_array)
+            .is_some_and(|services| services.iter().any(|service| {
+                service.get("service_id").and_then(Value::as_str) == Some("runtime-mcp-pool-obs")
+                    && service.get("tool_count").and_then(Value::as_i64) == Some(3)
+                    && service.get("health_status").and_then(Value::as_str) == Some("healthy")
+            })),
+        "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
 
     // /mcp is opt-in: this server was started without --enable-mcp, so the

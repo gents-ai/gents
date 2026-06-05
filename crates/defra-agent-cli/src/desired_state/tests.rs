@@ -256,14 +256,15 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         cli_tool_names: Vec::new(),
         enable_meta_tools: true,
         allowed_mcp_service_ids: Vec::new(),
+        delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
-        subagent_targets: None,
-        subagent_spawn_enabled: None,
-        subagent_steering_enabled: None,
-        subagent_background_enabled: None,
-        subagent_allow_cross_deployment: None,
+        subagent_targets: Vec::new(),
+        subagent_spawn_enabled: false,
+        subagent_steering_enabled: false,
+        subagent_background_enabled: false,
+        subagent_allow_cross_deployment: false,
         cross_deployment_spawn_timeout_seconds: None,
     }
 }
@@ -366,6 +367,57 @@ fn tool_service_registry_round_trip_preserves_send_agent_did() {
     let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
         .expect("manifest should parse back from bundle");
     assert!(round_tripped.tool_service_registries[0].send_agent_did);
+}
+
+#[test]
+fn tool_selection_round_trip_preserves_subagent_controls() {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut selection = sample_tool_selection("default-tools");
+    selection.subagent_targets = vec!["researcher".to_string()];
+    selection.subagent_spawn_enabled = true;
+    selection.subagent_steering_enabled = true;
+    selection.subagent_background_enabled = true;
+    selection.subagent_allow_cross_deployment = true;
+    selection.cross_deployment_spawn_timeout_seconds = Some(90);
+    manifest.tool_selections.push(selection);
+
+    let bundle =
+        export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
+    let exported_selection = &bundle.as_bundle().tool_selections[0];
+    assert_eq!(
+        exported_selection["subagent_targets"],
+        json!(["researcher"])
+    );
+    assert_eq!(exported_selection["subagent_spawn_enabled"], json!(true));
+    assert_eq!(exported_selection["subagent_steering_enabled"], json!(true));
+    assert_eq!(
+        exported_selection["subagent_background_enabled"],
+        json!(true)
+    );
+    assert_eq!(
+        exported_selection["subagent_allow_cross_deployment"],
+        json!(true)
+    );
+    assert_eq!(
+        exported_selection["cross_deployment_spawn_timeout_seconds"],
+        json!(90)
+    );
+
+    let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
+        .expect("manifest should parse back from bundle");
+    let round_tripped_selection = &round_tripped.tool_selections[0];
+    assert_eq!(
+        round_tripped_selection.subagent_targets,
+        vec!["researcher".to_string()]
+    );
+    assert!(round_tripped_selection.subagent_spawn_enabled);
+    assert!(round_tripped_selection.subagent_steering_enabled);
+    assert!(round_tripped_selection.subagent_background_enabled);
+    assert!(round_tripped_selection.subagent_allow_cross_deployment);
+    assert_eq!(
+        round_tripped_selection.cross_deployment_spawn_timeout_seconds,
+        Some(90)
+    );
 }
 
 #[test]
@@ -883,7 +935,7 @@ fn validate_rejects_empty_string_in_subagent_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_targets = Some(vec!["".to_string()]);
+    sel.subagent_targets = vec!["".to_string()];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -900,8 +952,8 @@ fn validate_rejects_subagent_spawn_enabled_without_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_targets = None;
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_targets = Vec::new();
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -920,8 +972,8 @@ fn validate_rejects_subagent_spawn_enabled_with_empty_targets_vec() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_targets = Some(vec![]);
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_targets = Vec::new();
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -940,13 +992,13 @@ fn validate_accepts_subagent_spawn_enabled_with_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
         "researcher",
         "did:defra-agent:test",
         "amy-research",
         None,
-    )]);
+    )];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -963,11 +1015,11 @@ fn validate_rejects_duplicate_subagent_target_name() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_targets = Some(vec![
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_targets = vec![
         defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
         defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
-    ]);
+    ];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -986,15 +1038,15 @@ fn validate_rejects_remote_did_target_when_cross_deployment_off() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    // Flag defaults to None (== false): cross-deployment is OFF.
-    sel.subagent_allow_cross_deployment = None;
-    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+    sel.subagent_spawn_enabled = true;
+    // Flag defaults to false: cross-deployment is OFF.
+    sel.subagent_allow_cross_deployment = false;
+    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
         "remote-researcher",
         "did:defra-agent:OTHER-deployment",
         "amy-research",
         None,
-    )]);
+    )];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -1013,14 +1065,14 @@ fn validate_accepts_remote_did_target_when_cross_deployment_on() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_allow_cross_deployment = Some(true);
-    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_allow_cross_deployment = true;
+    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
         "remote-researcher",
         "did:defra-agent:OTHER-deployment",
         "amy-research",
         None,
-    )]);
+    )];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
@@ -1037,15 +1089,15 @@ fn validate_accepts_local_did_target_when_cross_deployment_off() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
-    sel.subagent_spawn_enabled = Some(true);
-    sel.subagent_allow_cross_deployment = None;
+    sel.subagent_spawn_enabled = true;
+    sel.subagent_allow_cross_deployment = false;
     // Same DID as the selection -> local target, allowed even with flag off.
-    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
         "local-researcher",
         "did:defra-agent:test",
         "amy-research",
         None,
-    )]);
+    )];
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);

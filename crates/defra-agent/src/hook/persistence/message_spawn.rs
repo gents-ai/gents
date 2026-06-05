@@ -535,7 +535,7 @@ impl DefraSessionHook {
 
         if await_mode == AwaitMode::Background {
             let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
-            return Ok(ToolCallHookAction::skip(receipt));
+            return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, receipt));
         }
 
         // Foreground spawns are local-only (the remote-foreground case is
@@ -552,7 +552,7 @@ impl DefraSessionHook {
             )
             .await?;
 
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
 
     /// Classify a resolved target as local or remote by comparing the target's

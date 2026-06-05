@@ -77,6 +77,7 @@ impl ClientCore {
             PeerDirectory::load(paths.peer_directory_path()).await?,
         ));
         ensure_runtime_schemas(node.as_ref()).await?;
+        ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
 
         // Open the EventName::Update subscription BEFORE reading the
@@ -115,7 +116,7 @@ impl ClientCore {
 
         let (peer_statuses, _peer_errors) = {
             let records = peer_directory.read().await.records().to_vec();
-            bootstrap_saved_peers(node.as_ref(), &p2p, &records, &options).await
+            bootstrap_saved_peers(node.as_ref(), &p2p, &records, &options, &principal).await
         };
         let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
         let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
@@ -129,6 +130,7 @@ impl ClientCore {
             Arc::clone(&peer_statuses),
             p2p_health.clone(),
             p2p_control_rx,
+            Arc::new(principal.clone()),
             options.install_replicators_on_bootstrap,
         );
         let materialization_supervisor = spawn_materialization_supervisor_task(
@@ -161,11 +163,28 @@ impl ClientCore {
     }
 }
 
+async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    defra_agent::migration::ensure_peer_pairing_desired_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop PeerPairingDesired migrations")?;
+    defra_agent::migration::ensure_tool_service_registry_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop ToolServiceRegistry migrations")?;
+    defra_agent::migration::ensure_tool_service_health_state_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop ToolServiceHealthState migrations")?;
+    defra_agent::migration::ensure_agent_behavior_migrations(node)
+        .await
+        .context("ensure desktop AgentBehavior migrations")?;
+    Ok(())
+}
+
 pub(super) async fn bootstrap_saved_peers(
     node: &EmbeddedNode,
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
+    actor: &PrincipalIdentity,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -221,7 +240,7 @@ pub(super) async fn bootstrap_saved_peers(
 
                 if let Some(graphql) = record.graphql.as_deref() {
                     if p2p_pairing_enabled {
-                        match configure_local_runtime_pairing(node, p2p, record).await {
+                        match configure_local_runtime_pairing(node, p2p, record, actor).await {
                             Ok(()) => {
                                 if branchable_pair_sync_enabled() {
                                     match sync_branchable_collections_with_retry(
@@ -295,6 +314,7 @@ pub(super) async fn configure_local_runtime_pairing(
     node: &EmbeddedNode,
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
+    actor: &PrincipalIdentity,
 ) -> Result<()> {
     if pairing_reconcile_enabled() {
         write_peer_pairing_desired(node, record).await?;
@@ -305,12 +325,13 @@ pub(super) async fn configure_local_runtime_pairing(
         .graphql
         .as_deref()
         .context("local runtime pairing requires a GraphQL endpoint")?;
-    configure_local_runtime_pairing_legacy(p2p, graphql).await
+    configure_local_runtime_pairing_legacy(p2p, graphql, actor).await
 }
 
 pub(super) async fn configure_local_runtime_pairing_legacy(
     p2p: &Arc<dyn P2POps>,
     graphql: &str,
+    actor: &PrincipalIdentity,
 ) -> Result<()> {
     let desktop_listen_address = wait_for_bootstrap_listen_address(p2p, graphql).await?;
     local_runtime::complete_runtime_pairing(
@@ -320,6 +341,7 @@ pub(super) async fn configure_local_runtime_pairing_legacy(
             .into_iter()
             .map(str::to_owned)
             .collect(),
+        actor,
     )
     .await
 }
