@@ -1824,14 +1824,15 @@ mod lean_apply_write_boundary_tests {
                 })
                 .map(|reference| reference.id.clone())
                 .collect(),
+            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
-            subagent_targets: None,
-            subagent_spawn_enabled: None,
-            subagent_steering_enabled: None,
-            subagent_background_enabled: None,
-            subagent_allow_cross_deployment: None,
+            subagent_targets: Vec::new(),
+            subagent_spawn_enabled: false,
+            subagent_steering_enabled: false,
+            subagent_background_enabled: false,
+            subagent_allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
         }
     }
