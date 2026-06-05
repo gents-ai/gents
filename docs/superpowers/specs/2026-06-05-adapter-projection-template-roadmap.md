@@ -632,6 +632,10 @@ Started after the adapter-driven reframing:
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
   external harness.
+- The AutoGen fixture generator also emits a real `Swarm` capture with native
+  `HandoffMessage` routing from planner to researcher to reviewer, projecting
+  the resulting delegation chain and child request boundaries through the same
+  multi-agent adapter contract.
 - `trace project --acp-policy-id POLICY --graphql ENDPOINT --actor-did DID`
   enforces DefraDB Document ACP read decisions before projection. The loader
   asks `/acp/document/decide` for each runtime row `_docID`, denies the root
@@ -656,9 +660,9 @@ Still pending for the adapter-driven slice:
 - Broader native ACP coverage beyond the projection binding and explicit
   `--acp-policy-id` GraphQL paths, especially write-time policy/resource
   binding from agent manifests.
-- Broader multi-agent captures for CrewAI, AutoGen handoffs/swarm, or Microsoft
-  Agent Framework if those expose compatibility issues the current AutoGen team
-  fixture does not cover.
+- Broader multi-agent captures for CrewAI or Microsoft Agent Framework if
+  those expose compatibility issues beyond the current AutoGen round-robin and
+  Swarm handoff fixtures.
 - Broader LangGraph external captures for provider-backed agents if those
   expose compatibility issues the current linear and compiled-subgraph fixtures
   do not cover.

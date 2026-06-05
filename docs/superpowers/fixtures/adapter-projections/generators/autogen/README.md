@@ -1,9 +1,16 @@
 # AutoGen Fixture Generator
 
-This generator executes a real AutoGen AgentChat `RoundRobinGroupChat` with
-deterministic custom `BaseChatAgent` participants. It captures the native
-`TaskResult` and writes a wrapped Defra Agent `multi_agent_task` adapter
-projection fixture.
+This generator executes real AutoGen AgentChat teams with deterministic custom
+`BaseChatAgent` participants. It captures native `TaskResult` values and writes
+wrapped Defra Agent `multi_agent_task` adapter projection fixtures.
+
+It emits:
+
+- `multi_agent_task.autogen.capture.json`: a `RoundRobinGroupChat` team with
+  planner, researcher, and reviewer turns.
+- `multi_agent_task.autogen_swarm.capture.json`: a `Swarm` team that routes
+  planner -> researcher -> reviewer through native `HandoffMessage` events and
+  projects the resulting delegation chain.
 
 Build and run it from the repository root:
 
@@ -28,5 +35,5 @@ DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-autogen-fixtures \
 ```
 
 The generator avoids live inference by using custom deterministic agents, but
-it still exercises AutoGen AgentChat's team runtime, message flow, and
-termination surface.
+it still exercises AutoGen AgentChat's team runtime, message flow, native
+handoff routing, and termination surface.

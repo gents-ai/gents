@@ -104,6 +104,7 @@ external outputs satisfy the shared Defra Agent projection contract.
   `StateGraph` flows, captures `get_state_history`, and writes wrapped
   `langgraph_state_history` fixtures into the mounted output directory. It
   emits both a linear retry/delegation graph and a compiled-subgraph graph.
-- `generators/autogen/` builds a Docker image that executes a real AutoGen
-  AgentChat `RoundRobinGroupChat` with deterministic custom agents and writes a
-  wrapped `multi_agent_task` fixture into the mounted output directory.
+- `generators/autogen/` builds a Docker image that executes real AutoGen
+  AgentChat teams with deterministic custom agents and writes wrapped
+  `multi_agent_task` fixtures into the mounted output directory. It emits both
+  a `RoundRobinGroupChat` team fixture and a `Swarm` handoff fixture.
