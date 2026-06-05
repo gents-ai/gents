@@ -3,7 +3,9 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use defra_agent::adapter_projection::{
-    build_adapter_projection, AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
+    adapter_projection_jsonl_records, build_adapter_projection,
+    validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
+    ProjectionRedactionMode,
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::run_timeline::{
@@ -15,11 +17,11 @@ use defra_agent::trace_export::{
     raw_message_json, AmyToolCallTraceRecord,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::args::{
-    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectionArg,
+    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectionArg, TraceProjectionFormatArg,
     TraceProjectionRedactionArg, TraceTimelineArgs,
 };
 use crate::config_writes::ConfigAccess;
@@ -62,11 +64,20 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
         &timeline,
         &context,
     );
-    let value = serde_json::to_value(&projection)?;
-    if let Some(path) = args.output_file.as_deref() {
-        write_json_output_file(path, &value)?;
-    } else {
-        print_json(&value)?;
+    validate_adapter_projection_contract(&projection)?;
+    match args.format {
+        TraceProjectionFormatArg::Json => {
+            let value = serde_json::to_value(&projection)?;
+            if let Some(path) = args.output_file.as_deref() {
+                write_json_output_file(path, &value)?;
+            } else {
+                print_json(&value)?;
+            }
+        }
+        TraceProjectionFormatArg::Jsonl => {
+            let records = adapter_projection_jsonl_records(&projection);
+            write_jsonl(args.output_file.as_deref(), &records)?;
+        }
     }
     Ok(())
 }
@@ -156,7 +167,7 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
     });
     let tool_calls = load_tool_calls(&access, args.limit, session_filter).await?;
     if tool_calls.is_empty() {
-        write_jsonl(args.output_file.as_deref(), &[])?;
+        write_jsonl::<AmyToolCallTraceRecord>(args.output_file.as_deref(), &[])?;
         return Ok(());
     }
 
@@ -1066,7 +1077,7 @@ fn graphql_int_list_literal(values: &[i64]) -> String {
     )
 }
 
-fn write_jsonl(path: Option<&std::path::Path>, records: &[AmyToolCallTraceRecord]) -> Result<()> {
+fn write_jsonl<T: Serialize>(path: Option<&std::path::Path>, records: &[T]) -> Result<()> {
     let mut output = String::new();
     for record in records {
         output.push_str(&serde_json::to_string(record)?);

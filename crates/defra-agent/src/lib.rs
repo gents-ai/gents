@@ -59,7 +59,9 @@ pub mod watcher;
 pub use collection::Collection;
 
 pub use adapter_projection::{
-    build_adapter_projection, AdapterProjection, AdapterProjectionEnvelope, AdapterProjectionKind,
+    adapter_projection_jsonl_records, build_adapter_projection,
+    validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
+    AdapterProjectionEnvelope, AdapterProjectionJsonlRecord, AdapterProjectionKind,
     LangGraphStateHistoryProjection, MultiAgentTaskProjection, OpenAiCodexRunTraceProjection,
     ProjectionContext, ProjectionRedactionMode,
 };

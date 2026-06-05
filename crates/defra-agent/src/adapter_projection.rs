@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -8,6 +9,7 @@ use crate::run_timeline::{
 };
 
 pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
+pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,6 +88,53 @@ pub enum AdapterProjection {
     LangGraphStateHistory(LangGraphStateHistoryProjection),
     MultiAgentTask(MultiAgentTaskProjection),
 }
+
+impl AdapterProjection {
+    pub fn kind(&self) -> AdapterProjectionKind {
+        match self {
+            Self::OpenAiCodexRunTrace(_) => AdapterProjectionKind::OpenAiCodexRunTrace,
+            Self::LangGraphStateHistory(_) => AdapterProjectionKind::LangGraphStateHistory,
+            Self::MultiAgentTask(_) => AdapterProjectionKind::MultiAgentTask,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdapterProjectionJsonlRecord {
+    pub projection_id: String,
+    pub projection_version: String,
+    pub source_request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+    pub redaction_mode: ProjectionRedactionMode,
+    pub record_kind: String,
+    pub record_index: usize,
+    pub record_id: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterProjectionContractError {
+    pub violations: Vec<String>,
+}
+
+impl AdapterProjectionContractError {
+    fn from_violations(violations: Vec<String>) -> Self {
+        Self { violations }
+    }
+}
+
+impl fmt::Display for AdapterProjectionContractError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "adapter projection contract failed: {}",
+            self.violations.join("; ")
+        )
+    }
+}
+
+impl std::error::Error for AdapterProjectionContractError {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenAiCodexRunTraceProjection {
@@ -268,7 +317,7 @@ pub fn build_adapter_projection(
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "defra-agent".to_string(),
-            source_projection_id: "run_timeline".to_string(),
+            source_projection_id: RUN_TIMELINE_PROJECTION_ID.to_string(),
             source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
             actor_did: context.actor_did.clone(),
         },
@@ -285,6 +334,356 @@ pub fn build_adapter_projection(
                 AdapterProjection::MultiAgentTask(build_multi_agent_task(timeline, context))
             }
         },
+    }
+}
+
+pub fn validate_adapter_projection_contract(
+    envelope: &AdapterProjectionEnvelope,
+) -> Result<(), AdapterProjectionContractError> {
+    let mut violations = Vec::new();
+    require_nonempty(
+        &mut violations,
+        "projection_id",
+        envelope.projection_id.as_str(),
+    );
+    require_nonempty(
+        &mut violations,
+        "projection_version",
+        envelope.projection_version.as_str(),
+    );
+    require_nonempty(
+        &mut violations,
+        "source_request_id",
+        envelope.source_request_id.as_str(),
+    );
+    require_nonempty(
+        &mut violations,
+        "provenance.runtime",
+        envelope.provenance.runtime.as_str(),
+    );
+    require_eq(
+        &mut violations,
+        "provenance.source_projection_id",
+        envelope.provenance.source_projection_id.as_str(),
+        RUN_TIMELINE_PROJECTION_ID,
+    );
+    require_eq(
+        &mut violations,
+        "projection_id",
+        envelope.projection_id.as_str(),
+        envelope.output.kind().id(),
+    );
+    require_eq(
+        &mut violations,
+        "projection_version",
+        envelope.projection_version.as_str(),
+        ADAPTER_PROJECTION_VERSION,
+    );
+
+    match &envelope.output {
+        AdapterProjection::OpenAiCodexRunTrace(projection) => {
+            validate_openai_codex_projection(&mut violations, projection);
+        }
+        AdapterProjection::LangGraphStateHistory(projection) => {
+            validate_langgraph_projection(&mut violations, projection);
+        }
+        AdapterProjection::MultiAgentTask(projection) => {
+            validate_multi_agent_projection(&mut violations, projection);
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(AdapterProjectionContractError::from_violations(violations))
+    }
+}
+
+pub fn adapter_projection_jsonl_records(
+    envelope: &AdapterProjectionEnvelope,
+) -> Vec<AdapterProjectionJsonlRecord> {
+    match &envelope.output {
+        AdapterProjection::OpenAiCodexRunTrace(projection) => projection
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                jsonl_record(
+                    envelope,
+                    "openai_codex_trace_item",
+                    index,
+                    openai_item_id(item),
+                    serde_json::to_value(item).unwrap_or(Value::Null),
+                )
+            })
+            .collect(),
+        AdapterProjection::LangGraphStateHistory(projection) => {
+            let mut records = Vec::new();
+            records.push(jsonl_record(
+                envelope,
+                "langgraph_values",
+                records.len(),
+                projection.checkpoint_id.clone(),
+                serde_json::to_value(&projection.values).unwrap_or(Value::Null),
+            ));
+            for node in &projection.nodes {
+                records.push(jsonl_record(
+                    envelope,
+                    "langgraph_node",
+                    records.len(),
+                    node.id.clone(),
+                    serde_json::to_value(node).unwrap_or(Value::Null),
+                ));
+            }
+            for edge in &projection.edges {
+                records.push(jsonl_record(
+                    envelope,
+                    "langgraph_edge",
+                    records.len(),
+                    format!("{}->{}:{}", edge.from, edge.to, edge.kind),
+                    serde_json::to_value(edge).unwrap_or(Value::Null),
+                ));
+            }
+            for task in &projection.tasks {
+                records.push(jsonl_record(
+                    envelope,
+                    "langgraph_task",
+                    records.len(),
+                    task.id.clone(),
+                    serde_json::to_value(task).unwrap_or(Value::Null),
+                ));
+            }
+            records
+        }
+        AdapterProjection::MultiAgentTask(projection) => {
+            let mut records = Vec::new();
+            for participant in &projection.participants {
+                records.push(jsonl_record(
+                    envelope,
+                    "multi_agent_participant",
+                    records.len(),
+                    participant
+                        .agent_did
+                        .clone()
+                        .or_else(|| participant.behavior_id.clone())
+                        .unwrap_or_else(|| participant.role.clone()),
+                    serde_json::to_value(participant).unwrap_or(Value::Null),
+                ));
+            }
+            for message in &projection.messages {
+                records.push(jsonl_record(
+                    envelope,
+                    "multi_agent_message",
+                    records.len(),
+                    message.id.clone(),
+                    serde_json::to_value(message).unwrap_or(Value::Null),
+                ));
+            }
+            for delegation in &projection.delegations {
+                records.push(jsonl_record(
+                    envelope,
+                    "multi_agent_delegation",
+                    records.len(),
+                    format!(
+                        "{}->{}",
+                        delegation.parent_request_id, delegation.child_request_id
+                    ),
+                    serde_json::to_value(delegation).unwrap_or(Value::Null),
+                ));
+            }
+            for tool_event in &projection.tool_events {
+                records.push(jsonl_record(
+                    envelope,
+                    "multi_agent_tool_event",
+                    records.len(),
+                    tool_event.id.clone(),
+                    serde_json::to_value(tool_event).unwrap_or(Value::Null),
+                ));
+            }
+            records
+        }
+    }
+}
+
+fn jsonl_record(
+    envelope: &AdapterProjectionEnvelope,
+    record_kind: &str,
+    record_index: usize,
+    record_id: String,
+    value: Value,
+) -> AdapterProjectionJsonlRecord {
+    AdapterProjectionJsonlRecord {
+        projection_id: envelope.projection_id.clone(),
+        projection_version: envelope.projection_version.clone(),
+        source_request_id: envelope.source_request_id.clone(),
+        source_session_id: envelope.source_session_id.clone(),
+        redaction_mode: envelope.redaction_mode,
+        record_kind: record_kind.to_string(),
+        record_index,
+        record_id,
+        value,
+    }
+}
+
+fn openai_item_id(item: &OpenAiCodexTraceItem) -> String {
+    match item {
+        OpenAiCodexTraceItem::Request { id, .. }
+        | OpenAiCodexTraceItem::Message { id, .. }
+        | OpenAiCodexTraceItem::ToolCall { id, .. }
+        | OpenAiCodexTraceItem::Response { id, .. } => id.clone(),
+    }
+}
+
+fn validate_openai_codex_projection(
+    violations: &mut Vec<String>,
+    projection: &OpenAiCodexRunTraceProjection,
+) {
+    require_nonempty(violations, "output.projection.run_id", &projection.run_id);
+    require_nonempty_vec(
+        violations,
+        "output.projection.items",
+        projection.items.len(),
+    );
+    for (index, item) in projection.items.iter().enumerate() {
+        match item {
+            OpenAiCodexTraceItem::Request { id, .. }
+            | OpenAiCodexTraceItem::Message { id, .. }
+            | OpenAiCodexTraceItem::Response { id, .. } => {
+                require_nonempty(violations, &format!("items[{index}].id"), id);
+            }
+            OpenAiCodexTraceItem::ToolCall {
+                id, name, status, ..
+            } => {
+                require_nonempty(violations, &format!("items[{index}].id"), id);
+                require_nonempty(violations, &format!("items[{index}].name"), name);
+                require_nonempty(violations, &format!("items[{index}].status"), status);
+            }
+        }
+    }
+}
+
+fn validate_langgraph_projection(
+    violations: &mut Vec<String>,
+    projection: &LangGraphStateHistoryProjection,
+) {
+    require_nonempty(
+        violations,
+        "output.projection.checkpoint_id",
+        &projection.checkpoint_id,
+    );
+    require_nonempty(
+        violations,
+        "output.projection.root_request_id",
+        &projection.root_request_id,
+    );
+    require_nonempty_vec(
+        violations,
+        "output.projection.nodes",
+        projection.nodes.len(),
+    );
+    if !projection.values.contains_key("request_id") {
+        violations.push("output.projection.values.request_id is required".to_string());
+    }
+    for (index, node) in projection.nodes.iter().enumerate() {
+        require_nonempty(violations, &format!("nodes[{index}].id"), &node.id);
+        require_nonempty(violations, &format!("nodes[{index}].kind"), &node.kind);
+    }
+    for (index, edge) in projection.edges.iter().enumerate() {
+        require_nonempty(violations, &format!("edges[{index}].from"), &edge.from);
+        require_nonempty(violations, &format!("edges[{index}].to"), &edge.to);
+        require_nonempty(violations, &format!("edges[{index}].kind"), &edge.kind);
+    }
+    for (index, task) in projection.tasks.iter().enumerate() {
+        require_nonempty(violations, &format!("tasks[{index}].id"), &task.id);
+        require_nonempty(violations, &format!("tasks[{index}].name"), &task.name);
+        require_nonempty(violations, &format!("tasks[{index}].status"), &task.status);
+    }
+}
+
+fn validate_multi_agent_projection(
+    violations: &mut Vec<String>,
+    projection: &MultiAgentTaskProjection,
+) {
+    require_nonempty(violations, "output.projection.task_id", &projection.task_id);
+    require_nonempty_vec(
+        violations,
+        "output.projection.participants",
+        projection.participants.len(),
+    );
+    for (index, participant) in projection.participants.iter().enumerate() {
+        require_nonempty(
+            violations,
+            &format!("participants[{index}].role"),
+            &participant.role,
+        );
+        if participant
+            .agent_did
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+            && participant
+                .behavior_id
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            violations.push(format!(
+                "participants[{index}] must include agent_did or behavior_id"
+            ));
+        }
+    }
+    for (index, message) in projection.messages.iter().enumerate() {
+        require_nonempty(violations, &format!("messages[{index}].id"), &message.id);
+        require_nonempty(
+            violations,
+            &format!("messages[{index}].role"),
+            &message.role,
+        );
+    }
+    for (index, delegation) in projection.delegations.iter().enumerate() {
+        require_nonempty(
+            violations,
+            &format!("delegations[{index}].parent_request_id"),
+            &delegation.parent_request_id,
+        );
+        require_nonempty(
+            violations,
+            &format!("delegations[{index}].child_request_id"),
+            &delegation.child_request_id,
+        );
+    }
+    for (index, event) in projection.tool_events.iter().enumerate() {
+        require_nonempty(violations, &format!("tool_events[{index}].id"), &event.id);
+        require_nonempty(
+            violations,
+            &format!("tool_events[{index}].tool_name"),
+            &event.tool_name,
+        );
+        require_nonempty(
+            violations,
+            &format!("tool_events[{index}].status"),
+            &event.status,
+        );
+    }
+}
+
+fn require_nonempty(violations: &mut Vec<String>, path: &str, value: &str) {
+    if value.trim().is_empty() {
+        violations.push(format!("{path} is required"));
+    }
+}
+
+fn require_nonempty_vec(violations: &mut Vec<String>, path: &str, len: usize) {
+    if len == 0 {
+        violations.push(format!("{path} must not be empty"));
+    }
+}
+
+fn require_eq(violations: &mut Vec<String>, path: &str, actual: &str, expected: &str) {
+    if actual != expected {
+        violations.push(format!("{path} expected {expected:?}, got {actual:?}"));
     }
 }
 
@@ -696,6 +1095,24 @@ mod tests {
         assert_eq!(codex.projection_id, "openai_codex_run_trace");
         assert_eq!(langgraph.projection_id, "langgraph_state_history");
         assert_eq!(multi.projection_id, "multi_agent_task");
+        validate_adapter_projection_contract(&codex).unwrap();
+        validate_adapter_projection_contract(&langgraph).unwrap();
+        validate_adapter_projection_contract(&multi).unwrap();
+
+        let codex_records = adapter_projection_jsonl_records(&codex);
+        assert!(!codex_records.is_empty());
+        assert_eq!(codex_records[0].projection_id, "openai_codex_run_trace");
+        assert_eq!(codex_records[0].source_request_id, "req-1");
+        assert_eq!(codex_records[0].record_kind, "openai_codex_trace_item");
+
+        let mut invalid = multi.clone();
+        invalid.projection_id.clear();
+        let error = validate_adapter_projection_contract(&invalid).unwrap_err();
+        assert!(error
+            .violations
+            .iter()
+            .any(|violation| violation == "projection_id is required"));
+
         assert!(!serde_json::to_string(&codex)
             .unwrap()
             .contains("sensitive prompt"));

@@ -588,15 +588,20 @@ Started after the adapter-driven reframing:
   LangGraph-style state/history, and multi-agent task/delegation.
 - `defra-agent trace project --projection ... --request-id REQUEST_ID` exports
   those adapter views from the same run timeline reconstruction path.
+- Adapter projections have lightweight contract validation for shared envelope
+  fields and adapter-specific required fields before CLI output is written.
+- `trace project` supports both JSON envelopes and JSONL record streams through
+  `--format json|jsonl`.
 - Binary E2E coverage validates all three adapter views from embedded
-  persisted runtime rows and checks public redaction behavior.
+  persisted runtime rows, checks public redaction behavior, and exercises the
+  JSONL export path.
 
 Still pending for the adapter-driven slice:
 
 - JSON schema or snapshot files that external consumers can pin.
 - Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
-  actor/redaction context.
+  actor/redaction context and public/training-safe/full redaction modes.
 - Dependency-light contract tests against real external adapter fixtures.
 - Ignored/env-gated Docker or live-framework interoperability tests.
 - Optional live-inference projection test that asserts persisted state and

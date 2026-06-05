@@ -770,7 +770,17 @@ pub(crate) struct TraceProjectArgs {
         help = "Actor identity used for projection provenance"
     )]
     pub(crate) actor_did: Option<String>,
-    #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionFormatArg::Json,
+        help = "Adapter projection output format"
+    )]
+    pub(crate) format: TraceProjectionFormatArg,
+    #[arg(
+        long = "output-file",
+        help = "Write projection output to a file instead of stdout"
+    )]
     pub(crate) output_file: Option<PathBuf>,
 }
 
@@ -786,6 +796,12 @@ pub(crate) enum TraceProjectionRedactionArg {
     Full,
     TrainingSafe,
     Public,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionFormatArg {
+    Json,
+    Jsonl,
 }
 
 #[derive(Subcommand)]

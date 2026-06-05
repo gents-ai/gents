@@ -363,6 +363,21 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         serialized_openai.contains("[redacted]"),
         "public adapter projection should show redaction markers: {openai:#}"
     );
+    let openai_jsonl = trace_project_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
+    assert!(
+        !openai_jsonl.is_empty(),
+        "expected openai-codex JSONL projection records"
+    );
+    assert!(openai_jsonl.iter().all(|record| {
+        record.get("projection_id").and_then(Value::as_str) == Some("openai_codex_run_trace")
+            && record.get("source_request_id").and_then(Value::as_str) == Some("req-1")
+            && record.get("record_kind").and_then(Value::as_str) == Some("openai_codex_trace_item")
+    }));
+    let serialized_openai_jsonl = serde_json::to_string(&openai_jsonl)?;
+    assert!(
+        !serialized_openai_jsonl.contains("Inspect the repo and show README.md"),
+        "public JSONL adapter projection leaked request content: {openai_jsonl:#?}"
+    );
 
     let langgraph = trace_project_json(tempdir.path(), home, "langgraph", "full")?;
     assert_eq!(
@@ -435,6 +450,37 @@ fn trace_project_json(
         ],
     )?;
     serde_json::from_str::<Value>(&output).context("parsing adapter projection JSON")
+}
+
+fn trace_project_jsonl_lines(
+    cwd: &std::path::Path,
+    home: &str,
+    projection: &str,
+    redaction: &str,
+) -> Result<Vec<Value>> {
+    let output = run_cli_text(
+        cwd,
+        &[
+            "trace",
+            "project",
+            "--home",
+            home,
+            "--request-id",
+            "req-1",
+            "--projection",
+            projection,
+            "--redaction",
+            redaction,
+            "--format",
+            "jsonl",
+            "--actor-did",
+            "did:defra-agent:test-viewer",
+        ],
+    )?;
+    output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).context("parsing adapter projection JSONL"))
+        .collect::<Result<Vec<_>>>()
 }
 
 async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
