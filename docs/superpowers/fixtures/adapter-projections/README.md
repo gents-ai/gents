@@ -111,6 +111,12 @@ to choose another output root. Set `DEFRA_AGENT_DOCKER_INTEROP_KEEP=1` to keep
 existing files in that root, or `DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST=1` to
 only generate fixtures without invoking the Rust harness.
 
+The `Adapter Interop` GitHub Actions workflow runs the same Docker suite on
+demand with `workflow_dispatch` or by adding the `adapter-interop` label to a
+PR. Use it when the PR needs a remote, artifact-backed proof against real
+LangGraph, AutoGen, CrewAI, and Microsoft Agent Framework runtimes without
+adding Docker or Python dependencies to default PR CI.
+
 ## Generators
 
 - `generators/langgraph/` builds a Docker image that executes real LangGraph

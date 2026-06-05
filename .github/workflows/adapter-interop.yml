@@ -1,0 +1,143 @@
+name: Adapter Interop
+
+on:
+  pull_request:
+    types:
+      - labeled
+  workflow_dispatch:
+    inputs:
+      langgraph_provider_mode:
+        description: LangGraph provider mode for the Docker fixture generator
+        required: true
+        type: choice
+        default: fake
+        options:
+          - fake
+          - auto
+          - live
+      openai_base_url:
+        description: Optional OpenAI-compatible base URL for live provider mode
+        required: false
+        type: string
+      openai_model:
+        description: Optional OpenAI-compatible model name for live provider mode
+        required: false
+        type: string
+      output_dir:
+        description: Host output directory for generated fixture captures
+        required: true
+        type: string
+        default: /tmp/defra-agent-adapter-interop-fixtures
+      keep_output:
+        description: Keep existing files in the output directory before generating
+        required: true
+        type: boolean
+        default: false
+
+env:
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  adapter-interop:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'adapter-interop'
+    runs-on: [self-hosted, Linux, X64, workstation-1]
+    timeout-minutes: 60
+    env:
+      ADAPTER_INTEROP_OUTPUT_DIR: ${{ inputs.output_dir || '/tmp/defra-agent-adapter-interop-fixtures' }}
+      ADAPTER_INTEROP_PROVIDER_MODE: ${{ inputs.langgraph_provider_mode || 'fake' }}
+      ADAPTER_INTEROP_OPENAI_BASE_URL: ${{ inputs.openai_base_url || '' }}
+      ADAPTER_INTEROP_OPENAI_MODEL: ${{ inputs.openai_model || '' }}
+      GIT_CONFIG_GLOBAL: /tmp/defra-agent-adapter-interop-${{ github.run_id }}.gitconfig
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Rewrite Git SSH dependencies to HTTPS
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
+            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
+            exit 1
+          fi
+          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install native build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libssl-dev \
+            pkg-config \
+            protobuf-compiler
+          protoc --version
+
+      - name: Verify Docker
+        run: |
+          set -euo pipefail
+          docker_path="$(command -v docker)"
+          if docker info >/dev/null 2>&1; then
+            docker version
+            docker info
+          elif sudo -n "${docker_path}" info >/dev/null 2>&1; then
+            docker_bin="${RUNNER_TEMP}/docker-bin"
+            mkdir -p "${docker_bin}"
+            cat > "${docker_bin}/docker" <<EOF
+          #!/usr/bin/env bash
+          exec sudo -n "${docker_path}" "\$@"
+          EOF
+            chmod +x "${docker_bin}/docker"
+            echo "${docker_bin}" >> "${GITHUB_PATH}"
+            sudo -n "${docker_path}" version
+            sudo -n "${docker_path}" info
+          else
+            docker version || true
+            sudo -n "${docker_path}" version || true
+            echo "::error::Docker is installed but neither direct nor sudo access can reach the daemon."
+            exit 1
+          fi
+
+      - name: Run Docker adapter interop suite
+        env:
+          DEFRA_AGENT_DOCKER_INTEROP_OUT: ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}
+          DEFRA_LANGGRAPH_PROVIDER_MODE: ${{ env.ADAPTER_INTEROP_PROVIDER_MODE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ env.ADAPTER_INTEROP_OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ env.ADAPTER_INTEROP_OPENAI_MODEL }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.keep_output || false }}" == "true" ]]; then
+            export DEFRA_AGENT_DOCKER_INTEROP_KEEP=1
+          fi
+          docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh \
+            "${DEFRA_AGENT_DOCKER_INTEROP_OUT}"
+
+      - name: Upload generated fixtures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-interop-fixtures
+          path: ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/*.json
+          if-no-files-found: ignore
+
+      - name: Cleanup git auth
+        if: always()
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          rm -f "${GIT_CONFIG_GLOBAL}"

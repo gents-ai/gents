@@ -146,6 +146,14 @@ framework has a stable CLI/server image, use Docker only in the gated suite. If
 the framework is primarily a library, prefer a tiny fixture generator or schema
 validator over pulling the full stack into normal Rust tests.
 
+The current gated Docker suite is `Adapter Interop`, an on-demand GitHub
+Actions workflow available through `workflow_dispatch` or the
+`adapter-interop` PR label. It builds and runs the LangGraph, AutoGen, CrewAI,
+and Microsoft Agent Framework fixture generators with Docker, then points the
+ignored Rust adapter harness at the combined capture directory and uploads the
+generated JSON fixtures as run artifacts. The same path can use fake, auto, or
+live LangGraph provider mode without changing default PR CI.
+
 ## Phase 0: mapping contracts and conformance
 
 ### Deliverables
