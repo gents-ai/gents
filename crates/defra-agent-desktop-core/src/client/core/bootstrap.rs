@@ -77,6 +77,7 @@ impl ClientCore {
             PeerDirectory::load(paths.peer_directory_path()).await?,
         ));
         ensure_runtime_schemas(node.as_ref()).await?;
+        ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
 
         // Open the EventName::Update subscription BEFORE reading the
@@ -160,6 +161,22 @@ impl ClientCore {
             bootstrap_errors,
         })
     }
+}
+
+async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    defra_agent::migration::ensure_peer_pairing_desired_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop PeerPairingDesired migrations")?;
+    defra_agent::migration::ensure_tool_service_registry_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop ToolServiceRegistry migrations")?;
+    defra_agent::migration::ensure_tool_service_health_state_migrations(Arc::clone(&node))
+        .await
+        .context("ensure desktop ToolServiceHealthState migrations")?;
+    defra_agent::migration::ensure_agent_behavior_migrations(node)
+        .await
+        .context("ensure desktop AgentBehavior migrations")?;
+    Ok(())
 }
 
 pub(super) async fn bootstrap_saved_peers(
