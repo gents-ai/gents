@@ -108,3 +108,6 @@ external outputs satisfy the shared Defra Agent projection contract.
   AgentChat teams with deterministic custom agents and writes wrapped
   `multi_agent_task` fixtures into the mounted output directory. It emits both
   a `RoundRobinGroupChat` team fixture and a `Swarm` handoff fixture.
+- `generators/crewai/` builds a Docker image that executes a real CrewAI
+  sequential `Crew` with deterministic custom `BaseLLM` instances and writes a
+  wrapped `multi_agent_task` fixture into the mounted output directory.

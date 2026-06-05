@@ -636,6 +636,11 @@ Started after the adapter-driven reframing:
   `HandoffMessage` routing from planner to researcher to reviewer, projecting
   the resulting delegation chain and child request boundaries through the same
   multi-agent adapter contract.
+- A Docker-backed CrewAI fixture generator runs a real sequential `Crew` with
+  deterministic custom `BaseLLM` agents, captures native `Agent`, `Task`,
+  `Crew`, `Process.sequential`, and `Crew.kickoff` evidence, and emits a
+  wrapped `multi_agent_task` adapter fixture with task context handoff
+  boundaries for the external harness.
 - `trace project --acp-policy-id POLICY --graphql ENDPOINT --actor-did DID`
   enforces DefraDB Document ACP read decisions before projection. The loader
   asks `/acp/document/decide` for each runtime row `_docID`, denies the root
@@ -667,9 +672,10 @@ Still pending for the adapter-driven slice:
 - Broader native ACP lifecycle coverage beyond projection binding
   validate/apply/export and explicit `--acp-policy-id` GraphQL paths,
   especially policy/resource creation, rotation, and publication workflows.
-- Broader multi-agent captures for CrewAI or Microsoft Agent Framework if
-  those expose compatibility issues beyond the current AutoGen round-robin and
-  Swarm handoff fixtures.
+- Broader multi-agent captures for Microsoft Agent Framework, or additional
+  CrewAI process shapes, if those expose compatibility issues beyond the
+  current AutoGen round-robin, AutoGen Swarm handoff, and CrewAI sequential
+  task-context fixtures.
 - Broader LangGraph external captures for provider-backed agents if those
   expose compatibility issues the current linear and compiled-subgraph fixtures
   do not cover.
