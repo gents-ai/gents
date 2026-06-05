@@ -30,6 +30,14 @@ pub(super) fn graphql_optional_bool_field(name: &str, value: Option<bool>) -> Op
 
 pub(super) fn graphql_string_list_field(name: &str, value: Option<&[String]>) -> Option<String> {
     let values = value?;
+    // Empty lists serialize as `null`, never `[]`: a bare `[]` literal is typed
+    // by DefraDB as JsonArray and corrupts a NillableStringArray column (create
+    // stores JsonArray, later updates fail re-validation). Matches the
+    // `graphql_nullable_string_field` idiom and the protocol-level
+    // `string_list_field` fix.
+    if values.is_empty() {
+        return Some(format!("{name}: null"));
+    }
     Some(format!(
         "{name}: [{}]",
         values

@@ -199,9 +199,10 @@ async fn seed_live_behavior_documents(
         behavior_id: behavior_id.clone(),
         agent_did: Some(agent_did.to_string()),
         display_name: Some("Live Repo Audit Default".to_string()),
-        system_prompt: Some(format!(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with behavior_id {subagent_behavior_id:?} and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
-        )),
+        system_prompt: Some(
+            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
+                .to_string(),
+        ),
         backend_id: Some(backend_id.clone()),
         model_name: Some(backend.model_name.clone()),
         tool_selection_id: Some(tool_selection_id.clone()),

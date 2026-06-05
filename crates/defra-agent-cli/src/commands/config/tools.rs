@@ -42,11 +42,17 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         enable_meta_tools: Some(args.enable_meta_tools),
         allowed_mcp_service_ids: Some(args.allowed_mcp_service_ids.clone()),
         backgroundable_tool_names: Some(args.backgroundable_tool_names.clone()),
-        subagent_targets: Some(Vec::new()),
-        subagent_spawn_enabled: Some(false),
-        subagent_steering_enabled: Some(false),
-        subagent_background_enabled: Some(false),
-        subagent_allow_cross_deployment: Some(false),
+        // The imperative `config tools set` exposes no flags for subagent
+        // enablement (those are managed via `config apply` manifests). Emitting
+        // `Some(false)`/`Some(empty)` here would write those fields into the
+        // update mutation and silently clobber an apply-managed subagent
+        // config. Leave them `None` so the writer omits them: on update the
+        // stored values are preserved, on create the schema defaults apply.
+        subagent_targets: None,
+        subagent_spawn_enabled: None,
+        subagent_steering_enabled: None,
+        subagent_background_enabled: None,
+        subagent_allow_cross_deployment: None,
         cross_deployment_spawn_timeout_seconds: None,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections: Some(args.defra_query_collections.clone()),

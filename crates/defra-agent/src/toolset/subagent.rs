@@ -332,8 +332,11 @@ impl Tool for ReadSubagentTool {
 Paging is cursor-based and content-honest: pass `since_sequence` to resume, and the response \
 returns `next_sequence` (the exact cursor to pass next), `has_more` (true when the token budget \
 capped the read and more messages remain past `next_sequence`), and `terminal`/`lifecycle_state` \
-(whether the subagent has finished). Output is never silently dropped: when `has_more` is true, \
-read again with `since_sequence = next_sequence` to continue gap-free."
+(whether the subagent has finished). Output is never SILENTLY dropped: when `has_more` is true, \
+read again with `since_sequence = next_sequence` to continue. One case is truncated rather than \
+paged, but always explicitly marked: a single message larger than the entire budget is cut with a \
+`[truncated: showed N of M chars]` marker and the cursor advances past it, so that one message's \
+tail is not separately pageable."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

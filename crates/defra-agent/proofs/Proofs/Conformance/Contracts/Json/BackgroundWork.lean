@@ -123,13 +123,20 @@ def r4cReadTranscriptHidesBridgeRows :
   , renderedTranscript := "[assistant seq=2]\nplain assistant message\n"
   }
 
+-- Realigned to shipped behavior (see defra-agent#403): the R4c design specced
+-- an in-memory live ring buffer for running reads, but it was never built. The
+-- runtime returns EMPTY output for a running tool and serves the persisted
+-- result only once terminal (`background_tools.rs` running branch returns "",
+-- pinned by `read_tool_output_running_returns_empty_live_stream_without_ring_buffer`).
+-- So a running read has no live source and an empty payload; the only non-empty
+-- source is the persisted completion at terminal.
 def r4cReadToolOutputDispatchesByState :
     R4cWitnesses.ReadToolOutputDispatchesByState :=
   { toolCallId := "r4c-w4-tool-call"
-  , runningSource := "ring_buffer"
+  , runningSource := "none"
   , terminalSource := "persisted_tool_completion"
-  , runningPayload := "ring-buffer-live-tail"
-  , staleRunningPayload := "stale-ring-buffer-tail"
+  , runningPayload := ""
+  , staleRunningPayload := ""
   , terminalPayload := "persisted-completion-stdout"
   }
 

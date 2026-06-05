@@ -1,5 +1,14 @@
 # R4c Agent-Facing Background Work Management Tools Design
 
+> **Deferral note (added post-implementation):** the in-memory live **ring
+> buffer** for *running* reads described below (e.g. "Running: in-memory ring
+> buffer maintained by R6, 256 KB per stream") was **not built**. The shipped
+> runtime returns empty output for a running tool and serves the persisted
+> result only once terminal. The Lean conformance witness was realigned to this
+> shipped behavior. The ring-buffer design is preserved here as the plan of
+> record if live running-read visibility is later wanted — tracked by
+> **defra-agent#403**.
+
 Status: draft for Jack approval, revision 1
 Date: 2026-05-14
 Tracking: TBD (suggested title: "R4c: agent-facing background work management")

@@ -1357,14 +1357,23 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             terminal_payload,
         } => {
             assert_eq!(tool_call_id, "r4c-w4-tool-call");
-            assert_eq!(running_source, "ring_buffer");
+            // Shipped behavior (defra-agent#403): no live ring buffer was built,
+            // so a running read has no live source and returns empty output; the
+            // persisted completion is the only non-empty source, served at
+            // terminal. This mirrors `background_tools.rs` and is independently
+            // pinned by `read_tool_output_running_returns_empty_live_stream_without_ring_buffer`.
+            assert_eq!(running_source, "none");
             assert_eq!(terminal_source, "persisted_tool_completion");
-            assert_eq!(running_payload, "ring-buffer-live-tail");
-            assert_eq!(stale_running_payload, "stale-ring-buffer-tail");
+            assert_eq!(running_payload, "");
+            assert_eq!(stale_running_payload, "");
             assert_eq!(terminal_payload, "persisted-completion-stdout");
+            assert!(
+                running_payload.is_empty(),
+                "running reads must return empty output: no live ring buffer is maintained"
+            );
             assert_ne!(
-                terminal_payload, stale_running_payload,
-                "terminal reads must not replay a stale live buffer"
+                terminal_payload, running_payload,
+                "terminal reads serve the persisted result, never the (empty) running payload"
             );
         }
         other => panic!("unexpected R4c witness variant: {other:?}"),

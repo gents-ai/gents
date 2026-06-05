@@ -111,6 +111,97 @@ mod tests {
 
         Ok(())
     }
+
+    /// Regression for the `config tools set` clobbering bug: an update that
+    /// leaves the subagent enablement fields `None` (as the imperative command
+    /// does — it exposes no flags for them) MUST NOT overwrite an existing
+    /// apply-managed subagent config. The writer omits `None` fields from the
+    /// `update` clause, so DefraDB preserves the stored values.
+    #[tokio::test]
+    async fn update_with_none_subagent_fields_preserves_existing_config() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+
+        // Step 1: an apply-style write enables subagents.
+        let applied = ToolSelectionDocument {
+            selection_id: "test-clobber".to_string(),
+            agent_did: "did:test:clobber".to_string(),
+            display_name: Some("Original".to_string()),
+            subagent_spawn_enabled: Some(true),
+            subagent_targets: Some(vec!["amy-research".to_string()]),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(90),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &applied).await?;
+
+        // Step 2: an imperative `tools set`-style update touches only its own
+        // fields and leaves every subagent field `None`.
+        let imperative = ToolSelectionDocument {
+            selection_id: "test-clobber".to_string(),
+            agent_did: "did:test:clobber".to_string(),
+            display_name: Some("Updated".to_string()),
+            subagent_targets: None,
+            subagent_spawn_enabled: None,
+            subagent_steering_enabled: None,
+            subagent_background_enabled: None,
+            subagent_allow_cross_deployment: None,
+            cross_deployment_spawn_timeout_seconds: None,
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &imperative).await?;
+
+        let node = match &access {
+            ConfigAccess::Local(n) => n,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+        let loaded = load_tool_selection(node, "test-clobber")
+            .await?
+            .expect("ToolSelection should exist after update");
+
+        // The imperative field changed...
+        assert_eq!(
+            loaded.display_name.as_deref(),
+            Some("Updated"),
+            "imperative-owned field should update"
+        );
+        // ...but the apply-managed subagent config is preserved, not clobbered.
+        assert_eq!(
+            loaded.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_targets,
+            Some(vec!["amy-research".to_string()]),
+            "subagent_targets must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must NOT be clobbered by a None update"
+        );
+
+        Ok(())
+    }
 }
 
 fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) -> String {
