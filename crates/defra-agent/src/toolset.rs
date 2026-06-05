@@ -13,6 +13,7 @@ mod context_budget;
 mod denial;
 mod file_tools;
 mod native_runner;
+mod session_history;
 mod shared;
 mod subagent;
 #[cfg(test)]
@@ -35,6 +36,10 @@ pub use context_budget::{
     CONTEXT_BUDGET_TOOL_NAME,
 };
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+pub use session_history::{
+    build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
+    SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
+};
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 
