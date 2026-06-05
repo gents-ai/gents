@@ -609,16 +609,20 @@ Started after the adapter-driven reframing:
   records derived from each adapter projection, and
   `trace project-schema --format training-jsonl` exports the matching schema
   snapshots.
+- `trace project` accepts explicit document-scope gates for agent DID,
+  behavior id, and session id. Scoped projections deny out-of-scope root
+  requests and filter content-bearing child-agent events while preserving
+  delegation topology.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL and training/eval JSONL export paths. Tests also verify schema export
-  against the checked-in snapshots and validate conformance fixtures without
-  booting DefraDB.
+  JSONL, training/eval JSONL, and document-scope export paths. Tests also
+  verify schema export against the checked-in snapshots and validate
+  conformance fixtures without booting DefraDB.
 
 Still pending for the adapter-driven slice:
 
-- Actual DefraDB ACP subject scoping in projection loaders beyond the current
-  actor/redaction context and public/training-safe/full redaction modes.
+- Native DefraDB ACP decision integration for projection loaders, replacing the
+  current explicit document-scope gates where possible.
 - Broader real external adapter fixtures captured from upstream examples.
 - Ignored/env-gated Docker or live-framework interoperability tests for cases
   where fixtures are not enough.

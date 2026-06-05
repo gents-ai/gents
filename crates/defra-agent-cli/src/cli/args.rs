@@ -776,6 +776,21 @@ pub(crate) struct TraceProjectArgs {
     )]
     pub(crate) actor_did: Option<String>,
     #[arg(
+        long = "scope-agent-did",
+        help = "Require the root request to match this agent DID and omit content-bearing events for other agents"
+    )]
+    pub(crate) scope_agent_did: Option<String>,
+    #[arg(
+        long = "scope-behavior-id",
+        help = "Require the root request to match this behavior id and omit content-bearing events for other behaviors"
+    )]
+    pub(crate) scope_behavior_id: Option<String>,
+    #[arg(
+        long = "scope-session-id",
+        help = "Require the root request to belong to this session id"
+    )]
+    pub(crate) scope_session_id: Option<String>,
+    #[arg(
         long,
         value_enum,
         default_value_t = TraceProjectionFormatArg::Json,

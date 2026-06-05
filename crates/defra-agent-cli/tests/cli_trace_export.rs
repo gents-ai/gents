@@ -487,6 +487,46 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         !serialized_openai_training_jsonl.contains("Inspect the repo and show README.md"),
         "public training JSONL adapter projection leaked request content: {openai_training_jsonl:#?}"
     );
+    let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
+    assert!(
+        serde_json::to_string(&openai_full)?.contains("reviewer private child response"),
+        "unscoped full projection should include child-agent response content: {openai_full:#}"
+    );
+    let scoped_openai = trace_project_json_with_extra_args(
+        tempdir.path(),
+        home,
+        "openai-codex",
+        "full",
+        &["--scope-agent-did", "did:defra-agent:amy"],
+    )?;
+    let scoped_openai_serialized = serde_json::to_string(&scoped_openai)?;
+    assert!(
+        scoped_openai_serialized.contains("req-child"),
+        "scoped projection should retain child delegation metadata: {scoped_openai:#}"
+    );
+    assert!(
+        !scoped_openai_serialized.contains("reviewer private child response"),
+        "scoped projection leaked child-agent response content: {scoped_openai:#}"
+    );
+    let denied_scope = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "trace",
+            "project",
+            "--home",
+            home,
+            "--request-id",
+            "req-1",
+            "--projection",
+            "openai-codex",
+            "--scope-agent-did",
+            "did:defra-agent:reviewer",
+        ],
+    )?;
+    assert!(
+        denied_scope.contains("projection scope denied request req-1"),
+        "expected projection scope denial, got:\n{denied_scope}"
+    );
 
     let langgraph = trace_project_json(tempdir.path(), home, "langgraph", "full")?;
     assert_eq!(
@@ -551,23 +591,32 @@ fn trace_project_json(
     projection: &str,
     redaction: &str,
 ) -> Result<Value> {
-    let output = run_cli_text(
-        cwd,
-        &[
-            "trace",
-            "project",
-            "--home",
-            home,
-            "--request-id",
-            "req-1",
-            "--projection",
-            projection,
-            "--redaction",
-            redaction,
-            "--actor-did",
-            "did:defra-agent:test-viewer",
-        ],
-    )?;
+    trace_project_json_with_extra_args(cwd, home, projection, redaction, &[])
+}
+
+fn trace_project_json_with_extra_args(
+    cwd: &std::path::Path,
+    home: &str,
+    projection: &str,
+    redaction: &str,
+    extra_args: &[&str],
+) -> Result<Value> {
+    let mut args = vec![
+        "trace",
+        "project",
+        "--home",
+        home,
+        "--request-id",
+        "req-1",
+        "--projection",
+        projection,
+        "--redaction",
+        redaction,
+        "--actor-did",
+        "did:defra-agent:test-viewer",
+    ];
+    args.extend_from_slice(extra_args);
+    let output = run_cli_text(cwd, &args)?;
     serde_json::from_str::<Value>(&output).context("parsing adapter projection JSON")
 }
 
@@ -747,6 +796,29 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 materialized_at: "2026-05-04T12:00:06Z",
                 created_at: "2026-05-04T12:00:01Z",
                 completed_at: "2026-05-04T12:00:06Z"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentResponse(input: {
+                response_key: "req-child",
+                request_id: "req-child",
+                agent_did: "did:defra-agent:reviewer",
+                behavior_id: "reviewer",
+                session_id: "session-1",
+                content: "reviewer private child response",
+                reasoning: "child reasoning",
+                status: "completed",
+                error_message: "",
+                token_count: 8,
+                progress_seq: 1,
+                materialized_message_sequence: 5,
+                materialized_at: "2026-05-04T12:00:07Z",
+                created_at: "2026-05-04T12:00:04Z",
+                completed_at: "2026-05-04T12:00:07Z"
             }) { _docID }
         }"#,
     )

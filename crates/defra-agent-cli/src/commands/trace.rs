@@ -11,8 +11,9 @@ use defra_agent::adapter_projection::{
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::run_timeline::{
-    build_run_timeline, RunTimeline, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
-    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
+    TimelineMessageRow, TimelineRequestEvent, TimelineRequestRow, TimelineResponseRow,
+    TimelineSessionRow, TimelineToolCallEvent, TimelineToolCallRow,
 };
 use defra_agent::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
@@ -57,7 +58,15 @@ async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
 async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
-    let timeline = load_run_timeline(&access, &args.request_id).await?;
+    let scope = ProjectionDocumentScope {
+        agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
+        behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
+        session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
+    };
+    let timeline = apply_projection_document_scope(
+        load_run_timeline(&access, &args.request_id).await?,
+        &scope,
+    )?;
     let context = ProjectionContext {
         actor_did: args.actor_did,
         redaction_mode: projection_redaction_mode(args.redaction),
@@ -149,6 +158,183 @@ async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<Ru
         tool_calls,
         responses,
     }))
+}
+
+#[derive(Debug, Default)]
+struct ProjectionDocumentScope {
+    agent_did: Option<String>,
+    behavior_id: Option<String>,
+    session_id: Option<String>,
+}
+
+impl ProjectionDocumentScope {
+    fn has_filters(&self) -> bool {
+        self.agent_did.is_some() || self.behavior_id.is_some() || self.session_id.is_some()
+    }
+
+    fn description(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(agent_did) = self.agent_did.as_deref() {
+            parts.push(format!("agent_did={agent_did}"));
+        }
+        if let Some(behavior_id) = self.behavior_id.as_deref() {
+            parts.push(format!("behavior_id={behavior_id}"));
+        }
+        if let Some(session_id) = self.session_id.as_deref() {
+            parts.push(format!("session_id={session_id}"));
+        }
+        parts.join(", ")
+    }
+}
+
+fn apply_projection_document_scope(
+    mut timeline: RunTimeline,
+    scope: &ProjectionDocumentScope,
+) -> Result<RunTimeline> {
+    if !scope.has_filters() {
+        return Ok(timeline);
+    }
+
+    if !timeline_root_matches_scope(&timeline, scope) {
+        anyhow::bail!(
+            "projection scope denied request {} for {}",
+            timeline.request_id,
+            scope.description()
+        );
+    }
+
+    let allowed_request_ids = scoped_request_ids(&timeline, scope);
+    timeline.events.retain(|event| {
+        should_keep_scoped_timeline_event(event, &timeline.request_id, &allowed_request_ids, scope)
+    });
+    Ok(timeline)
+}
+
+fn timeline_root_matches_scope(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> bool {
+    scope_value_matches(
+        scope.agent_did.as_deref(),
+        [
+            timeline.request.agent_did.as_deref(),
+            timeline.agent_did.as_deref(),
+        ],
+    ) && scope_value_matches(
+        scope.behavior_id.as_deref(),
+        [
+            timeline.request.behavior_id.as_deref(),
+            timeline.behavior_id.as_deref(),
+            timeline
+                .session
+                .as_ref()
+                .and_then(|session| session.behavior_id.as_deref()),
+        ],
+    ) && scope_value_matches(
+        scope.session_id.as_deref(),
+        [
+            timeline.request.session_id.as_deref(),
+            timeline.session_id.as_deref(),
+        ],
+    )
+}
+
+fn scoped_request_ids(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> BTreeSet<String> {
+    let mut allowed = BTreeSet::from([timeline.request_id.clone()]);
+    for event in &timeline.events {
+        if let RunTimelineEvent::Request(request) = event {
+            if request_event_matches_scope(request, scope) {
+                allowed.insert(request.request_id.clone());
+            }
+        }
+    }
+    allowed
+}
+
+fn request_event_matches_scope(
+    request: &TimelineRequestEvent,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    scope_value_matches(scope.agent_did.as_deref(), [request.agent_did.as_deref()])
+        && scope_value_matches(
+            scope.behavior_id.as_deref(),
+            [request.behavior_id.as_deref()],
+        )
+        && scope_value_matches(scope.session_id.as_deref(), [request.session_id.as_deref()])
+}
+
+fn should_keep_scoped_timeline_event(
+    event: &RunTimelineEvent,
+    root_request_id: &str,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    match event {
+        RunTimelineEvent::Request(request) => {
+            request.request_id == root_request_id
+                || allowed_request_ids.contains(&request.request_id)
+                || request
+                    .parent_request_id
+                    .as_deref()
+                    .is_some_and(|parent_request_id| {
+                        allowed_request_ids.contains(parent_request_id)
+                    })
+        }
+        RunTimelineEvent::Message(message) => scoped_request_id_allowed(
+            message.request_id.as_deref(),
+            Some(message.session_id.as_str()),
+            allowed_request_ids,
+            scope,
+        ),
+        RunTimelineEvent::ToolCall(tool_call) => {
+            scoped_tool_call_allowed(tool_call, allowed_request_ids, scope)
+        }
+        RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
+    }
+}
+
+fn scoped_tool_call_allowed(
+    tool_call: &TimelineToolCallEvent,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    scoped_request_id_allowed(
+        tool_call.request_id.as_deref(),
+        Some(tool_call.session_id.as_str()),
+        allowed_request_ids,
+        scope,
+    )
+}
+
+fn scoped_request_id_allowed(
+    request_id: Option<&str>,
+    session_id: Option<&str>,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    request_id
+        .map(|request_id| allowed_request_ids.contains(request_id))
+        .unwrap_or_else(|| {
+            scope.agent_did.is_none()
+                && scope.behavior_id.is_none()
+                && scope_value_matches(scope.session_id.as_deref(), [session_id])
+        })
+}
+
+fn scope_value_matches<'a>(
+    expected: Option<&str>,
+    actual_values: impl IntoIterator<Item = Option<&'a str>>,
+) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    actual_values
+        .into_iter()
+        .flatten()
+        .any(|actual| actual.trim() == expected)
+}
+
+fn optional_scope_arg(field: &str, value: Option<String>) -> Result<Option<String>> {
+    value
+        .map(|value| crate::require_non_empty(field, &value).map(ToOwned::to_owned))
+        .transpose()
 }
 
 fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {
