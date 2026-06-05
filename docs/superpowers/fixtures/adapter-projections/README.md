@@ -111,3 +111,7 @@ external outputs satisfy the shared Defra Agent projection contract.
 - `generators/crewai/` builds a Docker image that executes a real CrewAI
   sequential `Crew` with deterministic custom `BaseLLM` instances and writes a
   wrapped `multi_agent_task` fixture into the mounted output directory.
+- `generators/microsoft-agent-framework/` builds a Docker image that executes
+  a real Microsoft Agent Framework group-chat workflow with deterministic
+  custom `BaseChatClient` instances and writes a wrapped `multi_agent_task`
+  fixture into the mounted output directory.
