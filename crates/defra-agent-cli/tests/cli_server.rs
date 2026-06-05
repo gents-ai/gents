@@ -150,6 +150,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let default_behavior_id = default_behavior_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -272,14 +273,19 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
-    // Seed an AgentRequest (so the agent's session resolves) plus a
-    // CompactionEntry in that session, so the agent-scoped context budget has
-    // something to aggregate. This exercises the agent -> session -> compaction
-    // path end-to-end against the live schema.
+    // Seed an AgentRequest (so the agent's session resolves), an AgentSession
+    // and AgentMessage for /sessions, plus a CompactionEntry so the
+    // agent-scoped context budget has something to aggregate.
     for mutation in [
+        format!(
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", agent_name: "{}", behavior_id: "{}", started: "2026-06-02T09:59:00Z", status: "active" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&agent_name),
+            escape_graphql_string(&default_behavior_id),
+        ),
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", status: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
+        r#"mutation { create_AgentMessage(input: { message_key: "self-budget-session:1", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
     ] {
         let seed = client
@@ -315,7 +321,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
                 && behavior
-                    .get("endpoint")
+                    .get("backend_endpoint")
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| !endpoint.is_empty())
         }),
@@ -333,6 +339,45 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         budget.get("latest_original_tokens").and_then(Value::as_i64),
         Some(1234),
         "expected context_budget latest tokens from the seeded compaction: {self_view}"
+    );
+
+    let sessions_response = client
+        .get(format!("http://127.0.0.1:{port}/sessions?limit=1"))
+        .send()
+        .await
+        .context("fetching /sessions")?;
+    assert!(
+        sessions_response.status().is_success(),
+        "unexpected /sessions response: {sessions_response:?}"
+    );
+    let sessions: Value = sessions_response
+        .json()
+        .await
+        .context("reading /sessions body")?;
+    assert_eq!(
+        sessions.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    let session = sessions
+        .get("sessions")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .unwrap_or_else(|| panic!("expected /sessions to include the seeded row: {sessions}"));
+    assert_eq!(
+        session.get("session_id").and_then(Value::as_str),
+        Some("self-budget-session")
+    );
+    assert_eq!(
+        session.get("request_count").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        session.get("message_count").and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        session.get("compaction_count").and_then(Value::as_i64),
+        Some(1)
     );
 
     // /fleet reshapes per-agent_did runtime + request counts.

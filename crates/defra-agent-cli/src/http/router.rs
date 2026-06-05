@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -17,6 +17,7 @@ use crate::http::prometheus::{
     MetricsRuntimeRow,
 };
 use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
+use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
 use defra_agent::defra_query::CollectionScope;
 
@@ -55,6 +56,7 @@ pub(crate) fn runtime_contract_router(
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
         .route("/self", get(self_handler))
+        .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
@@ -243,6 +245,21 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
             }
             (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(body)).into_response()
         }
+    }
+}
+
+async fn sessions_handler(
+    State(state): State<RuntimeHttpState>,
+    Query(query): Query<SessionHistoryParams>,
+) -> Response {
+    match load_session_history_snapshot(&state.graphql, &state.agent_did, query.limit).await {
+        Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("sessions snapshot failed: {error:#}"),
+        )
+            .into_response(),
     }
 }
 
