@@ -776,6 +776,11 @@ pub(crate) struct TraceProjectArgs {
     )]
     pub(crate) actor_did: Option<String>,
     #[arg(
+        long = "acp-policy-id",
+        help = "DefraDB Document ACP policy id used to enforce row-level read decisions before projection. Requires --graphql and --actor-did."
+    )]
+    pub(crate) acp_policy_id: Option<String>,
+    #[arg(
         long = "scope-agent-did",
         help = "Require the root request to match this agent DID and omit content-bearing events for other agents"
     )]

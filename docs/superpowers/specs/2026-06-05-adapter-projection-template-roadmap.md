@@ -629,11 +629,16 @@ Started after the adapter-driven reframing:
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
   external harness.
+- `trace project --acp-policy-id POLICY --graphql ENDPOINT --actor-did DID`
+  enforces DefraDB Document ACP read decisions before projection. The loader
+  asks `/acp/document/decide` for each runtime row `_docID`, denies the root
+  request fail-closed, and filters denied child/content rows before building
+  adapter output.
 
 Still pending for the adapter-driven slice:
 
-- Native DefraDB ACP decision integration for projection loaders, replacing the
-  current explicit document-scope gates where possible.
+- Automatic projection policy/resource discovery for ACP, plus broader native
+  ACP coverage beyond the current explicit `--acp-policy-id` GraphQL path.
 - Broader multi-agent captures for CrewAI, AutoGen handoffs/swarm, or Microsoft
   Agent Framework if those expose compatibility issues the current AutoGen team
   fixture does not cover.

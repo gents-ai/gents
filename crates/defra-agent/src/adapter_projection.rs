@@ -1879,6 +1879,7 @@ mod tests {
                 ..TimelineRequestRow::default()
             }],
             messages: vec![TimelineMessageRow {
+                doc_id: None,
                 session_id: "session-1".to_string(),
                 sequence: 1,
                 role: "assistant".to_string(),

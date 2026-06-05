@@ -40,6 +40,8 @@ pub struct RunTimeline {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRequestRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,6 +76,8 @@ pub struct TimelineRequestRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineMessageRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
@@ -88,6 +92,8 @@ pub struct TimelineMessageRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineResponseRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +128,8 @@ pub struct TimelineResponseRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineToolCallRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     #[serde(default)]
@@ -182,6 +190,8 @@ pub struct TimelineToolCallRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,6 +208,8 @@ pub struct TimelineSessionRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineConversationRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -699,6 +711,7 @@ mod tests {
                 },
             ],
             messages: vec![TimelineMessageRow {
+                doc_id: None,
                 session_id: "session-1".to_string(),
                 sequence: 2,
                 role: "assistant".to_string(),

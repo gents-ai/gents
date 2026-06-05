@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_agent::adapter_projection::{
@@ -21,7 +22,7 @@ use defra_agent::trace_export::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::cli::args::{
     TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectSchemaArgs, TraceProjectionArg,
@@ -58,17 +59,22 @@ async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
 async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let actor_did = args.actor_did;
+    let acp_scope =
+        projection_acp_read_scope(&access, args.acp_policy_id.as_deref(), actor_did.as_deref())?;
     let scope = ProjectionDocumentScope {
         agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
         behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
-    let timeline = apply_projection_document_scope(
-        load_run_timeline(&access, &args.request_id).await?,
-        &scope,
-    )?;
+    let rows = load_run_timeline_rows(&access, &args.request_id).await?;
+    let rows = match acp_scope.as_ref() {
+        Some(acp_scope) => apply_projection_acp_read_filter(rows, acp_scope).await?,
+        None => rows,
+    };
+    let timeline = apply_projection_document_scope(build_run_timeline(rows), &scope)?;
     let context = ProjectionContext {
-        actor_did: args.actor_did,
+        actor_did,
         redaction_mode: projection_redaction_mode(args.redaction),
     };
     let projection = build_adapter_projection(
@@ -116,6 +122,15 @@ fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
 }
 
 async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
+    Ok(build_run_timeline(
+        load_run_timeline_rows(access, request_id).await?,
+    ))
+}
+
+async fn load_run_timeline_rows(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<RunTimelineRows> {
     let request = load_timeline_request_by_id(access, request_id).await?;
     let session_id = request.session_id.as_deref();
 
@@ -149,7 +164,7 @@ async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<Ru
         None => None,
     };
 
-    Ok(build_run_timeline(RunTimelineRows {
+    Ok(RunTimelineRows {
         request,
         session,
         conversation,
@@ -157,7 +172,215 @@ async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<Ru
         messages,
         tool_calls,
         responses,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ProjectionAcpReadScope {
+    actor_did: String,
+    policy_id: String,
+    api_base: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectionAcpDecisionResponse {
+    allowed: bool,
+}
+
+fn projection_acp_read_scope(
+    access: &ConfigAccess,
+    policy_id: Option<&str>,
+    actor_did: Option<&str>,
+) -> Result<Option<ProjectionAcpReadScope>> {
+    let Some(policy_id) = policy_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let actor_did = actor_did
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--acp-policy-id requires --actor-did"))?;
+    let ConfigAccess::Graphql(graphql) = access else {
+        anyhow::bail!("--acp-policy-id requires --graphql so DefraDB ACP can decide documents");
+    };
+    Ok(Some(ProjectionAcpReadScope {
+        actor_did: actor_did.to_string(),
+        policy_id: policy_id.to_string(),
+        api_base: crate::graphql_access::graphql_api_base(graphql)?,
     }))
+}
+
+async fn apply_projection_acp_read_filter(
+    rows: RunTimelineRows,
+    scope: &ProjectionAcpReadScope,
+) -> Result<RunTimelineRows> {
+    let mut decider = ProjectionAcpReadDecider::new(scope)?;
+    let request_doc_id = required_doc_id(
+        "AgentRequest",
+        rows.request.request_id.as_str(),
+        &rows.request.doc_id,
+    )?;
+    if !decider.read_allowed("AgentRequest", request_doc_id).await? {
+        anyhow::bail!(
+            "DefraDB ACP denied read access to root request {}",
+            rows.request.request_id
+        );
+    }
+
+    let mut filtered_requests = Vec::new();
+    for request in rows.requests {
+        let doc_id = required_doc_id("AgentRequest", request.request_id.as_str(), &request.doc_id)?;
+        if decider.read_allowed("AgentRequest", doc_id).await? {
+            filtered_requests.push(request);
+        }
+    }
+
+    let mut filtered_messages = Vec::new();
+    for message in rows.messages {
+        let label = format!("{}:{}", message.session_id, message.sequence);
+        let doc_id = required_doc_id("AgentMessage", &label, &message.doc_id)?;
+        if decider.read_allowed("AgentMessage", doc_id).await? {
+            filtered_messages.push(message);
+        }
+    }
+
+    let mut filtered_tool_calls = Vec::new();
+    for tool_call in rows.tool_calls {
+        let doc_id = required_doc_id(
+            "AgentToolCall",
+            tool_call.tool_call_id.as_str(),
+            &tool_call.doc_id,
+        )?;
+        if decider.read_allowed("AgentToolCall", doc_id).await? {
+            filtered_tool_calls.push(tool_call);
+        }
+    }
+
+    let mut filtered_responses = Vec::new();
+    for response in rows.responses {
+        let doc_id = required_doc_id(
+            "AgentResponse",
+            response.request_id.as_str(),
+            &response.doc_id,
+        )?;
+        if decider.read_allowed("AgentResponse", doc_id).await? {
+            filtered_responses.push(response);
+        }
+    }
+
+    let session = match rows.session {
+        Some(session) => {
+            let doc_id =
+                required_doc_id("AgentSession", session.session_id.as_str(), &session.doc_id)?;
+            if decider.read_allowed("AgentSession", doc_id).await? {
+                Some(session)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let conversation = match rows.conversation {
+        Some(conversation) => {
+            let doc_id = required_doc_id(
+                "AgentConversation",
+                conversation.session_id.as_str(),
+                &conversation.doc_id,
+            )?;
+            if decider.read_allowed("AgentConversation", doc_id).await? {
+                Some(conversation)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
+    Ok(RunTimelineRows {
+        request: rows.request,
+        session,
+        conversation,
+        requests: filtered_requests,
+        messages: filtered_messages,
+        tool_calls: filtered_tool_calls,
+        responses: filtered_responses,
+    })
+}
+
+struct ProjectionAcpReadDecider<'a> {
+    scope: &'a ProjectionAcpReadScope,
+    client: reqwest::Client,
+    cache: BTreeMap<(String, String), bool>,
+}
+
+impl<'a> ProjectionAcpReadDecider<'a> {
+    fn new(scope: &'a ProjectionAcpReadScope) -> Result<Self> {
+        Ok(Self {
+            scope,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .context("building ACP decision client")?,
+            cache: BTreeMap::new(),
+        })
+    }
+
+    async fn read_allowed(&mut self, resource_name: &str, doc_id: &str) -> Result<bool> {
+        let key = (resource_name.to_string(), doc_id.to_string());
+        if let Some(allowed) = self.cache.get(&key) {
+            return Ok(*allowed);
+        }
+        let url = format!(
+            "{}/acp/document/decide",
+            self.scope.api_base.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .post(url)
+            .json(&json!({
+                "actor": self.scope.actor_did,
+                "permission": "read",
+                "policyID": self.scope.policy_id,
+                "resourceName": resource_name,
+                "docID": doc_id,
+            }))
+            .send()
+            .await
+            .with_context(|| {
+                format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
+            })?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .context("reading DefraDB ACP decision response")?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {text}"
+            );
+        }
+        let decision =
+            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).with_context(|| {
+                format!("parsing DefraDB ACP decision response for {resource_name}/{doc_id}")
+            })?;
+        self.cache.insert(key, decision.allowed);
+        Ok(decision.allowed)
+    }
+}
+
+fn required_doc_id<'a>(
+    resource_name: &str,
+    label: &str,
+    doc_id: &'a Option<String>,
+) -> Result<&'a str> {
+    doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "DefraDB ACP projection decisions require _docID for {resource_name} {label}"
+            )
+        })
 }
 
 #[derive(Debug, Default)]
@@ -632,6 +855,7 @@ async fn load_timeline_request_by_id(
                 order: {{ created_at: DESC }},
                 limit: 1
             ) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -668,6 +892,7 @@ async fn load_timeline_requests_for_session(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -700,6 +925,7 @@ async fn load_timeline_child_requests(
                 filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -732,6 +958,7 @@ async fn load_timeline_messages_for_session(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 order: {{ sequence: ASC }}
             ) {{
+                _docID
                 session_id
                 sequence
                 role
@@ -754,6 +981,7 @@ async fn load_timeline_tool_calls_for_session(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 order: {{ started_at: ASC }}
             ) {{
+                _docID
                 request_id
                 session_id
                 message_sequence
@@ -799,6 +1027,7 @@ async fn load_timeline_responses_for_session(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -831,6 +1060,7 @@ async fn load_timeline_responses_for_request(
                 filter: {{ request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -863,6 +1093,7 @@ async fn load_timeline_session(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 limit: 1
             ) {{
+                _docID
                 session_id
                 agent_name
                 behavior_id
@@ -891,6 +1122,7 @@ async fn load_timeline_conversation(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 limit: 1
             ) {{
+                _docID
                 session_id
                 agent_name
                 agent_did
@@ -1432,7 +1664,61 @@ struct BehaviorRow {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct MockAcpDecisionRequest {
+        actor: String,
+        permission: String,
+        #[serde(rename = "policyID")]
+        policy_id: String,
+        #[serde(rename = "resourceName")]
+        resource_name: String,
+        #[serde(rename = "docID")]
+        doc_id: String,
+    }
+
+    async fn mock_acp_decide(
+        State(allowed): State<Arc<BTreeMap<(String, String), bool>>>,
+        Json(body): Json<MockAcpDecisionRequest>,
+    ) -> (StatusCode, Json<Value>) {
+        if body.actor != "did:defra-agent:projection-reader"
+            || body.permission != "read"
+            || body.policy_id != "projection-policy"
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unexpected ACP decision request" })),
+            );
+        }
+        let allowed = allowed
+            .get(&(body.resource_name, body.doc_id))
+            .copied()
+            .unwrap_or(false);
+        (StatusCode::OK, Json(json!({ "allowed": allowed })))
+    }
+
+    async fn spawn_mock_acp(
+        allowed: BTreeMap<(String, String), bool>,
+    ) -> Result<ProjectionAcpReadScope> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let router = Router::new()
+            .route("/api/v0/acp/document/decide", post(mock_acp_decide))
+            .with_state(Arc::new(allowed));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Ok(ProjectionAcpReadScope {
+            actor_did: "did:defra-agent:projection-reader".to_string(),
+            policy_id: "projection-policy".to_string(),
+            api_base: format!("http://{addr}/api/v0"),
+        })
+    }
 
     #[test]
     fn request_metadata_hydrates_run_and_case_ids() {
@@ -1493,6 +1779,171 @@ mod tests {
             .expect("request");
 
         assert_eq!(request.request_id, "req-1");
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> Result<()> {
+        let mut allowed = BTreeMap::new();
+        for (resource_name, doc_id) in [
+            ("AgentRequest", "doc-request-root"),
+            ("AgentMessage", "doc-message-allowed"),
+            ("AgentToolCall", "doc-tool-allowed"),
+            ("AgentResponse", "doc-response-allowed"),
+            ("AgentConversation", "doc-conversation"),
+        ] {
+            allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
+        }
+        let scope = spawn_mock_acp(allowed).await?;
+
+        let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
+
+        assert_eq!(
+            filtered
+                .requests
+                .iter()
+                .map(|request| request.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-root"]
+        );
+        assert_eq!(
+            filtered
+                .messages
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            filtered
+                .tool_calls
+                .iter()
+                .map(|tool_call| tool_call.tool_call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-allowed"]
+        );
+        assert_eq!(
+            filtered
+                .responses
+                .iter()
+                .map(|response| response.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-root"]
+        );
+        assert!(
+            filtered.session.is_none(),
+            "session row should be omitted when ACP denies it"
+        );
+        assert!(
+            filtered.conversation.is_some(),
+            "conversation row should remain when ACP allows it"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_denies_root_request_fail_closed() -> Result<()> {
+        let scope = spawn_mock_acp(BTreeMap::new()).await?;
+        let error = apply_projection_acp_read_filter(acp_fixture_rows(), &scope)
+            .await
+            .expect_err("root request should be denied");
+
+        assert!(
+            error
+                .to_string()
+                .contains("DefraDB ACP denied read access to root request req-root"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    fn acp_fixture_rows() -> RunTimelineRows {
+        RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-request-root".to_string()),
+                request_id: "req-root".to_string(),
+                session_id: Some("session-acp".to_string()),
+                ..TimelineRequestRow::default()
+            },
+            session: Some(TimelineSessionRow {
+                doc_id: Some("doc-session".to_string()),
+                session_id: "session-acp".to_string(),
+                ..TimelineSessionRow::default()
+            }),
+            conversation: Some(TimelineConversationRow {
+                doc_id: Some("doc-conversation".to_string()),
+                session_id: "session-acp".to_string(),
+                ..TimelineConversationRow::default()
+            }),
+            requests: vec![
+                TimelineRequestRow {
+                    doc_id: Some("doc-request-root".to_string()),
+                    request_id: "req-root".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    ..TimelineRequestRow::default()
+                },
+                TimelineRequestRow {
+                    doc_id: Some("doc-request-child".to_string()),
+                    request_id: "req-child".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    caused_by_parent_request_id: Some("req-root".to_string()),
+                    ..TimelineRequestRow::default()
+                },
+            ],
+            messages: vec![
+                TimelineMessageRow {
+                    doc_id: Some("doc-message-allowed".to_string()),
+                    session_id: "session-acp".to_string(),
+                    sequence: 1,
+                    role: "user".to_string(),
+                    content: "allowed".to_string(),
+                    timestamp: None,
+                },
+                TimelineMessageRow {
+                    doc_id: Some("doc-message-denied".to_string()),
+                    session_id: "session-acp".to_string(),
+                    sequence: 2,
+                    role: "assistant".to_string(),
+                    content: "denied".to_string(),
+                    timestamp: None,
+                },
+            ],
+            tool_calls: vec![
+                TimelineToolCallRow {
+                    doc_id: Some("doc-tool-allowed".to_string()),
+                    request_id: Some("req-root".to_string()),
+                    session_id: "session-acp".to_string(),
+                    tool_call_id: "call-allowed".to_string(),
+                    tool_name: "handoff".to_string(),
+                    status: "completed".to_string(),
+                    ..TimelineToolCallRow::default()
+                },
+                TimelineToolCallRow {
+                    doc_id: Some("doc-tool-denied".to_string()),
+                    request_id: Some("req-child".to_string()),
+                    session_id: "session-acp".to_string(),
+                    tool_call_id: "call-denied".to_string(),
+                    tool_name: "review".to_string(),
+                    status: "completed".to_string(),
+                    ..TimelineToolCallRow::default()
+                },
+            ],
+            responses: vec![
+                TimelineResponseRow {
+                    doc_id: Some("doc-response-allowed".to_string()),
+                    request_id: "req-root".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    status: Some("completed".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+                TimelineResponseRow {
+                    doc_id: Some("doc-response-denied".to_string()),
+                    request_id: "req-child".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    status: Some("completed".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+            ],
+        }
     }
 
     fn empty_tool_call() -> ToolCallRow {
