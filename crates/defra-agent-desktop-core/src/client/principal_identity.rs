@@ -2,12 +2,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use crypto::Key;
-use identity::{Identity as _, RawIdentity};
+use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
 use super::paths::DesktopPaths;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PrincipalIdentity {
     did: String,
     public_key_bytes: Vec<u8>,
@@ -86,6 +86,15 @@ impl PrincipalIdentity {
 
     pub fn private_key_bytes(&self) -> &[u8] {
         &self.private_key_bytes
+    }
+
+    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("loading principal identity for {}", self.did))?
+            .sign(payload)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("signing payload as {}", self.did))
     }
 }
 
