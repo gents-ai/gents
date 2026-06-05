@@ -7,14 +7,20 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
+use crate::document_config::SubagentTarget;
 use crate::toolset::CommandExecutionPolicy;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubagentToolConfig {
-    pub targets: Vec<String>,
+    pub targets: Vec<SubagentTarget>,
     pub spawn_enabled: bool,
     pub steering_enabled: bool,
     pub background_enabled: bool,
+    /// When false (default), cross-deployment (remote-DID) subagent delegation is
+    /// disabled: remote-DID targets are not surfaced to the model and remote spawns
+    /// are rejected at runtime. Cross-deployment is deferred pending ACP; only
+    /// trusted-fleet deployments should opt in.
+    pub allow_cross_deployment: bool,
 }
 
 impl SubagentToolConfig {
@@ -51,7 +57,6 @@ pub struct ToolSelection {
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
-    pub delegate_to: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
     /// Enable the read-only `defra_query` structured query tool.
     pub enable_defra_query: bool,
@@ -69,7 +74,6 @@ impl Default for ToolSelection {
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
-            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),

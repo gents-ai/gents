@@ -1,4 +1,4 @@
-//! Pure-function transcript renderer for read_subagent_transcript.
+//! Pure-function transcript renderer for read_subagent.
 
 use crate::background_tools::r4c_args::PER_TOOL_RESULT_SNIPPET_BYTES;
 
@@ -46,7 +46,12 @@ pub(crate) struct RenderOutput {
     pub(crate) from_sequence: u64,
     pub(crate) through_sequence: u64,
     pub(crate) next_sequence: u64,
-    pub(crate) truncated: bool,
+    /// True when the token budget (or per-page block ceiling) capped this read
+    /// AND at least one renderable message remains at or after `next_sequence`.
+    /// This is the honest resume signal: the cursor points at exactly where the
+    /// next read should continue (no gap, no overlap), never silently dropping
+    /// output without flagging it.
+    pub(crate) has_more: bool,
 }
 
 pub(crate) fn render_transcript(
@@ -58,7 +63,7 @@ pub(crate) fn render_transcript(
     let mut first_included: Option<u64> = None;
     let mut last_included = since_sequence;
     let mut included_count = 0;
-    let mut truncated = false;
+    let mut capped = false;
 
     for msg in messages {
         if msg.sequence < since_sequence {
@@ -76,7 +81,25 @@ pub(crate) fn render_transcript(
         };
         let projected_len = transcript.len() + block.len() + usize::from(!transcript.is_empty());
         if included_count + 1 > opts.limit || projected_len > opts.max_chars as usize {
-            truncated = true;
+            // Always emit the first eligible block on this page even when it
+            // exceeds the budget: skipping it silently violates the
+            // content-honest contract and produces a non-advancing cursor.
+            if included_count == 0 {
+                // Force-emit the oversized block so the page always makes
+                // progress — but TRUNCATE it to respect the budget (context-honest).
+                // We snap to a char boundary, append a marker, and advance the
+                // cursor so paging never re-serves this message.
+                let separator_overhead = usize::from(!transcript.is_empty()); // 1 newline or 0
+                let budget = (opts.max_chars as usize).saturating_sub(separator_overhead);
+                let emitted = truncate_to_budget(&block, budget);
+                if !transcript.is_empty() {
+                    transcript.push('\n');
+                }
+                transcript.push_str(&emitted);
+                first_included.get_or_insert(msg.sequence);
+                last_included = msg.sequence;
+            }
+            capped = true;
             break;
         }
 
@@ -90,15 +113,58 @@ pub(crate) fn render_transcript(
     }
 
     let from_sequence = first_included.unwrap_or(since_sequence);
+    let next_sequence = last_included
+        .saturating_add(1)
+        .max(since_sequence.saturating_add(1));
+
+    // Honest `has_more`: only true when capping left a renderable message at or
+    // after the resume cursor. A read that ran out of budget exactly on the last
+    // message reports `has_more = false`.
+    let has_more = capped
+        && messages
+            .iter()
+            .any(|msg| msg.sequence >= next_sequence && would_render(msg, opts));
+
     RenderOutput {
         transcript,
         from_sequence,
         through_sequence: last_included,
-        next_sequence: last_included
-            .saturating_add(1)
-            .max(since_sequence.saturating_add(1)),
-        truncated,
+        next_sequence,
+        has_more,
     }
+}
+
+/// Truncate `text` to at most `budget` chars (char-boundary-safe) and, when
+/// truncation was needed, append a human-readable marker of the form
+/// `…[truncated: showed N of M chars]`.
+///
+/// The prefix is exactly `budget` chars (or fewer if the text is shorter).
+/// When truncation occurs the total result is `budget + marker_len` chars.
+/// The marker is a small constant overhead (~40-60 chars); the budget cap
+/// ensures the main body content never exceeds `budget` chars.
+fn truncate_to_budget(text: &str, budget: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= budget {
+        return text.to_string();
+    }
+    // Take exactly `budget` chars — char-boundary-safe via the chars iterator.
+    let keep = budget.min(total_chars);
+    let prefix: String = text.chars().take(keep).collect();
+    let shown = prefix.chars().count();
+    // Append the marker as a small constant overhead on top of the budget.
+    format!("{prefix}\u{2026}[truncated: showed {shown} of {total_chars} chars]")
+}
+
+/// Whether a message would produce a rendered block under the given options
+/// (mirrors the filter + `render_block` decision without materializing output).
+fn would_render(msg: &MessageView, opts: RenderOptions) -> bool {
+    if !opts.include_user_messages
+        && msg.role == MessageRoleView::User
+        && !matches!(&msg.kind, MessageKindView::ToolResult { .. })
+    {
+        return false;
+    }
+    render_block(msg, opts).is_some()
 }
 
 fn render_block(msg: &MessageView, opts: RenderOptions) -> Option<String> {
@@ -218,7 +284,7 @@ mod tests {
         assert_eq!(out.from_sequence, 1);
         assert_eq!(out.through_sequence, 3);
         assert_eq!(out.next_sequence, 4);
-        assert!(!out.truncated);
+        assert!(!out.has_more);
     }
 
     #[test]
@@ -306,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_when_limit_hit() {
+    fn has_more_when_limit_hit_and_more_remain() {
         let msgs = vec![assistant(1, "a"), assistant(2, "b"), assistant(3, "c")];
         let out = render_transcript(
             &msgs,
@@ -316,13 +382,13 @@ mod tests {
                 ..OPTS_DEFAULT
             },
         );
-        assert!(out.truncated);
+        assert!(out.has_more);
         assert_eq!(out.through_sequence, 2);
         assert_eq!(out.next_sequence, 3);
     }
 
     #[test]
-    fn truncated_when_max_chars_hit() {
+    fn has_more_when_max_chars_hit() {
         let long = "x".repeat(200);
         let msgs = vec![
             assistant(1, &long),
@@ -337,7 +403,128 @@ mod tests {
                 ..OPTS_DEFAULT
             },
         );
-        assert!(out.truncated);
+        assert!(out.has_more);
         assert!(out.transcript.len() <= 250);
+    }
+
+    #[test]
+    fn no_has_more_when_budget_exhausted_on_last_message() {
+        // Two messages, budget fits exactly one. After page 1 the cursor points
+        // past message 1; message 2 still renders, so has_more is true. After
+        // page 2 (resuming at the cursor) nothing renderable remains: has_more
+        // must be false even though page 2 itself was budget-tight.
+        let long = "x".repeat(80);
+        let msgs = vec![assistant(1, &long), assistant(2, &long)];
+        let opts = RenderOptions {
+            max_chars: 100,
+            ..OPTS_DEFAULT
+        };
+        let page1 = render_transcript(&msgs, 0, opts);
+        assert!(page1.has_more);
+        assert_eq!(page1.through_sequence, 1);
+        let page2 = render_transcript(&msgs, page1.next_sequence, opts);
+        assert_eq!(page2.through_sequence, 2);
+        assert!(!page2.has_more, "no renderable message past the cursor");
+    }
+
+    #[test]
+    fn oversized_single_block_is_truncated_not_dropped_and_respects_budget() {
+        // A single assistant turn whose rendered block exceeds max_chars must:
+        //   (a) return a NON-EMPTY transcript containing a TRUNCATED prefix
+        //   (b) include a truncation MARKER ("…[truncated: showed N of M chars]")
+        //   (c) NOT blow the context budget — transcript length within max_chars + small slack
+        //   (d) NOT contain the full oversized body
+        //   (e) advance the cursor so a follow-up read terminates honestly (has_more=false)
+        let big_body = "y".repeat(500);
+        let msgs = vec![assistant(1, &big_body), assistant(2, "small")];
+        let opts = RenderOptions {
+            max_chars: 50, // far smaller than the 500-char block
+            ..OPTS_DEFAULT
+        };
+        // Page 1: the oversized block must be TRUNCATED and still emitted.
+        let page1 = render_transcript(&msgs, 0, opts);
+
+        // (a) Non-empty; contains the header and a prefix of the body.
+        assert!(
+            !page1.transcript.is_empty(),
+            "page1 must not be empty for an oversized first block"
+        );
+        assert!(
+            page1.transcript.contains("[assistant seq=1]"),
+            "oversized first block header must be present: {:?}",
+            page1.transcript
+        );
+
+        // (b) Truncation marker is present.
+        assert!(
+            page1.transcript.contains("[truncated:"),
+            "truncation marker must be present: {:?}",
+            page1.transcript
+        );
+
+        // (c) Budget respected — allow a small marker slack (80 chars above max_chars).
+        let marker_slack = 80usize;
+        assert!(
+            page1.transcript.len() <= opts.max_chars as usize + marker_slack,
+            "transcript ({} chars) must stay within budget ({} + {} slack): {:?}",
+            page1.transcript.len(),
+            opts.max_chars,
+            marker_slack,
+            page1.transcript
+        );
+
+        // (d) Full oversized body must NOT appear.
+        assert!(
+            !page1.transcript.contains(&big_body),
+            "full oversized body must NOT be present (budget violation): transcript len={}",
+            page1.transcript.len()
+        );
+
+        // (e) Cursor advanced.
+        assert!(
+            page1.through_sequence >= 1,
+            "through_sequence must cover sequence 1"
+        );
+        assert!(
+            page1.next_sequence >= 2,
+            "next_sequence must point past the emitted block"
+        );
+
+        // Page 2: resume cursor picks up the second (small) message and terminates.
+        let page2 = render_transcript(&msgs, page1.next_sequence, opts);
+        assert!(
+            page2.transcript.contains("[assistant seq=2]"),
+            "page 2 must emit the second message"
+        );
+        assert!(!page2.has_more, "no more messages after page 2");
+    }
+
+    #[test]
+    fn paging_is_gap_free_across_token_budget() {
+        // Ten messages, small budget forces several pages. Walking the cursor
+        // must visit every message exactly once with no gap or overlap.
+        let msgs: Vec<MessageView> = (1..=10)
+            .map(|seq| assistant(seq, &format!("turn {seq}")))
+            .collect();
+        let opts = RenderOptions {
+            max_chars: 40,
+            ..OPTS_DEFAULT
+        };
+        let mut cursor = 0u64;
+        let mut seen = Vec::new();
+        loop {
+            let page = render_transcript(&msgs, cursor, opts);
+            for seq in page.from_sequence..=page.through_sequence {
+                if page.transcript.contains(&format!("turn {seq}")) {
+                    seen.push(seq);
+                }
+            }
+            if !page.has_more {
+                break;
+            }
+            assert!(page.next_sequence > cursor, "cursor must advance");
+            cursor = page.next_sequence;
+        }
+        assert_eq!(seen, (1..=10).collect::<Vec<_>>());
     }
 }

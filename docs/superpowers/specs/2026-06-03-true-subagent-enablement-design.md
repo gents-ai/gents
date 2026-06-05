@@ -1,0 +1,387 @@
+# True Subagent Enablement — Design
+
+**Issue:** #377 · **Unblocks:** #378 (workflow orchestration) · **Date:** 2026-06-03
+
+## Summary
+
+The subagent execution path is fully built and proven in Lean (`Background.lean`), with
+the runtime plumbing already wired and conformance-tested. It has never been enabled by
+default, never made natively uniform across the network, and never exercised on a real
+fleet — because until now there were no deployed agents to run complex, cross-deployment
+scenarios against. This spec takes that verified base **over the line to testing**: turn
+subagents on per behavior, converge the spawn path so a spawn is genuinely *one document
+write* regardless of locality, keep authorization as an explicit operator-controlled
+static allowlist, and validate up a ladder — local → simulated fleet → real fleet. It
+adds **no new execution semantics and no new Lean modules**.
+
+## Context — current state (grounded)
+
+- **The server is the agent; everything else is a view.** Tool calls execute server-side
+  via the persistence hook; the Codex shim, desktop, and CLI are read-only projections
+  over the same session documents. They never participate in tool routing.
+- **Why now.** The gating blocker was the absence of deployed agents to exercise complex
+  and cross-deployment scenarios. A 14-node fleet now exists, so we can finally drive this
+  to real testing — but only as the *last* tier, after local and simulated-fleet testing,
+  since real-fleet runs require deploying binaries to every node.
+- **Tools exist, gated off.** `spawn_subagent` / `wait_subagent` / `cancel_subagent`
+  (R4), `list_subagents` / `read_subagent_transcript` / `steer_subagent` (R4c), and
+  `background_tool` / `wait_tool` / `cancel_tool` (R6) are all built. They are offered
+  only when `subagent_spawn_enabled == true` **and** `subagent_targets` is non-empty
+  (`tool_surface/selection.rs:21-23`); `subagent_spawn_enabled` defaults to `false`.
+- **Direct execution is stubbed by design.** `SpawnSubagentTool::call()` returns
+  `not_yet_executable_error` (`toolset/subagent.rs:193-196`); the hook intercepts every
+  spawn at `on_tool_call` and returns `Skip` so `Tool::call()` never runs
+  (`hook/persistence/message_spawn.rs:217-543`). This is server-side and correct.
+- **Plumbing is live.** `SubagentSource` is a registered `TriggerSource` and the
+  background-completion observer is spawned (`agent/runtime/startup.rs:204-263`).
+- **Dual local/remote spawn path.** Same-deployment spawns create the child
+  `AgentRequest` synchronously and locally with the parent's DID
+  (`message_spawn.rs:445-512`); cross-deployment spawns return a background receipt and
+  wait for the remote `SubagentSource` to materialize the child
+  (`message_spawn.rs:434-443`). Both produce the same documents/lineage, but the code is
+  two paths and locality is not transparent.
+- **Trust + replication intent already modeled.** `PeerPairingDesired`
+  (`schemas/agent/peer_pairing_desired.graphql`) records trusted `agent_did`s,
+  collections, and `replicator_addresses`; `load_startup_paired_peer_dids`
+  (`startup.rs:592-626`) loads DIDs into `paired_peer_dids`; the cross-deployment check
+  is `snapshot.paired_peer_dids.contains(&parent_authoring_did)`
+  (`subagent_source.rs:319`). Actual P2P transport is defradb's job.
+- **Authorization today is a static allowlist + app-level filtering.** `subagent_targets`
+  on `ToolSelection` is a static list of `behavior_id`s the orchestrator may spawn; the
+  watcher filters `AgentRequest` by `agent_did` (`watcher/query.rs:66-98`). DefraDB ACP is
+  not yet wired (no policy files, no `@policy`, identity never signs mutations).
+- **`AgentBehavior` is not self-describing.** It has no `description`/`summary` field, so
+  an orchestrator's allowlisted targets carry no human/LLM-facing "what this does."
+
+## Goals
+
+1. Make subagents enable-able per behavior through the apply path, ergonomically and with
+   validation.
+2. Ensure the server maintains, per session and per agent, queryable state of which
+   subagents are running — consumed by the agent's own tools and projected uniformly to
+   all read-only views (Codex shim, desktop, CLI).
+3. Converge the spawn path so a spawn is genuinely **one uniform document write** that
+   works the same whether the target is local or remote.
+4. Make an orchestrator's **statically-allowed** targets self-describing (what each does),
+   without any dynamic, fleet-wide discovery.
+5. Validate up a ladder: local → simulated fleet (in-process multi-node + replication) →
+   real fleet (deploy binaries; last).
+
+## Non-goals
+
+- New execution semantics, lifecycle states, or transitions (already in `Background.lean`).
+- **Dynamic / fleet-wide agent discovery.** Authorization is an explicit static allowlist;
+  we deliberately do not build a directory the agent queries to find arbitrary peers.
+- Owning P2P replication transport setup (prerequisite; see C6).
+- Wiring DefraDB ACP enforcement (separate dependency; this spec is honest about the
+  interim and keeps the static allowlist as the operator-facing control).
+- Workflow orchestration primitives (#378 — this unblocks them, doesn't build them).
+
+## Design tenets
+
+1. **A spawn is a document write.** Spawning = writing a bridge/request document to a
+   collection. Replication carries it to the deployment that owns the target
+   `(agent_did, behavior_id)`; that deployment's watcher claims and runs it; the terminal
+   document replicates back. Locality is transparent — same-node is the degenerate case
+   where replication is a no-op.
+2. **One path, not two.** Collapse the synchronous-local vs async-remote fork into a
+   single write-and-claim path so tenet 1 is real in the code, not just conceptual. The
+   local case becomes the zero-replication-lag case of the remote case.
+3. **Authorization is an explicit, operator-controlled static allowlist.**
+   `subagent_targets` is the deliberate permission surface — explicit and auditable.
+   DefraDB ACP at the document layer is the deeper enforcement target when it lands; the
+   allowlist is not a throwaway interim.
+4. **The server is the single execution and state authority; views are read-only
+   projections.** Subagent state lives as session-scoped DefraDB documents; the Codex
+   shim, desktop, and CLI all render the same documents and never route tool calls.
+5. **Least privilege stays opt-in.** Subagent spawning is off by default per
+   principal/behavior; enabling is a deliberate, audited config act.
+6. **Use the verified base; don't rebuild it.** The Lean state machine and runtime
+   plumbing exist. The work is enablement, one targeted convergence, and testing — not
+   net-new design.
+
+## Components
+
+Each component is tagged **[exists → validate]** (already built; prove/operationalize it)
+or **[new]** (genuinely new code).
+
+### C1 — Enablement surface **[new, small]**
+
+- Keep `subagent_spawn_enabled` (default `false`) and expose the **full R4c/R6 tool
+  surface** when enabled.
+- Ergonomic apply-path config on `ToolSelection`, with **apply-time validation**:
+  `subagent_targets` entries resolve to a known `AgentBehavior` (local or replicated); the
+  target principal is enabled; surface a clear error rather than silently offering inert
+  tools.
+- Document the stubbed `Tool::call()` as a permanent **hook-only invariant** (it must
+  never execute directly); ensure `not_yet_executable_error` never reaches operators in
+  normal use.
+
+### C2 — Server-maintained subagent state **[exists → validate]**
+
+For each session and agent the server already records running-subagent state as
+documents: `AgentToolCall` bridge rows + child `AgentRequest` lineage, surfaced to the
+agent via `list_subagents` / `read_subagent_transcript` and to every view by reading the
+documents. The work is to **confirm this state is complete and queryable** end-to-end
+(running, completed, failed, cancelled) — not to add view-layer plumbing.
+
+### C3 — Converge the spawn path **[new]**
+
+- Make the spawn write-path uniform: always persist the `AgentToolCall` bridge with a
+  pre-allocated child `request_id`; let the owning deployment's `SubagentSource`
+  materialize and claim the child `AgentRequest`. The current synchronous-local create
+  becomes an internal fast-path of this single path, not a separate semantic.
+- Completion always projects from the (possibly replicated-back) terminal child
+  `AgentRequest` via the `BackgroundCompletionObserver`.
+- Preserve all existing `Background.lean`-proven behavior; this is a code-path
+  unification, not a semantic change. The 17 `subagent_source_conformance.rs` tests are
+  the regression gate.
+
+### C4 — Self-describing static targets **[new, small]**
+
+- Add `description` / `summary` fields to `AgentBehavior` (what this agent does,
+  LLM-facing). Adding fields to an existing collection touches **no `Collection` enum
+  variant and no Lean parity** — it is desired-state config only.
+- Surface the orchestrator's **statically-allowed** targets (its `subagent_targets`) with
+  their descriptions to the agent via prompt-context injection — so it knows what it may
+  spawn and what each does — **without** a directory collection or a dynamic discovery
+  tool.
+
+### C5 — Authorization (static allowlist; ACP later) **[exists → validate]**
+
+- Primary surface: the static `subagent_targets` allowlist + the existing `agent_did`
+  query filtering. Explicit, operator-controlled, auditable.
+- Future enforcement: DefraDB ACP at the document layer (a caller may spawn iff it can
+  write the spawn document into the target's scope). When ACP lands it *complements* the
+  allowlist (defense in depth); it does not require removing it.
+
+### C6 — Replication prerequisite **[external dependency]**
+
+Cross-deployment requires these collections to replicate across trusted peers:
+`AgentRequest`, `AgentToolCall`, `AgentBehavior`, `PeerPairingDesired`. This spec does not
+own transport setup — that is the existing P2P work (#363, defradb.rs#1012/#1013).
+Simulated-fleet testing (Tier 2) uses in-process multi-node replication; real-fleet
+testing depends on transport being enabled across the 14 nodes. This spec contributes a
+**replication health check** (are the required collections live and converging between an
+orchestrator and its targets?).
+
+## Data flow — uniform spawn (local or remote)
+
+1. Orchestrator picks a target from its static `subagent_targets` (self-describing via the
+   behavior's `description`).
+2. Orchestrator calls `spawn_subagent(target)`. The hook intercepts (`on_tool_call` →
+   `Skip`) and writes the `AgentToolCall` bridge with a pre-allocated `child_request_id`.
+3. The bridge reaches the deployment owning the target (replication; a no-op when local).
+   That deployment's `SubagentSource` materializes the child `AgentRequest` (DID per
+   trusted-peer rules) and its watcher claims and runs it.
+4. The child reaches a terminal state; the terminal `AgentRequest` reaches the orchestrator
+   (replication; local when same-node). The `BackgroundCompletionObserver` projects it into
+   the parent bridge and enqueues a wake-up so `wait_subagent` resolves.
+
+## Schema changes
+
+- `AgentBehavior`: add `description`, `summary` (fields on an existing collection — no
+  `Collection` enum change, no apply-order change, no Lean parity delta).
+- No new collections.
+
+## Error handling
+
+- **Unclaimed remote spawn:** existing `unclaimed_deadline_at` bounds the remote claim
+  (`message_spawn.rs:428-430`); surface a tool failure with a clear cause.
+- **Replication lag / partition:** the spawn document persists and converges when the
+  partition heals; the health check (C6) and the unclaimed deadline bound the wait.
+- **Invalid target at spawn:** rejected against the static allowlist with a clear cause;
+  no partial state.
+- **Denied write (future ACP):** spawn document write rejected → tool failure with a
+  permission cause; no partial state.
+
+## Formal-methods posture
+
+**No Lean changes required.** `Background.lean` already proves parent/child spawn,
+completion, cascade-cancel, and depth-bound properties; the path convergence (C3) is a
+code-path unification that must continue to satisfy those proofs, enforced by the existing
+conformance tests. No new collection means no `ApplyReconcile/Collections.lean` parity
+delta. The only spec-adjacent Lean touch is optionally recording in
+`Conformance/Boundaries.lean` the external assumptions this rests on: (a) replication
+delivers the bridge/request/terminal documents, and (b) ACP — when wired — is the
+document-layer authorization boundary.
+
+## Testing & validation ladder
+
+Real-fleet runs require deploying binaries to every node, so they are **last**. Cross-
+deployment correctness is proven in simulation first.
+
+- **Tier 1 — Local (single node):** enable subagents; orchestrator spawns a local child;
+  foreground and background `wait`; result returned; per-session subagent state (running →
+  terminal) queryable via `list_subagents` and visible as documents. No P2P.
+- **Tier 2 — Simulated fleet (in-process multi-node + replication):** multiple
+  `EmbeddedNode`s with replication between them exercise the *uniform* spawn path across
+  "deployments": cross-deployment spawn / wait / completion, behavioral parity with the
+  local case, lineage, terminal projection, and a small fan-out (one orchestrator → N
+  targets). This is where C3 and cross-deployment correctness are proven without shipping
+  binaries.
+- **Tier 3 — Real fleet (deploy binaries; last):** with replication transport enabled
+  across the 14 nodes, run the complex scenarios (e.g. `amy` → stewards, fan-out) on real
+  hardware/network; verify lineage and completion end-to-end.
+- The 17 `subagent_source_conformance.rs` tests and `r4_subagent_tools/` tests stay green;
+  `cargo test`, clippy, fmt clean throughout.
+
+## Implementation slices
+
+1. **Enablement (C1):** config ergonomics + apply-time validation + document the
+   hook-only-invariant for the stubbed `call`.
+2. **State completeness (C2):** confirm/repair per-session subagent state; prove with the
+   Tier-1 local E2E.
+3. **Path convergence (C3):** unify the local/remote spawn into one write-and-claim path;
+   regression-gated by conformance tests.
+4. **Self-describing targets (C4):** `AgentBehavior.description`/`summary` + prompt-context
+   injection of allowed targets. Small, independent.
+5. **Simulated fleet (Tier 2):** in-process multi-node + replication harness; cross-
+   deployment correctness, parity, fan-out; replication health check (C6).
+6. **Real fleet (Tier 3, last):** deploy binaries to the 14 nodes; complex scenarios;
+   depends on replication transport (#363).
+
+## Out of scope
+
+- Dynamic/fleet-wide agent discovery (static allowlist is the chosen model); ACP
+  enforcement wiring; P2P transport setup; workflow primitives (#378);
+  multi-tenant/untrusted-fleet spawning (gated on #180).
+
+## Open questions
+
+- Is the server's per-session subagent state already complete enough to answer "what do I
+  have running," or are there gaps to close (resolved by the Tier-1 E2E)?
+- Does an in-process multi-node + replication harness already exist for Tier-2, or do we
+  need to build it? (Likely partially present in `subagent_source_conformance.rs`.)
+- Surface allowed targets to the agent via prompt-context injection only, or is a
+  read-only "list my allowed targets" tool worth it too? (Leaning: context injection only,
+  to stay clear of anything resembling dynamic discovery.)
+
+## Addendum (implemented) — named delegation targets + cross-node
+
+During implementation, live e2e testing surfaced that the original C4/C5 model
+(bare `behavior_id` targets resolved against locally-owned behaviors) could not
+express or reach a *remote* target: the runtime filtered behaviors by the local
+DID, so a cross-node `subagent_target` never resolved and the orchestrator never
+reached `ready`. The targeting model was revised:
+
+- **A delegation target is a named `(agent_did, behavior_id)` pair with a
+  description.** Each `subagent_targets` entry is the JSON of a
+  `SubagentTarget { name, agent_did, behavior_id, description }` (encoded in the
+  existing `[String]` field — no new collection, no Lean change). The model only
+  ever uses the friendly `name`; the runtime maps name → `(did, behavior)` and
+  hides the addressing. The preamble lists `name: description`.
+- **`spawn_subagent` takes `name`.** The runtime resolves it and writes the child
+  `AgentRequest` **locally with the target's `agent_did`**. Local vs remote is a
+  pure DID comparison (no behavior-doc lookup). For a remote target, out-of-band
+  P2P replication carries the child to the owning node, which runs it; the
+  response replicates back. This **removes the local-resolution requirement** —
+  `validate_subagent_targets_resolve`/`retain_subagent_targets` keep well-formed
+  remote-DID targets; apply-time validation checks target *structure*, not local
+  resolution.
+- **Replication is out-of-band** (operator/infra), surfaced by a new
+  `defra-agent p2p pair --peer <addr> [--profile chat-requests]` convenience
+  command composing connect + collection subscription + replicator install. Run
+  on both servers for bidirectional delegation replication. The `chat-requests`
+  collection set (`AgentRequest`/`AgentToolCall`/`AgentResponse`/`AgentMessage`/
+  `AgentSession`/…) is sufficient — `AgentBehavior`/`AgentPrincipal` need NOT
+  replicate, since the orchestrator no longer resolves the remote behavior doc.
+- **Spawn-path convergence** (Task 6 here): local and remote spawns unified into
+  one "write the bridge → `SubagentSource` creates the child" path;
+  `SubagentSource` is the sole child creator. Behavior-preserving for local;
+  enables the remote case. One benign change: the local background receipt's
+  `child_session_id` is now `null` (matching cross-deployment); all follow-up
+  tools address by `child_request_id`.
+- **Validated live** (DeepSeek-V4-Flash): local delegation and cross-node
+  delegation over real in-process P2P both produce real results, ignore-gated
+  behind `DEFRA_AGENT_LIVE_SUBAGENT=1`.
+
+This supersedes the C4 "static allowlist of behavior_ids" and the C5/open-question
+wording about local-only resolution; the static-allowlist principle stands, now as
+named `(did, behavior)` entries.
+
+## Addendum 2 (post-audit) — cross-deployment DEFERRED; security posture
+
+A deep adversarial security/correctness audit of the branch produced two decisions
+that change the shipped scope:
+
+- **Cross-deployment is deferred behind a default-OFF flag.** `ToolSelection` gains
+  `subagent_allow_cross_deployment` (default `false`). When false (the default and the
+  only production posture for now), remote-DID targets are rejected at apply-time, the
+  spawn is rejected at runtime, and remote targets are not surfaced to the model — so a
+  node ships **local-only** subagent delegation. The named-target substrate + the R5
+  cross-deployment conformance + the live cross-node test remain (the latter set the flag
+  true), so re-enabling is a flag flip plus the security work below. `#382` ships
+  local-only; cross-deployment is its own follow-up track.
+- **Security model is replication-trust, not authorization (accepted, documented).** The
+  audit confirmed the execution gate has no per-document authorization: a node runs any
+  replicated `AgentRequest` whose `agent_did` matches its own (unsigned; DefraDB ACP not
+  wired), and the pairing check keys on a document field rather than the authenticated
+  peer. The entire cross-deployment boundary therefore reduces to **which peers a node
+  replicates with**. This is accepted for the **trusted-fleet** deployment model and is
+  the reason cross-deployment stays default-off pending ACP / authenticated replication.
+  "Disabling cross-deployment by curating targets + not pairing" is NOT enforceable on
+  its own; the default-off flag is the enforceable control. The flag gates **both sides**:
+  the orchestrator (spawn rejected at apply/spawn/surfacing) AND the receiver/recovery
+  (the `SubagentSource` trusted-paired-peer claim path and orphan recovery refuse to
+  materialize a cross-deployment child when the target behavior's flag is off). So with
+  the flag off (default), no cross-deployment child is created on spawn, receive, or
+  recovery — even between paired peers.
+
+Audit also fixed (in-branch): a server-startup crash on upgraded DBs (migration ordering),
+two convergence races (cancel-before-materialize orphan; DID-anchored the claim gate so a
+node only materializes children for its own DID), and fail-safety/hygiene (silent
+target-drop warn, reject-on-deleted-local-behavior, timeout field type, apply `created_at`,
+`list_subagents` surfaces the friendly name).
+
+## Addendum 3 — clean agent tool surface (verb × noun)
+
+Reviewing the model-facing tool surface (prompted by the `delegate_to_agent` vs
+`spawn_subagent` overlap) found the agent-delegation / async-work area had sprawled into
+**three overlapping families** (subagent, background-tool, delegate) with duplicated
+wait/cancel/list verbs and "background" meaning both a mode and a family. The cleanup
+applies one principle: **one verb vocabulary, two non-overlapping nouns.** The model
+learns `<verb>_<noun>` once and applies it to either noun.
+
+The surface (only the delegation/async area changes; file/bash/cli/`defra_query`/MCP
+`discover|describe|call` are untouched):
+
+```
+spawn_subagent · wait_subagent · cancel_subagent · list_subagents · read_subagent · steer_subagent
+spawn_process  · wait_process  · cancel_process  · list_processes · read_process
+```
+
+- **noun `subagent`** = a child agent (lineage + cascade). **noun `process`** = a
+  backgrounded long-running tool — shell `bash` today; the `spawn_process(tool_name,
+  args)` shape keeps "any long tool" open, **MCP tools explicitly out of scope** for now.
+- **`delegate_to_agent` is REMOVED**, folded into `spawn_subagent` (the named
+  `(did,behavior)` allowlist is the one door to "have an agent do work"). The
+  `delegate_to` config field is removed.
+- Renames: `background_tool→spawn_process`, `wait_tool→wait_process`,
+  `cancel_tool→cancel_process`, `list_background_tools→list_processes`,
+  `read_tool_output→read_process`, `read_subagent_transcript→read_subagent`. Internal
+  `BackgroundedKind::Tool→Process` (use an internal name like `BackgroundProcess` so it's
+  not confused with the runtime **Process Lifecycle** state machine — different layer).
+- `steer` exists only on `subagent` (you steer an agent, not a command). A future
+  `write_process` (stdin to a running process) is the deferred process-analog of
+  `steer_subagent`.
+
+**`read_` is context-honest and content-honest** (both nouns): a token budget + a resume
+cursor + an honest "what's left" envelope — it never silently swallows output.
+- `read_process(id, offset?, max_tokens?)` → chunk · `next_offset` · `total_bytes` ·
+  `has_more` · `exited`/exit_code. Pages through *all* stdout/stderr gap-free (no
+  head/tail middle-drop).
+- `read_subagent(id, since_sequence?, max_tokens?, include_user_messages?,
+  include_tool_results?)` → messages · `next_sequence` · `has_more` · terminal-state.
+  (`max_tokens` replaces the old `max_chars` — tokens are model-native.)
+Symmetry: cursor + `max_tokens` + a "resume-here / has-more / done" envelope on both; only
+the noun-specific knobs differ (`offset`↔`since_sequence`, stream budget ↔ include flags).
+
+This addendum is implemented on the #382 branch (folded in before merge, per decision).
+
+## Related
+
+#377 (this) · #378 (workflow orchestration, unblocked) · #9 (principal/behavior/
+deployment identity) · #213/#177/#216/#200 (subagent substrate) · #363,
+defradb.rs#1012/#1013 (replication) · #8 (apply path) · #369 (shared schema) ·
+`Background.lean`, `Triggers.lean`.

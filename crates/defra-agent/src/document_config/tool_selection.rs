@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -45,11 +46,6 @@ pub struct ToolSelectionDocument {
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
-    pub delegate_to: Option<Vec<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
-    )]
     pub backgroundable_tool_names: Option<Vec<String>>,
     #[serde(
         default,
@@ -59,7 +55,8 @@ pub struct ToolSelectionDocument {
     pub subagent_spawn_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub subagent_allow_cross_deployment: Option<bool>,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_defra_query: Option<bool>,
     #[serde(
         default,
@@ -74,8 +71,27 @@ impl ToolSelectionDocument {
             for (i, target) in targets.iter().enumerate() {
                 if target.is_empty() {
                     return Err(anyhow::anyhow!(
-                        "subagent_targets[{}] is empty; behavior IDs must be non-empty strings",
+                        "subagent_targets[{}] is empty; each entry must be a valid SubagentTarget JSON object",
                         i
+                    ));
+                }
+                // Every non-empty entry must be parseable as a SubagentTarget JSON
+                // object AND pass structural validation (all fields non-empty).
+                // Bare behavior-id strings are not valid — the runtime silently
+                // drops them, which entrenches a silent misconfiguration. Reject
+                // them here with a clear diagnostic.
+                let parsed = SubagentTarget::parse(target).map_err(|e| {
+                    anyhow::anyhow!(
+                        "subagent_targets[{i}] is not a valid SubagentTarget JSON object \
+                         (got {target:?}): {e}; \
+                         use subagent_target_entry(name, agent_did, behavior_id, description) \
+                         to build a valid entry"
+                    )
+                })?;
+                if !parsed.is_structurally_valid() {
+                    return Err(anyhow::anyhow!(
+                        "subagent_targets[{i}] parsed as SubagentTarget but is not structurally \
+                         valid (name, agent_did, and behavior_id must all be non-empty): {target:?}"
                     ));
                 }
             }
@@ -134,12 +150,12 @@ pub(crate) async fn load_tool_selection_record(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -185,12 +201,12 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -236,12 +252,12 @@ pub(crate) async fn list_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -281,12 +297,12 @@ pub(crate) async fn list_all_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
-                delegate_to
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_defra_query
                 defra_query_collections
@@ -357,7 +373,6 @@ pub async fn upsert_tool_selection(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
         ),
-        graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),
@@ -377,6 +392,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            selection.subagent_allow_cross_deployment,
         ),
         selection
             .cross_deployment_spawn_timeout_seconds
@@ -440,7 +459,6 @@ pub async fn upsert_tool_selection(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
         ),
-        graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),
@@ -460,6 +478,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_allow_cross_deployment",
+            selection.subagent_allow_cross_deployment,
         ),
         selection
             .cross_deployment_spawn_timeout_seconds

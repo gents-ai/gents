@@ -8,8 +8,8 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
-    ToolCeiling,
+    subagent_target_entry, upsert_agent_behavior, AgentIdentity, DefraAgent,
+    DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
 };
 use defra_agent_desktop_core::client::ClientCore;
 use defra_agent_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
@@ -141,13 +141,19 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
-        enable_defra_query: Some(true),
-        defra_query_collections: Vec::new(),
-        subagent_targets: vec![subagent_behavior_id.clone()],
+        subagent_targets: vec![subagent_target_entry(
+            "repo-audit-subagent",
+            agent_did,
+            &subagent_behavior_id,
+            Some("Local repository audit subagent for the desktop live fixture".to_string()),
+        )],
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
+        subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: Some(60),
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
     core.save_tool_selection(&ToolSelectionRow {
@@ -168,13 +174,14 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
-        enable_defra_query: Some(true),
-        defra_query_collections: Vec::new(),
         subagent_targets: Vec::new(),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
     core.save_inference_profile(&InferenceProfileRow {
@@ -192,9 +199,10 @@ async fn seed_live_behavior_documents(
         behavior_id: behavior_id.clone(),
         agent_did: Some(agent_did.to_string()),
         display_name: Some("Live Repo Audit Default".to_string()),
-        system_prompt: Some(format!(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with behavior_id {subagent_behavior_id:?} and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
-        )),
+        system_prompt: Some(
+            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
+                .to_string(),
+        ),
         backend_id: Some(backend_id.clone()),
         model_name: Some(backend.model_name.clone()),
         tool_selection_id: Some(tool_selection_id.clone()),

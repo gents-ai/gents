@@ -984,11 +984,9 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_meta_tools: bool,
     #[arg(long = "allowed-mcp-service-id")]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
-    #[arg(long = "delegate-to")]
-    pub(crate) delegate_to: Vec<String>,
     #[arg(
         long = "backgroundable-tool-name",
-        help = "Host tool that may be run through background_tool, e.g. bash_unrestricted"
+        help = "Host tool that may be spawned as a background process via spawn_process, e.g. bash_unrestricted"
     )]
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[arg(
@@ -1249,6 +1247,26 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(
+        about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
+        after_help = "\
+This command runs against the LOCAL server (--graphql / --home) and sets up \
+one direction of replication toward --peer:\n\
+  1. connect  — dials the peer\n\
+  2. collections add  — subscribes the profile's collections\n\
+  3. replicators add  — installs a push replicator to the peer\n\
+\n\
+Replication is directional. For bidirectional delegation (the child writes \
+AgentRequests/AgentToolCalls that the parent reads, and the parent writes \
+AgentResponses/AgentMessages that the child reads) you must run `p2p pair` on \
+BOTH servers, each with --peer set to the other's listen address.\n\
+\n\
+NOTE: replication alone does NOT enable cross-deployment delegation. \
+Cross-deployment delegation is off by default and DEFERRED — to opt in, \
+set `subagent_allow_cross_deployment: true` on the relevant behaviors' tool \
+selections on BOTH the orchestrator and the target server (trusted-fleet only)."
+    )]
+    Pair(P2pPairArgs),
 }
 
 #[derive(clap::Args)]
@@ -1363,6 +1381,25 @@ pub(crate) struct P2pReplicatorRemoveArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Multiaddr of the remote peer (e.g. /ip4/1.2.3.4/tcp/4001/p2p/<peer-id>)
+    #[arg(long)]
+    pub(crate) peer: String,
+    /// Collection profile to subscribe and replicate (default: chat-requests)
+    #[arg(
+        long = "profile",
+        value_enum,
+        value_name = "PROFILE",
+        default_value = "chat-requests"
+    )]
+    pub(crate) profile: P2pCollectionProfileArg,
 }
 
 #[derive(clap::Args)]

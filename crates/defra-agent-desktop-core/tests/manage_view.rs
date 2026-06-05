@@ -75,7 +75,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Vec::new(),
-        delegate_to: vec!["planner".to_string()],
+        delegate_to: Vec::new(),
         backgroundable_tool_names: vec!["read_file".to_string()],
         enable_defra_query: Some(true),
         defra_query_collections: Vec::new(),
@@ -83,7 +83,10 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
+        subagent_allow_cross_deployment: Some(true),
         cross_deployment_spawn_timeout_seconds: Some(45),
+        enable_defra_query: Some(false),
+        defra_query_collections: Vec::new(),
     })
     .await?;
 
@@ -160,6 +163,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(tools.subagent_spawn_enabled, Some(true));
     assert_eq!(tools.subagent_steering_enabled, Some(true));
     assert_eq!(tools.subagent_background_enabled, Some(true));
+    assert_eq!(tools.subagent_allow_cross_deployment, Some(true));
     assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
     assert!(snapshot
         .behaviors

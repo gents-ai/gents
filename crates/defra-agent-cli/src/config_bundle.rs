@@ -610,6 +610,33 @@ pub(crate) fn sanitize_import_document(
         .ok_or_else(|| anyhow::anyhow!("{collection_name} import document must be an object"))?;
 
     match collection_name {
+        "AgentBehavior" => {
+            // `created_at` is immutable once set; on create (add doc) inject
+            // the current timestamp if the document doesn't already carry one,
+            // so the live-bundle ordering query (`order: { created_at: ASC }`)
+            // is deterministic. On update, leave it untouched (Null sentinel
+            // tells DefraDB to skip the field on upsert update).
+            if for_update {
+                object.remove("created_at");
+            } else {
+                let has_created_at = object
+                    .get("created_at")
+                    .map(|v| !matches!(v, Value::Null))
+                    .and_then(|present| present.then_some(()))
+                    .is_some()
+                    && object
+                        .get("created_at")
+                        .and_then(Value::as_str)
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
+                if !has_created_at {
+                    object.insert(
+                        "created_at".to_string(),
+                        Value::String(chrono::Utc::now().to_rfc3339()),
+                    );
+                }
+            }
+        }
         "InferenceBackend" => {
             desired_state::strip_deprecated_inference_backend_fields(&mut object);
             object.remove("last_probe");

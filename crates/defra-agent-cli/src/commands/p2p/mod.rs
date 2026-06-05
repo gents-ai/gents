@@ -3,6 +3,7 @@ mod collections;
 mod connect;
 mod documents;
 mod output;
+mod pair;
 mod replicators;
 
 use anyhow::{Context, Result};
@@ -42,6 +43,7 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pDocumentsCommand::Sync(args) => documents::p2p_documents_sync(args).await,
         },
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
+        P2pCommand::Pair(args) => pair::p2p_pair(args).await,
     }
 }
 

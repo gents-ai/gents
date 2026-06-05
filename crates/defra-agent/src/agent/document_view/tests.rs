@@ -118,7 +118,6 @@ async fn load_document_runtime_view_includes_referenced_documents() {
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
-            delegate_to: Some(Vec::new()),
             ..Default::default()
         },
     )
@@ -185,7 +184,6 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
-            delegate_to: Some(Vec::new()),
             ..Default::default()
         },
     )
@@ -342,7 +340,7 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
         .expect("tool surface");
     // The preamble holds the CATALOG (name + description + load_skill mandate),
     // NOT the skill body (progressive disclosure).
-    let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref())
+    let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &[])
         .preamble()
         .to_string();
     assert!(
@@ -550,6 +548,90 @@ async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
     assert!(!snapshot.paired_peer_dids.contains("peer-b"));
 }
 
+/// A `PeerPairingDesired` row carrying this node's OWN DID must NOT land in
+/// `paired_peer_dids`: a self-referential pairing would mis-route a LOCAL spawn
+/// into the trusted-paired-peer (cross-deployment) branch and, with the
+/// cross-deployment flag off, wrongly deny it.
+#[tokio::test]
+async fn runtime_snapshot_excludes_own_did_from_paired_peers() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-own-did-paired"));
+    let local_did = identity.did().to_string();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        &local_did,
+        "backend-own-did-paired",
+        "http://localhost:18181/v1",
+    )
+    .await;
+
+    // A self-referential pairing row (our own DID) AND a legitimate remote peer.
+    let mutation = format!(
+        r#"mutation {{
+            create_PeerPairingDesired(input: {{
+                peer_id: "self-peer",
+                agent_did: "{}",
+                collections: ["AgentRequest"],
+                replicator_addresses: [],
+                created_at: "2026-06-04T00:00:00Z",
+                updated_at: "2026-06-04T00:00:00Z"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&local_did)
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create self PeerPairingDesired failed: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(
+            r#"mutation {
+                create_PeerPairingDesired(input: {
+                    peer_id: "peer-remote",
+                    agent_did: "did:defra-agent:peer-remote",
+                    collections: ["AgentRequest"],
+                    replicator_addresses: [],
+                    created_at: "2026-06-04T00:00:00Z",
+                    updated_at: "2026-06-04T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create remote PeerPairingDesired failed: {:?}",
+        response.errors
+    );
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot should resolve");
+
+    assert!(
+        !snapshot.paired_peer_dids.contains(&local_did),
+        "own DID must not be a trusted paired peer: {:?}",
+        snapshot.paired_peer_dids
+    );
+    assert!(
+        snapshot
+            .paired_peer_dids
+            .contains("did:defra-agent:peer-remote"),
+        "legitimate remote peer should still be present: {:?}",
+        snapshot.paired_peer_dids
+    );
+}
+
 /// Insert a ToolSelection row with an empty string in `subagent_targets` and
 /// return its `_docID`.  DefraDB schema has no non-empty constraint on
 /// `[String]` fields, so the document writes successfully.  The validator
@@ -645,12 +727,21 @@ async fn apply_control_update_rejects_tool_selection_with_missing_subagent_targe
     let selection_id = "missing-targets-selection";
     let escaped_selection_id = escape_graphql_string(selection_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    // A LOCAL-DID target (own agent_did) naming a behavior that does not exist
+    // locally must be rejected; remote targets are exempt (handled elsewhere).
+    let target_entry = crate::document_config::subagent_target_entry(
+        "missing-behavior",
+        agent_did,
+        "missing-behavior",
+        None,
+    );
+    let escaped_target_entry = escape_graphql_string(&target_entry);
     let mutation = format!(
         r#"mutation {{
             create_ToolSelection(input: {{
                 selection_id: "{escaped_selection_id}",
                 agent_did: "{escaped_agent_did}",
-                subagent_targets: ["missing-behavior"],
+                subagent_targets: ["{escaped_target_entry}"],
                 subagent_spawn_enabled: true
             }}) {{ _docID }}
         }}"#

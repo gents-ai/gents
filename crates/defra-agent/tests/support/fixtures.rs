@@ -1,13 +1,113 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use defra_agent::__test_internals::run_subagent_source_for_test;
 use defra_agent::compaction::CompactionStrategy;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
-    AgentPrincipal, BackendProviderKind, BehaviorToolConfig, KeyIdentity,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, ActiveRuntimeSnapshot,
+    AgentBehavior, AgentIdentity, AgentPrincipal, BackendProviderKind, BehaviorToolConfig,
+    KeyIdentity,
 };
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+
+/// Guard that cancels and joins a standalone `SubagentSource` task on drop.
+///
+/// After the spawn convergence (#377) the child `AgentRequest` is materialized
+/// by `SubagentSource`, not synchronously by the hook. Hook-driven integration
+/// tests (`r4_subagent_tools`, `r4c_*`) start one of these so that
+/// `on_tool_call("spawn_subagent")` produces a child without booting the full
+/// request daemon (which would also claim/process the child).
+pub struct SubagentSourceGuard {
+    cancel: CancellationToken,
+    handle: Option<tokio::task::JoinHandle<()>>,
+    _snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
+}
+
+impl Drop for SubagentSourceGuard {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
+    }
+}
+
+/// Spawn a standalone `SubagentSource` against `node` whose snapshot treats
+/// `child_behavior_id` as a locally runnable target owned by `agent_did`. The
+/// source materializes child `AgentRequest`s from `AgentToolCall` bridge rows;
+/// everything else (parent authorization, dedup) runs against the live node.
+pub fn spawn_subagent_source(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    parent_behavior_id: &str,
+    child_behavior_id: &str,
+) -> SubagentSourceGuard {
+    spawn_subagent_source_with_paired_peers(
+        node,
+        agent_did,
+        parent_behavior_id,
+        child_behavior_id,
+        HashSet::new(),
+    )
+}
+
+/// Like [`spawn_subagent_source`] but lets the caller seed the snapshot's
+/// `paired_peer_dids` set. A bridge whose parent `agent_did` is in this set
+/// drives the trusted-paired-peer (cross-deployment receiver) branch in
+/// `SubagentSource`. Used by the #377 receiver-gate tests.
+pub fn spawn_subagent_source_with_paired_peers(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    parent_behavior_id: &str,
+    child_behavior_id: &str,
+    paired_peer_dids: HashSet<String>,
+) -> SubagentSourceGuard {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-source-principal"));
+    let principal = test_principal_for(identity, parent_behavior_id);
+    let mut child = test_behavior_for_principal(child_behavior_id, principal.clone());
+    child.principal = Arc::new(AgentPrincipal {
+        agent_did: agent_did.to_string(),
+        identity: principal.identity.clone(),
+        default_behavior_id: parent_behavior_id.to_string(),
+        display_name: None,
+        enabled: true,
+    });
+    let mut behaviors = HashMap::new();
+    behaviors.insert(child_behavior_id.to_string(), Arc::new(child));
+    let snapshot = ActiveRuntimeSnapshot {
+        generation: 1,
+        principal: None,
+        local_did: agent_did.to_string(),
+        paired_peer_dids,
+        default_behavior_id: parent_behavior_id.to_string(),
+        behaviors,
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+        dispatchers: HashMap::new(),
+    };
+    let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(snapshot));
+    let cancel = CancellationToken::new();
+    let handle = tokio::spawn(run_subagent_source_for_test(
+        node,
+        snapshot_rx,
+        cancel.clone(),
+    ));
+    SubagentSourceGuard {
+        cancel,
+        handle: Some(handle),
+        _snapshot_tx: snapshot_tx,
+    }
+}
 
 pub fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));

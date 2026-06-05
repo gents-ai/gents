@@ -53,7 +53,7 @@ Work like a strong command-line operator:
 
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
-For long-running commands such as builds, test suites, installs, servers, and log tails, prefer background_tool with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_background_tools, read_tool_output, wait_tool, or cancel_tool to inspect, finish, or stop backgrounded work."#;
+For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -134,11 +134,22 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
-    let node = node_builder
-        .build()
-        .await
-        .context("building embedded defra node for init")?;
-    ensure_config_bootstrap_schemas(&node).await?;
+    let node_arc = std::sync::Arc::new(
+        node_builder
+            .build()
+            .await
+            .context("building embedded defra node for init")?,
+    );
+    ensure_config_bootstrap_schemas(node_arc.as_ref()).await?;
+    // Run the AgentBehavior migration BEFORE the first load_agent_behavior
+    // call below. On an upgraded DB (created before #377), the AgentBehavior
+    // collection lacks description/summary; ensure_config_bootstrap_schemas
+    // silently skips adding them to an existing collection. Without this call
+    // re-running init against a pre-#377 DB crashes with "unknown field".
+    defra_agent::migration::ensure_agent_behavior_migrations(node_arc.clone()).await?;
+    let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
+        unreachable!("node_arc had exactly one strong reference at this point")
+    });
 
     let access = ConfigAccess::Local(node);
     let summary =
@@ -484,6 +495,8 @@ async fn initialize_runtime_home(
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some("Default".to_string()),
+        description: None,
+        summary: None,
         system_prompt: Some(standard_system_prompt(tool_ceiling).to_string()),
         backend_id: Some(backend_id.clone()),
         model_name: Some(model_name.to_string()),
@@ -545,12 +558,12 @@ fn standard_tool_selection(
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Some(Vec::new()),
-        delegate_to: Some(Vec::new()),
         backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_ceiling)),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
         enable_defra_query: None,
         defra_query_collections: None,

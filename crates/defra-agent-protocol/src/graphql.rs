@@ -620,7 +620,19 @@ pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> 
 }
 
 pub fn string_list_field(name: &str, values: &[String]) -> Option<String> {
-    Some(format!("{name}: {}", graphql_string_list_literal(values)))
+    // Empty lists serialize as `null`, NOT `[]`. A bare `[]` GraphQL literal is
+    // typed by DefraDB as `JsonArray([])`, which is incompatible with a
+    // `NillableStringArray` (`[String]`) column: the create "succeeds" but
+    // stores a JsonArray, and every later update of that document fails
+    // re-validation ("expected ScalarArray(NillableStringArray), got
+    // JsonArray([])"). `null` is the NillableStringArray-faithful empty and
+    // round-trips back to an empty list, matching the `nullable_string_field`
+    // idiom used for scalar fields.
+    if values.is_empty() {
+        Some(format!("{name}: null"))
+    } else {
+        Some(format!("{name}: {}", graphql_string_list_literal(values)))
+    }
 }
 
 pub fn turn_state_query(request_id: &str) -> String {
@@ -906,6 +918,22 @@ mod tests {
         assert!(session_query.contains("cancel_cause"));
         assert!(session_query.contains("latency_ms"));
         assert!(session_query.contains("discarded_because_interrupted"));
+    }
+
+    #[test]
+    fn string_list_field_emits_null_for_empty_not_bracket_literal() {
+        // An empty list must serialize as `null`, never `[]`: a bare `[]`
+        // literal is typed by DefraDB as JsonArray and corrupts a
+        // NillableStringArray column (create stores JsonArray, later updates
+        // fail re-validation). See `string_list_field` doc comment.
+        assert_eq!(
+            string_list_field("subagent_targets", &[]),
+            Some("subagent_targets: null".to_string()),
+        );
+        assert_eq!(
+            string_list_field("cli_tool_names", &["rg".to_string(), "cargo".to_string()]),
+            Some(r#"cli_tool_names: ["rg", "cargo"]"#.to_string()),
+        );
     }
 
     #[test]

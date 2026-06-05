@@ -433,3 +433,66 @@ impl TriggerEngine {
         result
     }
 }
+
+/// Run a standalone `SubagentSource` driven by a `TriggerEngine` against
+/// `node` until `cancel` fires, without booting the full `DefraAgent` request
+/// daemon. Used by integration tests (`r4_subagent_tools`) that drive the
+/// `DefraSessionHook` directly but need the same `SubagentSource` that
+/// production runs to materialize child `AgentRequest`s from `AgentToolCall`
+/// bridge rows.
+///
+/// The `SubagentSource` always produces `FireIntent`s carrying a
+/// `pre_materialized_request_id`, so `TriggerEngine::dispatch` short-circuits
+/// before ever touching the `MaterializerHandle`; a panicking stub is therefore
+/// sufficient and never invoked.
+#[doc(hidden)]
+pub async fn run_subagent_source_for_test(
+    node: Arc<defra_node::EmbeddedNode>,
+    snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    cancel: CancellationToken,
+) {
+    struct UnusedMaterializer;
+    impl MaterializerHandle for UnusedMaterializer {
+        fn materialize(
+            &self,
+            _task: &crate::runtime_snapshot::ResolvedTask,
+            _trigger_id: Option<&str>,
+            _trigger_kind: TriggerKind,
+            _rendered_prompt: &str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
+        {
+            Box::pin(async {
+                unreachable!(
+                    "SubagentSource fires pre-materialized requests; materialize is never called"
+                )
+            })
+        }
+
+        fn has_active_runtime_request_for_trigger(
+            &self,
+            _trigger_id: &str,
+            _trigger_kind: TriggerKind,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+        {
+            Box::pin(async { Ok(false) })
+        }
+
+        fn supersede_active_runtime_requests_for_trigger(
+            &self,
+            _trigger_id: &str,
+            _trigger_kind: TriggerKind,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>
+        {
+            Box::pin(async { Ok(0) })
+        }
+    }
+
+    let subagent_source: Box<dyn TriggerSource> = Box::new(subagent_source::SubagentSource::new(
+        snapshot_rx.clone(),
+        node,
+        cancel.clone(),
+    ));
+    let materializer: Arc<dyn MaterializerHandle> = Arc::new(UnusedMaterializer);
+    let engine = TriggerEngine::new(snapshot_rx, materializer);
+    engine.run(vec![subagent_source], cancel).await;
+}

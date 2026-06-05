@@ -77,7 +77,7 @@ pub(super) fn expand_p2p_collection_args(
     Ok(collections.into_iter().collect())
 }
 
-fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'static str> {
+pub(super) fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'static str> {
     match profile {
         P2pCollectionProfileArg::Runtime => SCHEMA_COLLECTION_CHECKS
             .iter()

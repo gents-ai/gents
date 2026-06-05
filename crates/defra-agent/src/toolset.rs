@@ -1,9 +1,7 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 use std::collections::HashMap;
 
@@ -12,7 +10,6 @@ mod bash_tools;
 mod cancellable;
 mod cli_tool;
 mod context_budget;
-mod delegate;
 mod denial;
 mod file_tools;
 mod native_runner;
@@ -23,13 +20,12 @@ mod tests;
 
 use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
-use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
 use subagent::{
-    BackgroundTool, CancelSubagentTool, CancelTool, ListBackgroundToolsTool, ListSubagentsTool,
-    ReadSubagentTranscriptTool, ReadToolOutputTool, SpawnSubagentTool, SteerSubagentTool,
-    WaitSubagentTool, WaitTool,
+    CancelProcessTool, CancelSubagentTool, ListProcessesTool, ListSubagentsTool, ReadProcessTool,
+    ReadSubagentTool, SpawnProcessTool, SpawnSubagentTool, SteerSubagentTool, WaitProcessTool,
+    WaitSubagentTool,
 };
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -51,20 +47,17 @@ const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 const DEFAULT_MAX_MATCHES: usize = 200;
 const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
-const DELEGATE_POLL_INTERVAL_MS: u64 = 200;
-const DELEGATE_WAIT_TIMEOUT_SECS: u64 = 30;
-pub const DELEGATE_TOOL_NAME: &str = "delegate_to_agent";
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";
-pub(crate) const READ_SUBAGENT_TRANSCRIPT_TOOL_NAME: &str = "read_subagent_transcript";
+pub(crate) const READ_SUBAGENT_TOOL_NAME: &str = "read_subagent";
 pub(crate) const STEER_SUBAGENT_TOOL_NAME: &str = "steer_subagent";
 pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
-pub(crate) const BACKGROUND_TOOL_NAME: &str = "background_tool";
-pub(crate) const WAIT_TOOL_NAME: &str = "wait_tool";
-pub(crate) const LIST_BACKGROUND_TOOLS_TOOL_NAME: &str = "list_background_tools";
-pub(crate) const READ_TOOL_OUTPUT_TOOL_NAME: &str = "read_tool_output";
-pub(crate) const CANCEL_TOOL_NAME: &str = "cancel_tool";
+pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
+pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
+pub(crate) const LIST_PROCESSES_TOOL_NAME: &str = "list_processes";
+pub(crate) const READ_PROCESS_TOOL_NAME: &str = "read_process";
+pub(crate) const CANCEL_PROCESS_TOOL_NAME: &str = "cancel_process";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {
@@ -406,13 +399,6 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .build_native_tools()
 }
 
-pub fn build_delegate_tool(
-    node: Arc<EmbeddedNode>,
-    allowed_target_dids: Vec<String>,
-) -> Box<dyn ToolDyn> {
-    Box::new(DelegateToAgentTool::new(node, allowed_target_dids))
-}
-
 pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();
@@ -428,7 +414,7 @@ pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
     .map(str::to_string)
     .collect::<Vec<_>>();
     if config.steering_tools_enabled() {
-        names.insert(3, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string());
+        names.insert(3, READ_SUBAGENT_TOOL_NAME.to_string());
     }
     if config.steer_subagent_enabled() {
         let insert_at = if config.steering_tools_enabled() {
@@ -452,7 +438,7 @@ pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn To
         Box::new(ListSubagentsTool),
     ];
     if config.steering_tools_enabled() {
-        tools.push(Box::new(ReadSubagentTranscriptTool));
+        tools.push(Box::new(ReadSubagentTool));
     }
     if config.steer_subagent_enabled() {
         tools.push(Box::new(SteerSubagentTool));
@@ -467,11 +453,11 @@ pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String
     }
 
     [
-        BACKGROUND_TOOL_NAME,
-        WAIT_TOOL_NAME,
-        LIST_BACKGROUND_TOOLS_TOOL_NAME,
-        READ_TOOL_OUTPUT_TOOL_NAME,
-        CANCEL_TOOL_NAME,
+        SPAWN_PROCESS_TOOL_NAME,
+        WAIT_PROCESS_TOOL_NAME,
+        LIST_PROCESSES_TOOL_NAME,
+        READ_PROCESS_TOOL_NAME,
+        CANCEL_PROCESS_TOOL_NAME,
     ]
     .into_iter()
     .map(str::to_string)
@@ -484,11 +470,11 @@ pub(crate) fn build_background_tools(config: BackgroundToolConfig) -> Vec<Box<dy
     }
 
     vec![
-        Box::new(BackgroundTool::new(config.clone())),
-        Box::new(WaitTool),
-        Box::new(ListBackgroundToolsTool),
-        Box::new(ReadToolOutputTool),
-        Box::new(CancelTool),
+        Box::new(SpawnProcessTool::new(config.clone())),
+        Box::new(WaitProcessTool),
+        Box::new(ListProcessesTool),
+        Box::new(ReadProcessTool),
+        Box::new(CancelProcessTool),
     ]
 }
 

@@ -14,6 +14,7 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::StreamingCompletionResponse;
 use serde_json::{json, Value};
 
+use support::fixtures::spawn_subagent_source;
 use support::test_db;
 
 const AGENT_DID: &str = "did:defra-agent:r4c-list-subagents";
@@ -52,14 +53,19 @@ impl CompletionModel for TestModel {
     }
 }
 
-async fn setup_db(name: &str) -> support::TestDb {
+async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSourceGuard) {
     let db = test_db(name).await;
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -75,6 +81,8 @@ async fn setup_db(name: &str) -> support::TestDb {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -96,6 +104,8 @@ async fn setup_db(name: &str) -> support::TestDb {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -109,7 +119,16 @@ async fn setup_db(name: &str) -> support::TestDb {
     )
     .await
     .unwrap();
-    db
+    // Spawn convergence (#377): the child `AgentRequest` is materialized by
+    // SubagentSource, not synchronously by the hook. Run a standalone source for
+    // the lifetime of the test; the guard is returned so callers hold it alive.
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        AGENT_DID,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+    (db, source)
 }
 
 async fn create_parent_hook(
@@ -180,12 +199,13 @@ async fn create_parent_request(
 }
 
 async fn spawn_background_child(
+    node: &EmbeddedNode,
     hook: &DefraSessionHook,
     internal_call_id: &str,
     prompt: &str,
 ) -> Value {
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": prompt,
         "await_mode": "background"
     })
@@ -198,9 +218,48 @@ async fn spawn_background_child(
         &args,
     )
     .await;
-    let receipt = skip_reason_json(action);
+    let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
+    // Spawn convergence (#377): the receipt no longer carries the child session
+    // id. Wait for SubagentSource to materialize the child, then backfill it so
+    // callers keep observing a resolved `child_session_id`.
+    let child_request_id = receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+    let child_session_id = wait_for_child_session_id(node, &child_request_id).await;
+    receipt["child_session_id"] = Value::String(child_session_id);
     receipt
+}
+
+async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ session_id }}
+        }}"#
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let response = node.execute(&query).await;
+        #[derive(serde::Deserialize)]
+        struct Row {
+            session_id: String,
+        }
+        if let Some(row) = support::first_optional_row::<Row>(&response, "AgentRequest") {
+            if !row.session_id.is_empty() {
+                return row.session_id;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for child AgentRequest {child_request_id} session id"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn list_subagents(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
@@ -331,10 +390,10 @@ async fn create_superseded_child_edge(
 
 #[tokio::test]
 async fn list_subagents_returns_running_children() {
-    let db = setup_db("r4c-list-running").await;
+    let (db, _source) = setup_db("r4c-list-running").await;
     let hook = create_parent_hook(&db, "parent-running", "session-running").await;
-    let child_a = spawn_background_child(&hook, "spawn-a", "do A").await;
-    let child_b = spawn_background_child(&hook, "spawn-b", "do B").await;
+    let child_a = spawn_background_child(db.node.as_ref(), &hook, "spawn-a", "do A").await;
+    let child_b = spawn_background_child(db.node.as_ref(), &hook, "spawn-b", "do B").await;
 
     let result = list_subagents(&hook, "list-running", json!({})).await;
     let entries = result["entries"].as_array().expect("entries");
@@ -355,10 +414,16 @@ async fn list_subagents_returns_running_children() {
 
 #[tokio::test]
 async fn list_subagents_rejects_sibling_children() {
-    let db = setup_db("r4c-list-sibling").await;
+    let (db, _source) = setup_db("r4c-list-sibling").await;
     let hook_1 = create_parent_hook(&db, "parent-one", "session-one").await;
     let hook_2 = create_parent_hook(&db, "parent-two", "session-two").await;
-    spawn_background_child(&hook_2, "spawn-sibling", "do sibling work").await;
+    spawn_background_child(
+        db.node.as_ref(),
+        &hook_2,
+        "spawn-sibling",
+        "do sibling work",
+    )
+    .await;
 
     let result = list_subagents(&hook_1, "list-sibling", json!({})).await;
     let entries = result["entries"].as_array().expect("entries");
@@ -370,10 +435,10 @@ async fn list_subagents_rejects_sibling_children() {
 
 #[tokio::test]
 async fn list_subagents_status_filter() {
-    let db = setup_db("r4c-list-status").await;
+    let (db, _source) = setup_db("r4c-list-status").await;
     let session_id = "session-status";
     let hook = create_parent_hook(&db, "parent-status", session_id).await;
-    spawn_background_child(&hook, "spawn-terminal", "terminal child").await;
+    spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "terminal child").await;
     bridge_complete(&db, session_id, "spawn-terminal").await;
 
     let running = list_subagents(&hook, "list-status-running", json!({"status": "running"})).await;
@@ -390,7 +455,7 @@ async fn list_subagents_status_filter() {
 
 #[tokio::test]
 async fn list_subagents_terminal_includes_superseded_children() {
-    let db = setup_db("r4c-list-superseded").await;
+    let (db, _source) = setup_db("r4c-list-superseded").await;
     let session_id = "session-superseded";
     let hook = create_parent_hook(&db, "parent-superseded", session_id).await;
     create_superseded_child_edge(
@@ -411,10 +476,16 @@ async fn list_subagents_terminal_includes_superseded_children() {
 
 #[tokio::test]
 async fn list_subagents_limit_truncates() {
-    let db = setup_db("r4c-list-limit").await;
+    let (db, _source) = setup_db("r4c-list-limit").await;
     let hook = create_parent_hook(&db, "parent-limit", "session-limit").await;
     for index in 0..5 {
-        spawn_background_child(&hook, &format!("spawn-limit-{index}"), "limited child").await;
+        spawn_background_child(
+            db.node.as_ref(),
+            &hook,
+            &format!("spawn-limit-{index}"),
+            "limited child",
+        )
+        .await;
     }
 
     let result = list_subagents(&hook, "list-limit", json!({"limit": 3})).await;
@@ -424,10 +495,10 @@ async fn list_subagents_limit_truncates() {
 
 #[tokio::test]
 async fn list_subagents_no_parent_tool_call_row_written() {
-    let db = setup_db("r4c-list-no-row").await;
+    let (db, _source) = setup_db("r4c-list-no-row").await;
     let session_id = "session-no-row";
     let hook = create_parent_hook(&db, "parent-no-row", session_id).await;
-    spawn_background_child(&hook, "spawn-no-row", "child").await;
+    spawn_background_child(db.node.as_ref(), &hook, "spawn-no-row", "child").await;
     let _ = list_subagents(&hook, "list-no-row", json!({})).await;
 
     assert_eq!(
@@ -438,11 +509,16 @@ async fn list_subagents_no_parent_tool_call_row_written() {
 
 #[tokio::test]
 async fn list_subagents_lineage_matches_r4c_witness_shape() {
-    let db = setup_db("r4c-list-witness").await;
+    let (db, _source) = setup_db("r4c-list-witness").await;
     let hook_1 = create_parent_hook(&db, "r4c-w1-caller", "r4c-w1-caller-session").await;
     let hook_2 = create_parent_hook(&db, "r4c-w1-sibling", "r4c-w1-sibling-session").await;
-    let sibling_child =
-        spawn_background_child(&hook_2, "r4c-w1-sibling-tool-call", "sibling child").await;
+    let sibling_child = spawn_background_child(
+        db.node.as_ref(),
+        &hook_2,
+        "r4c-w1-sibling-tool-call",
+        "sibling child",
+    )
+    .await;
     let sibling_child_id = sibling_child["child_request_id"].as_str().unwrap();
 
     let result = list_subagents(&hook_1, "r4c-w1-list", json!({})).await;

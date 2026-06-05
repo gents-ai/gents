@@ -99,7 +99,18 @@ pub struct LayeredPromptBuilder {
 }
 
 impl LayeredPromptBuilder {
-    pub fn new(behavior: &AgentBehavior, tool_surface: &ToolSurface) -> Self {
+    /// Construct a builder from a loaded behavior and its resolved tool surface.
+    ///
+    /// `allowed_targets` is a list of `(name, description)` pairs for
+    /// subagent targets that the model is statically permitted to spawn.  Pass
+    /// an empty slice when the behavior has no spawn targets or when spawn is
+    /// disabled (the caller is responsible for filtering via
+    /// `tool_surface.subagent_targets()`).
+    pub fn new(
+        behavior: &AgentBehavior,
+        tool_surface: &ToolSurface,
+        allowed_targets: &[(String, String)],
+    ) -> Self {
         let tool_names = tool_surface.tool_names();
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = Self::for_behavior(
@@ -109,6 +120,7 @@ impl LayeredPromptBuilder {
             tool_surface.includes_meta_tools(),
             behavior.context_window,
             behavior.max_output_tokens,
+            allowed_targets,
         );
         // Progressive disclosure (D2): the behavior's effective skills (D5) go
         // into the cached preamble as a CATALOG (name + description) only. The
@@ -163,12 +175,14 @@ impl LayeredPromptBuilder {
         include_meta_tool_guidance: bool,
         context_window: usize,
         max_output_tokens: usize,
+        allowed_targets: &[(String, String)],
     ) -> Self {
-        let preamble = build_preamble(
+        let preamble = build_preamble_with_targets(
             system_prompt,
             behavior_name,
             tool_names,
             include_meta_tool_guidance,
+            allowed_targets,
         );
         Self {
             preamble,
@@ -240,11 +254,17 @@ impl PromptBuilder for LayeredPromptBuilder {
     }
 }
 
-fn build_preamble(
+/// Build a preamble with an optional subagent spawn-target guidance block.
+///
+/// When `allowed_targets` is non-empty a "## Spawnable Sub-Agents" section is
+/// appended that lists each `(name, description)` pair and reminds the
+/// model to use the `spawn_subagent` tool's `name` argument.
+pub(crate) fn build_preamble_with_targets(
     system_prompt: &str,
     behavior_name: &str,
     tool_names: &[&str],
     include_meta_tool_guidance: bool,
+    allowed_targets: &[(String, String)],
 ) -> String {
     let mut parts = Vec::new();
     let system_prompt = strip_title_generation_suffix(system_prompt);
@@ -262,7 +282,39 @@ fn build_preamble(
     }
     parts.push(direct_tool_guidance(tool_names));
 
+    if !allowed_targets.is_empty() {
+        let mut lines = Vec::with_capacity(allowed_targets.len() + 3);
+        lines.push("## Spawnable Sub-Agents".to_string());
+        lines.push(
+            "You may spawn the following sub-agents by passing one of these names as the \
+             `spawn_subagent` tool's `name` argument:"
+                .to_string(),
+        );
+        for (name, description) in allowed_targets {
+            lines.push(format!("- {name}: {description}"));
+        }
+        parts.push(lines.join("\n"));
+    }
+
     parts.join("\n\n")
+}
+
+/// Thin wrapper that builds a preamble with no subagent targets.
+/// Kept for existing tests that exercise preamble construction without targets.
+#[cfg(test)]
+fn build_preamble(
+    system_prompt: &str,
+    behavior_name: &str,
+    tool_names: &[&str],
+    include_meta_tool_guidance: bool,
+) -> String {
+    build_preamble_with_targets(
+        system_prompt,
+        behavior_name,
+        tool_names,
+        include_meta_tool_guidance,
+        &[],
+    )
 }
 
 fn strip_title_generation_suffix(system_prompt: &str) -> &str {

@@ -1767,6 +1767,8 @@ mod lean_apply_write_boundary_tests {
             behavior_id: doc.id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some(doc.content.clone()),
+            description: None,
+            summary: None,
             system_prompt: Some(doc.content.clone()),
             backend_id: ref_id(doc, Collection::InferenceBackend),
             model_name: Some(format!("model-{}", doc.id)),
@@ -1822,10 +1824,15 @@ mod lean_apply_write_boundary_tests {
                 })
                 .map(|reference| reference.id.clone())
                 .collect(),
-            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
+            subagent_targets: None,
+            subagent_spawn_enabled: None,
+            subagent_steering_enabled: None,
+            subagent_background_enabled: None,
+            subagent_allow_cross_deployment: None,
+            cross_deployment_spawn_timeout_seconds: None,
         }
     }
 

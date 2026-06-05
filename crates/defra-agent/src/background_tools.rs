@@ -13,6 +13,7 @@ use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::document_config::SubagentTarget;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
     drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
@@ -27,8 +28,8 @@ use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
-    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse, ReadToolOutputArgs,
-    ReadToolOutputResponse, ReadToolOutputStream, SteerSubagentResponse,
+    ReadSubagentArgs, ReadSubagentResponse, ReadToolOutputArgs, ReadToolOutputResponse,
+    SteerSubagentResponse,
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
@@ -36,7 +37,9 @@ use self::transcript_render::{
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
-    pub behavior_id: String,
+    /// Friendly, model-facing name of an allowed subagent target. The runtime
+    /// maps this name to the target's `(agent_did, behavior_id)`.
+    pub name: String,
     pub prompt: String,
     #[serde(default)]
     pub await_mode: AwaitModeArg,
@@ -114,26 +117,43 @@ pub(crate) struct ParentSubagentContext {
     pub behavior_id: String,
     pub subagent_depth: u32,
     pub request_deadline_at: DateTime<Utc>,
-    pub allowed_targets: Vec<String>,
+    pub allowed_targets: Vec<SubagentTarget>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    /// When false (default), cross-deployment (remote-DID) subagent spawns are
+    /// rejected at runtime. Cross-deployment is deferred pending ACP.
+    pub subagent_allow_cross_deployment: bool,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParentSubagentAuthorization {
     pub behavior_id: String,
-    pub allowed_targets: Vec<String>,
+    pub allowed_targets: Vec<SubagentTarget>,
     pub spawn_enabled: bool,
     pub background_enabled: bool,
-    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
+    pub allow_cross_deployment: bool,
+    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 impl ParentSubagentAuthorization {
-    pub(crate) fn authorizes_target(&self, target_behavior_id: &str) -> bool {
+    /// Resolve a model-facing target `name` to its configured [`SubagentTarget`].
+    pub(crate) fn resolve_target(&self, name: &str) -> Option<&SubagentTarget> {
         self.allowed_targets
             .iter()
-            .any(|target| target == target_behavior_id)
+            .find(|target| target.name == name)
+    }
+
+    pub(crate) fn authorizes_target(&self, name: &str) -> bool {
+        self.resolve_target(name).is_some()
+    }
+
+    /// Model-facing names the parent is allowed to spawn (for error payloads).
+    pub(crate) fn allowed_target_names(&self) -> Vec<String> {
+        self.allowed_targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect()
     }
 }
 
@@ -146,9 +166,10 @@ pub(crate) struct SubagentAuthorizationDenial {
 
 pub(crate) fn subagent_spawn_denial(
     authorization: &ParentSubagentAuthorization,
-    target_behavior_id: &str,
+    target_name: &str,
     await_mode: AwaitMode,
     tool_name: &str,
+    local_did: &str,
 ) -> Option<SubagentAuthorizationDenial> {
     if !authorization.spawn_enabled {
         return Some(SubagentAuthorizationDenial {
@@ -166,13 +187,29 @@ pub(crate) fn subagent_spawn_denial(
         });
     }
 
-    if !authorization.authorizes_target(target_behavior_id) {
+    let Some(target) = authorization.resolve_target(target_name) else {
         return Some(SubagentAuthorizationDenial {
-            path: "/behavior_id",
-            requested: target_behavior_id.to_string(),
-            message: format!(
-                "behavior '{target_behavior_id}' is not allowed as a subagent target for this behavior"
-            ),
+            path: "/name",
+            requested: target_name.to_string(),
+            message: format!("'{target_name}' is not an allowed subagent target for this behavior"),
+        });
+    };
+
+    // Cross-deployment (remote-DID) subagent delegation is deferred behind a
+    // default-OFF flag (#377). When the resolved target is owned by a DID other
+    // than this node's local DID and the parent behavior has not opted in,
+    // refuse the spawn. This single gate covers the recovery path and the
+    // non-trusted receiver fallback (both call `subagent_spawn_denial`); the
+    // trusted-paired-peer receiver branch is gated separately in
+    // `subagent_source`.
+    let target_did = target.agent_did.trim();
+    let local_did = local_did.trim();
+    let target_is_remote = local_did.is_empty() || target_did != local_did;
+    if target_is_remote && !authorization.allow_cross_deployment {
+        return Some(SubagentAuthorizationDenial {
+            path: "/name",
+            requested: target_name.to_string(),
+            message: "cross-deployment subagent delegation is not enabled".to_string(),
         });
     }
 
@@ -213,10 +250,12 @@ struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
     subagent_spawn_enabled: Option<bool>,
     subagent_background_enabled: Option<bool>,
-    cross_deployment_spawn_timeout_seconds: Option<u32>,
+    #[serde(default)]
+    subagent_allow_cross_deployment: Option<bool>,
+    cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
-pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: u32 = 60;
+pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize)]
 struct ListSubagentBridgeRow {
@@ -226,6 +265,8 @@ struct ListSubagentBridgeRow {
     await_mode: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
+    /// Raw JSON bridge args — we extract the `name` field here.
+    args: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,7 +364,7 @@ pub(crate) enum SteerSubagentTarget {
     Terminal(String),
 }
 
-pub(crate) async fn handle_list_subagents(
+pub async fn handle_list_subagents(
     node: &EmbeddedNode,
     caller_request_id: &str,
     local_deployment_id: &str,
@@ -347,6 +388,7 @@ pub(crate) async fn handle_list_subagents(
                 await_mode
                 started_at
                 completed_at
+                args
             }}
         }}"#
     );
@@ -414,9 +456,24 @@ pub(crate) async fn handle_list_subagents(
             .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
             .unwrap_or(created_at);
 
+        // Extract the model-facing `name` from the bridge args JSON. The
+        // named-target redesign (#377) always writes `name` into the bridge
+        // args payload; older or malformed records fall back to empty string.
+        let target_name = bridge
+            .args
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|v| {
+                v.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .and_then(|s| non_empty_string(Some(&s)))
+            .unwrap_or_default();
         entries.push(ListSubagentsEntry {
             child_request_id,
             child_session_id: child.session_id.clone(),
+            name: target_name,
             behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
             deployment_id: local_deployment_id.to_string(),
             await_mode: "background".to_string(),
@@ -519,17 +576,36 @@ pub(crate) async fn handle_list_background_tools(
     })
 }
 
-pub(crate) async fn handle_read_subagent_transcript(
+pub(crate) async fn handle_read_subagent(
     node: &EmbeddedNode,
     caller_request_id: &str,
-    args: ReadSubagentTranscriptArgs,
-) -> Result<Option<ReadSubagentTranscriptResponse>> {
+    args: ReadSubagentArgs,
+) -> Result<Option<ReadSubagentResponse>> {
     let child_request_id = args.child_request_id.trim();
     let Some(edge) =
         load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
     else {
         return Ok(None);
     };
+
+    // Project the child's terminal status so the model knows whether to keep
+    // polling once it has drained the transcript.
+    let (terminal, lifecycle_state) =
+        match load_child_terminal_row(node, &edge.child_request_id).await? {
+            Some(row) => match child_terminal_state_name(&row) {
+                Some(state) => (true, state),
+                None => (
+                    false,
+                    row.lifecycle_state
+                        .as_deref()
+                        .or(row.status.as_deref())
+                        .filter(|state| !state.trim().is_empty())
+                        .unwrap_or("running")
+                        .to_string(),
+                ),
+            },
+            None => (false, "running".to_string()),
+        };
 
     let escaped_session_id = escape_graphql_string(&edge.child_session_id);
     let messages_query = format!(
@@ -547,7 +623,7 @@ pub(crate) async fn handle_read_subagent_transcript(
     let messages_response = node.execute(&messages_query).await;
     if messages_response.has_errors() {
         anyhow::bail!(
-            "read_subagent_transcript AgentMessage query failed: {:?}",
+            "read_subagent AgentMessage query failed: {:?}",
             messages_response.errors
         );
     }
@@ -570,7 +646,7 @@ pub(crate) async fn handle_read_subagent_transcript(
     let tool_calls_response = node.execute(&tool_calls_query).await;
     if tool_calls_response.has_errors() {
         anyhow::bail!(
-            "read_subagent_transcript AgentToolCall query failed: {:?}",
+            "read_subagent AgentToolCall query failed: {:?}",
             tool_calls_response.errors
         );
     }
@@ -589,13 +665,15 @@ pub(crate) async fn handle_read_subagent_transcript(
         },
     );
 
-    Ok(Some(ReadSubagentTranscriptResponse {
+    Ok(Some(ReadSubagentResponse {
         child_request_id: edge.child_request_id,
         child_session_id: edge.child_session_id,
         from_sequence: rendered.from_sequence,
         through_sequence: rendered.through_sequence,
         next_sequence: rendered.next_sequence,
-        truncated: rendered.truncated,
+        has_more: rendered.has_more,
+        terminal,
+        lifecycle_state,
         transcript: rendered.transcript,
     }))
 }
@@ -795,31 +873,100 @@ pub(crate) async fn handle_read_tool_output(
         .filter(|state| !state.trim().is_empty())
         .unwrap_or("running")
         .to_string();
-    let max_bytes = args.validated_max_bytes() as usize;
-    let result = if status == "running" {
-        ""
-    } else {
+    let exited = status != "running";
+    let max_bytes = args.validated_max_bytes();
+    let result = if exited {
         row.result.as_deref().unwrap_or_default()
+    } else {
+        ""
     };
     let persisted = persisted_tool_output_streams(&row.tool_name, result);
-    let stdout = read_tool_output_stream(
-        &persisted.stdout,
-        max_bytes,
-        persisted.stdout_total_bytes_seen,
-    );
-    let stderr = read_tool_output_stream(
-        &persisted.stderr,
-        max_bytes,
-        persisted.stderr_total_bytes_seen,
-    );
+    // Merge stdout + stderr into a single logical buffer behind one byte cursor.
+    // The capture stores the two streams separately with no preserved interleave
+    // order, so combining them with a stable labeled boundary (stdout first,
+    // then `STDERR_BOUNDARY`, then stderr) is the cleanest honest single-cursor
+    // model: an orchestrator pages through ALL output gap-free from `offset`.
+    let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
+    let slice = read_combined_output_slice(&combined, args.offset, max_bytes);
+
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
         tool_name: row.tool_name,
         status,
-        stdout,
-        stderr,
+        output: slice.output,
+        next_offset: slice.next_offset,
+        total_bytes: slice.total_bytes,
+        has_more: slice.has_more,
+        exited,
         exit_code: persisted.exit_code,
     }))
+}
+
+/// Boundary inserted between captured stdout and stderr in the combined buffer.
+/// Only present when BOTH streams have content, so single-stream output is
+/// served verbatim.
+const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
+
+/// Concatenate captured stdout and stderr into one logical buffer behind a
+/// single byte cursor. stdout first; if both streams are non-empty a labeled
+/// boundary separates them; if only one is non-empty it is served verbatim.
+fn combine_output_streams(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}{STDERR_BOUNDARY}{stderr}"),
+    }
+}
+
+struct CombinedOutputSlice {
+    output: String,
+    next_offset: u64,
+    total_bytes: u64,
+    has_more: bool,
+}
+
+/// Read a contiguous byte slice of the combined buffer starting at `offset`,
+/// capped at `max_bytes`. Pages are contiguous from the cursor (no head/tail
+/// drop): `next_offset = offset + bytes_returned`, `has_more` is true iff
+/// `next_offset < total_bytes`. `offset` past the end yields an empty slice
+/// with `next_offset == total_bytes` and `has_more == false`.
+fn read_combined_output_slice(
+    combined: &str,
+    offset: u64,
+    max_bytes: usize,
+) -> CombinedOutputSlice {
+    let bytes = combined.as_bytes();
+    let total_bytes = bytes.len() as u64;
+    let start = (offset.min(total_bytes)) as usize;
+    let mut start = start;
+    // Snap forward to a UTF-8 char boundary so slicing never splits a codepoint.
+    while start < bytes.len() && !combined.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(max_bytes).min(bytes.len());
+    while end > start && !combined.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Progress guard: if snapping back a multi-byte codepoint collapses the
+    // slice to empty yet more bytes remain, advance `end` past that one
+    // codepoint so every read makes progress.  In practice the 256-byte floor
+    // in `validated_max_bytes` makes this unreachable today, but the guard
+    // keeps the invariant explicit and safe against future budget changes.
+    if end == start && start < bytes.len() {
+        end = start + 1;
+        while end < bytes.len() && !combined.is_char_boundary(end) {
+            end += 1;
+        }
+    }
+    let output = combined[start..end].to_string();
+    let next_offset = end as u64;
+    CombinedOutputSlice {
+        output,
+        next_offset,
+        total_bytes,
+        has_more: next_offset < total_bytes,
+    }
 }
 
 pub(crate) async fn load_steer_subagent_target(
@@ -1073,15 +1220,12 @@ struct PersistedToolOutputStreams {
     stdout: String,
     stderr: String,
     exit_code: Option<i32>,
-    stdout_total_bytes_seen: Option<u64>,
-    stderr_total_bytes_seen: Option<u64>,
 }
 
 fn persisted_tool_output_streams(tool_name: &str, result: &str) -> PersistedToolOutputStreams {
     parse_native_command_output_streams(tool_name, result).unwrap_or_else(|| {
         PersistedToolOutputStreams {
             stdout: result.to_string(),
-            stdout_total_bytes_seen: Some(result.as_bytes().len() as u64),
             ..Default::default()
         }
     })
@@ -1103,8 +1247,6 @@ fn parse_native_command_output_streams(
     let (stdout, stderr) = body.rsplit_once("\nstderr:\n")?;
     let stdout = persisted_stream_body(stdout);
     let stderr = persisted_stream_body(stderr);
-    let stdout_total_bytes_seen = stream_total_seen(&metadata, "stdout_truncation", &stdout);
-    let stderr_total_bytes_seen = stream_total_seen(&metadata, "stderr_truncation", &stderr);
     let exit_code = metadata
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -1114,8 +1256,6 @@ fn parse_native_command_output_streams(
         stdout,
         stderr,
         exit_code,
-        stdout_total_bytes_seen: Some(stdout_total_bytes_seen),
-        stderr_total_bytes_seen: Some(stderr_total_bytes_seen),
     })
 }
 
@@ -1125,41 +1265,6 @@ fn persisted_stream_body(value: &str) -> String {
     } else {
         value.to_string()
     }
-}
-
-fn stream_total_seen(metadata: &Value, key: &str, returned: &str) -> u64 {
-    metadata
-        .get(key)
-        .and_then(|value| value.get("total_chars"))
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| returned.as_bytes().len() as u64)
-        .max(returned.as_bytes().len() as u64)
-}
-
-fn read_tool_output_stream(
-    value: &str,
-    max_bytes: usize,
-    total_bytes_seen: Option<u64>,
-) -> ReadToolOutputStream {
-    let value_bytes = value.as_bytes().len() as u64;
-    let total_bytes_seen = total_bytes_seen.unwrap_or(value_bytes).max(value_bytes);
-    let (bytes, truncated) = truncate_utf8_tail(value, max_bytes);
-    ReadToolOutputStream {
-        bytes,
-        truncated,
-        total_bytes_seen,
-    }
-}
-
-fn truncate_utf8_tail(value: &str, max_bytes: usize) -> (String, bool) {
-    if value.len() <= max_bytes {
-        return (value.to_string(), false);
-    }
-    let mut start = value.len().saturating_sub(max_bytes);
-    while start < value.len() && !value.is_char_boundary(start) {
-        start += 1;
-    }
-    (value[start..].to_string(), true)
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
@@ -1233,6 +1338,7 @@ pub(crate) async fn load_parent_subagent_context(
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
         subagent_background_enabled: selection.background_enabled,
+        subagent_allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
@@ -1283,13 +1389,29 @@ pub(crate) async fn load_parent_subagent_authorization(
         allowed_targets: selection.allowed_targets,
         spawn_enabled: selection.spawn_enabled,
         background_enabled: selection.background_enabled,
+        allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
 
+/// Load the `subagent_allow_cross_deployment` flag for a target behavior on
+/// THIS node. Used by the receiver-side trusted-paired-peer claim path (#377)
+/// to gate cross-deployment children on the TARGET behavior's opt-in: the
+/// trusted-peer branch bypasses `subagent_spawn_denial`, so it must consult the
+/// target behavior's flag directly before materializing a cross-deployment
+/// child. Returns false (deny) when the behavior or its selection is absent.
+pub(crate) async fn load_behavior_allow_cross_deployment(
+    node: &EmbeddedNode,
+    behavior_id: &str,
+) -> Result<bool> {
+    Ok(load_subagent_tool_selection(node, behavior_id)
+        .await?
+        .allow_cross_deployment)
+}
+
 pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
     authorization: &ParentSubagentAuthorization,
-) -> u32 {
+) -> i64 {
     authorization
         .cross_deployment_spawn_timeout_seconds
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
@@ -1297,24 +1419,66 @@ pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
 
 pub(crate) fn effective_context_cross_deployment_spawn_timeout_seconds(
     context: &ParentSubagentContext,
-) -> u32 {
+) -> i64 {
     context
         .cross_deployment_spawn_timeout_seconds
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
 }
 
-pub(crate) fn target_is_allowed(context: &ParentSubagentContext, target_behavior_id: &str) -> bool {
+/// Resolve a model-facing target `name` to its configured [`SubagentTarget`]
+/// within the parent context's allowed set.
+pub(crate) fn resolve_context_target<'a>(
+    context: &'a ParentSubagentContext,
+    name: &str,
+) -> Option<&'a SubagentTarget> {
     context
         .allowed_targets
         .iter()
-        .any(|target| target == target_behavior_id)
+        .find(|target| target.name == name)
+}
+
+pub(crate) fn target_is_allowed(context: &ParentSubagentContext, name: &str) -> bool {
+    resolve_context_target(context, name).is_some()
+}
+
+/// Model-facing target names allowed by the parent context (for error payloads).
+pub(crate) fn context_allowed_target_names(context: &ParentSubagentContext) -> Vec<String> {
+    context
+        .allowed_targets
+        .iter()
+        .map(|target| target.name.clone())
+        .collect()
 }
 
 struct SubagentToolSelection {
-    allowed_targets: Vec<String>,
+    allowed_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
-    cross_deployment_spawn_timeout_seconds: Option<u32>,
+    allow_cross_deployment: bool,
+    cross_deployment_spawn_timeout_seconds: Option<i64>,
+}
+
+/// Parse the `subagent_targets` `[String]` JSON entries into structured
+/// targets, deduping by `name` and dropping malformed/invalid entries.
+fn parse_subagent_targets(entries: Vec<String>) -> Vec<SubagentTarget> {
+    let mut seen = HashSet::new();
+    let mut targets = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match SubagentTarget::parse(&entry) {
+            Ok(target) if target.is_structurally_valid() => {
+                if seen.insert(target.name.trim().to_string()) {
+                    targets.push(target);
+                }
+            }
+            Ok(_) => {
+                tracing::warn!(entry = %entry, "skipping structurally invalid subagent target");
+            }
+            Err(error) => {
+                tracing::warn!(entry = %entry, %error, "skipping malformed subagent target entry");
+            }
+        }
+    }
+    targets
 }
 
 async fn load_subagent_tool_selection(
@@ -1354,6 +1518,7 @@ async fn load_subagent_tool_selection(
                 allowed_targets: Vec::new(),
                 spawn_enabled: false,
                 background_enabled: false,
+                allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
             });
         }
@@ -1369,6 +1534,7 @@ async fn load_subagent_tool_selection(
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_background_enabled
+                subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
             }}
         }}"#
@@ -1387,14 +1553,16 @@ async fn load_subagent_tool_selection(
             allowed_targets: Vec::new(),
             spawn_enabled: false,
             background_enabled: false,
+            allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
         });
     };
 
     Ok(SubagentToolSelection {
-        allowed_targets: dedupe_non_empty(selection.subagent_targets.unwrap_or_default()),
+        allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
@@ -1403,12 +1571,18 @@ async fn load_subagent_tool_selection(
 mod cross_deployment_timeout_tests {
     use super::*;
 
-    fn auth(timeout: Option<u32>) -> ParentSubagentAuthorization {
+    fn auth(timeout: Option<i64>) -> ParentSubagentAuthorization {
         ParentSubagentAuthorization {
             behavior_id: "parent".to_string(),
-            allowed_targets: vec!["child".to_string()],
+            allowed_targets: vec![SubagentTarget {
+                name: "child".to_string(),
+                agent_did: "did:key:zParent".to_string(),
+                behavior_id: "child".to_string(),
+                description: None,
+            }],
             spawn_enabled: true,
             background_enabled: true,
+            allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: timeout,
         }
     }
@@ -1428,6 +1602,76 @@ mod cross_deployment_timeout_tests {
             DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS
         );
     }
+
+    fn auth_with(target_did: &str, allow_cross_deployment: bool) -> ParentSubagentAuthorization {
+        ParentSubagentAuthorization {
+            behavior_id: "parent".to_string(),
+            allowed_targets: vec![SubagentTarget {
+                name: "child".to_string(),
+                agent_did: target_did.to_string(),
+                behavior_id: "child-behavior".to_string(),
+                description: None,
+            }],
+            spawn_enabled: true,
+            background_enabled: true,
+            allow_cross_deployment,
+            cross_deployment_spawn_timeout_seconds: None,
+        }
+    }
+
+    #[test]
+    fn denial_allows_local_target_with_flag_off() {
+        let auth = auth_with("did:key:zLocal", false);
+        assert_eq!(
+            subagent_spawn_denial(
+                &auth,
+                "child",
+                AwaitMode::Background,
+                "spawn_subagent",
+                "did:key:zLocal"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn denial_refuses_remote_target_with_flag_off() {
+        let auth = auth_with("did:key:zRemote", false);
+        let denial = subagent_spawn_denial(
+            &auth,
+            "child",
+            AwaitMode::Background,
+            "spawn_subagent",
+            "did:key:zLocal",
+        )
+        .expect("remote target with flag off must be denied");
+        assert_eq!(denial.path, "/name");
+        assert!(denial.message.contains("cross-deployment"));
+    }
+
+    #[test]
+    fn denial_allows_remote_target_with_flag_on() {
+        let auth = auth_with("did:key:zRemote", true);
+        assert_eq!(
+            subagent_spawn_denial(
+                &auth,
+                "child",
+                AwaitMode::Background,
+                "spawn_subagent",
+                "did:key:zLocal"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn denial_refuses_when_local_did_unknown() {
+        let auth = auth_with("did:key:zRemote", false);
+        let denial =
+            subagent_spawn_denial(&auth, "child", AwaitMode::Background, "spawn_subagent", "")
+                .expect("empty local DID must be treated as remote and denied");
+        assert!(denial.message.contains("cross-deployment"));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1446,6 +1690,30 @@ struct ParentToolCallEdgeRow {
     lifecycle_state: Option<String>,
     await_mode: Option<String>,
     child_request_id: Option<String>,
+}
+
+/// Tolerant variant of [`load_authorized_child_edge`] used by the foreground
+/// subagent wait loop. After the spawn convergence (#377) the child
+/// `AgentRequest` is materialized asynchronously by `SubagentSource` rather than
+/// synchronously by the hook, so the foreground poller can observe the bridge
+/// before the child row exists. This returns `Ok(None)` for the "child not yet
+/// materialized" / not-yet-linked cases (using the same `authorization_lookup_error`
+/// predicate as `load_readable_background_child_edge`) so the caller can back off
+/// and keep polling; all other errors propagate.
+pub(crate) async fn try_load_authorized_child_edge(
+    node: &EmbeddedNode,
+    parent_context: &ParentSubagentContext,
+    child_request_id: &str,
+) -> Result<Option<ChildEdge>> {
+    match load_authorized_child_edge(node, parent_context, child_request_id).await {
+        Ok(edge) => Ok(Some(edge)),
+        Err(error)
+            if authorization_lookup_error(&error, &parent_context.request_id, child_request_id) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) async fn load_authorized_child_edge(
@@ -1635,35 +1903,6 @@ pub(crate) async fn load_child_final_response(
     }
 
     Ok(Some(render_assistant_message_text(&message_row.content)?))
-}
-
-pub(crate) async fn load_child_session_id(
-    node: &EmbeddedNode,
-    child_request_id: &str,
-) -> Result<Option<String>> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                limit: 1
-            ) {{
-                session_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query child AgentRequest {child_request_id} session failed: {:?}",
-            response.errors
-        );
-    }
-    #[derive(Deserialize)]
-    struct SessionRow {
-        session_id: String,
-    }
-    Ok(first_row::<SessionRow>(response.data.as_ref(), "AgentRequest").map(|row| row.session_id))
 }
 
 pub(crate) async fn load_child_terminal_row(

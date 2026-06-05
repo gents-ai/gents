@@ -6,8 +6,8 @@ use defra_node::EmbeddedNode;
 use crate::toolset::ToolSet;
 
 use super::build::{
-    build_host_tools, dedupe_strings, downgrade_bash, downgrade_file_tools,
-    has_registered_mcp_services,
+    build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
+    downgrade_file_tools, has_registered_mcp_services,
 };
 use super::modes::ToolCeiling;
 use super::selection::{
@@ -20,7 +20,6 @@ pub struct BehaviorToolConfig {
     host_tools: ToolSet,
     enable_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
-    delegate_to: Vec<String>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
@@ -34,7 +33,6 @@ impl BehaviorToolConfig {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
-            delegate_to: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
@@ -73,7 +71,6 @@ impl BehaviorToolConfig {
             cli_tool_names,
             enable_meta_tools,
             allowed_mcp_service_ids,
-            delegate_to,
             backgroundable_tool_names,
             enable_defra_query,
             defra_query_collections,
@@ -105,12 +102,12 @@ impl BehaviorToolConfig {
             host_tools,
             enable_meta_tools,
             allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
-            delegate_to: dedupe_strings(delegate_to),
             subagent_tools: SubagentToolConfig {
-                targets: dedupe_strings(subagent_tools.targets),
+                targets: dedupe_subagent_targets(subagent_tools.targets),
                 spawn_enabled: subagent_tools.spawn_enabled,
                 steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
+                allow_cross_deployment: subagent_tools.allow_cross_deployment,
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
@@ -131,10 +128,6 @@ impl BehaviorToolConfig {
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
-    }
-
-    pub fn delegate_to(&self) -> &[String] {
-        &self.delegate_to
     }
 
     #[allow(dead_code)]
@@ -174,7 +167,6 @@ impl BehaviorToolConfig {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
-            delegate_to: self.delegate_to.clone(),
             subagent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
@@ -183,15 +175,27 @@ impl BehaviorToolConfig {
         })
     }
 
+    /// Resolve the tool surface, dropping local-DID subagent targets whose
+    /// behavior is not in the active local set. Remote-DID targets survive only
+    /// when cross-deployment delegation is enabled (`allow_cross_deployment`);
+    /// when it is false (the default, #377) remote-DID targets are filtered out
+    /// so the model is never told about targets a runtime spawn would reject.
     pub(crate) async fn resolve_with_available_subagent_targets(
         &self,
         node: &EmbeddedNode,
+        own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
     ) -> Result<ToolSurface> {
         let mut subagent_tools = self.subagent_tools.clone();
-        subagent_tools
-            .targets
-            .retain(|target| active_behavior_ids.contains(target));
+        let allow_cross_deployment = subagent_tools.allow_cross_deployment;
+        subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                // Remote-DID target: only surface when cross-deployment is enabled.
+                allow_cross_deployment
+            }
+        });
         self.resolve_with_subagent_tools(node, subagent_tools).await
     }
 }
@@ -208,7 +212,6 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
-            .field("delegate_to", &self.delegate_to)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
             .field(

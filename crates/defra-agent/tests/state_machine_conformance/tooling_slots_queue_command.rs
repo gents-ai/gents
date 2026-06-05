@@ -1079,7 +1079,12 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -1095,6 +1100,8 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             behavior_id: AGENT_NAME.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("Queue deadline parent".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -1116,6 +1123,8 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("Queue deadline child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

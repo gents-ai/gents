@@ -224,6 +224,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
+    let own_agent_did = context.identity.did().to_string();
     let candidate_behavior_ids = behaviors
         .iter()
         .map(|behavior| behavior.behavior_id.clone())
@@ -232,7 +233,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     for behavior in behaviors {
         match behavior
             .tools
-            .resolve_with_available_subagent_targets(node, &candidate_behavior_ids)
+            .resolve_with_available_subagent_targets(node, &own_agent_did, &candidate_behavior_ids)
             .await
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
@@ -249,7 +250,26 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
-        tool_surface.retain_subagent_targets(&active_behavior_ids);
+        // Warn for every LOCAL target that is about to be dropped because its
+        // target behavior did not make it into the active set (either disabled,
+        // or its backend/MCP resolution failed). Remote-DID targets are retained
+        // ONLY when `subagent_allow_cross_deployment` is true; with the flag off
+        // (the default) they are dropped in `resolve_with_available_subagent_targets`
+        // before this pass, so none appear here.
+        for target in tool_surface.subagent_targets() {
+            if target.agent_did == own_agent_did
+                && !active_behavior_ids.contains(&target.behavior_id)
+            {
+                tracing::warn!(
+                    behavior_id = %behavior.behavior_id,
+                    target_name = %target.name,
+                    target_behavior_id = %target.behavior_id,
+                    "dropping LOCAL subagent target: target behavior is not active \
+                     (behavior may be disabled or its backend/MCP resolution failed)"
+                );
+            }
+        }
+        tool_surface.retain_subagent_targets(&own_agent_did, &active_behavior_ids);
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);
     }
@@ -262,7 +282,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let (active_event_triggers, unavailable_event_triggers) =
         resolve_event_triggers(view, &unavailable_behaviors);
     let active_tasks = resolve_tasks(view, &unavailable_behaviors);
-    let paired_peer_dids = load_paired_peer_dids(node).await?;
+    let paired_peer_dids = load_paired_peer_dids(node, context.identity.did()).await?;
 
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
@@ -285,7 +305,7 @@ struct PeerPairingDesiredDidRow {
     agent_did: Option<String>,
 }
 
-async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
+async fn load_paired_peer_dids(node: &EmbeddedNode, local_did: &str) -> Result<HashSet<String>> {
     let query = r#"{
         PeerPairingDesired {
             peer_id
@@ -305,6 +325,11 @@ async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
         .and_then(|d| d.get("PeerPairingDesired"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
+    // Never treat this node's OWN DID as a trusted PEER (see
+    // `startup::load_startup_paired_peer_dids`): a self-referential pairing row
+    // would mis-route a LOCAL spawn into the trusted-paired-peer branch and
+    // wrongly deny it when cross-deployment is off. Empty/blank DIDs are dropped.
+    let local_did = local_did.trim();
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -318,6 +343,7 @@ async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
                     peer_id.starts_with("did:").then(|| peer_id.to_string())
                 })
         })
+        .filter(|did| !did.trim().is_empty() && did.trim() != local_did)
         .collect())
 }
 

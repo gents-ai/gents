@@ -71,8 +71,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "command_forbidden_argv_prefixes": ["git commit"],
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
-                "allowed_mcp_service_ids": ["x-data"],
-                "delegate_to": []
+                "allowed_mcp_service_ids": ["x-data"]
             }),
         )?;
     }
@@ -276,8 +275,7 @@ async fn config_validate_reports_command_policy_errors() -> Result<()> {
             "command_allowed_argv_prefixes": ["[\"git\", \"\"]"],
             "command_forbidden_argv_prefixes": ["["],
             "cli_tool_names": [],
-            "enable_meta_tools": true,
-            "delegate_to": []
+            "enable_meta_tools": true
         }),
     )?;
 
@@ -381,8 +379,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
                 "enable_bash": true,
                 "bash_mode": "ReadOnly",
                 "cli_tool_names": [],
-                "enable_meta_tools": true,
-                "delegate_to": []
+                "enable_meta_tools": true
             }),
         )?;
     }
@@ -668,8 +665,7 @@ fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Re
             "enable_bash": true,
             "bash_mode": "ReadOnly",
             "cli_tool_names": [],
-            "enable_meta_tools": true,
-            "delegate_to": []
+            "enable_meta_tools": true
         }),
     )?;
     write_json_file(

@@ -14,12 +14,14 @@ type ToolSelection {
     cli_tool_names: [String]
     enable_meta_tools: Boolean
     allowed_mcp_service_ids: [String]
+    # deprecated: delegate_to_agent removed; field retained for schema-compat, unused.
     delegate_to: [String]
     backgroundable_tool_names: [String]
     subagent_targets: [String]
     subagent_spawn_enabled: Boolean
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
+    subagent_allow_cross_deployment: Boolean
     cross_deployment_spawn_timeout_seconds: Int
     enable_defra_query: Boolean
     defra_query_collections: [String]

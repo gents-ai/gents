@@ -2,6 +2,8 @@ type AgentBehavior {
     behavior_id: String @index(unique: true)
     agent_did: String @index
     display_name: String
+    description: String
+    summary: String
     system_prompt: String
     backend_id: String @index
     model_name: String

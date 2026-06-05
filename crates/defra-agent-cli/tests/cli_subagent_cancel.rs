@@ -309,7 +309,12 @@ async fn enable_default_subagents_before_server(
     let mut selection = load_tool_selection(&node, selection_id)
         .await?
         .ok_or_else(|| anyhow!("ToolSelection {selection_id} not found"))?;
-    selection.subagent_targets = Some(vec![target_behavior_id.to_string()]);
+    selection.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        target_behavior_id,
+        &selection.agent_did,
+        target_behavior_id,
+        None,
+    )]);
     selection.subagent_spawn_enabled = Some(true);
     selection.subagent_background_enabled = Some(true);
     upsert_tool_selection(&node, &selection)
@@ -706,7 +711,7 @@ fn handle_chat_request(
             .expect("behavior id lock poisoned")
             .clone();
         let args = serde_json::json!({
-            "behavior_id": behavior_id,
+            "name": behavior_id,
             "prompt": child_prompt,
             "await_mode": "background"
         })

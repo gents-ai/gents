@@ -26,11 +26,29 @@ use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use support::fixtures::{spawn_subagent_source, SubagentSourceGuard};
 use support::{first_optional_row, first_row, test_db};
 
-const AGENT_DID: &str = "did:defra-agent:r4-subagent-tools";
 const PARENT_BEHAVIOR_ID: &str = "r4-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-child";
+
+/// Result of `setup_spawn_fixture`: a standalone `DefraSessionHook` (which the
+/// R4 tests drive via `on_tool_call`) plus a standalone `SubagentSource`
+/// running against the SAME node. The `SubagentSource` materializes child
+/// `AgentRequest`s from the `AgentToolCall` bridge rows the hook writes.
+///
+/// We run only the `SubagentSource` (not a full `DefraAgent`) so the runtime
+/// does not also claim and process the pending child requests — these tests
+/// drive child completion by hand.
+struct SpawnFixture {
+    db: support::TestDb,
+    hook: DefraSessionHook,
+    session_id: String,
+    request_id: String,
+    parent_deadline: chrono::DateTime<chrono::Utc>,
+    agent_did: String,
+    _source: SubagentSourceGuard,
+}
 
 #[derive(Clone, Default)]
 struct TestModel;
@@ -105,13 +123,7 @@ async fn setup_spawn_fixture(
     targets: Vec<&str>,
     parent_subagent_depth: u32,
     background_enabled: bool,
-) -> (
-    support::TestDb,
-    DefraSessionHook,
-    String,
-    String,
-    chrono::DateTime<chrono::Utc>,
-) {
+) -> SpawnFixture {
     setup_spawn_fixture_with_flags(
         test_name,
         targets,
@@ -128,13 +140,7 @@ async fn setup_spawn_fixture_with_flags(
     parent_subagent_depth: u32,
     spawn_enabled: bool,
     background_enabled: bool,
-) -> (
-    support::TestDb,
-    DefraSessionHook,
-    String,
-    String,
-    chrono::DateTime<chrono::Utc>,
-) {
+) -> SpawnFixture {
     setup_spawn_fixture_with_flags_and_deadline(
         test_name,
         targets,
@@ -153,20 +159,30 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     spawn_enabled: bool,
     background_enabled: bool,
     parent_deadline: chrono::DateTime<chrono::Utc>,
-) -> (
-    support::TestDb,
-    DefraSessionHook,
-    String,
-    String,
-    chrono::DateTime<chrono::Utc>,
-) {
+) -> SpawnFixture {
     let db = test_db(test_name).await;
+    let agent_did = format!("did:defra-agent:r4-{test_name}");
+
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
-            agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(targets.into_iter().map(str::to_string).collect()),
+            agent_did: agent_did.clone(),
+            // Each target's friendly `name` equals its behavior id so the spawn
+            // args (which pass `name`) resolve. agent_did is the local owner.
+            subagent_targets: Some(
+                targets
+                    .into_iter()
+                    .map(|behavior_id| {
+                        defra_agent::subagent_target_entry(
+                            behavior_id,
+                            &agent_did,
+                            behavior_id,
+                            None,
+                        )
+                    })
+                    .collect(),
+            ),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             ..Default::default()
@@ -180,8 +196,10 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             display_name: Some("R4 parent".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -201,8 +219,10 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             display_name: Some("R4 child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -217,10 +237,21 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .await
     .unwrap();
 
+    // Run only the `SubagentSource` (not a full `DefraAgent`) against the same
+    // node the hook writes to. The snapshot lists only the local child behavior
+    // so cross-deployment targets are declined deterministically.
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
     create_parent_request(
         db.node.as_ref(),
+        &agent_did,
         &request_id,
         &session_id,
         parent_subagent_depth,
@@ -232,7 +263,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
         db.node.clone(),
         &session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -240,11 +271,20 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     hook.set_active_request_id(Some(request_id.clone())).await;
     hook.set_request_deadline_at(Some(parent_deadline)).await;
 
-    (db, hook, session_id, request_id, parent_deadline)
+    SpawnFixture {
+        db,
+        hook,
+        session_id,
+        request_id,
+        parent_deadline,
+        agent_did,
+        _source: source,
+    }
 }
 
 async fn create_parent_request(
     node: &EmbeddedNode,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     subagent_depth: u32,
@@ -253,7 +293,7 @@ async fn create_parent_request(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let deadline = deadline.to_rfc3339();
     let mutation = format!(
@@ -493,8 +533,29 @@ async fn wait_for_child_request_for_tool(
     }
 }
 
+/// After the spawn convergence (#377) the background spawn receipt no longer
+/// carries the child session id (the child is materialized asynchronously by
+/// `SubagentSource`). Tests that need the child session resolve it from the DB
+/// once `SubagentSource` has created the child `AgentRequest`.
+async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(child) = fetch_child_request_optional(node, child_request_id).await {
+            if !child.session_id.is_empty() {
+                return child.session_id;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for child AgentRequest {child_request_id} session id"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn persist_child_completion(
     node: &EmbeddedNode,
+    agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
     final_response: &str,
@@ -543,7 +604,7 @@ async fn persist_child_completion(
         response.errors
     );
 
-    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let create_response = format!(
         r#"mutation {{
@@ -644,13 +705,14 @@ async fn update_request_state(
 
 async fn create_child_session_queued_request(
     node: &EmbeddedNode,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
     metadata: &str,
 ) {
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_execution_origin = escape_graphql_string(execution_origin);

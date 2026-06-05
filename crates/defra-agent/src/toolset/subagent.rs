@@ -3,7 +3,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
 use crate::background_tools::r4c_args::{
-    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentArgs, ReadToolOutputArgs,
     SteerSubagentArgs,
 };
 use crate::background_tools::{
@@ -15,10 +15,10 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
 use super::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
-    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
-    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TOOL_NAME,
+    SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
+    WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -29,7 +29,7 @@ pub(super) struct SpawnSubagentTool {
 }
 
 #[derive(Clone)]
-pub(super) struct BackgroundTool {
+pub(super) struct SpawnProcessTool {
     config: BackgroundToolConfig,
 }
 
@@ -39,28 +39,21 @@ impl SpawnSubagentTool {
     }
 
     fn validate(&self, args: &SpawnSubagentArgs) -> Result<(), ToolError> {
-        let behavior_id = args.behavior_id.trim();
-        if behavior_id.is_empty() {
+        let name = args.name.trim();
+        if name.is_empty() {
             return Err(invalid_arguments_error(
                 SPAWN_SUBAGENT_TOOL_NAME,
-                "/behavior_id",
-                "behavior_id is required",
+                "/name",
+                "name is required",
             ));
         }
-        if !self
-            .config
-            .targets
-            .iter()
-            .any(|target| target == behavior_id)
-        {
+        if !self.config.targets.iter().any(|target| target.name == name) {
             return Err(tool_not_allowed_error(
                 SPAWN_SUBAGENT_TOOL_NAME,
-                "/behavior_id",
-                behavior_id,
-                format!(
-                    "behavior '{behavior_id}' is not allowed as a subagent target for this behavior"
-                ),
-                self.config.targets.clone(),
+                "/name",
+                name,
+                format!("'{name}' is not an allowed subagent target for this behavior"),
+                self.allowed_target_names(),
             ));
         }
         if args.prompt.trim().is_empty() {
@@ -80,16 +73,25 @@ impl SpawnSubagentTool {
                     "/await_mode",
                     "background",
                     "background subagent spawning is not enabled for this behavior",
-                    self.config.targets.clone(),
+                    self.allowed_target_names(),
                 ));
             }
         }
 
         Ok(())
     }
+
+    /// Model-facing names of the configured subagent targets.
+    fn allowed_target_names(&self) -> Vec<String> {
+        self.config
+            .targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect()
+    }
 }
 
-impl BackgroundTool {
+impl SpawnProcessTool {
     pub(super) fn new(config: BackgroundToolConfig) -> Self {
         Self { config }
     }
@@ -98,14 +100,14 @@ impl BackgroundTool {
         let tool_name = args.tool_name.trim();
         if tool_name.is_empty() {
             return Err(background_invalid_arguments_error(
-                BACKGROUND_TOOL_NAME,
+                SPAWN_PROCESS_TOOL_NAME,
                 "/tool_name",
                 "tool_name is required",
             ));
         }
         if !self.config.allowlist.iter().any(|name| name == tool_name) {
             return Err(background_tool_not_allowed_error(
-                BACKGROUND_TOOL_NAME,
+                SPAWN_PROCESS_TOOL_NAME,
                 "/tool_name",
                 tool_name,
                 format!("tool '{tool_name}' is not allowed for backgrounding by this behavior"),
@@ -123,7 +125,7 @@ pub(super) struct WaitSubagentTool;
 pub(super) struct ListSubagentsTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ReadSubagentTranscriptTool;
+pub(super) struct ReadSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct SteerSubagentTool;
@@ -132,16 +134,16 @@ pub(super) struct SteerSubagentTool;
 pub(super) struct CancelSubagentTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct WaitTool;
+pub(super) struct WaitProcessTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ListBackgroundToolsTool;
+pub(super) struct ListProcessesTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct ReadToolOutputTool;
+pub(super) struct ReadProcessTool;
 
 #[derive(Clone, Copy)]
-pub(super) struct CancelTool;
+pub(super) struct CancelProcessTool;
 
 impl Tool for SpawnSubagentTool {
     const NAME: &'static str = SPAWN_SUBAGENT_TOOL_NAME;
@@ -157,17 +159,20 @@ impl Tool for SpawnSubagentTool {
             vec!["foreground"]
         };
 
+        let allowed_names = self.allowed_target_names();
+        let name_description = subagent_target_name_description(&self.config.targets);
+
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Spawn an authorized behavior as a child subagent. Foreground is the default await mode; background is available only when enabled for this behavior."
+            description: "Spawn an authorized subagent by its friendly name. Foreground is the default await mode; background is available only when enabled for this behavior."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "behavior_id": {
+                    "name": {
                         "type": "string",
-                        "enum": &self.config.targets,
-                        "description": "Target behavior ID from this behavior's allowed subagent target set."
+                        "enum": allowed_names,
+                        "description": name_description
                     },
                     "prompt": {
                         "type": "string",
@@ -185,7 +190,7 @@ impl Tool for SpawnSubagentTool {
                         "description": "Optional RFC3339 deadline for the child, bounded by the parent request deadline."
                     }
                 },
-                "required": ["behavior_id", "prompt"]
+                "required": ["name", "prompt"]
             }),
         }
     }
@@ -312,18 +317,27 @@ impl Tool for ListSubagentsTool {
     }
 }
 
-impl Tool for ReadSubagentTranscriptTool {
-    const NAME: &'static str = READ_SUBAGENT_TRANSCRIPT_TOOL_NAME;
+impl Tool for ReadSubagentTool {
+    const NAME: &'static str = READ_SUBAGENT_TOOL_NAME;
 
     type Error = ToolError;
-    type Args = ReadSubagentTranscriptArgs;
+    type Args = ReadSubagentArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read a compact transcript snapshot from a visible background subagent."
-                .to_string(),
+            description:
+                "Read an incremental transcript slice from a visible background subagent. \
+Paging is cursor-based and content-honest: pass `since_sequence` to resume, and the response \
+returns `next_sequence` (the exact cursor to pass next), `has_more` (true when the token budget \
+capped the read and more messages remain past `next_sequence`), and `terminal`/`lifecycle_state` \
+(whether the subagent has finished). Output is never SILENTLY dropped: when `has_more` is true, \
+read again with `since_sequence = next_sequence` to continue. One case is truncated rather than \
+paged, but always explicitly marked: a single message larger than the entire budget is cut with a \
+`[truncated: showed N of M chars]` marker and the cursor advances past it, so that one message's \
+tail is not separately pageable."
+                    .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -335,21 +349,14 @@ impl Tool for ReadSubagentTranscriptTool {
                         "type": "integer",
                         "minimum": 0,
                         "default": 0,
-                        "description": "First transcript sequence to include."
+                        "description": "Resume cursor: first transcript sequence to include (0 = from start). Pass the prior response's `next_sequence` to continue."
                     },
-                    "limit": {
+                    "max_tokens": {
                         "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "default": 20,
-                        "description": "Maximum rendered message blocks to return."
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "minimum": 64,
-                        "maximum": 24000,
-                        "default": 6000,
-                        "description": "Maximum rendered transcript characters to return."
+                        "minimum": 16,
+                        "maximum": 6000,
+                        "default": 1500,
+                        "description": "Token budget for the returned transcript slice (estimated as chars/4). When the budget caps the read, `has_more` is true and `next_sequence` marks the resume point."
                     },
                     "include_user_messages": {
                         "type": "boolean",
@@ -369,7 +376,7 @@ impl Tool for ReadSubagentTranscriptTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         validate_child_request_id(Self::NAME, &args.child_request_id)?;
-        let _ = args.validated_limit();
+        let _ = args.validated_max_tokens();
         let _ = args.validated_max_chars();
         Err(not_yet_executable_error(Self::NAME))
     }
@@ -422,8 +429,8 @@ impl Tool for SteerSubagentTool {
     }
 }
 
-impl Tool for BackgroundTool {
-    const NAME: &'static str = BACKGROUND_TOOL_NAME;
+impl Tool for SpawnProcessTool {
+    const NAME: &'static str = SPAWN_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = BackgroundToolArgs;
@@ -432,7 +439,7 @@ impl Tool for BackgroundTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run an allowlisted backgroundable tool and return a handle immediately."
+            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -440,7 +447,7 @@ impl Tool for BackgroundTool {
                     "tool_name": {
                         "type": "string",
                         "enum": &self.config.allowlist,
-                        "description": "Allowlisted tool name to run in the background."
+                        "description": "Allowlisted tool name to run as a background process."
                     },
                     "args": {
                         "type": "object",
@@ -458,8 +465,8 @@ impl Tool for BackgroundTool {
     }
 }
 
-impl Tool for WaitTool {
-    const NAME: &'static str = WAIT_TOOL_NAME;
+impl Tool for WaitProcessTool {
+    const NAME: &'static str = WAIT_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = WaitToolArgs;
@@ -468,14 +475,13 @@ impl Tool for WaitTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for an existing backgrounded tool call to reach a terminal state."
-                .to_string(),
+            description: "Wait for a background process to reach a terminal state.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool."
+                        "description": "Process handle returned by spawn_process."
                     }
                 },
                 "required": ["tool_call_id"]
@@ -484,13 +490,13 @@ impl Tool for WaitTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        validate_tool_call_id(WAIT_TOOL_NAME, &args.tool_call_id)?;
+        validate_tool_call_id(WAIT_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         Err(background_not_yet_executable_error(Self::NAME))
     }
 }
 
-impl Tool for ListBackgroundToolsTool {
-    const NAME: &'static str = LIST_BACKGROUND_TOOLS_TOOL_NAME;
+impl Tool for ListProcessesTool {
+    const NAME: &'static str = LIST_PROCESSES_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ListBackgroundToolsArgs;
@@ -499,7 +505,7 @@ impl Tool for ListBackgroundToolsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this parent request's visible background tool calls.".to_string(),
+            description: "List this request's background processes.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -507,7 +513,7 @@ impl Tool for ListBackgroundToolsTool {
                         "type": "string",
                         "enum": ["running", "terminal", "all"],
                         "default": "running",
-                        "description": "Filter background tool calls by lifecycle state."
+                        "description": "Filter background processes by lifecycle state."
                     },
                     "limit": {
                         "type": "integer",
@@ -527,8 +533,8 @@ impl Tool for ListBackgroundToolsTool {
     }
 }
 
-impl Tool for ReadToolOutputTool {
-    const NAME: &'static str = READ_TOOL_OUTPUT_TOOL_NAME;
+impl Tool for ReadProcessTool {
+    const NAME: &'static str = READ_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ReadToolOutputArgs;
@@ -537,21 +543,34 @@ impl Tool for ReadToolOutputTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read stdout and stderr snapshots for a visible background tool call."
+            description: "Read an incremental, byte-addressed slice of a background process's \
+captured output. stdout and stderr are merged in capture order behind a single byte cursor \
+(stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
+gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
+bytes returned; the exact cursor to pass next), `total_bytes` (total captured so far), `has_more` \
+(true when `next_offset < total_bytes`), and `exited`/`exit_code` (whether the process finished). \
+To read everything, start at offset 0 and loop with `offset = next_offset` until `has_more` is \
+false. Pages are contiguous from the cursor; nothing in the middle is dropped."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool or list_background_tools."
+                        "description": "Process handle returned by spawn_process or list_processes."
                     },
-                    "max_bytes_per_stream": {
+                    "offset": {
                         "type": "integer",
-                        "minimum": 256,
-                        "maximum": 262144,
-                        "default": 16384,
-                        "description": "Maximum bytes to return per stream."
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "Byte cursor into the combined output (0 = from start). Reads forward from here. Pass the prior response's `next_offset` to continue gap-free."
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 65536,
+                        "default": 4096,
+                        "description": "Token budget for the returned slice (estimated as chars/4). When the budget caps the slice, `has_more` is true and `next_offset` marks the resume point."
                     }
                 },
                 "required": ["tool_call_id"]
@@ -566,8 +585,8 @@ impl Tool for ReadToolOutputTool {
     }
 }
 
-impl Tool for CancelTool {
-    const NAME: &'static str = CANCEL_TOOL_NAME;
+impl Tool for CancelProcessTool {
+    const NAME: &'static str = CANCEL_PROCESS_TOOL_NAME;
 
     type Error = ToolError;
     type Args = CancelToolArgs;
@@ -576,13 +595,13 @@ impl Tool for CancelTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Cancel an existing backgrounded tool call.".to_string(),
+            description: "Cancel a running background process.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
-                        "description": "Tool call ID returned by background_tool."
+                        "description": "Process handle returned by spawn_process."
                     },
                     "reason": {
                         "type": "string",
@@ -595,20 +614,45 @@ impl Tool for CancelTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        validate_tool_call_id(CANCEL_TOOL_NAME, &args.tool_call_id)?;
+        validate_tool_call_id(CANCEL_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         if args
             .reason
             .as_deref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
             return Err(background_invalid_arguments_error(
-                CANCEL_TOOL_NAME,
+                CANCEL_PROCESS_TOOL_NAME,
                 "/reason",
                 "reason must be omitted or non-empty",
             ));
         }
         Err(background_not_yet_executable_error(Self::NAME))
     }
+}
+
+/// Build a model-facing description listing each allowed subagent target name
+/// with its description, so the model can pick the right `name`.
+fn subagent_target_name_description(targets: &[crate::document_config::SubagentTarget]) -> String {
+    let mut description = String::from(
+        "Friendly name of the subagent to spawn, from this behavior's allowed targets.",
+    );
+    let entries: Vec<String> = targets
+        .iter()
+        .map(|target| {
+            let desc = target.description_text();
+            if desc.is_empty() {
+                format!("'{}'", target.name)
+            } else {
+                format!("'{}': {}", target.name, desc)
+            }
+        })
+        .collect();
+    if !entries.is_empty() {
+        description.push_str(" Available: ");
+        description.push_str(&entries.join("; "));
+        description.push('.');
+    }
+    description
 }
 
 fn validate_child_request_id(tool_name: &str, child_request_id: &str) -> Result<(), ToolError> {
@@ -688,7 +732,7 @@ fn background_invalid_arguments_error(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name
     }))
 }
@@ -706,7 +750,7 @@ fn background_tool_not_allowed_error(
         "path": path,
         "message": message.into(),
         "retryable": false,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name,
         "requested_tool_name": requested,
         "allowed_backgroundable_tool_names": allowed_targets
@@ -718,9 +762,9 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
         "ok": false,
         "failure_class": "service_unavailable",
         "path": "/",
-        "message": format!("{tool_name} is registered but requires the R6 background-tool hook runtime path before direct execution"),
+        "message": format!("{tool_name} is registered but requires the R6 process hook runtime path before direct execution"),
         "retryable": true,
-        "service_id": "background",
+        "service_id": "process",
         "tool_name": tool_name
     }))
 }

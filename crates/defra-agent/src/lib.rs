@@ -77,9 +77,10 @@ pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, load_tool_selection, upsert_agent_behavior, upsert_agent_principal,
-    upsert_inference_profile, upsert_tool_selection, AgentBehavior as AgentBehaviorDocument,
-    InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    load_inference_profile, load_tool_selection, subagent_target_entry, upsert_agent_behavior,
+    upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
+    ToolSelectionDocument,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
@@ -131,9 +132,8 @@ pub use tool_surface::{
     ToolRuntimeContext, ToolSelection, ToolSurface,
 };
 pub use toolset::{
-    build_delegate_tool, build_native_tools, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
-    DELEGATE_TOOL_NAME,
+    build_native_tools, CliToolConfig, CommandExecutionMode, CommandExecutionPolicy,
+    CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::subagent_source::SubagentSource;
@@ -150,11 +150,20 @@ pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 /// proptest (`tests/identity_conformance_proptest.rs`) call the same
 /// helper that both production snapshot paths funnel through, without
 /// widening the public API.
+///
+/// `handle_list_subagents` and its arg/response types are exposed here so
+/// the `subagent_enablement_e2e` integration test can call the handler
+/// directly and assert C2 state (running-subagent listing) end-to-end.
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
         assemble_principal_and_behaviors, BehaviorBuildError,
     };
+    pub use crate::background_tools::handle_list_subagents;
+    pub use crate::background_tools::r4c_args::{
+        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+    };
+    pub use crate::trigger_engine::run_subagent_source_for_test;
 }
 
 // Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.

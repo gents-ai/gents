@@ -14,7 +14,7 @@ use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::schema::ensure_schemas;
-use crate::tool_surface::ToolRuntimeContext;
+use crate::tool_surface::{self, ToolRuntimeContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneshotRunResult {
@@ -39,12 +39,14 @@ pub async fn run_openai_oneshot_with_tools(
     ensure_schemas(node.as_ref()).await?;
     crate::migration::ensure_tool_call_migrations(node.clone()).await?;
     crate::migration::ensure_tool_service_registry_migrations(node.clone()).await?;
+    crate::migration::ensure_agent_behavior_migrations(node.clone()).await?;
 
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime =
         ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
     let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
-    let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface);
+    let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);
+    let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);
     let preamble = prompt_builder.preamble().to_string();
 
     let mut tools = tool_surface.build_tools(&tool_runtime)?;

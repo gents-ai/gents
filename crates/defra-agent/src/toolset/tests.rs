@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use defra_node::EmbeddedNode;
@@ -9,7 +9,6 @@ use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
 };
 use super::bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
-use super::delegate::DelegateToAgentArgs;
 use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
@@ -24,7 +23,6 @@ use crate::lean_vocab_test::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
     lean_command_sandbox_cases, lean_native_filesystem_boundary_cases, LeanCommandPolicyCase,
 };
-use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
 #[test]
 fn toolset_presets_have_expected_counts() {
@@ -107,10 +105,11 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
 #[test]
 fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let disabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: false,
         steering_enabled: false,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&disabled).is_empty());
 
@@ -119,14 +118,16 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&no_targets).is_empty());
 
     let enabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        allow_cross_deployment: false,
     };
     let names = subagent_tool_names(&enabled);
     assert_eq!(
@@ -135,17 +136,18 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
-            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
     assert!(!names.contains(&"steer_subagent".to_string()));
 
     let steering_disabled = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: false,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert_eq!(
         subagent_tool_names(&steering_disabled),
@@ -158,10 +160,11 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     );
 
     let steering_and_background = SubagentToolConfig {
-        targets: vec!["worker".to_string()],
+        targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     assert_eq!(
         subagent_tool_names(&steering_and_background),
@@ -169,7 +172,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
-            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TOOL_NAME.to_string(),
             STEER_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
@@ -204,11 +207,11 @@ fn background_tool_names_are_gated_by_allowlist() {
     assert_eq!(
         background_tool_names(&enabled),
         vec![
-            BACKGROUND_TOOL_NAME.to_string(),
-            WAIT_TOOL_NAME.to_string(),
-            LIST_BACKGROUND_TOOLS_TOOL_NAME.to_string(),
-            READ_TOOL_OUTPUT_TOOL_NAME.to_string(),
-            CANCEL_TOOL_NAME.to_string()
+            SPAWN_PROCESS_TOOL_NAME.to_string(),
+            WAIT_PROCESS_TOOL_NAME.to_string(),
+            LIST_PROCESSES_TOOL_NAME.to_string(),
+            READ_PROCESS_TOOL_NAME.to_string(),
+            CANCEL_PROCESS_TOOL_NAME.to_string()
         ]
     );
 }
@@ -216,10 +219,11 @@ fn background_tool_names_are_gated_by_allowlist() {
 #[tokio::test]
 async fn subagent_tool_definitions_register_expected_surface() {
     let config = SubagentToolConfig {
-        targets: vec!["research".to_string()],
+        targets: subagent_targets("research"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
     let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
@@ -229,14 +233,14 @@ async fn subagent_tool_definitions_register_expected_surface() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
-            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
 
     let spawn_def = tools[0].definition(String::new()).await;
     assert_eq!(
-        spawn_def.parameters["properties"]["behavior_id"]["enum"],
+        spawn_def.parameters["properties"]["name"]["enum"],
         serde_json::json!(["research"])
     );
     assert_eq!(
@@ -248,10 +252,11 @@ async fn subagent_tool_definitions_register_expected_surface() {
 #[tokio::test]
 async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
     let config = SubagentToolConfig {
-        targets: vec!["research".to_string()],
+        targets: subagent_targets("research"),
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
     let spawn_def = tools[0].definition(String::new()).await;
@@ -260,6 +265,17 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
         spawn_def.parameters["properties"]["await_mode"]["enum"],
         serde_json::json!(["foreground", "background"])
     );
+}
+
+/// Build a single-target list for subagent tool tests. `name` doubles as the
+/// behavior id; the agent_did is a fixed local placeholder.
+fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTarget> {
+    vec![crate::document_config::SubagentTarget {
+        name: name.to_string(),
+        agent_did: "did:key:zTest".to_string(),
+        behavior_id: name.to_string(),
+        description: None,
+    }]
 }
 
 fn temp_root(name: &str) -> PathBuf {
@@ -500,7 +516,10 @@ async fn read_file_reports_truncation_in_compact_metadata() {
     assert_eq!(meta["truncated"], true);
     assert_eq!(meta["returned_count"], 3);
     assert_eq!(meta["total_count"], 3);
-    assert!(output.contains("[truncated to 12 chars]"), "{output}");
+    assert!(
+        output.contains("[Showing lines 1-1 of 3 (28 bytes total)]"),
+        "{output}"
+    );
 }
 
 #[tokio::test]
@@ -1301,8 +1320,8 @@ async fn unrestricted_bash_runs_shell_command_strings() {
     assert_eq!(meta["exit_code"], 0);
     assert_eq!(meta["timed_out"], false);
     assert_eq!(meta["argv"][0], "/bin/sh");
-    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
-    assert_eq!(meta["stderr_truncation"]["total_chars"], 3);
+    assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
+    assert_eq!(meta["stderr_truncation"]["total_bytes"], 3);
     assert!(output.contains("stdout:\nOK"));
     assert!(output.contains("stderr:\nERR"));
 }
@@ -1335,7 +1354,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
     assert_eq!(meta["ok"], true);
     assert_eq!(meta["execution_mode"], "unrestricted");
     assert_eq!(meta["sandbox"], "unsandboxed_unrestricted");
-    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
+    assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
 }
 
 #[tokio::test]
@@ -1505,141 +1524,4 @@ fn read_only_bash_rejects_mutating_host_diagnostics_commands() {
     )
     .is_err());
     assert!(validate_read_only_command("tailscale", &[String::from("up")], &allowlist).is_err());
-}
-
-#[tokio::test]
-async fn delegate_to_agent_round_trip_waits_for_response() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ensure_schemas(node.as_ref()).await.unwrap();
-    let tool = super::delegate::DelegateToAgentTool::new(
-        node.clone(),
-        vec!["did:defra-agent:amy-code".to_string()],
-    );
-
-    let call = tokio::spawn(async move {
-        rig::tool::Tool::call(
-            &tool,
-            DelegateToAgentArgs {
-                target_did: "did:defra-agent:amy-code".to_string(),
-                content: "Write a test".to_string(),
-                wait: true,
-            },
-        )
-        .await
-        .unwrap()
-    });
-
-    #[derive(serde::Deserialize)]
-    struct RequestRow {
-        request_id: String,
-        agent_did: String,
-        session_id: String,
-        content: String,
-        retry_count: i64,
-        max_retries: i64,
-    }
-
-    let request = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let resp = node
-                .execute(
-                    r#"{
-                            AgentRequest(limit: 1) {
-                                request_id
-                                agent_did
-                                session_id
-                                content
-                                retry_count
-                                max_retries
-                            }
-                        }"#,
-                )
-                .await;
-            if !resp.has_errors() {
-                let rows: Vec<RequestRow> = resp
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("AgentRequest"))
-                    .and_then(|value| serde_json::from_value(value.clone()).ok())
-                    .unwrap_or_default();
-                if let Some(row) = rows.into_iter().next() {
-                    break row;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(request.agent_did, "did:defra-agent:amy-code");
-    assert_eq!(request.content, "Write a test");
-    assert_eq!(request.retry_count, 0);
-    assert_eq!(request.max_retries, DEFAULT_REQUEST_MAX_RETRIES as i64);
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-                create_AgentResponse(
-                    input: {{
-                        response_key: "{request_id}",
-                        request_id: "{request_id}",
-                        agent_did: "{agent_did}",
-                        session_id: "{session_id}",
-                        content: "delegated result",
-                        status: "complete",
-                        token_count: 2,
-                        progress_seq: 1,
-                        created_at: "{created_at}",
-                        completed_at: "{created_at}"
-                    }}
-                ) {{ _docID }}
-            }}"#,
-        request_id = crate::graphql::escape_graphql_string(&request.request_id),
-        agent_did = crate::graphql::escape_graphql_string(&request.agent_did),
-        session_id = crate::graphql::escape_graphql_string(&request.session_id),
-        created_at = crate::graphql::escape_graphql_string(&now),
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
-
-    let result = call.await.unwrap();
-    assert_eq!(result, "delegated result");
-}
-
-#[tokio::test]
-async fn delegate_to_agent_rejects_target_outside_allowlist() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ensure_schemas(node.as_ref()).await.unwrap();
-    let tool = super::delegate::DelegateToAgentTool::new(
-        node.clone(),
-        vec!["did:defra-agent:allowed".to_string()],
-    );
-
-    let error = rig::tool::Tool::call(
-        &tool,
-        DelegateToAgentArgs {
-            target_did: "did:defra-agent:blocked".to_string(),
-            content: "Write a test".to_string(),
-            wait: false,
-        },
-    )
-    .await
-    .expect_err("delegate_to_agent should reject blocked targets");
-    assert!(error
-        .to_string()
-        .contains("is not in the allowed delegation set"));
-
-    let resp = node
-        .execute(r#"{ AgentRequest(limit: 1) { request_id } }"#)
-        .await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(rows.is_empty(), "blocked delegation wrote an AgentRequest");
 }

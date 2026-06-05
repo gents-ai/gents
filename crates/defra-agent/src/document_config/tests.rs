@@ -13,14 +13,12 @@ fn tool_selection_document_accepts_empty_string_arrays() {
         "bash_mode": "disabled",
         "cli_tool_names": "",
         "enable_meta_tools": false,
-        "allowed_mcp_service_ids": "",
-        "delegate_to": ""
+        "allowed_mcp_service_ids": ""
     }))
     .expect("empty string arrays should deserialize");
 
     assert_eq!(document.cli_tool_names, Some(Vec::new()));
     assert_eq!(document.allowed_mcp_service_ids, Some(Vec::new()));
-    assert_eq!(document.delegate_to, Some(Vec::new()));
 }
 
 #[test]
@@ -36,8 +34,7 @@ fn tool_selection_document_accepts_string_array_values() {
         "bash_mode": "disabled",
         "cli_tool_names": ["rg"],
         "enable_meta_tools": false,
-        "allowed_mcp_service_ids": ["x-data"],
-        "delegate_to": ["did:defra-agent:other"]
+        "allowed_mcp_service_ids": ["x-data"]
     }))
     .expect("string arrays should deserialize");
 
@@ -45,10 +42,6 @@ fn tool_selection_document_accepts_string_array_values() {
     assert_eq!(
         document.allowed_mcp_service_ids,
         Some(vec!["x-data".to_string()])
-    );
-    assert_eq!(
-        document.delegate_to,
-        Some(vec!["did:defra-agent:other".to_string()])
     );
 }
 
@@ -118,16 +111,105 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     );
 }
 
+#[tokio::test]
+async fn agent_behavior_description_and_summary_round_trip() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = AgentBehavior {
+        behavior_id: "amy-general".to_string(),
+        agent_did: "did:key:z-test-desc".to_string(),
+        display_name: Some("Amy General".to_string()),
+        description: Some("A general-purpose assistant for research and writing.".to_string()),
+        summary: Some("General assistant".to_string()),
+        system_prompt: Some("You are a helpful assistant.".to_string()),
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
+        created_at: None,
+    };
+    upsert_agent_behavior(&node, &doc)
+        .await
+        .expect("upsert should persist description and summary fields");
+
+    let loaded = load_agent_behavior(&node, "amy-general")
+        .await
+        .expect("load should succeed")
+        .expect("behavior should exist after upsert");
+    assert_eq!(
+        loaded.description,
+        Some("A general-purpose assistant for research and writing.".to_string()),
+        "description must round-trip through upsert/load"
+    );
+    assert_eq!(
+        loaded.summary,
+        Some("General assistant".to_string()),
+        "summary must round-trip through upsert/load"
+    );
+}
+
 #[test]
 fn validate_accepts_well_formed_subagent_targets() {
+    // Bare behavior-id strings like "amy-code" are NOT valid SubagentTarget
+    // entries — the runtime silently drops them. Proper entries are JSON
+    // objects built with subagent_target_entry().
+    let code_entry = subagent_target_entry(
+        "amy-code",
+        "did:key:zParent",
+        "did:key:zParent:amy-code",
+        Some("Code assistant".to_string()),
+    );
+    let research_entry = subagent_target_entry(
+        "amy-research",
+        "did:key:zParent",
+        "did:key:zParent:amy-research",
+        None,
+    );
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
-        subagent_targets: Some(vec!["amy-code".to_string(), "amy-research".to_string()]),
+        subagent_targets: Some(vec![code_entry, research_entry]),
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(true),
         ..Default::default()
     };
-    assert!(doc.validate().is_ok());
+    assert!(
+        doc.validate().is_ok(),
+        "well-formed JSON SubagentTarget entries must be accepted"
+    );
+}
+
+#[test]
+fn validate_rejects_bare_string_subagent_target() {
+    // A bare behavior-id string is NOT a valid SubagentTarget JSON entry.
+    // The runtime silently drops non-JSON entries, so validate() must catch
+    // this misconfiguration early with a clear error.
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        subagent_targets: Some(vec!["amy-code".to_string()]),
+        subagent_spawn_enabled: Some(true),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(
+        result.is_err(),
+        "bare behavior-id string must be rejected by validate()"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("subagent_targets"),
+        "error must mention subagent_targets; got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("SubagentTarget JSON"),
+        "error must mention SubagentTarget JSON; got: {err_msg}"
+    );
 }

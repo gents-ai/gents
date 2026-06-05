@@ -63,6 +63,13 @@ pub(in crate::agent) async fn run_agent(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    if let Err(error) = crate::migration::ensure_agent_behavior_migrations(agent.node.clone())
+        .await
+        .context("ensure AgentBehavior migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new_with_agent_did(
         agent.node.clone(),
@@ -565,7 +572,8 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
-            let paired_peer_dids = load_startup_paired_peer_dids(agent.node.as_ref()).await?;
+            let paired_peer_dids =
+                load_startup_paired_peer_dids(agent.node.as_ref(), agent.agent_did()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id().to_string(),
                 agent.behaviors.clone(),
@@ -589,7 +597,10 @@ struct StartupPeerPairingDesiredRow {
     agent_did: Option<String>,
 }
 
-async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Result<HashSet<String>> {
+async fn load_startup_paired_peer_dids(
+    node: &defra_node::EmbeddedNode,
+    local_did: &str,
+) -> Result<HashSet<String>> {
     let query = r#"{
         PeerPairingDesired {
             peer_id
@@ -609,6 +620,12 @@ async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Resul
         .and_then(|d| d.get("PeerPairingDesired"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
+    // Never treat this node's OWN DID as a trusted PEER. A PeerPairingDesired row
+    // carrying our own DID would otherwise route a LOCAL spawn into the
+    // trusted-paired-peer (cross-deployment) branch and — with the
+    // cross-deployment flag off — wrongly deny it. Empty/blank DIDs are likewise
+    // dropped.
+    let local_did = local_did.trim();
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -622,6 +639,7 @@ async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Resul
                     peer_id.starts_with("did:").then(|| peer_id.to_string())
                 })
         })
+        .filter(|did| !did.trim().is_empty() && did.trim() != local_did)
         .collect())
 }
 

@@ -7,11 +7,20 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::health_checker::HealthStatus;
+use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
 use super::shared::{
     enforce_health_gate, extract_text, lookup_service, MetaToolContext, MetaToolError,
     StructuredToolError,
 };
+
+/// Maximum size returned verbatim to the model per `call_tool` invocation.
+/// Aligns with `DefraSpillTruncator`'s default byte budget (50 KiB / 2 000 lines).
+/// The full remote response still reaches the persistence layer via the
+/// turn-level backstop; this caps the in-loop copy that fits in the model's
+/// context window.
+const CALL_TOOL_MAX_BYTES: usize = 50 * 1024;
+const CALL_TOOL_MAX_LINES: usize = 2_000;
 
 #[derive(Debug, Deserialize)]
 pub struct CallToolArgs {
@@ -150,11 +159,17 @@ impl Tool for CallToolTool {
         }
 
         let text = extract_text(&result);
-        Ok(if text.is_empty() {
-            "(tool returned no text content)".to_string()
-        } else {
-            text
-        })
+        if text.is_empty() {
+            return Ok("(tool returned no text content)".to_string());
+        }
+
+        let limits = TruncationLimits {
+            max_bytes: CALL_TOOL_MAX_BYTES,
+            max_lines: CALL_TOOL_MAX_LINES,
+        };
+        let (capped, _trigger, _was_truncated) =
+            truncate_text(&text, TruncationMode::Head, &limits);
+        Ok(capped)
     }
 }
 
@@ -607,5 +622,60 @@ mod tests {
             error.available_tools,
             Some(vec!["search_bookmarks".to_string()])
         );
+    }
+
+    /// Synthesize an oversized MCP text result and confirm that `call_tool`
+    /// caps the returned string and appends an honest truncation marker.
+    #[test]
+    fn oversized_mcp_result_is_capped_and_truncation_is_signalled() {
+        // Build a string larger than CALL_TOOL_MAX_BYTES (50 KiB).
+        let big_line = "x".repeat(200);
+        let lines: Vec<String> = (0..500).map(|_| big_line.clone()).collect();
+        let big_text = lines.join("\n"); // ~100 KiB, well over the 50 KiB cap
+
+        let limits = TruncationLimits {
+            max_bytes: CALL_TOOL_MAX_BYTES,
+            max_lines: CALL_TOOL_MAX_LINES,
+        };
+        let (capped, _trigger, was_truncated) =
+            truncate_text(&big_text, TruncationMode::Head, &limits);
+
+        assert!(was_truncated, "oversized result must be truncated");
+        assert!(
+            capped.len() < big_text.len(),
+            "capped output must be smaller than original: capped={}, original={}",
+            capped.len(),
+            big_text.len()
+        );
+        // Slack: capped output should be within 2× the byte cap (marker overhead)
+        assert!(
+            capped.len() < CALL_TOOL_MAX_BYTES * 2,
+            "capped output should be near the cap, got {}",
+            capped.len()
+        );
+        // Honest marker must be present so the model knows it was truncated.
+        assert!(
+            capped.contains("[Showing lines"),
+            "honest truncation marker must be present: {capped}"
+        );
+        assert!(
+            capped.contains("bytes total"),
+            "total byte count must be reported: {capped}"
+        );
+    }
+
+    /// Small result under the cap must pass through verbatim (no marker added).
+    #[test]
+    fn small_mcp_result_passes_through_unchanged() {
+        let small_text = "hello from MCP tool";
+        let limits = TruncationLimits {
+            max_bytes: CALL_TOOL_MAX_BYTES,
+            max_lines: CALL_TOOL_MAX_LINES,
+        };
+        let (result, _trigger, was_truncated) =
+            truncate_text(small_text, TruncationMode::Head, &limits);
+
+        assert!(!was_truncated);
+        assert_eq!(result, small_text);
     }
 }

@@ -37,6 +37,8 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
         behavior_id: "default".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: None,
+        description: None,
+        summary: None,
         system_prompt: None,
         backend_id: None,
         model_name: None,
@@ -56,6 +58,8 @@ fn behavior_with(id: &str, backend_id: Option<&str>) -> DesiredAgentBehavior {
         behavior_id: id.to_string(),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: None,
+        description: None,
+        summary: None,
         system_prompt: None,
         backend_id: backend_id.map(|s| s.to_string()),
         model_name: None,
@@ -252,10 +256,15 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         cli_tool_names: Vec::new(),
         enable_meta_tools: true,
         allowed_mcp_service_ids: Vec::new(),
-        delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
+        subagent_targets: None,
+        subagent_spawn_enabled: None,
+        subagent_steering_enabled: None,
+        subagent_background_enabled: None,
+        subagent_allow_cross_deployment: None,
+        cross_deployment_spawn_timeout_seconds: None,
     }
 }
 
@@ -865,6 +874,187 @@ fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
     let mut errors = Vec::new();
     validate_manifest(manifest, &mut errors);
     errors
+}
+
+// ── subagent_targets structural validation ──────────────────────────────────
+
+#[test]
+fn validate_rejects_empty_string_in_subagent_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_targets = Some(vec!["".to_string()]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|msg| msg.contains("subagent_targets") && msg.contains("agent-tools")),
+        "expected empty subagent_targets entry rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_subagent_spawn_enabled_without_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = None;
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("agent-tools")
+                && msg.contains("subagent_spawn_enabled")
+                && msg.contains("subagent_targets")
+        }),
+        "expected subagent_spawn_enabled-without-targets rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_subagent_spawn_enabled_with_empty_targets_vec() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec![]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("agent-tools")
+                && msg.contains("subagent_spawn_enabled")
+                && msg.contains("subagent_targets")
+        }),
+        "expected subagent_spawn_enabled-with-empty-targets-vec rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_subagent_spawn_enabled_with_targets() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "researcher",
+        "did:defra-agent:test",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("subagent_targets") || msg.contains("subagent_spawn_enabled")),
+        "expected no subagent rejections for valid config, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_subagent_target_name() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_targets = Some(vec![
+        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
+        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
+    ]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|msg| msg.contains("duplicate subagent target name") && msg.contains("dup")),
+        "expected duplicate-name rejection, got {errors:?}"
+    );
+}
+
+// ── cross-deployment delegation flag (deferred, default-OFF) #377 ────────────
+
+#[test]
+fn validate_rejects_remote_did_target_when_cross_deployment_off() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    // Flag defaults to None (== false): cross-deployment is OFF.
+    sel.subagent_allow_cross_deployment = None;
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "remote-researcher",
+        "did:defra-agent:OTHER-deployment",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| {
+            msg.contains("cross-deployment subagent delegation is deferred")
+                && msg.contains("remote-researcher")
+                && msg.contains("subagent_allow_cross_deployment=true")
+        }),
+        "expected remote-DID rejection when flag is off, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_remote_did_target_when_cross_deployment_on() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_allow_cross_deployment = Some(true);
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "remote-researcher",
+        "did:defra-agent:OTHER-deployment",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("cross-deployment subagent delegation is deferred")),
+        "expected no cross-deployment rejection when flag is on, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_local_did_target_when_cross_deployment_off() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.subagent_spawn_enabled = Some(true);
+    sel.subagent_allow_cross_deployment = None;
+    // Same DID as the selection -> local target, allowed even with flag off.
+    sel.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+        "local-researcher",
+        "did:defra-agent:test",
+        "amy-research",
+        None,
+    )]);
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|msg| msg.contains("cross-deployment subagent delegation is deferred")),
+        "expected no cross-deployment rejection for local target, got {errors:?}"
+    );
 }
 
 #[test]
@@ -1615,6 +1805,8 @@ pub(super) mod write_manifest_root {
                 behavior_id: "default".to_string(),
                 agent_did: "did:key:example".to_string(),
                 display_name: None,
+                description: None,
+                summary: None,
                 system_prompt: Some("You are helpful.".to_string()),
                 backend_id: None,
                 model_name: None,
@@ -1753,6 +1945,8 @@ pub(super) mod write_manifest_root {
             behavior_id: "bad/id".to_string(),
             agent_did: "did:key:example".to_string(),
             display_name: None,
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

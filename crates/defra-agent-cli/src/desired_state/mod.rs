@@ -42,6 +42,10 @@ pub(crate) struct DesiredAgentBehavior {
     pub(crate) behavior_id: String,
     pub(crate) agent_did: String,
     pub(crate) display_name: Option<String>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
     pub(crate) system_prompt: Option<String>,
     pub(crate) backend_id: Option<String>,
     pub(crate) model_name: Option<String>,
@@ -132,13 +136,23 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
-    pub(crate) delegate_to: Vec<String>,
-    #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,
     #[serde(default)]
     pub(crate) defra_query_collections: Vec<String>,
+    #[serde(default)]
+    pub(crate) subagent_targets: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) subagent_spawn_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) subagent_steering_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) subagent_background_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) subagent_allow_cross_deployment: Option<bool>,
+    #[serde(default)]
+    pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

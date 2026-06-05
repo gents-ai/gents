@@ -5,9 +5,17 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
+use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
+
 use super::shared::{
     enforce_health_gate, lookup_service, MetaToolContext, MetaToolError, StructuredToolError,
 };
+
+/// Maximum size of the raw JSON schema block returned to the model.
+/// Compact mode is already per-field bounded; this caps only the `raw_schema:
+/// true` path that emits the full `to_string_pretty` output.
+const RAW_SCHEMA_MAX_BYTES: usize = 16_000;
+const RAW_SCHEMA_MAX_LINES: usize = 2_000;
 
 #[derive(Debug, Deserialize)]
 pub struct DescribeToolArgs {
@@ -173,8 +181,14 @@ fn format_tool_description(service_id: &str, tool: &McpTool, raw_schema: bool) -
     let schema_json = serde_json::to_string_pretty(tool.input_schema.as_ref()).unwrap_or_default();
 
     if raw_schema {
+        let limits = TruncationLimits {
+            max_bytes: RAW_SCHEMA_MAX_BYTES,
+            max_lines: RAW_SCHEMA_MAX_LINES,
+        };
+        let (capped_schema, _trigger, _was_truncated) =
+            truncate_text(&schema_json, TruncationMode::Head, &limits);
         return format!(
-            "## {name}\n{desc}\n\nRaw input schema:\n```json\n{schema_json}\n```",
+            "## {name}\n{desc}\n\nRaw input schema:\n```json\n{capped_schema}\n```",
             name = tool.name,
         );
     }
@@ -1003,5 +1017,93 @@ mod tests {
         assert_eq!(value["service_id"], "missing-service");
         assert_eq!(value["requested_tool_name"], "search_posts");
         assert_eq!(value["path"], "/service_id");
+    }
+
+    /// Build a schema so large that `raw_schema: true` would exceed
+    /// `RAW_SCHEMA_MAX_BYTES` and confirm the output is capped with an honest
+    /// truncation marker.
+    #[test]
+    fn raw_schema_oversized_is_capped_with_truncation_marker() {
+        // Build a schema with many verbose properties so the pretty-printed JSON
+        // exceeds 16 000 bytes.
+        let properties: Map<String, Value> = (0..200)
+            .map(|i| {
+                (
+                    format!("field_{i:03}"),
+                    json!({
+                        "type": "string",
+                        "description": format!(
+                            "A deliberately verbose description for field {i} that adds bytes to the \
+                             raw JSON Schema output to ensure we exceed the RAW_SCHEMA_MAX_BYTES cap."
+                        ),
+                        "default": format!("default-value-for-field-{i}")
+                    }),
+                )
+            })
+            .collect();
+
+        let mut schema_map = Map::new();
+        schema_map.insert("type".to_string(), json!("object"));
+        schema_map.insert("properties".to_string(), Value::Object(properties));
+        let raw_schema_json =
+            serde_json::to_string_pretty(&Value::Object(schema_map.clone())).unwrap();
+
+        assert!(
+            raw_schema_json.len() > RAW_SCHEMA_MAX_BYTES,
+            "test precondition: raw schema must exceed cap ({} bytes)",
+            raw_schema_json.len()
+        );
+
+        let tool = McpTool::new(
+            "big_tool",
+            "A tool with a huge schema.",
+            Arc::new(schema_map),
+        );
+        let list_result = ListToolsResult::with_all_items(vec![tool]);
+        let output = describe_tool_result("x-data", "big_tool", true, &list_result)
+            .expect("known tool should describe");
+
+        // Output must be shorter than the raw pretty-printed schema + header overhead.
+        let header = "## big_tool\nA tool with a huge schema.\n\nRaw input schema:\n```json\n";
+        let body = output
+            .strip_prefix(header)
+            .and_then(|s| s.strip_suffix("\n```"))
+            .expect("output must have schema block wrapper");
+
+        assert!(
+            body.len() < raw_schema_json.len(),
+            "capped schema body should be smaller than original: capped={}, original={}",
+            body.len(),
+            raw_schema_json.len()
+        );
+        // Slack: body should be within 2x the cap (marker overhead).
+        assert!(
+            body.len() < RAW_SCHEMA_MAX_BYTES * 2,
+            "capped body should be near the cap, got {}",
+            body.len()
+        );
+        // Honest marker must be present.
+        assert!(
+            body.contains("[Showing lines"),
+            "honest truncation marker must be present"
+        );
+        assert!(
+            body.contains("bytes total"),
+            "total byte count must be reported"
+        );
+    }
+
+    /// A small schema under the cap must be returned verbatim (no truncation marker).
+    #[test]
+    fn raw_schema_under_cap_passes_through_verbatim() {
+        let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
+        let output = describe_tool_result("x-data", "search_posts", true, &list_result)
+            .expect("known tool should describe");
+
+        // The schema from x_data_search_tool is small; no truncation marker expected.
+        assert!(
+            !output.contains("[Showing lines"),
+            "small schema must not carry a truncation marker"
+        );
     }
 }

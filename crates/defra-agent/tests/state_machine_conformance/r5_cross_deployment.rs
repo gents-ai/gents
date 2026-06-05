@@ -187,11 +187,18 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
     );
     assert!(case.single_deployment_fallback, "{}", case.name);
 
-    let (parent_db, hook, parent_session_id, _parent_behavior_id) =
+    let (parent_db, hook, parent_session_id, parent_behavior_id) =
         setup_parent_hook(case, true).await;
-    // A local target behavior makes spawn_subagent materialize the child
-    // synchronously in the production hook, so no SubagentSource runtime is
-    // needed for the single-deployment fallback row.
+    // After spawn convergence (#377) the child AgentRequest is materialized by
+    // SubagentSource, not synchronously by the hook.  Start a standalone source
+    // against the parent node so it can observe the bridge row and materialize
+    // the child before we assert on wait_for_child_request.
+    let _source = super::support::fixtures::spawn_subagent_source(
+        parent_db.node.clone(),
+        PARENT_AGENT_DID,
+        &parent_behavior_id,
+        &case.target_behavior_id,
+    );
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
 
     let bridge = fetch_tool_call(
@@ -272,14 +279,33 @@ async fn setup_parent_hook_on_db(
     let parent_session_id = format!("{}-session", case.parent_request_id);
     let selection_id = format!("{parent_behavior_id}-tools");
 
+    // The target's owning DID is the parent (local case) or the child
+    // deployment (cross case). The friendly target name equals the behavior id
+    // so the spawn args (which pass `name`) resolve.
+    let target_owner_did = if target_is_local {
+        PARENT_AGENT_DID.to_string()
+    } else {
+        test_identity(&format!("{}-child", case.name))
+            .did()
+            .to_string()
+    };
+
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: PARENT_AGENT_DID.to_string(),
-            subagent_targets: Some(vec![case.target_behavior_id.clone()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                case.target_behavior_id.clone(),
+                target_owner_did,
+                case.target_behavior_id.clone(),
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
+            // Cross-deployment delegation is deferred behind a default-OFF flag
+            // (#377). The R5 substrate stays proven by opting in here.
+            subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
             enable_defra_query: None,
             defra_query_collections: None,
@@ -296,6 +322,8 @@ async fn setup_parent_hook_on_db(
             behavior_id: parent_behavior_id.clone(),
             agent_did: PARENT_AGENT_DID.to_string(),
             display_name: Some(parent_behavior_id.clone()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -319,6 +347,8 @@ async fn setup_parent_hook_on_db(
                 behavior_id: case.target_behavior_id.clone(),
                 agent_did: PARENT_AGENT_DID.to_string(),
                 display_name: Some(case.target_behavior_id.clone()),
+                description: None,
+                summary: None,
                 system_prompt: None,
                 backend_id: None,
                 model_name: None,
@@ -364,7 +394,7 @@ async fn spawn_from_parent_hook(
     hook: &DefraSessionHook,
 ) -> String {
     let args = json!({
-        "behavior_id": case.target_behavior_id.as_str(),
+        "name": case.target_behavior_id.as_str(),
         "prompt": format!("child prompt for {}", case.name),
         "await_mode": case.await_mode.as_str()
     })
@@ -409,9 +439,30 @@ async fn upsert_active_child_behavior_from_default(
         .await
         .expect("load default child behavior")
         .expect("default child behavior");
+    let child_agent_did = behavior.agent_did.clone();
+    // Cross-deployment delegation is deferred behind a default-OFF flag (#377).
+    // The receiver-side trusted-paired-peer claim path now gates on the TARGET
+    // behavior's `subagent_allow_cross_deployment` flag, so the R5 substrate must
+    // opt the target behavior in on the receiving node for the cross-deployment
+    // child to be materialized.
+    let selection_id = format!("{target_behavior_id}-r5-cross-deployment-tools");
+    upsert_tool_selection(
+        node,
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: child_agent_did,
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(60),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("upsert target child tool selection");
     behavior.behavior_id = target_behavior_id.to_string();
     behavior.display_name = Some(target_behavior_id.to_string());
-    behavior.tool_selection_id = None;
+    behavior.tool_selection_id = Some(selection_id);
     upsert_agent_behavior(node, &behavior)
         .await
         .expect("upsert target child behavior");

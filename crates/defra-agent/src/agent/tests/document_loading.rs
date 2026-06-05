@@ -131,8 +131,20 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
-            delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
-            subagent_targets: Some(vec!["researcher".to_string(), "researcher".to_string()]),
+            subagent_targets: Some(vec![
+                crate::document_config::subagent_target_entry(
+                    "researcher",
+                    &did,
+                    "researcher",
+                    None,
+                ),
+                crate::document_config::subagent_target_entry(
+                    "researcher",
+                    &did,
+                    "researcher",
+                    None,
+                ),
+            ]),
             subagent_spawn_enabled: Some(true),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
@@ -149,6 +161,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Use tools carefully.".to_string()),
             backend_id: Some("backend-tools".to_string()),
             model_name: None,
@@ -170,6 +184,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             behavior_id: "researcher".to_string(),
             agent_did: did.clone(),
             display_name: Some("Researcher".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Research carefully.".to_string()),
             backend_id: Some("backend-tools".to_string()),
             model_name: None,
@@ -200,11 +216,13 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
     assert_eq!(
-        behavior.tools.delegate_to(),
-        ["did:defra-agent:amy-code".to_string()]
-    );
-    assert_eq!(
-        behavior.tools.subagent_tools().targets,
+        behavior
+            .tools
+            .subagent_tools()
+            .targets
+            .iter()
+            .map(|target| target.name.clone())
+            .collect::<Vec<_>>(),
         ["researcher".to_string()]
     );
     assert!(behavior.tools.subagent_tools().spawn_enabled);
@@ -224,7 +242,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     assert!(tool_names.contains(&"spawn_subagent".to_string()));
     assert!(tool_names.contains(&"wait_subagent".to_string()));
     assert!(tool_names.contains(&"list_subagents".to_string()));
-    assert!(tool_names.contains(&"read_subagent_transcript".to_string()));
+    assert!(tool_names.contains(&"read_subagent".to_string()));
     assert!(tool_names.contains(&"steer_subagent".to_string()));
     assert!(tool_names.contains(&"cancel_subagent".to_string()));
 }
@@ -253,7 +271,12 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             enable_meta_tools: Some(false),
-            subagent_targets: Some(vec!["disabled-researcher".to_string()]),
+            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
+                "disabled-researcher",
+                &did,
+                "disabled-researcher",
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -269,6 +292,8 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Use tools carefully.".to_string()),
             backend_id: Some("backend-disabled-target".to_string()),
             model_name: None,
@@ -290,6 +315,8 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
             behavior_id: "disabled-researcher".to_string(),
             agent_did: did.clone(),
             display_name: Some("Disabled Researcher".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Research carefully.".to_string()),
             backend_id: Some("backend-disabled-target".to_string()),
             model_name: None,
@@ -348,7 +375,12 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             enable_meta_tools: Some(false),
-            subagent_targets: Some(vec!["missing-behavior".to_string()]),
+            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
+                "missing-behavior",
+                &did,
+                "missing-behavior",
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -364,6 +396,8 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: did.clone(),
             display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Use tools carefully.".to_string()),
             backend_id: Some("backend-missing-target".to_string()),
             model_name: None,
@@ -432,6 +466,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             behavior_id: "code".to_string(),
             agent_did: did.clone(),
             display_name: Some("Code".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("You write code.".to_string()),
             backend_id: Some("backend-healthy".to_string()),
             model_name: Some("gpt-code".to_string()),
@@ -453,6 +489,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             behavior_id: "broken".to_string(),
             agent_did: did.clone(),
             display_name: Some("Broken".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("This backend is missing.".to_string()),
             backend_id: Some("backend-missing".to_string()),
             model_name: Some("gpt-missing".to_string()),
@@ -474,6 +512,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             behavior_id: "disabled".to_string(),
             agent_did: did.clone(),
             display_name: Some("Disabled".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("You should never run.".to_string()),
             backend_id: None,
             model_name: None,
@@ -495,6 +535,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             behavior_id: "unhealthy".to_string(),
             agent_did: did.clone(),
             display_name: Some("Unhealthy".to_string()),
+            description: None,
+            summary: None,
             system_prompt: Some("Backend is unhealthy.".to_string()),
             backend_id: Some("backend-unhealthy".to_string()),
             model_name: Some("gpt-unhealthy".to_string()),

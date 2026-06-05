@@ -2,15 +2,20 @@ use super::*;
 
 #[tokio::test]
 async fn foreground_spawn_subagent_waits_for_child_completion() {
-    let (db, hook, session_id, _request_id, parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_foreground",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let parent_deadline = fixture.parent_deadline;
+    let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child prompt",
         "deadline": (parent_deadline - chrono::Duration::minutes(1)).to_rfc3339()
     })
@@ -32,6 +37,7 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
     let child = wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg").await;
     persist_child_completion(
         db.node.as_ref(),
+        &agent_did,
         &child.request_id,
         &child.session_id,
         "foreground final answer",
@@ -56,18 +62,20 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
 #[tokio::test]
 async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
     let parent_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(250);
-    let (db, hook, session_id, _request_id, _parent_deadline) =
-        setup_spawn_fixture_with_flags_and_deadline(
-            "foreground_spawn_deadline",
-            vec![CHILD_BEHAVIOR_ID],
-            0,
-            true,
-            true,
-            parent_deadline,
-        )
-        .await;
+    let fixture = setup_spawn_fixture_with_flags_and_deadline(
+        "foreground_spawn_deadline",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+        true,
+        parent_deadline,
+    )
+    .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will exceed parent deadline"
     })
     .to_string();
@@ -94,10 +102,13 @@ async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
 
 #[tokio::test]
 async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_wait() {
-    let (db, hook, session_id, _request_id, _parent_deadline) =
+    let fixture =
         setup_spawn_fixture("foreground_spawn_cancel", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will be cancelled"
     })
     .to_string();
@@ -157,15 +168,18 @@ async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_w
 
 #[tokio::test]
 async fn foreground_spawn_subagent_user_backgrounding_returns_background_receipt() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "foreground_spawn_backgrounded",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "foreground child that will be backgrounded"
     })
     .to_string();
@@ -228,10 +242,12 @@ async fn foreground_spawn_subagent_maps_child_terminal_failures() {
     for (child_state, expected_status, expected_tool_state, failure_reason) in cases {
         let test_name = format!("foreground_spawn_terminal_{child_state}");
         let internal_call_id = format!("internal-spawn-terminal-{child_state}");
-        let (db, hook, session_id, _request_id, _parent_deadline) =
-            setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
+        let fixture = setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
+        let db = &fixture.db;
+        let hook = fixture.hook.clone();
+        let session_id = fixture.session_id.clone();
         let args = json!({
-            "behavior_id": CHILD_BEHAVIOR_ID,
+            "name": CHILD_BEHAVIOR_ID,
             "prompt": format!("foreground child terminal {child_state}")
         })
         .to_string();

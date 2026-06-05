@@ -251,7 +251,7 @@ impl DefraSessionHook {
         };
 
         let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
-        if parsed.behavior_id.trim().is_empty() {
+        if parsed.name.trim().is_empty() {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,
@@ -263,8 +263,8 @@ impl DefraSessionHook {
                     FailureClass::ArgumentInvalid,
                     invalid_tool_arguments_payload(
                         SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        "behavior_id is required",
+                        "/name",
+                        "name is required",
                     ),
                 )
                 .await;
@@ -302,13 +302,13 @@ impl DefraSessionHook {
                         "/",
                         SPAWN_SUBAGENT_TOOL_NAME,
                         "subagent spawning is not enabled for this behavior",
-                        parent_context.allowed_targets.clone(),
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
         }
-        let behavior_id = parsed.behavior_id.trim();
-        if !target_is_allowed(&parent_context, behavior_id) {
+        let name = parsed.name.trim();
+        let Some(target) = resolve_context_target(&parent_context, name).cloned() else {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,
@@ -320,19 +320,45 @@ impl DefraSessionHook {
                     FailureClass::ServiceUnavailable,
                     tool_not_allowed_payload(
                         SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        behavior_id,
-                        format!(
-                            "behavior '{behavior_id}' is not allowed as a subagent target for this behavior"
-                        ),
-                        parent_context.allowed_targets.clone(),
+                        "/name",
+                        name,
+                        format!("'{name}' is not an allowed subagent target for this behavior"),
+                        context_allowed_target_names(&parent_context),
+                    ),
+                )
+                .await;
+        };
+        let behavior_id = target.behavior_id.as_str();
+
+        let await_mode = parsed.await_mode.as_await_mode();
+        let target_host = self.subagent_target_host(&target);
+        // Cross-deployment (remote-DID) subagent delegation is deferred behind a
+        // default-OFF flag (#377). When the parent behavior has not opted in,
+        // reject ANY remote spawn (both await modes). Remote targets should not
+        // even be surfaced to the model in this case (see tool_surface), so a
+        // remote spawn here means a stale/forged target name.
+        if target_host == SubagentTargetHost::Remote
+            && !parent_context.subagent_allow_cross_deployment
+        {
+            return self
+                .fail_spawn_subagent_tool_call(
+                    session_id,
+                    request_id,
+                    parent_context.request_deadline_at,
+                    seq,
+                    internal_call_id,
+                    args,
+                    FailureClass::ServiceUnavailable,
+                    tool_not_allowed_payload(
+                        SPAWN_SUBAGENT_TOOL_NAME,
+                        "/name",
+                        name,
+                        "cross-deployment subagent delegation is not enabled",
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
         }
-
-        let await_mode = parsed.await_mode.as_await_mode();
-        let target_host = self.subagent_target_host(behavior_id).await?;
         if target_host == SubagentTargetHost::Remote && await_mode == AwaitMode::Foreground {
             return self
                 .fail_spawn_subagent_tool_call(
@@ -366,10 +392,53 @@ impl DefraSessionHook {
                         "/await_mode",
                         "background",
                         "background subagent spawning is not enabled for this behavior",
-                        parent_context.allowed_targets.clone(),
+                        context_allowed_target_names(&parent_context),
                     ),
                 )
                 .await;
+        }
+
+        // Fail-safe for local targets whose behavior was deleted mid-session
+        // (#377). If the resolved target is LOCAL (same agent DID) but its
+        // behavior no longer exists in the DB, writing a child AgentRequest
+        // would produce an orphan that can never be claimed. Reject cleanly
+        // with a service_unavailable payload instead of writing the orphan.
+        if target_host == SubagentTargetHost::Local {
+            match load_agent_behavior(&self.node, behavior_id).await {
+                Ok(None) => {
+                    return self
+                        .fail_spawn_subagent_tool_call(
+                            session_id,
+                            request_id,
+                            parent_context.request_deadline_at,
+                            seq,
+                            internal_call_id,
+                            args,
+                            FailureClass::ServiceUnavailable,
+                            tool_not_allowed_payload(
+                                SPAWN_SUBAGENT_TOOL_NAME,
+                                "/name",
+                                name,
+                                format!(
+                                    "subagent target '{name}' refers to behavior '{behavior_id}' \
+                                     which no longer exists; the target may have been removed \
+                                     after this session started"
+                                ),
+                                context_allowed_target_names(&parent_context),
+                            ),
+                        )
+                        .await;
+                }
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        behavior_id = %behavior_id,
+                        %error,
+                        "spawn guard: failed to verify local target behavior existence; \
+                         proceeding with spawn"
+                    );
+                }
+            }
         }
 
         if let Some(child_deadline) = parsed.deadline.as_ref() {
@@ -408,6 +477,24 @@ impl DefraSessionHook {
                 .await;
         }
 
+        // Persist a normalized bridge args payload that carries the RESOLVED
+        // target `(agent_did, behavior_id)` alongside the model-facing `name`.
+        // `SubagentSource` reads these resolved fields directly, so the child
+        // `AgentRequest` is written with the TARGET's agent_did + behavior_id
+        // -- for a remote target this is the remote DID, and out-of-band
+        // replication carries the child to the owning node. The claiming
+        // deployment never needs to re-resolve the friendly name (it has no
+        // access to the parent's target table), which is what removes the
+        // resolution seam.
+        let bridge_args = serde_json::json!({
+            "name": name,
+            "agent_did": target.agent_did,
+            "behavior_id": target.behavior_id,
+            "prompt": parsed.prompt,
+            "deadline": parsed.deadline,
+        })
+        .to_string();
+
         let child_request_id = uuid::Uuid::new_v4().to_string();
         let mut lifecycle = ToolCallLifecycle::new_subagent(
             self.node.clone(),
@@ -416,7 +503,7 @@ impl DefraSessionHook {
             internal_call_id.to_string(),
             seq,
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
-            args.to_string(),
+            bridge_args,
             parent_context.request_deadline_at,
             await_mode,
             CancelPolicy::Cascade,
@@ -426,114 +513,40 @@ impl DefraSessionHook {
             let timeout_secs =
                 effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);
             lifecycle.set_unclaimed_deadline_at(Some(
-                chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64),
+                chrono::Utc::now() + chrono::Duration::seconds(timeout_secs),
             ));
         }
         lifecycle.start_running().await?;
 
-        if target_host == SubagentTargetHost::Remote {
-            let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
-
-            self.in_flight_lifecycles
-                .lock()
-                .await
-                .insert(internal_call_id.to_string(), lifecycle);
-
-            return Ok(ToolCallHookAction::skip(receipt));
-        }
-
-        let child_session_id = if let Err(error) = create_subagent_request_with_request_id(
-            &self.node,
-            child_request_id.clone(),
-            parent_context.request_id.clone(),
-            internal_call_id.to_string(),
-            parent_context.subagent_depth,
-            self.agent_did.clone(),
-            behavior_id.to_string(),
-            parsed.prompt.clone(),
-            parsed.deadline,
-        )
-        .await
-        {
-            match load_authorized_child_edge(&self.node, &parent_context, &child_request_id).await {
-                Ok(edge) if edge.behavior_id == behavior_id => edge.child_session_id,
-                Ok(edge) => {
-                    let result = service_unavailable_payload(
-                        SPAWN_SUBAGENT_TOOL_NAME,
-                        "/behavior_id",
-                        format!(
-                            "pre-materialized child subagent request has behavior_id {}, expected {behavior_id}",
-                            edge.behavior_id
-                        ),
-                        false,
-                    );
-                    lifecycle
-                        .bridge_failure(ChildTerminal::Failed {
-                            reason: result.clone(),
-                            failure_class: FailureClass::External,
-                        })
-                        .await?;
-                    return Ok(ToolCallHookAction::skip(result));
-                }
-                Err(_) => {
-                    let result = service_unavailable_payload(
-                        SPAWN_SUBAGENT_TOOL_NAME,
-                        "/",
-                        format!("failed to materialize child subagent request: {error}"),
-                        true,
-                    );
-                    lifecycle
-                        .bridge_failure(ChildTerminal::Failed {
-                            reason: result.clone(),
-                            failure_class: FailureClass::External,
-                        })
-                        .await?;
-                    return Ok(ToolCallHookAction::skip(result));
-                }
-            }
-        } else if let Some(child_session_id) =
-            load_child_session_id(&self.node, &child_request_id).await?
-        {
-            child_session_id
-        } else {
-            let result = service_unavailable_payload(
-                SPAWN_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child subagent request was created without a readable session id",
-                true,
-            );
-            lifecycle
-                .bridge_failure(ChildTerminal::Failed {
-                    reason: result.clone(),
-                    failure_class: FailureClass::External,
-                })
-                .await?;
-            return Ok(ToolCallHookAction::skip(result));
-        };
-
-        if await_mode == AwaitMode::Background {
-            let receipt =
-                background_receipt_payload(&child_request_id, Some(&child_session_id), behavior_id);
-
-            self.in_flight_lifecycles
-                .lock()
-                .await
-                .insert(internal_call_id.to_string(), lifecycle);
-
-            return Ok(ToolCallHookAction::skip(receipt));
-        }
-
+        // Spawn convergence (#377): both same-deployment (local) and
+        // cross-deployment (remote) spawns now follow ONE path — write the
+        // `AgentToolCall` bridge (done by `start_running()` above) and let
+        // `SubagentSource` create the child `AgentRequest`. `SubagentSource`
+        // dedups via `child_request_exists`, so there is exactly one creator
+        // regardless of locality. The hook no longer synchronously creates the
+        // child, so the background receipt does not yet carry the child session
+        // id (the claiming deployment assigns it when it materializes the
+        // child); foreground waits adopt the session id from the edge once
+        // `SubagentSource` has materialized the child.
         self.in_flight_lifecycles
             .lock()
             .await
             .insert(internal_call_id.to_string(), lifecycle);
 
+        if await_mode == AwaitMode::Background {
+            let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
+            return Ok(ToolCallHookAction::skip(receipt));
+        }
+
+        // Foreground spawns are local-only (the remote-foreground case is
+        // rejected above). Block until `SubagentSource` materializes the child
+        // and the bridge reaches a terminal state.
         let result = self
             .await_foreground_subagent(
                 internal_call_id,
                 &parent_context,
                 &child_request_id,
-                &child_session_id,
+                "",
                 behavior_id,
                 parent_context.request_deadline_at,
             )
@@ -542,17 +555,15 @@ impl DefraSessionHook {
         Ok(ToolCallHookAction::skip(result))
     }
 
-    pub(super) async fn subagent_target_host(
-        &self,
-        behavior_id: &str,
-    ) -> anyhow::Result<SubagentTargetHost> {
-        let Some(behavior) = load_agent_behavior(&self.node, behavior_id).await? else {
-            return Ok(SubagentTargetHost::Remote);
-        };
-        if behavior.agent_did == self.agent_did {
-            Ok(SubagentTargetHost::Local)
+    /// Classify a resolved target as local or remote by comparing the target's
+    /// `agent_did` to this deployment's own DID. No behavior DB lookup is
+    /// needed: the target carries the owning agent's DID directly, which is
+    /// also what removes the cross-node resolution seam.
+    pub(super) fn subagent_target_host(&self, target: &SubagentTarget) -> SubagentTargetHost {
+        if target.agent_did == self.agent_did {
+            SubagentTargetHost::Local
         } else {
-            Ok(SubagentTargetHost::Remote)
+            SubagentTargetHost::Remote
         }
     }
 }

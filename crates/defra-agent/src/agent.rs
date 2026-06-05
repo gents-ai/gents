@@ -15,6 +15,7 @@ use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
+use crate::migration;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::{
@@ -120,6 +121,11 @@ impl DefraAgent {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
+        // Run the AgentBehavior migration before any behavior read so that
+        // desktops, embedders, and CLI serve paths all see description/summary
+        // even when the DB was created before branch #377. This is idempotent
+        // (field-presence-checked) and cheap on already-migrated DBs.
+        migration::ensure_agent_behavior_migrations(node.clone()).await?;
         let document_runtime_context = DocumentResolveContext {
             identity: identity.clone(),
             tool_ceiling: options.tool_ceiling.clone(),
@@ -361,7 +367,6 @@ pub(crate) fn tool_selection_from_document(
             .allowed_mcp_service_ids
             .clone()
             .unwrap_or_default(),
-        delegate_to: selection.delegate_to.clone().unwrap_or_default(),
         backgroundable_tool_names: selection
             .backgroundable_tool_names
             .clone()
@@ -381,11 +386,31 @@ pub(crate) fn tool_selection_from_document(
 pub(crate) fn subagent_tool_config_from_document(
     selection: &crate::document_config::ToolSelectionDocument,
 ) -> SubagentToolConfig {
+    let targets = selection
+        .subagent_targets
+        .iter()
+        .flatten()
+        .filter_map(
+            |entry| match crate::document_config::SubagentTarget::parse(entry) {
+                Ok(target) => Some(target),
+                Err(error) => {
+                    tracing::warn!(
+                        selection_id = %selection.selection_id,
+                        entry = %entry,
+                        %error,
+                        "skipping malformed subagent_targets entry"
+                    );
+                    None
+                }
+            },
+        )
+        .collect();
     SubagentToolConfig {
-        targets: selection.subagent_targets.clone().unwrap_or_default(),
+        targets,
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
     }
 }
 

@@ -377,7 +377,7 @@ async fn seed_tool_parent_and_row(
                 parent_session_id.to_string(),
                 tool_call_id.to_string(),
                 1,
-                "background_tool".to_string(),
+                "spawn_process".to_string(),
                 "{}".to_string(),
                 future_deadline,
             )

@@ -162,6 +162,13 @@ fn render_json(value: &impl Serialize) -> Result<String> {
     serde_json::to_string(value).context("serializing tool output")
 }
 
+// NOTE: This is a deliberately self-contained char truncator, NOT drift from
+// the canonical `defra-agent::truncation` truncator. This crate is an
+// out-of-process runner kept as a zero-internal-dependency leaf, so it cannot
+// import the agent crate's truncator without eroding that boundary. It bounds a
+// short inline grep *preview* (not a full tool result), so the simpler helper is
+// intentional. If this ever needs the line+byte honest marker, promote the
+// canonical truncator into a shared lower crate both can depend on (see #402).
 fn truncate_inline(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();

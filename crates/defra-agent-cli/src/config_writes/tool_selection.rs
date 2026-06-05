@@ -31,6 +31,196 @@ pub(crate) async fn write_tool_selection_document(
     crate::extract_mutation_doc_id(&response, "ToolSelection")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+    use defra_agent::{ensure_runtime_schemas, load_tool_selection};
+
+    /// Round-trip test: write a `ToolSelectionDocument` with all five subagent
+    /// enablement fields set, then read it back and assert every field persisted.
+    ///
+    /// This test will FAIL before the fix because `tool_selection_fields()` does
+    /// not emit the subagent fields.
+    #[tokio::test]
+    async fn write_tool_selection_persists_subagent_enablement_fields() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        // A valid `subagent_targets` entry is the JSON serialization of a named
+        // SubagentTarget, not a bare behavior id.
+        let target = defra_agent::subagent_target_entry(
+            "amy-research",
+            "did:test:subagent-enablement",
+            "amy-research",
+            None,
+        );
+        let selection = ToolSelectionDocument {
+            selection_id: "test-subagent-fields".to_string(),
+            agent_did: "did:test:subagent-enablement".to_string(),
+            subagent_spawn_enabled: Some(true),
+            subagent_targets: Some(vec![target.clone()]),
+            subagent_steering_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(90),
+            ..Default::default()
+        };
+
+        let access = ConfigAccess::Local(node);
+        write_tool_selection_document(&access, &selection).await?;
+
+        let node = match &access {
+            ConfigAccess::Local(n) => n,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+
+        let loaded = load_tool_selection(node, "test-subagent-fields")
+            .await?
+            .expect("ToolSelection should exist after write");
+
+        assert_eq!(
+            loaded.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_targets,
+            Some(vec![target.clone()]),
+            "subagent_targets must persist"
+        );
+        assert_eq!(
+            loaded.subagent_steering_enabled,
+            Some(true),
+            "subagent_steering_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must persist"
+        );
+        assert_eq!(
+            loaded.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must persist"
+        );
+
+        Ok(())
+    }
+
+    /// Regression for the `config tools set` clobbering bug: an update that
+    /// leaves the subagent enablement fields `None` (as the imperative command
+    /// does — it exposes no flags for them) MUST NOT overwrite an existing
+    /// apply-managed subagent config. The writer omits `None` fields from the
+    /// `update` clause, so DefraDB preserves the stored values.
+    #[tokio::test]
+    async fn update_with_none_subagent_fields_preserves_existing_config() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+
+        // A valid `subagent_targets` entry is the JSON serialization of a named
+        // SubagentTarget, not a bare behavior id.
+        let target = defra_agent::subagent_target_entry(
+            "amy-research",
+            "did:test:clobber",
+            "amy-research",
+            None,
+        );
+
+        // Step 1: an apply-style write enables subagents.
+        let applied = ToolSelectionDocument {
+            selection_id: "test-clobber".to_string(),
+            agent_did: "did:test:clobber".to_string(),
+            display_name: Some("Original".to_string()),
+            subagent_spawn_enabled: Some(true),
+            subagent_targets: Some(vec![target.clone()]),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            cross_deployment_spawn_timeout_seconds: Some(90),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &applied).await?;
+
+        // Step 2: an imperative `tools set`-style update touches only its own
+        // fields and leaves every subagent field `None`.
+        let imperative = ToolSelectionDocument {
+            selection_id: "test-clobber".to_string(),
+            agent_did: "did:test:clobber".to_string(),
+            display_name: Some("Updated".to_string()),
+            subagent_targets: None,
+            subagent_spawn_enabled: None,
+            subagent_steering_enabled: None,
+            subagent_background_enabled: None,
+            subagent_allow_cross_deployment: None,
+            cross_deployment_spawn_timeout_seconds: None,
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &imperative).await?;
+
+        let node = match &access {
+            ConfigAccess::Local(n) => n,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+        let loaded = load_tool_selection(node, "test-clobber")
+            .await?
+            .expect("ToolSelection should exist after update");
+
+        // The imperative field changed...
+        assert_eq!(
+            loaded.display_name.as_deref(),
+            Some("Updated"),
+            "imperative-owned field should update"
+        );
+        // ...but the apply-managed subagent config is preserved, not clobbered.
+        assert_eq!(
+            loaded.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_targets,
+            Some(vec![target.clone()]),
+            "subagent_targets must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must NOT be clobbered by a None update"
+        );
+
+        Ok(())
+    }
+}
+
 fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) -> String {
     let mut fields = Vec::new();
     if include_id {
@@ -80,10 +270,6 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .as_ref()
                 .and_then(|values| string_list_field("allowed_mcp_service_ids", values)),
             selection
-                .delegate_to
-                .as_ref()
-                .and_then(|values| string_list_field("delegate_to", values)),
-            selection
                 .backgroundable_tool_names
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),
@@ -92,6 +278,26 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .defra_query_collections
                 .as_ref()
                 .and_then(|values| string_list_field("defra_query_collections", values)),
+            selection
+                .subagent_targets
+                .as_ref()
+                .and_then(|values| string_list_field("subagent_targets", values)),
+            optional_bool_field("subagent_spawn_enabled", selection.subagent_spawn_enabled),
+            optional_bool_field(
+                "subagent_steering_enabled",
+                selection.subagent_steering_enabled,
+            ),
+            optional_bool_field(
+                "subagent_background_enabled",
+                selection.subagent_background_enabled,
+            ),
+            optional_bool_field(
+                "subagent_allow_cross_deployment",
+                selection.subagent_allow_cross_deployment,
+            ),
+            selection
+                .cross_deployment_spawn_timeout_seconds
+                .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
         ]
         .into_iter()
         .flatten(),

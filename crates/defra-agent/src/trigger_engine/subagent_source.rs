@@ -16,8 +16,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::{
-    fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
-    subagent_tool_not_allowed_payload,
+    fail_running_subagent_tool_call, load_behavior_allow_cross_deployment,
+    load_parent_subagent_authorization, subagent_spawn_denial, subagent_tool_not_allowed_payload,
 };
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::graphql::escape_graphql_string;
@@ -25,7 +25,9 @@ use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTa
 use crate::tool_call_lifecycle::subagent_request::{
     create_subagent_request_with_request_id, create_subagent_request_with_trusted_parent_request_id,
 };
-use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
+use crate::tool_call_lifecycle::{
+    AwaitMode, CancelPolicy, FailureClass, IllegalToolCallTransition, ToolCallState,
+};
 use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
@@ -64,7 +66,21 @@ struct ToolCallRow {
     #[serde(default)]
     await_mode: Option<String>,
     #[serde(default)]
+    cancel_policy: Option<String>,
+    #[serde(default)]
     child_request_id: Option<String>,
+}
+
+impl ToolCallRow {
+    /// Resolve the bridge `cancel_policy`, defaulting to `Cascade` to match
+    /// `recovery::cancel_policy` (an absent/unknown policy is treated as the
+    /// cascade default everywhere else).
+    fn cancel_policy(&self) -> CancelPolicy {
+        self.cancel_policy
+            .as_deref()
+            .and_then(CancelPolicy::from_persisted)
+            .unwrap_or(CancelPolicy::Cascade)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,13 +91,61 @@ struct ParentRequestRow {
 }
 
 #[derive(Debug, Deserialize)]
+struct ParentTerminalRow {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+}
+
+/// True when the parent request reached a CANCEL-WORTHY terminal state — the
+/// states for which the live cascade (`transition/bridge.rs`) and recovery
+/// cascade (`recovery.rs`) drive a Cascade child to `.interrupted`.
+///
+/// This is `recovery::request_is_terminal` MINUS clean `completed`: a parent that
+/// completed NORMALLY does not cascade-cancel its tools anywhere else, so a
+/// background/detached child whose parent simply finished must be allowed to keep
+/// running. We treat `error | superseded | dead | interrupted` (status) and
+/// `failed | superseded | dead | interrupted` (lifecycle_state) as cancel-worthy.
+fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
+    matches!(
+        row.status.as_deref(),
+        Some("error" | "superseded" | "dead" | "interrupted")
+    ) || matches!(
+        row.lifecycle_state.as_deref(),
+        Some("failed" | "superseded" | "dead" | "interrupted")
+    )
+}
+
+/// Bridge args persisted by the spawn hook. After the named-target redesign
+/// (#377) these carry both the model-facing `name` and the RESOLVED target
+/// `(agent_did, behavior_id)`, so the claiming node never needs to re-resolve
+/// the friendly name. The `target`/`target_behavior_id` aliases keep older
+/// fixtures that wrote a bare behavior id under `behavior_id` working.
+#[derive(Debug, Deserialize)]
 struct SpawnArgs {
+    #[serde(default)]
+    name: Option<String>,
+    /// Resolved owning DID of the target behavior. Absent on legacy fixtures.
+    #[serde(default)]
+    agent_did: Option<String>,
     #[serde(alias = "target", alias = "target_behavior_id")]
     behavior_id: String,
     #[serde(alias = "message", alias = "content")]
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
+}
+
+impl SpawnArgs {
+    /// Model-facing target name for authorization/error reporting. Falls back to
+    /// the behavior id for legacy fixtures that omit a name.
+    fn target_name(&self) -> &str {
+        self.name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&self.behavior_id)
+    }
 }
 
 impl SubagentSource {
@@ -172,6 +236,7 @@ impl SubagentSource {
                     started_at
                     deadline_at
                     await_mode
+                    cancel_policy
                     child_request_id
                 }}
             }}"#
@@ -216,6 +281,38 @@ impl SubagentSource {
             );
         }
         let rows: Vec<ParentRequestRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        Ok(rows.into_iter().next())
+    }
+
+    async fn load_parent_terminal(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ParentTerminalRow>> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{
+                    status
+                    lifecycle_state
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "query parent AgentRequest terminal state for SubagentSource failed: {:?}",
+                response.errors
+            );
+        }
+        let rows: Vec<ParentTerminalRow> = response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentRequest"))
@@ -319,6 +416,40 @@ impl SubagentSource {
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
+            // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
+            // parent DID is a paired peer, not this node). It bypasses
+            // `subagent_spawn_denial`, so it must gate on the TARGET behavior's
+            // `subagent_allow_cross_deployment` flag directly (#377). With the
+            // flag off (default) we refuse to materialize the cross-deployment
+            // child. The behavior id is the target behavior on THIS node.
+            let allow_cross_deployment = match load_behavior_allow_cross_deployment(
+                &self.node,
+                &spawn_args.behavior_id,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        parent_authoring_did = %parent_authoring_did,
+                        target_behavior_id = %spawn_args.behavior_id,
+                        %error,
+                        "subagent source could not load target behavior cross-deployment flag; refusing cross-deployment child",
+                    );
+                    return Ok(None);
+                }
+            };
+            if !allow_cross_deployment {
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    target_behavior_id = %spawn_args.behavior_id,
+                    "cross-deployment child refused: subagent_allow_cross_deployment is off for target behavior {behavior_id}",
+                    behavior_id = spawn_args.behavior_id,
+                );
+                return Ok(None);
+            }
             tracing::debug!(
                 parent_request_id = %parent_request_id,
                 parent_authoring_did = %parent_authoring_did,
@@ -336,8 +467,8 @@ impl SubagentSource {
                     let failed = self
                         .fail_unauthorized_tool_call(
                             &row,
-                            "/behavior_id",
-                            &spawn_args.behavior_id,
+                            "/name",
+                            spawn_args.target_name(),
                             "subagent authorization could not be verified for this behavior",
                             &[],
                         )
@@ -346,7 +477,7 @@ impl SubagentSource {
                     tracing::warn!(
                         parent_request_id = %parent_request_id,
                         parent_tool_call_id = %parent_tool_call_id,
-                        target_behavior_id = %spawn_args.behavior_id,
+                        target_name = %spawn_args.target_name(),
                         failed_tool_call = failed,
                         %error,
                         "subagent source could not verify parent subagent authorization; rejecting spawn",
@@ -356,9 +487,10 @@ impl SubagentSource {
             };
             if let Some(denial) = subagent_spawn_denial(
                 &authorization,
-                &spawn_args.behavior_id,
+                spawn_args.target_name(),
                 await_mode,
                 tool_name,
+                snapshot.local_did.as_str(),
             ) {
                 let failed = self
                     .fail_unauthorized_tool_call(
@@ -366,7 +498,7 @@ impl SubagentSource {
                         denial.path,
                         &denial.requested,
                         denial.message,
-                        &authorization.allowed_targets,
+                        &authorization.allowed_target_names(),
                     )
                     .await?;
                 self.processed_tool_calls.insert(processed_key);
@@ -374,7 +506,7 @@ impl SubagentSource {
                     parent_request_id = %parent_request_id,
                     parent_behavior_id = %authorization.behavior_id,
                     parent_tool_call_id = %parent_tool_call_id,
-                    target_behavior_id = %spawn_args.behavior_id,
+                    target_name = %spawn_args.target_name(),
                     await_mode = %await_mode.as_str(),
                     failed_tool_call = failed,
                     "subagent source rejected unauthorized subagent spawn",
@@ -387,10 +519,47 @@ impl SubagentSource {
             tracing::warn!(
                 parent_request_id = %parent_request_id,
                 parent_tool_call_id = %parent_tool_call_id,
+                target_name = %spawn_args.target_name(),
                 target_behavior_id = %spawn_args.behavior_id,
                 "subagent source target behavior is not in the active runtime snapshot; skipping spawn",
             );
             return Ok(None);
+        }
+
+        // The child is owned by the RESOLVED target's `agent_did` carried in the
+        // bridge args (#377). Legacy fixtures that omit `agent_did` fall back to
+        // the parent's DID.
+        let resolved_target_did = spawn_args
+            .agent_did
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        // DID-anchored single-creator gate (audit Finding 2). On the non-trusted
+        // path a node may ONLY materialize a child addressed to its OWN DID.
+        // `request_id` is `@index` (not unique), so without this anchor two peers
+        // that both replicate the bridge could each create the same child. The
+        // trusted-paired-peer path is the explicit, vetted cross-deployment
+        // exception and keeps taking local ownership below.
+        if !trusted_paired_peer {
+            let local_did = snapshot.local_did.trim();
+            let target_owner_did = resolved_target_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| parent.agent_did.trim());
+            if local_did.is_empty() || target_owner_did != local_did {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    target_name = %spawn_args.target_name(),
+                    target_owner_did = %target_owner_did,
+                    local_did = %local_did,
+                    "subagent source skipping spawn: this node does not own the target DID (single-creator gate)",
+                );
+                return Ok(None);
+            }
         }
 
         if self.child_request_exists(&child_request_id).await? {
@@ -404,10 +573,13 @@ impl SubagentSource {
             .unwrap_or(0);
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
+        // The trusted-paired-peer claiming path takes local ownership; otherwise
+        // the child is owned by the RESOLVED target DID (which the single-creator
+        // gate above has already confirmed equals our local DID).
         let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
             snapshot.local_did.clone()
         } else {
-            parent.agent_did
+            resolved_target_did.unwrap_or_else(|| parent.agent_did.clone())
         };
         let request_id = if trusted_paired_peer {
             create_subagent_request_with_trusted_parent_request_id(
@@ -436,6 +608,113 @@ impl SubagentSource {
             )
             .await?
         };
+
+        // Orphan-child-escapes-cancel race (audit Finding 1). The parent may have
+        // been cancelled/interrupted in the window between the spawn hook writing
+        // the `running` bridge and this child create. The cascade's
+        // `interrupt_request(child_request_id)` would have no-oped because the
+        // child did not exist yet, so we re-check AFTER the create and interrupt
+        // the just-created child if a genuine cancel signal is present.
+        //
+        // CRUCIALLY, this re-check must be consistent with the live cascade
+        // (`transition/bridge.rs::bridge_cancel_cascade`) and the recovery cascade
+        // (`recovery.rs::cascade_child_request_id`): BOTH gate the child interrupt
+        // on `cancel_policy == Cascade` and refuse to cascade for detached
+        // children (`if self.cancel_policy != CancelPolicy::Cascade { return None }`
+        // / `cascade_child_request_id` returns `None` unless Cascade). A
+        // DETACHED/background-detached child outlives its parent. So we ONLY
+        // interrupt when the bridge policy is Cascade AND a real cancel signal is
+        // present. A parent that completed NORMALLY is NOT a cancel signal — a
+        // cleanly-completed parent never cascade-cancels its tools anywhere else.
+        let bridge_cancel_policy = row.cancel_policy();
+        if bridge_cancel_policy != CancelPolicy::Cascade {
+            // Detached/background-detached: the child is intentionally decoupled
+            // from parent lifetime and must survive parent completion/cancel.
+            tracing::debug!(
+                child_request_id = %request_id,
+                parent_request_id = %parent_request_id,
+                cancel_policy = bridge_cancel_policy.as_str(),
+                "subagent source: detached child, skipping orphan cancel re-check (child outlives parent)",
+            );
+        } else {
+            // A bridge that itself reached `.cancelled` is a genuine cancel signal
+            // (the live cascade cancels the bridge then drives the child). Other
+            // non-running bridge states (e.g. `completed`/`failed`) are NOT cancel
+            // signals on their own. A vanished bridge is treated as cancel-worthy
+            // so a truly orphaned child is reclaimed rather than left running
+            // uncancellable.
+            let bridge_cancelled = match self.load_tool_call(doc_id).await {
+                Ok(Some(latest)) => {
+                    latest.lifecycle_state.as_deref() == Some(ToolCallState::Cancelled.as_str())
+                }
+                Ok(None) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        child_request_id = %request_id,
+                        %error,
+                        "subagent source failed to re-read bridge lifecycle after child create; assuming not cancelled",
+                    );
+                    false
+                }
+            };
+            // Parent interrupt latch — the exact signal the live cascade fires on.
+            let parent_interrupted = match crate::interrupt::fetch_interrupt_requested_at(
+                &self.node,
+                &parent_request_id,
+            )
+            .await
+            {
+                Ok(value) => value.is_some(),
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        %error,
+                        "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
+                    );
+                    false
+                }
+            };
+            // The parent may have reached a CANCEL-WORTHY terminal state
+            // (error/superseded/dead/interrupted — NOT clean `completed`) in the
+            // materialize window without setting the interrupt latch. Recovery's
+            // cascade treats these as Failed/Cancelled and interrupts the Cascade
+            // child; mirror that here. A vanished parent row is treated as
+            // cancel-worthy so the orphan is reclaimed.
+            let parent_cancel_worthy_terminal = match self
+                .load_parent_terminal(&parent_request_id)
+                .await
+            {
+                Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
+                Ok(None) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        %error,
+                        "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
+                    );
+                    false
+                }
+            };
+            if bridge_cancelled || parent_interrupted || parent_cancel_worthy_terminal {
+                tracing::info!(
+                    child_request_id = %request_id,
+                    parent_request_id = %parent_request_id,
+                    bridge_cancelled,
+                    parent_interrupted,
+                    parent_cancel_worthy_terminal,
+                    "subagent source: Cascade bridge with real cancel signal in materialize window; interrupting just-created orphan child",
+                );
+                if let Err(error) =
+                    crate::interrupt::interrupt_request(&self.node, &request_id).await
+                {
+                    tracing::warn!(
+                        child_request_id = %request_id,
+                        %error,
+                        "subagent source failed to interrupt orphaned child after cancel-before-materialize race",
+                    );
+                }
+            }
+        }
 
         self.processed_tool_calls.insert(processed_key);
         let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);

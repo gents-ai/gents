@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use anyhow::Result;
 use defra_agent::{
     parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
-    CommandNetworkMode, VariableRef,
+    CommandNetworkMode, SubagentTarget, VariableRef,
 };
 
 use super::DesiredStateManifest;
@@ -136,6 +136,26 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.allowed_mcp_service_ids,
             errors,
         );
+        validate_subagent_targets(
+            &selection.selection_id,
+            selection.agent_did.trim(),
+            selection.subagent_allow_cross_deployment.unwrap_or(false),
+            selection.subagent_targets.as_deref().unwrap_or(&[]),
+            errors,
+        );
+        if selection.subagent_spawn_enabled == Some(true) {
+            let targets_empty = selection
+                .subagent_targets
+                .as_ref()
+                .map(|t| t.is_empty())
+                .unwrap_or(true);
+            if targets_empty {
+                errors.push(format!(
+                    "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
+                    selection.selection_id
+                ));
+            }
+        }
     }
 
     for profile in &manifest.inference_profiles {
@@ -655,6 +675,14 @@ pub(crate) async fn validate_manifest_against_live(
             ));
         }
     }
+
+    // NOTE: subagent_targets are NOT resolved against local AgentBehavior docs.
+    // A delegation target is a named (agent_did, behavior_id) pair; a target may
+    // legitimately live on a remote deployment that never replicates its
+    // AgentBehavior locally. Structural validation (JSON shape, non-empty
+    // fields, unique names) happens in `validate_manifest`; cross-node
+    // resolution is handled out-of-band via P2P at runtime.
+
     Ok(errors)
 }
 
@@ -699,6 +727,56 @@ fn validate_argv_prefixes(
     }
 }
 
+/// Validate `subagent_targets` entries. Each entry must be a JSON
+/// [`SubagentTarget`] with non-empty `name`/`agent_did`/`behavior_id`, and the
+/// model-facing `name` must be unique within the selection. Remote targets are
+/// NOT resolved against local AgentBehavior docs (they legitimately do not
+/// resolve locally and reach the owning node via P2P).
+fn validate_subagent_targets(
+    selection_id: &str,
+    selection_agent_did: &str,
+    allow_cross_deployment: bool,
+    entries: &[String],
+    errors: &mut Vec<String>,
+) {
+    let mut seen_names: HashSet<String> = HashSet::new();
+    for entry in entries {
+        let target = match SubagentTarget::parse(entry) {
+            Ok(target) => target,
+            Err(error) => {
+                errors.push(format!(
+                    "tool selection {selection_id} subagent_targets entry {entry:?} is not valid SubagentTarget JSON: {error}"
+                ));
+                continue;
+            }
+        };
+        if !target.is_structurally_valid() {
+            errors.push(format!(
+                "tool selection {selection_id} subagent_targets entry {entry:?} must have non-empty name, agent_did, and behavior_id"
+            ));
+            continue;
+        }
+        if !seen_names.insert(target.name.trim().to_string()) {
+            errors.push(format!(
+                "tool selection {selection_id} has a duplicate subagent target name {:?}",
+                target.name
+            ));
+        }
+        // Cross-deployment (remote-DID) delegation is deferred behind an opt-in
+        // flag. When the flag is false (default), reject any target whose DID
+        // differs from the selection's own agent_did.
+        if !allow_cross_deployment
+            && !selection_agent_did.is_empty()
+            && target.agent_did.trim() != selection_agent_did
+        {
+            errors.push(format!(
+                "cross-deployment subagent delegation is deferred; remote target {} requires subagent_allow_cross_deployment=true (trusted-fleet only).",
+                target.name
+            ));
+        }
+    }
+}
+
 fn validate_non_empty_values(
     selection_id: &str,
     field: &str,
@@ -734,6 +812,476 @@ pub(crate) fn normalize_tool_service_mcp_path(value: Option<String>) -> String {
         trimmed.to_string()
     } else {
         format!("/{trimmed}")
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use anyhow::Result;
+    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+    use defra_agent::ensure_runtime_schemas;
+
+    use super::*;
+    use crate::config_writes::ConfigAccess;
+
+    /// Build a minimal `DesiredStateManifest` whose only content is a single
+    /// tool selection with the given `subagent_targets` list and
+    /// `subagent_spawn_enabled` flag.  All other collections are empty (the
+    /// live validator only iterates `event_triggers` and `tool_selections`).
+    fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateManifest {
+        use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
+        let targets: Vec<String> = targets.iter().map(SubagentTarget::to_entry).collect();
+        DesiredStateManifest {
+            agent_principal: DesiredAgentPrincipal {
+                agent_did: "did:key:test-live-validate".to_string(),
+                display_name: None,
+                default_behavior_id: None,
+                enabled: true,
+            },
+            agent_behaviors: Vec::new(),
+            skills: Vec::new(),
+            tool_selections: vec![DesiredToolSelection {
+                selection_id: "live-test-sel".to_string(),
+                agent_did: "did:key:test-live-validate".to_string(),
+                display_name: None,
+                enable_file_tools: false,
+                file_tools_mode: "ReadOnly".to_string(),
+                file_tool_root: None,
+                enable_bash: false,
+                bash_mode: "ReadOnly".to_string(),
+                command_execution_policy: None,
+                command_allowed_argv_prefixes: Vec::new(),
+                command_forbidden_argv_prefixes: Vec::new(),
+                command_network_mode: None,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                allowed_mcp_service_ids: Vec::new(),
+                backgroundable_tool_names: Vec::new(),
+                enable_defra_query: true,
+                defra_query_collections: Vec::new(),
+                subagent_targets: Some(targets),
+                subagent_spawn_enabled: Some(true),
+                subagent_steering_enabled: None,
+                subagent_background_enabled: None,
+                subagent_allow_cross_deployment: None,
+                cross_deployment_spawn_timeout_seconds: None,
+            }],
+            inference_backends: Vec::new(),
+            inference_profiles: Vec::new(),
+            tool_service_registries: Vec::new(),
+            tasks: Vec::new(),
+            schedules: Vec::new(),
+            event_triggers: Vec::new(),
+        }
+    }
+
+    /// Live-validator does NOT resolve subagent targets against local
+    /// AgentBehavior docs: a target whose behavior lives on a remote deployment
+    /// (and never replicates locally) must not produce a live-validation error.
+    /// This is the post-#377 contract that removed the cross-node resolution
+    /// seam.
+    #[tokio::test]
+    async fn live_validate_does_not_resolve_remote_subagent_target() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        // No local AgentBehavior is seeded; the target names a remote agent_did.
+        let access = ConfigAccess::Local(node);
+
+        let manifest = manifest_with_subagent_targets(vec![SubagentTarget {
+            name: "remote-researcher".to_string(),
+            agent_did: "did:key:zRemotePeer".to_string(),
+            behavior_id: "does-not-exist-locally".to_string(),
+            description: None,
+        }]);
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+
+        assert!(
+            !errors
+                .iter()
+                .any(|msg| msg.contains("does-not-exist-locally") || msg.contains("live-test-sel")),
+            "remote subagent target must not trigger live resolution errors, got {errors:?}"
+        );
+        Ok(())
+    }
+
+    /// Live-validator does NOT report an error for a local subagent target
+    /// either: target resolution is no longer a live-validation concern.
+    #[tokio::test]
+    async fn live_validate_passes_for_known_subagent_target() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+
+        let manifest = manifest_with_subagent_targets(vec![SubagentTarget {
+            name: "researcher".to_string(),
+            agent_did: "did:key:test-live-validate".to_string(),
+            behavior_id: "amy-research".to_string(),
+            description: None,
+        }]);
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+
+        assert!(
+            !errors
+                .iter()
+                .any(|msg| msg.contains("amy-research") || msg.contains("live-test-sel")),
+            "expected no subagent errors for known target, got {errors:?}"
+        );
+        Ok(())
+    }
+
+    /// Apply a tool selection with all five subagent fields set, then:
+    ///   (a) read the ToolSelection back and assert all five persisted, and
+    ///   (b) recompute the apply diff and assert it shows UNCHANGED (idempotent).
+    ///
+    /// Before the fix this test fails because:
+    ///  - `DesiredToolSelection` was missing the three new fields → manifest
+    ///    deserialization with `deny_unknown_fields` would reject them.
+    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted all five fields → live read
+    ///    always saw them as `None` → diff never converged.
+    #[tokio::test]
+    async fn all_five_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
+        use std::path::PathBuf;
+
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+
+        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
+        // find the agent on the second (post-apply) read.
+        {
+            use defra_agent::graphql::escape_graphql_string;
+            let did = escape_graphql_string("did:key:test-subagent-idempotency");
+            access
+                .execute(&format!(
+                    r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
+                ))
+                .await?;
+        }
+
+        // Build the desired manifest with all five subagent fields set.
+        let desired_manifest = {
+            use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
+            DesiredStateManifest {
+                agent_principal: DesiredAgentPrincipal {
+                    agent_did: "did:key:test-subagent-idempotency".to_string(),
+                    display_name: None,
+                    default_behavior_id: None,
+                    enabled: true,
+                },
+                agent_behaviors: Vec::new(),
+                skills: Vec::new(),
+                tool_selections: vec![DesiredToolSelection {
+                    selection_id: "subagent-idempotency-sel".to_string(),
+                    agent_did: "did:key:test-subagent-idempotency".to_string(),
+                    display_name: None,
+                    enable_file_tools: false,
+                    file_tools_mode: "ReadOnly".to_string(),
+                    file_tool_root: None,
+                    enable_bash: false,
+                    bash_mode: "ReadOnly".to_string(),
+                    command_execution_policy: None,
+                    command_allowed_argv_prefixes: Vec::new(),
+                    command_forbidden_argv_prefixes: Vec::new(),
+                    command_network_mode: None,
+                    cli_tool_names: Vec::new(),
+                    enable_meta_tools: false,
+                    allowed_mcp_service_ids: Vec::new(),
+                    backgroundable_tool_names: Vec::new(),
+                    enable_defra_query: true,
+                    defra_query_collections: Vec::new(),
+                    subagent_targets: Some(vec![SubagentTarget {
+                        name: "researcher".to_string(),
+                        agent_did: "did:key:test-subagent-idempotency".to_string(),
+                        behavior_id: "amy-research".to_string(),
+                        description: None,
+                    }
+                    .to_entry()]),
+                    subagent_spawn_enabled: Some(true),
+                    subagent_steering_enabled: Some(true),
+                    subagent_background_enabled: Some(true),
+                    subagent_allow_cross_deployment: Some(true),
+                    cross_deployment_spawn_timeout_seconds: Some(90),
+                }],
+                inference_backends: Vec::new(),
+                inference_profiles: Vec::new(),
+                tool_service_registries: Vec::new(),
+                tasks: Vec::new(),
+                schedules: Vec::new(),
+                event_triggers: Vec::new(),
+            }
+        };
+
+        let root = PathBuf::from(".");
+        let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
+
+        // ── First apply ──────────────────────────────────────────────────────
+        let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (live_principal, live_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
+        txn.commit().await?;
+
+        // ── (a) Read back and assert all five fields persisted ────────────────
+        let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (remaining_principal, remaining_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
+
+        let live_sel = remaining_manifest
+            .tool_selections
+            .iter()
+            .find(|s| s.selection_id == "subagent-idempotency-sel")
+            .expect("ToolSelection should exist after apply");
+
+        assert_eq!(
+            live_sel.subagent_targets,
+            Some(vec![SubagentTarget {
+                name: "researcher".to_string(),
+                agent_did: "did:key:test-subagent-idempotency".to_string(),
+                behavior_id: "amy-research".to_string(),
+                description: None,
+            }
+            .to_entry()]),
+            "subagent_targets must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_spawn_enabled,
+            Some(true),
+            "subagent_spawn_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_steering_enabled,
+            Some(true),
+            "subagent_steering_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_background_enabled,
+            Some(true),
+            "subagent_background_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_allow_cross_deployment,
+            Some(true),
+            "subagent_allow_cross_deployment must persist through apply"
+        );
+        assert_eq!(
+            live_sel.cross_deployment_spawn_timeout_seconds,
+            Some(90),
+            "cross_deployment_spawn_timeout_seconds must persist through apply"
+        );
+
+        // ── (b) Re-diff: tool selection must show as UNCHANGED ────────────────
+        let second_diff = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            remaining_principal.as_ref(),
+            &remaining_manifest,
+            false,
+        );
+
+        assert!(
+            !diff_has_pending_apply(&second_diff.counts),
+            "second diff must have no pending apply (idempotent); got: {:?}",
+            second_diff.counts
+        );
+        assert!(
+            second_diff
+                .collections
+                .tool_selections
+                .unchanged
+                .contains(&"subagent-idempotency-sel".to_string()),
+            "tool selection must be in the 'unchanged' set after re-apply; got: {:?}",
+            second_diff.collections.tool_selections
+        );
+
+        Ok(())
+    }
+
+    /// Apply a manifest with an `AgentBehavior` that has `description` and
+    /// `summary` set, then:
+    ///   (a) read the `AgentBehavior` back and assert both fields persisted, and
+    ///   (b) recompute the apply diff and assert the behavior is UNCHANGED
+    ///       (idempotent).
+    ///
+    /// Before the fix this test fails because the fields were absent from:
+    ///  - `DesiredAgentBehavior` → manifest deserialization would lose them.
+    ///  - `EXPORT_AGENT_BEHAVIOR_FIELDS` → live read always saw `None` → diff
+    ///    never converged.
+    ///  - the `convert.rs` whitelist → fields stripped during export→manifest.
+    #[tokio::test]
+    async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> Result<()> {
+        use std::path::PathBuf;
+
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+
+        let access = ConfigAccess::Local(node);
+
+        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
+        // find the agent on the second (post-apply) read.
+        {
+            use defra_agent::graphql::escape_graphql_string;
+            let did = escape_graphql_string("did:key:test-behavior-desc-idempotency");
+            access
+                .execute(&format!(
+                    r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
+                ))
+                .await?;
+        }
+
+        // Build the desired manifest with description and summary set.
+        let desired_manifest = {
+            use super::super::{DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest};
+            DesiredStateManifest {
+                agent_principal: DesiredAgentPrincipal {
+                    agent_did: "did:key:test-behavior-desc-idempotency".to_string(),
+                    display_name: None,
+                    default_behavior_id: None,
+                    enabled: true,
+                },
+                agent_behaviors: vec![DesiredAgentBehavior {
+                    behavior_id: "desc-idempotency-behavior".to_string(),
+                    agent_did: "did:key:test-behavior-desc-idempotency".to_string(),
+                    display_name: Some("Research Assistant".to_string()),
+                    description: Some(
+                        "A general-purpose assistant for research and writing tasks.".to_string(),
+                    ),
+                    summary: Some("Research assistant".to_string()),
+                    system_prompt: None,
+                    backend_id: None,
+                    model_name: None,
+                    tool_selection_id: None,
+                    inference_profile_id: None,
+                    compaction_strategy: None,
+                    compaction_threshold: None,
+                    enabled: true,
+                    skill_refs: Vec::new(),
+                    skill_excludes: Vec::new(),
+                }],
+                skills: Vec::new(),
+                tool_selections: Vec::new(),
+                inference_backends: Vec::new(),
+                inference_profiles: Vec::new(),
+                tool_service_registries: Vec::new(),
+                tasks: Vec::new(),
+                schedules: Vec::new(),
+                event_triggers: Vec::new(),
+            }
+        };
+
+        let root = PathBuf::from(".");
+        let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
+
+        // ── First apply ──────────────────────────────────────────────────────
+        let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (live_principal, live_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
+        txn.commit().await?;
+
+        // ── (a) Read back and assert description + summary persisted ─────────
+        let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+        let (remaining_principal, remaining_manifest) =
+            live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
+
+        let live_behavior = remaining_manifest
+            .agent_behaviors
+            .iter()
+            .find(|b| b.behavior_id == "desc-idempotency-behavior")
+            .expect("AgentBehavior should exist after apply");
+
+        assert_eq!(
+            live_behavior.description,
+            Some("A general-purpose assistant for research and writing tasks.".to_string()),
+            "description must persist through apply"
+        );
+        assert_eq!(
+            live_behavior.summary,
+            Some("Research assistant".to_string()),
+            "summary must persist through apply"
+        );
+
+        // ── (b) Re-diff: behavior must show as UNCHANGED ─────────────────────
+        let second_diff = diff_manifests(
+            &root,
+            "local",
+            &desired_manifest,
+            remaining_principal.as_ref(),
+            &remaining_manifest,
+            false,
+        );
+
+        assert!(
+            !diff_has_pending_apply(&second_diff.counts),
+            "second diff must have no pending apply (idempotent); got: {:?}",
+            second_diff.counts
+        );
+        assert!(
+            second_diff
+                .collections
+                .agent_behaviors
+                .unchanged
+                .contains(&"desc-idempotency-behavior".to_string()),
+            "behavior must be in the 'unchanged' set after re-apply; got: {:?}",
+            second_diff.collections.agent_behaviors
+        );
+
+        Ok(())
     }
 }
 

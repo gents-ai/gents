@@ -640,12 +640,24 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(vec![
-                "child-behavior".to_string(),
-                "child-behavior-1".to_string(),
-                "child-behavior-2".to_string(),
-                behavior_id.to_string(),
-            ]),
+            subagent_targets: Some(
+                [
+                    "child-behavior",
+                    "child-behavior-1",
+                    "child-behavior-2",
+                    behavior_id,
+                ]
+                .into_iter()
+                .map(|target_behavior_id| {
+                    defra_agent::subagent_target_entry(
+                        target_behavior_id,
+                        agent_did,
+                        target_behavior_id,
+                        None,
+                    )
+                })
+                .collect(),
+            ),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
@@ -663,6 +675,8 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,

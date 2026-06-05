@@ -15,6 +15,7 @@ use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
 use serde_json::{json, Value};
 
+use support::fixtures::spawn_subagent_source;
 use support::test_db;
 
 const AGENT_DID: &str = "did:defra-agent:r4c-read-transcript";
@@ -53,14 +54,19 @@ impl CompletionModel for TestModel {
     }
 }
 
-async fn setup_db(name: &str) -> support::TestDb {
+async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSourceGuard) {
     let db = test_db(name).await;
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                AGENT_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
@@ -76,6 +82,8 @@ async fn setup_db(name: &str) -> support::TestDb {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -97,6 +105,8 @@ async fn setup_db(name: &str) -> support::TestDb {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -110,7 +120,16 @@ async fn setup_db(name: &str) -> support::TestDb {
     )
     .await
     .unwrap();
-    db
+    // Spawn convergence (#377): the child `AgentRequest` is materialized by
+    // SubagentSource, not synchronously by the hook. Run a standalone source for
+    // the lifetime of the test; the guard is returned so callers hold it alive.
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        AGENT_DID,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+    (db, source)
 }
 
 async fn create_parent_hook(
@@ -181,12 +200,13 @@ async fn create_parent_request(
 }
 
 async fn spawn_background_child(
+    node: &EmbeddedNode,
     hook: &DefraSessionHook,
     internal_call_id: &str,
     prompt: &str,
 ) -> Value {
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": prompt,
         "await_mode": "background"
     })
@@ -199,15 +219,53 @@ async fn spawn_background_child(
         &args,
     )
     .await;
-    let receipt = skip_reason_json(action);
+    let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
+    // Spawn convergence (#377): backfill the child session id once SubagentSource
+    // materializes the child (the receipt no longer carries it).
+    let child_request_id = receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+    let child_session_id = wait_for_child_session_id(node, &child_request_id).await;
+    receipt["child_session_id"] = Value::String(child_session_id);
     receipt
+}
+
+async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ session_id }}
+        }}"#
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let response = node.execute(&query).await;
+        #[derive(serde::Deserialize)]
+        struct Row {
+            session_id: String,
+        }
+        if let Some(row) = support::first_optional_row::<Row>(&response, "AgentRequest") {
+            if !row.session_id.is_empty() {
+                return row.session_id;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for child AgentRequest {child_request_id} session id"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn read_transcript(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
     let action = PromptHook::<TestModel>::on_tool_call(
         hook,
-        "read_subagent_transcript",
+        "read_subagent",
         Some(format!("model-{internal_call_id}")),
         internal_call_id,
         &args.to_string(),
@@ -260,7 +318,7 @@ async fn append_assistant_tool_call_message(
                 call_id: Some(tool_call_id.to_string()),
                 function: ToolFunction {
                     name: tool_name.to_string(),
-                    arguments: json!({"behavior_id": CHILD_BEHAVIOR_ID}),
+                    arguments: json!({"name": CHILD_BEHAVIOR_ID}),
                 },
                 signature: None,
                 additional_params: None,
@@ -357,6 +415,24 @@ async fn create_background_tool_call(
     );
 }
 
+async fn mark_child_completed(node: &EmbeddedNode, child_request_id: &str) {
+    let request_id = escape_graphql_string(child_request_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ status: "completed", lifecycle_state: "completed" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "mark child completed failed: {:?}",
+        response.errors
+    );
+}
+
 async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
@@ -386,9 +462,9 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 
 #[tokio::test]
 async fn read_transcript_assistant_only_default() {
-    let db = setup_db("r4c-read-default").await;
+    let (db, _source) = setup_db("r4c-read-default").await;
     let hook = create_parent_hook(&db, "parent-default", "session-default").await;
-    let child = spawn_background_child(&hook, "spawn-default", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-default", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
     append_message(
@@ -423,9 +499,9 @@ async fn read_transcript_assistant_only_default() {
 
 #[tokio::test]
 async fn read_transcript_includes_user_when_opted_in() {
-    let db = setup_db("r4c-read-user").await;
+    let (db, _source) = setup_db("r4c-read-user").await;
     let hook = create_parent_hook(&db, "parent-user", "session-user").await;
-    let child = spawn_background_child(&hook, "spawn-user", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-user", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
     append_message(db.node.as_ref(), child_session_id, 1, "assistant", "a1").await;
@@ -447,9 +523,9 @@ async fn read_transcript_includes_user_when_opted_in() {
 
 #[tokio::test]
 async fn read_transcript_hides_bridge_rows() {
-    let db = setup_db("r4c-read-bridge").await;
+    let (db, _source) = setup_db("r4c-read-bridge").await;
     let hook = create_parent_hook(&db, "parent-bridge", "session-bridge").await;
-    let child = spawn_background_child(&hook, "spawn-bridge", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-bridge", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
     append_assistant_tool_call_message(
@@ -484,9 +560,10 @@ async fn read_transcript_hides_bridge_rows() {
 
 #[tokio::test]
 async fn read_transcript_hides_tool_kind_background_bridge_rows() {
-    let db = setup_db("r4c-read-tool-bridge").await;
+    let (db, _source) = setup_db("r4c-read-tool-bridge").await;
     let hook = create_parent_hook(&db, "parent-tool-bridge", "session-tool-bridge").await;
-    let child = spawn_background_child(&hook, "spawn-tool-bridge", "do work").await;
+    let child =
+        spawn_background_child(db.node.as_ref(), &hook, "spawn-tool-bridge", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
     append_assistant_tool_call_message(
@@ -521,66 +598,110 @@ async fn read_transcript_hides_tool_kind_background_bridge_rows() {
 
 #[tokio::test]
 async fn read_transcript_cursor_advances_cleanly() {
-    let db = setup_db("r4c-read-cursor").await;
+    let (db, _source) = setup_db("r4c-read-cursor").await;
     let hook = create_parent_hook(&db, "parent-cursor", "session-cursor").await;
-    let child = spawn_background_child(&hook, "spawn-cursor", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cursor", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
+    // Pad each turn so a small token budget caps the read after a few blocks.
+    let pad = "x".repeat(120);
     for sequence in 1..=10 {
         append_message(
             db.node.as_ref(),
             child_session_id,
             sequence,
             "assistant",
-            &format!("turn {sequence}"),
+            &format!("turn {sequence} {pad}"),
         )
         .await;
     }
 
-    let first = read_transcript(
-        &hook,
-        "read-cursor-first",
-        json!({
-            "child_request_id": child_request_id,
-            "limit": 5
-        }),
-    )
-    .await;
-    assert_eq!(first["truncated"].as_bool(), Some(true));
-    assert_eq!(first["through_sequence"].as_u64(), Some(5));
-    let next = first["next_sequence"].as_u64().unwrap();
-    assert_eq!(next, 6);
-
-    let second = read_transcript(
-        &hook,
-        "read-cursor-second",
-        json!({
-            "child_request_id": child_request_id,
-            "since_sequence": next,
-            "limit": 5
-        }),
-    )
-    .await;
-    assert_eq!(second["through_sequence"].as_u64(), Some(10));
-    let combined = format!(
-        "{}\n{}",
-        first["transcript"].as_str().unwrap(),
-        second["transcript"].as_str().unwrap()
-    );
-    for sequence in 1..=10 {
+    // Walk the cursor across the whole transcript with a tiny token budget and
+    // assert every turn is visited exactly once, gap-free, with honest has_more.
+    let mut cursor = 0u64;
+    let mut pages = 0;
+    let mut seen = Vec::new();
+    loop {
+        let page = read_transcript(
+            &hook,
+            &format!("read-cursor-{pages}"),
+            json!({
+                "child_request_id": child_request_id,
+                "since_sequence": cursor,
+                "max_tokens": 40
+            }),
+        )
+        .await;
+        let transcript = page["transcript"].as_str().unwrap();
+        for sequence in 1..=10 {
+            if transcript.contains(&format!("turn {sequence} ")) {
+                seen.push(sequence);
+            }
+        }
+        let next = page["next_sequence"].as_u64().unwrap();
+        let has_more = page["has_more"].as_bool().unwrap();
+        if !has_more {
+            break;
+        }
         assert!(
-            combined.contains(&format!("turn {sequence}")),
-            "missing turn {sequence}"
+            next > cursor,
+            "cursor must advance: next={next} cursor={cursor}"
         );
+        cursor = next;
+        pages += 1;
+        assert!(pages < 50, "paging did not terminate");
     }
+    assert!(pages >= 1, "small budget should force more than one page");
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=10).collect::<Vec<u64>>(), "gap-free coverage");
+}
+
+#[tokio::test]
+async fn read_transcript_terminal_flag_tracks_child_lifecycle() {
+    let (db, _source) = setup_db("r4c-read-terminal").await;
+    let hook = create_parent_hook(&db, "parent-terminal", "session-terminal").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "assistant",
+        "working",
+    )
+    .await;
+
+    // While the child is still running (set up as "processing"), terminal=false.
+    let running = read_transcript(
+        &hook,
+        "read-running",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(running["terminal"].as_bool(), Some(false));
+    // Child is materialized in the "pending" lifecycle state by SubagentSource.
+    assert_eq!(running["lifecycle_state"].as_str(), Some("pending"));
+
+    // Flip the child to a completed terminal state and re-read.
+    mark_child_completed(db.node.as_ref(), child_request_id).await;
+    let done = read_transcript(
+        &hook,
+        "read-done",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(done["terminal"].as_bool(), Some(true));
+    assert_eq!(done["lifecycle_state"].as_str(), Some("completed"));
+    assert_eq!(done["has_more"].as_bool(), Some(false));
 }
 
 #[tokio::test]
 async fn read_transcript_rejects_unauthorized_child() {
-    let db = setup_db("r4c-read-unauthorized").await;
+    let (db, _source) = setup_db("r4c-read-unauthorized").await;
     let hook_1 = create_parent_hook(&db, "parent-one", "session-one").await;
     let hook_2 = create_parent_hook(&db, "parent-two", "session-two").await;
-    let child = spawn_background_child(&hook_2, "spawn-sibling", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook_2, "spawn-sibling", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
 
     let result = read_transcript(
@@ -595,10 +716,10 @@ async fn read_transcript_rejects_unauthorized_child() {
 
 #[tokio::test]
 async fn read_transcript_no_parent_tool_call_row_written() {
-    let db = setup_db("r4c-read-no-row").await;
+    let (db, _source) = setup_db("r4c-read-no-row").await;
     let parent_session_id = "session-no-row";
     let hook = create_parent_hook(&db, "parent-no-row", parent_session_id).await;
-    let child = spawn_background_child(&hook, "spawn-no-row", "do work").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-no-row", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
 
     let _ = read_transcript(
@@ -608,12 +729,7 @@ async fn read_transcript_no_parent_tool_call_row_written() {
     )
     .await;
     assert_eq!(
-        count_tool_calls_by_name(
-            db.node.as_ref(),
-            parent_session_id,
-            "read_subagent_transcript"
-        )
-        .await,
+        count_tool_calls_by_name(db.node.as_ref(), parent_session_id, "read_subagent").await,
         0
     );
 }

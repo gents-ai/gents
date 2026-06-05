@@ -597,7 +597,6 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
-                delegate_to: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
                 enable_defra_query: false,
                 defra_query_collections: Vec::new(),

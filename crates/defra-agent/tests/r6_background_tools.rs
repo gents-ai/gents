@@ -303,7 +303,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     let receipt = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-bg-1",
             r#"{"tool_name":"test_tool","args":{"x":1}}"#,
@@ -316,7 +316,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     let waited = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "wait_tool",
+            "wait_process",
             None,
             "meta-wait-1",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -333,7 +333,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert_eq!(row.child_request_id.as_deref(), None);
     assert_eq!(row.result.as_deref(), Some("done"));
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_tool").await,
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
         0
     );
 
@@ -371,7 +371,7 @@ async fn background_tool_rejects_not_allowlisted_target() {
     let error = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-bg-denied",
             r#"{"tool_name":"other_tool","args":{}}"#,
@@ -394,7 +394,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
         let receipt = skip_reason_json(
             PromptHook::<TestModel>::on_tool_call(
                 &hook,
-                "background_tool",
+                "spawn_process",
                 None,
                 &format!("meta-bg-budget-{index}"),
                 r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -407,7 +407,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
     let denied = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-bg-budget-denied",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -434,7 +434,7 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
     let receipt = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-bg-wait-deadline",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -449,7 +449,7 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
     let waited = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "wait_tool",
+            "wait_process",
             None,
             "meta-wait-deadline",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -462,7 +462,7 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_tool").await,
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
         0
     );
 }
@@ -478,7 +478,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     let receipt = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "background_tool",
+            "spawn_process",
             None,
             "meta-bg-slow",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -490,7 +490,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     let cancelled = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "cancel_tool",
+            "cancel_process",
             None,
             "meta-cancel-slow",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -503,7 +503,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_tool").await,
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_process").await,
         0
     );
 
@@ -524,7 +524,7 @@ async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn()
     let cancelled = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "cancel_tool",
+            "cancel_process",
             None,
             "meta-cancel-missing",
             r#"{"tool_call_id":"missing-background-handle"}"#,
@@ -533,7 +533,7 @@ async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn()
     );
 
     assert_eq!(cancelled["ok"], false);
-    assert_eq!(cancelled["tool_name"], "cancel_tool");
+    assert_eq!(cancelled["tool_name"], "cancel_process");
     assert!(cancelled["message"]
         .as_str()
         .unwrap()
@@ -548,7 +548,7 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
     let waited = skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             &hook,
-            "wait_tool",
+            "wait_process",
             None,
             "meta-wait-missing",
             r#"{"tool_call_id":"missing-background-handle"}"#,
@@ -557,7 +557,7 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
     );
 
     assert_eq!(waited["ok"], false);
-    assert_eq!(waited["tool_name"], "wait_tool");
+    assert_eq!(waited["tool_name"], "wait_process");
     assert!(waited["message"]
         .as_str()
         .unwrap()

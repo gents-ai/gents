@@ -353,15 +353,15 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             "network_mode": "inherit",
             "sandbox": "policy_read_only",
             "stdout_truncation": {
-                "returned_chars": 0,
-                "total_chars": 0,
-                "max_chars": 16000,
+                "returned_bytes": 0,
+                "total_bytes": 0,
+                "max_bytes": 16000,
                 "truncated": false
             },
             "stderr_truncation": {
-                "returned_chars": 24,
-                "total_chars": 24,
-                "max_chars": 16000,
+                "returned_bytes": 24,
+                "total_bytes": 24,
+                "max_bytes": 16000,
                 "truncated": false
             }
         })

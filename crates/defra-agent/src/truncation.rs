@@ -8,7 +8,7 @@ mod spill;
 #[cfg(test)]
 mod tests;
 
-pub use logic::truncate_text;
+pub use logic::{truncate, truncate_text, TextTruncation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncationMode {

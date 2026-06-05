@@ -202,10 +202,27 @@ fn validate_subagent_targets_resolve(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
 ) -> anyhow::Result<()> {
-    for target in selection.subagent_targets.iter().flatten() {
-        if !view.behaviors.contains_key(target) {
+    let own_agent_did = view.principal.value.agent_did.as_str();
+    for entry in selection.subagent_targets.iter().flatten() {
+        let target = crate::document_config::SubagentTarget::parse(entry).map_err(|error| {
+            anyhow::anyhow!(
+                "ToolSelection {} subagent_targets entry {entry:?} is not a valid SubagentTarget JSON: {error}",
+                selection.selection_id,
+            )
+        })?;
+        if !target.is_structurally_valid() {
             anyhow::bail!(
-                "ToolSelection {} subagent_targets entry {target:?} does not resolve to an AgentBehavior",
+                "ToolSelection {} subagent_targets entry {entry:?} has empty name/agent_did/behavior_id",
+                selection.selection_id,
+            );
+        }
+        // Local-DID targets may be checked against locally-known behaviors;
+        // remote-DID targets resolve out-of-band via P2P, so we never require
+        // local resolution for them. This removes the cross-node delegation
+        // seam: a well-formed remote target never blocks reaching `ready`.
+        if target.agent_did == own_agent_did && !view.behaviors.contains_key(&target.behavior_id) {
+            anyhow::bail!(
+                "ToolSelection {} subagent_targets entry {entry:?} names a local behavior that does not resolve to an AgentBehavior",
                 selection.selection_id,
             );
         }

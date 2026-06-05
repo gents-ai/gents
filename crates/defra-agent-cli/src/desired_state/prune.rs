@@ -25,7 +25,6 @@
 //! | Task | `behavior_id` | AgentBehavior |
 //! | Schedule | `task_id` | Task |
 //! | EventTrigger | `task_id` | Task |
-//! | ToolSelection | `delegate_to[]` | AgentBehavior |
 //! | ToolSelection | `allowed_mcp_service_ids[]` | ToolServiceRegistry |
 //!
 //! ### Open questions for review
@@ -34,8 +33,6 @@
 //!   anyway for runtime safety (don't delete a task a schedule still fires).
 //!   `delete_safe` doesn't depend on rank, so this is sound at runtime; it just
 //!   means a same-rank protection lives outside the proven WellFormed invariant.
-//! - **ToolSelection → AgentBehavior** (`delegate_to`) inverts apply-order rank
-//!   (0 → 1); included for safety, same caveat as above.
 //! - **`Skill.tool_refs[]` is EXCLUDED**: its entries are tool identifiers whose
 //!   correspondence to a config doc id is not established here. If they can name
 //!   a ToolServiceRegistry, add that edge.
@@ -115,9 +112,6 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
 
     for ts in &m.tool_selections {
         let mut refs = Vec::new();
-        for b in &ts.delegate_to {
-            refs.push(doc(Collection::AgentBehavior, b));
-        }
         for sid in &ts.allowed_mcp_service_ids {
             refs.push(doc(Collection::ToolServiceRegistry, sid));
         }

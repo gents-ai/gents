@@ -40,14 +40,14 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6Case
       "background_tool_budget_count_7_admits_spawn"
       "budget"
-      "background_tool"
+      "spawn_process"
       true
       7
       "running"
   , r6Case
       "background_tool_budget_count_8_rejects_spawn"
       "budget"
-      "background_tool"
+      "spawn_process"
       false
       8
       "rejected"

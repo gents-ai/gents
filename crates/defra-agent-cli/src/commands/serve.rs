@@ -140,6 +140,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     ensure_runtime_schemas(node.as_ref()).await?;
     defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
     defra_agent::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
+    // ensure_agent_behavior_migrations is now called inside
+    // DefraAgent::from_default_behavior_documents (below), so the explicit
+    // call that was here (added in commit b13d7cd8) is no longer needed.
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(

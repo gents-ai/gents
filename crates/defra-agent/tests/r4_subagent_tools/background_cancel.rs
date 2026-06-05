@@ -2,16 +2,21 @@ use super::*;
 
 #[tokio::test]
 async fn spawn_subagent_background_materializes_child_and_bridge() {
-    let (db, hook, session_id, request_id, parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_background",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let request_id = fixture.request_id.clone();
+    let parent_deadline = fixture.parent_deadline;
     let child_deadline = parent_deadline - chrono::Duration::minutes(1);
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "child prompt from spawn tool",
         "await_mode": "background",
         "deadline": child_deadline.to_rfc3339()
@@ -35,15 +40,26 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    let child_session_id = receipt["child_session_id"]
-        .as_str()
-        .expect("child_session_id")
-        .to_string();
+    // Spawn convergence (#377): the background receipt no longer carries the
+    // child session id; SubagentSource materializes the child asynchronously.
+    assert!(
+        receipt["child_session_id"].is_null(),
+        "background receipt must not carry the child session id post-convergence"
+    );
+    let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-1").await;
     assert_eq!(tool.request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(tool.tool_name.as_deref(), Some("spawn_subagent"));
-    assert_eq!(tool.args.as_deref(), Some(args.as_str()));
+    // Spawn-by-name (#377): the persisted bridge args are normalized to carry
+    // the RESOLVED target (agent_did + behavior_id) alongside the model-facing
+    // name, so SubagentSource can write the child without re-resolving the name.
+    let persisted_args: serde_json::Value =
+        serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
+    assert_eq!(persisted_args["name"], CHILD_BEHAVIOR_ID);
+    assert_eq!(persisted_args["behavior_id"], CHILD_BEHAVIOR_ID);
+    assert_eq!(persisted_args["agent_did"], fixture.agent_did);
+    assert_eq!(persisted_args["prompt"], "child prompt from spawn tool");
     assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
     assert_eq!(tool.cancel_policy.as_deref(), Some("cascade"));
@@ -91,13 +107,17 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
 
 #[tokio::test]
 async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
-    let (db, hook, session_id, request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "spawn_subagent_cross_deployment_background",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let request_id = fixture.request_id.clone();
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
@@ -106,6 +126,8 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: "did:defra-agent:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),
+            description: None,
+            summary: None,
             system_prompt: None,
             backend_id: None,
             model_name: None,
@@ -121,7 +143,7 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     .unwrap();
 
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "remote child prompt from spawn tool",
         "await_mode": "background"
     })
@@ -172,15 +194,19 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
 
 #[tokio::test]
 async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "cross_deployment_cancel_intent",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "remote child prompt",
         "await_mode": "background"
     })
@@ -199,6 +225,9 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
         .as_str()
         .expect("child_request_id")
         .to_string();
+    // Wait for SubagentSource to materialize the child, then flip its owner to
+    // a remote DID so the cascade classifies as cross-deployment (#377).
+    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
     override_child_agent_did(
         db.node.as_ref(),
         &child_request_id,
@@ -212,7 +241,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
             .unwrap()
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &agent_did)
         .await
         .unwrap()
         .expect("cascade dispatch");
@@ -239,15 +268,19 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
 
 #[tokio::test]
 async fn single_deployment_cancel_dispatch_still_interrupts_child() {
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+    let fixture = setup_spawn_fixture(
         "single_deployment_cancel_interrupt",
         vec![CHILD_BEHAVIOR_ID],
         0,
         true,
     )
     .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+    let session_id = fixture.session_id.clone();
+    let agent_did = fixture.agent_did.clone();
     let args = json!({
-        "behavior_id": CHILD_BEHAVIOR_ID,
+        "name": CHILD_BEHAVIOR_ID,
         "prompt": "local child prompt",
         "await_mode": "background"
     })
@@ -266,6 +299,9 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         .as_str()
         .expect("child_request_id")
         .to_string();
+    // Cascade dispatch reads the child's agent_did to classify local vs remote,
+    // so wait for SubagentSource to materialize the child first (#377).
+    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-local-cancel")
@@ -273,7 +309,7 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
             .unwrap()
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &agent_did)
         .await
         .unwrap()
         .expect("cascade dispatch");

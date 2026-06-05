@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::truncation::{truncate, TruncationLimits, TruncationMode};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct RenderedFileContents {
     pub content: String,
@@ -46,11 +48,16 @@ pub(crate) fn render_file_contents(
     }
 }
 
-pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-
-    let truncated = text.chars().take(max_chars).collect::<String>();
-    format!("{truncated}\n[truncated to {max_chars} chars]")
+/// Byte-cap free-form tool output using the canonical honest truncator
+/// (`crate::truncation`). Returns the (possibly truncated) text and whether
+/// truncation occurred. Only a byte ceiling is applied here (`max_lines` is
+/// unbounded) so callers keep their existing "cap by size" semantics while
+/// gaining the shared honest marker (`[Showing lines 1-N of M (B bytes total)]`).
+pub(crate) fn cap_output(text: &str, max_bytes: usize) -> (String, bool) {
+    let limits = TruncationLimits {
+        max_bytes,
+        max_lines: usize::MAX,
+    };
+    let result = truncate(text, TruncationMode::Head, &limits);
+    (result.text, result.truncated)
 }

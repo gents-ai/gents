@@ -113,11 +113,49 @@ impl DefraSessionHook {
         parent_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
         let mut missing_owner_since = None;
+        // After the spawn convergence (#377) the child `AgentRequest` is
+        // materialized asynchronously by `SubagentSource`, so the foreground
+        // poller may start before the child row exists. Adopt the child session
+        // id from the edge once it appears (the caller may pass an empty
+        // placeholder for the not-yet-materialized child).
+        let mut child_session_id = child_session_id.to_string();
 
         loop {
             let now = chrono::Utc::now();
-            let edge =
-                load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+            let Some(edge) =
+                try_load_authorized_child_edge(&self.node, parent_context, child_request_id)
+                    .await?
+            else {
+                // Child not yet materialized by SubagentSource. Back off,
+                // honoring the parent deadline, and keep polling.
+                if now >= parent_deadline_at {
+                    // Terminalize the bridge as dead (parent deadline exceeded
+                    // before the child was ever materialized), mirroring the
+                    // running-edge deadline path so the bridge does not leak in
+                    // a `running` state.
+                    if let Some(mut lifecycle) =
+                        self.take_owned_in_flight_lifecycle(internal_call_id).await
+                    {
+                        let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await;
+                    }
+                    return Ok(foreground_terminal_failure_payload(
+                        child_request_id,
+                        &child_session_id,
+                        "dead",
+                        "parent request deadline exceeded while waiting for child subagent",
+                        FailureClass::External,
+                    ));
+                }
+                let remaining = (parent_deadline_at - now)
+                    .to_std()
+                    .unwrap_or(Duration::from_millis(0));
+                tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+                continue;
+            };
+            if child_session_id.is_empty() {
+                child_session_id = edge.child_session_id.clone();
+            }
+            let child_session_id = child_session_id.as_str();
 
             if edge.lifecycle_state == "cancelled" {
                 self.discard_in_flight_lifecycle(internal_call_id).await;
