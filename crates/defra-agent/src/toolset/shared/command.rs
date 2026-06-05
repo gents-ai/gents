@@ -9,6 +9,7 @@ use tokio::process::Command;
 
 use super::context::{ToolContext, ToolError};
 use crate::toolset::{CommandPolicyDenial, DenialReason};
+use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
 const OUTPUT_META_PREFIX: &str = "defra_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -918,9 +919,9 @@ struct CommandMetadata {
 
 #[derive(Clone, Copy, Serialize)]
 struct StreamTruncationMetadata {
-    returned_chars: usize,
-    total_chars: usize,
-    max_chars: usize,
+    returned_bytes: usize,
+    total_bytes: usize,
+    max_bytes: usize,
     truncated: bool,
 }
 
@@ -929,23 +930,23 @@ struct TruncatedStream {
     metadata: StreamTruncationMetadata,
 }
 
-fn truncate_stream(text: &str, max_chars: usize) -> TruncatedStream {
-    let total_chars = text.chars().count();
-    let truncated = total_chars > max_chars;
-    let content = if truncated {
-        let mut value = text.chars().take(max_chars).collect::<String>();
-        value.push_str(&format!("\n[truncated to {max_chars} chars]"));
-        value
-    } else {
-        text.to_string()
+/// Byte-cap a command stream via the canonical honest truncator
+/// (`crate::truncation`) and surface a machine-readable byte summary. Only a
+/// byte ceiling is applied (`max_lines` unbounded), preserving the prior
+/// "cap by size" behaviour while sharing the runtime-wide honest marker.
+fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
+    let limits = TruncationLimits {
+        max_bytes,
+        max_lines: usize::MAX,
     };
+    let result = truncate(text, TruncationMode::Head, &limits);
     TruncatedStream {
-        content,
+        content: result.text,
         metadata: StreamTruncationMetadata {
-            returned_chars: total_chars.min(max_chars),
-            total_chars,
-            max_chars,
-            truncated,
+            returned_bytes: result.returned_bytes,
+            total_bytes: result.original_bytes,
+            max_bytes,
+            truncated: result.truncated,
         },
     }
 }

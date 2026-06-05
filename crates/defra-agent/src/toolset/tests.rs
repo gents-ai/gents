@@ -516,7 +516,10 @@ async fn read_file_reports_truncation_in_compact_metadata() {
     assert_eq!(meta["truncated"], true);
     assert_eq!(meta["returned_count"], 3);
     assert_eq!(meta["total_count"], 3);
-    assert!(output.contains("[truncated to 12 chars]"), "{output}");
+    assert!(
+        output.contains("[Showing lines 1-1 of 3 (28 bytes total)]"),
+        "{output}"
+    );
 }
 
 #[tokio::test]
@@ -1317,8 +1320,8 @@ async fn unrestricted_bash_runs_shell_command_strings() {
     assert_eq!(meta["exit_code"], 0);
     assert_eq!(meta["timed_out"], false);
     assert_eq!(meta["argv"][0], "/bin/sh");
-    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
-    assert_eq!(meta["stderr_truncation"]["total_chars"], 3);
+    assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
+    assert_eq!(meta["stderr_truncation"]["total_bytes"], 3);
     assert!(output.contains("stdout:\nOK"));
     assert!(output.contains("stderr:\nERR"));
 }
@@ -1351,7 +1354,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
     assert_eq!(meta["ok"], true);
     assert_eq!(meta["execution_mode"], "unrestricted");
     assert_eq!(meta["sandbox"], "unsandboxed_unrestricted");
-    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
+    assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
 }
 
 #[tokio::test]

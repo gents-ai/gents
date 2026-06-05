@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
 use super::native_runner::NativeFsRunner;
-use super::shared::{render_file_contents, truncate_text, ToolContext, ToolError};
+use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
 
@@ -216,7 +216,7 @@ impl Tool for ReadFileTool {
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);
         let max_chars = args.max_chars.min(self.default_max_chars).max(1);
-        let content = truncate_text(&rendered.content, max_chars);
+        let (content, truncated) = cap_output(&rendered.content, max_chars);
 
         let output = ReadFileOutput {
             metadata: ReadFileMetadata {
@@ -226,7 +226,7 @@ impl Tool for ReadFileTool {
                 path: self.context.display_path(&path),
                 returned_count: rendered.returned_lines,
                 total_count: Some(rendered.total_lines),
-                truncated: rendered.content.chars().count() > max_chars,
+                truncated,
                 start_line: rendered.start_line,
                 end_line: rendered.end_line,
             },

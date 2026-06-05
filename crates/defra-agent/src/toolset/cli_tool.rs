@@ -8,7 +8,7 @@ use rig::wasm_compat::WasmBoxedFuture;
 use tokio::process::Command;
 
 use super::args::CliToolArgs;
-use super::shared::{truncate_text, ToolError as LocalToolError};
+use super::shared::{cap_output, ToolError as LocalToolError};
 use super::CliToolConfig;
 
 #[derive(Clone)]
@@ -122,11 +122,11 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
     .await
     .with_context(|| format!("timed out after {}s", config.timeout_secs.max(1)))??;
 
-    let stdout = truncate_text(
+    let (stdout, _) = cap_output(
         &String::from_utf8_lossy(&output.stdout),
         super::DEFAULT_MAX_COMMAND_CHARS,
     );
-    let stderr = truncate_text(
+    let (stderr, _) = cap_output(
         &String::from_utf8_lossy(&output.stderr),
         super::DEFAULT_MAX_COMMAND_CHARS,
     );
