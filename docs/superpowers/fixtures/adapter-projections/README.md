@@ -97,3 +97,9 @@ container write one JSON fixture per captured scenario. Then run the Rust
 harness against that output directory. This keeps framework installation and
 network access out of the default test suite while still proving that real
 external outputs satisfy the shared Defra Agent projection contract.
+
+## Generators
+
+- `generators/langgraph/` builds a Docker image that executes a real LangGraph
+  `StateGraph`, captures `get_state_history`, and writes a wrapped
+  `langgraph_state_history` fixture into the mounted output directory.

@@ -622,13 +622,19 @@ Started after the adapter-driven reframing:
   Docker-generated adapter captures through the same DTO contract, envelope
   schema, adapter JSONL schema, and training/eval JSONL schema path used by the
   checked-in fixtures.
+- A Docker-backed LangGraph fixture generator runs a real LangGraph
+  `StateGraph`, captures `get_state_history`, and emits a wrapped
+  `langgraph_state_history` adapter fixture for the external harness.
 
 Still pending for the adapter-driven slice:
 
 - Native DefraDB ACP decision integration for projection loaders, replacing the
   current explicit document-scope gates where possible.
-- Real upstream fixture generators/captures for LangGraph and multi-agent
-  systems, including Docker or live-framework generation where fixtures alone
-  do not catch compatibility issues.
+- Real upstream fixture generators/captures for multi-agent systems, including
+  Docker or live-framework generation where fixtures alone do not catch
+  compatibility issues.
+- Broader LangGraph external captures for subgraphs or provider-backed agents
+  if those expose compatibility issues the current state-history fixture does
+  not cover.
 - Optional live-inference projection test that asserts persisted state and
   adapter invariants.
