@@ -37,6 +37,8 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: agent_did.clone(),
             display_name: Some("R4 parent (ghost test)".to_string()),

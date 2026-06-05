@@ -1084,23 +1084,19 @@ mod live_tests {
             "subagent_targets must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_spawn_enabled,
-            true,
+            live_sel.subagent_spawn_enabled, true,
             "subagent_spawn_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_steering_enabled,
-            true,
+            live_sel.subagent_steering_enabled, true,
             "subagent_steering_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_background_enabled,
-            true,
+            live_sel.subagent_background_enabled, true,
             "subagent_background_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_allow_cross_deployment,
-            true,
+            live_sel.subagent_allow_cross_deployment, true,
             "subagent_allow_cross_deployment must persist through apply"
         );
         assert_eq!(
