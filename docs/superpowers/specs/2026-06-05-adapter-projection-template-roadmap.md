@@ -628,6 +628,11 @@ Started after the adapter-driven reframing:
 - The LangGraph fixture generator also emits a compiled-subgraph capture that
   projects parent/subgraph nodes, nested transitions, subgraph tasks, and the
   child request boundary through the same external harness.
+- The LangGraph fixture generator also emits a provider-shaped capture that
+  invokes a LangChain chat model, checkpoints `HumanMessage`, `AIMessage`, and
+  `ToolMessage` state, projects the model/tool boundary as a child task, and
+  can run either deterministically with `FakeListChatModel` or against a live
+  OpenAI-compatible endpoint when credentials are supplied.
 - A Docker-backed AutoGen AgentChat fixture generator runs a real
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
@@ -689,6 +694,6 @@ Still pending for the adapter-driven slice:
   CrewAI process shapes, if those expose compatibility issues beyond the
   current AutoGen round-robin, AutoGen Swarm handoff, CrewAI sequential
   task-context, and Microsoft Agent Framework group-chat fixtures.
-- Broader LangGraph external captures for provider-backed agents if those
-  expose compatibility issues the current linear and compiled-subgraph fixtures
-  do not cover.
+- Broader LangGraph external captures only for provider-specific edge cases
+  beyond the current linear, compiled-subgraph, and provider-shaped chat-model
+  fixtures.
