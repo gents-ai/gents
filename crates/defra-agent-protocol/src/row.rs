@@ -659,6 +659,8 @@ pub struct ToolServiceHealthStateRow {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
+    pub tool_count: Option<i64>,
+    #[serde(default)]
     pub failure_count: Option<i64>,
     #[serde(default)]
     pub k_max: Option<i64>,

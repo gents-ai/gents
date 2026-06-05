@@ -41,6 +41,7 @@ pub(crate) async fn load_mcp_services_with_health(
                 agent_did
                 endpoint
                 status
+                tool_count
                 failure_count
                 k_max
                 backoff_until
@@ -84,6 +85,7 @@ fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
         agent_did: row.agent_did,
         endpoint: row.endpoint,
         status: row.status,
+        tool_count: row.tool_count,
         failure_count: row.failure_count,
         k_max: row.k_max,
         backoff_until: row.backoff_until,

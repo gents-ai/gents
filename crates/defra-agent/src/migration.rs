@@ -90,6 +90,10 @@ const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":2}}
 ]"#;
 
+const ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":5}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -560,6 +564,34 @@ pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) ->
     Ok(())
 }
 
+pub async fn ensure_tool_service_health_state_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("ToolServiceHealthState")
+        .context("get ToolServiceHealthState collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "tool_count") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "ToolServiceHealthState",
+            ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
+        )
+        .await
+        .context("patch_collection ToolServiceHealthState tool_count")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version ToolServiceHealthState tool_count")?;
+    tracing::info!(
+        version = %next.version_id,
+        "ToolServiceHealthState patched with tool_count field"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
@@ -629,6 +661,7 @@ mod patch_kind_tests {
             ADD_AGENT_TOOL_CALL_R5_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
+            ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");

@@ -315,7 +315,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
                 && behavior
-                    .get("endpoint")
+                    .get("backend_endpoint")
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| !endpoint.is_empty())
         }),
@@ -355,6 +355,88 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
                     && agent.get("process_state").and_then(Value::as_str) == Some("ready")
             })),
         "expected /fleet to list this agent in ready state: {fleet}"
+    );
+
+    // /mcp/pool joins registered MCP services with this agent's persisted
+    // health state, including the last observed tool count.
+    let escaped_agent_did = escape_graphql_string(&agent_did);
+    for mutation in [
+        r#"mutation {
+            create_ToolServiceRegistry(input: {
+                service_id: "runtime-mcp-pool-obs",
+                display_name: "Runtime Observability",
+                description: "Runtime endpoint fixture",
+                hostname: "studio-1",
+                tailscale_ip: "100.64.0.10",
+                lan_ip: "192.168.1.10",
+                mcp_port: 9201,
+                mcp_path: "/mcp",
+                send_agent_did: true,
+                status: "online",
+                version: "test",
+                updated_at: "2026-06-05T00:00:00Z"
+            }) { _docID }
+        }"#
+        .to_string(),
+        format!(
+            r#"mutation {{
+                create_ToolServiceHealthState(input: {{
+                    service_id: "runtime-mcp-pool-obs",
+                    agent_did: "{escaped_agent_did}",
+                    endpoint: "http://100.64.0.10:9201/mcp",
+                    status: "healthy",
+                    tool_count: 3,
+                    failure_count: 0,
+                    k_max: 3,
+                    last_probe_at: "2026-06-05T00:00:00Z",
+                    last_seen: "2026-06-05T00:00:00Z",
+                    updated_at: "2026-06-05T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    ] {
+        graphql_query(&graphql, &mutation)
+            .await
+            .context("seeding MCP pool fixtures")?;
+    }
+
+    let mcp_pool_response = client
+        .get(format!("http://127.0.0.1:{port}/mcp/pool"))
+        .send()
+        .await
+        .context("fetching /mcp/pool")?;
+    assert!(
+        mcp_pool_response.status().is_success(),
+        "unexpected /mcp/pool response: {mcp_pool_response:?}"
+    );
+    let mcp_pool: Value = mcp_pool_response
+        .json()
+        .await
+        .context("reading /mcp/pool body")?;
+    assert_eq!(
+        mcp_pool.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        mcp_pool.pointer("/totals/online").and_then(Value::as_i64),
+        Some(1),
+        "expected /mcp/pool totals to count the seeded online service: {mcp_pool}"
+    );
+    assert_eq!(
+        mcp_pool.pointer("/totals/healthy").and_then(Value::as_i64),
+        Some(1),
+        "expected /mcp/pool totals to count the seeded healthy service: {mcp_pool}"
+    );
+    assert!(
+        mcp_pool
+            .get("services")
+            .and_then(Value::as_array)
+            .is_some_and(|services| services.iter().any(|service| {
+                service.get("service_id").and_then(Value::as_str) == Some("runtime-mcp-pool-obs")
+                    && service.get("tool_count").and_then(Value::as_i64) == Some(3)
+                    && service.get("health_status").and_then(Value::as_str) == Some("healthy")
+            })),
+        "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
 
     // /mcp is opt-in: this server was started without --enable-mcp, so the

@@ -40,6 +40,7 @@ fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealt
         agent_did: Some("did:defra:contract-agent".to_string()),
         endpoint: Some("127.0.0.1:9201/mcp".to_string()),
         status: Some(status.to_string()),
+        tool_count: Some(7),
         failure_count: Some(count as i64),
         k_max: Some(3),
         backoff_until: if status == "evicted" {
@@ -74,6 +75,7 @@ fn view_from_row(row: &ToolServiceHealthStateRow) -> MCPServiceHealthView {
         agent_did: row.agent_did.clone(),
         endpoint: row.endpoint.clone(),
         status: row.status.clone(),
+        tool_count: row.tool_count,
         failure_count: row.failure_count,
         k_max: row.k_max,
         backoff_until: row.backoff_until.clone(),
