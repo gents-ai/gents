@@ -618,13 +618,17 @@ Started after the adapter-driven reframing:
   JSONL, training/eval JSONL, and document-scope export paths. Tests also
   verify schema export against the checked-in snapshots and validate
   conformance fixtures without booting DefraDB.
+- An ignored/env-gated external fixture harness validates upstream-captured or
+  Docker-generated adapter captures through the same DTO contract, envelope
+  schema, adapter JSONL schema, and training/eval JSONL schema path used by the
+  checked-in fixtures.
 
 Still pending for the adapter-driven slice:
 
 - Native DefraDB ACP decision integration for projection loaders, replacing the
   current explicit document-scope gates where possible.
-- Broader real external adapter fixtures captured from upstream examples.
-- Ignored/env-gated Docker or live-framework interoperability tests for cases
-  where fixtures are not enough.
+- Real upstream fixture generators/captures for LangGraph and multi-agent
+  systems, including Docker or live-framework generation where fixtures alone
+  do not catch compatibility issues.
 - Optional live-inference projection test that asserts persisted state and
   adapter invariants.
