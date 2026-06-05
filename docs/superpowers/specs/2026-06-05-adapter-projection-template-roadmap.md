@@ -602,6 +602,9 @@ Started after the adapter-driven reframing:
   `docs/superpowers/fixtures/adapter-projections/v1/`, covering representative
   OpenAI/Codex, LangGraph, and multi-agent envelopes without Docker or live
   service startup.
+- Core adapter tests compile the generated JSON Schemas with a dev-only
+  validator and validate emitted adapter envelopes, emitted JSONL records, and
+  checked-in conformance fixture envelopes against those schemas.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
   JSONL export path. Tests also verify schema export against the checked-in
@@ -609,7 +612,6 @@ Started after the adapter-driven reframing:
 
 Still pending for the adapter-driven slice:
 
-- Real JSON Schema validator coverage for emitted adapter fixtures.
 - Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
   actor/redaction context and public/training-safe/full redaction modes.

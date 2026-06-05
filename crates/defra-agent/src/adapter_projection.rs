@@ -1401,6 +1401,40 @@ mod tests {
         (envelope, value)
     }
 
+    fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) {
+        let validator = jsonschema::validator_for(schema)
+            .unwrap_or_else(|error| panic!("{label} schema failed to compile: {error}"));
+        let errors = validator
+            .iter_errors(instance)
+            .map(|error| format!("{}: {error}", error.instance_path()))
+            .collect::<Vec<_>>();
+        assert!(
+            errors.is_empty(),
+            "{label} failed JSON Schema validation:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    fn assert_adapter_projection_matches_json_schema(envelope: &AdapterProjectionEnvelope) {
+        let kind = envelope.output.kind();
+        let envelope_value = serde_json::to_value(envelope).unwrap();
+        assert_json_schema_valid(
+            &adapter_projection_json_schema(kind),
+            &envelope_value,
+            kind.id(),
+        );
+
+        let jsonl_record_schema = adapter_projection_jsonl_record_schema(kind);
+        for record in adapter_projection_jsonl_records(envelope) {
+            let record_value = serde_json::to_value(&record).unwrap();
+            assert_json_schema_valid(
+                &jsonl_record_schema,
+                &record_value,
+                &format!("{} JSONL record {}", kind.id(), record.record_id),
+            );
+        }
+    }
+
     #[test]
     fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
         let timeline = build_run_timeline(RunTimelineRows {
@@ -1519,6 +1553,9 @@ mod tests {
         validate_adapter_projection_contract(&codex).unwrap();
         validate_adapter_projection_contract(&langgraph).unwrap();
         validate_adapter_projection_contract(&multi).unwrap();
+        assert_adapter_projection_matches_json_schema(&codex);
+        assert_adapter_projection_matches_json_schema(&langgraph);
+        assert_adapter_projection_matches_json_schema(&multi);
 
         let codex_records = adapter_projection_jsonl_records(&codex);
         assert!(!codex_records.is_empty());
@@ -1581,6 +1618,11 @@ mod tests {
             assert_eq!(envelope.output.kind(), *kind);
             validate_adapter_projection_contract(&envelope)
                 .unwrap_or_else(|error| panic!("{fixture_name} failed contract: {error}"));
+            assert_json_schema_valid(
+                &adapter_projection_json_schema(*kind),
+                &fixture_value,
+                fixture_name,
+            );
 
             let round_trip = serde_json::to_value(&envelope).unwrap();
             assert_eq!(
@@ -1615,6 +1657,11 @@ mod tests {
                     allowed_record_kinds.contains(&record.record_kind),
                     "{fixture_name} produced unsupported JSONL record kind {}",
                     record.record_kind
+                );
+                assert_json_schema_valid(
+                    &adapter_projection_jsonl_record_schema(*kind),
+                    &serde_json::to_value(record).unwrap(),
+                    &format!("{fixture_name} JSONL record {}", record.record_id),
                 );
                 observed_record_kinds.insert(record.record_kind.clone());
             }
