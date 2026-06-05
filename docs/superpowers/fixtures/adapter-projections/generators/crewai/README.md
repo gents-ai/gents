@@ -1,15 +1,20 @@
 # CrewAI Fixture Generator
 
-This generator executes a real CrewAI sequential `Crew` with deterministic
-custom `BaseLLM` instances. It captures native CrewAI `CrewOutput` / task output
-objects and writes a wrapped Defra Agent `multi_agent_task` adapter projection
-fixture.
+This generator executes real CrewAI `Crew` workflows with deterministic custom
+`BaseLLM` instances. It captures native CrewAI `CrewOutput` / task output
+objects and writes wrapped Defra Agent `multi_agent_task` adapter projection
+fixtures.
 
 It emits:
 
 - `multi_agent_task.crewai_sequential.capture.json`: a sequential CrewAI crew
   with planner, researcher, and reviewer tasks. The fixture projects task
   assignment, context flow, review, and parent/child request boundaries.
+- `multi_agent_task.crewai_hierarchical.capture.json`: a hierarchical CrewAI
+  crew where a manager delegates research and review tasks to coworkers through
+  CrewAI's `delegate_work_to_coworker` tool. The fixture projects repeated
+  manager-to-worker child request boundaries and task context from research
+  into review.
 
 Build and run it from the repository root:
 
@@ -35,4 +40,5 @@ DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-crewai-fixtures \
 
 The generator avoids live inference by using custom deterministic LLMs, but it
 still exercises CrewAI's `Agent`, `Task`, `Crew`, `Process.sequential`,
-`BaseLLM`, task-context, kickoff, and output surfaces.
+`Process.hierarchical`, `BaseLLM`, manager delegation tools, task-context,
+kickoff, and output surfaces.

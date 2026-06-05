@@ -646,6 +646,11 @@ Started after the adapter-driven reframing:
   `Crew`, `Process.sequential`, and `Crew.kickoff` evidence, and emits a
   wrapped `multi_agent_task` adapter fixture with task context handoff
   boundaries for the external harness.
+- The CrewAI fixture generator also emits a hierarchical `Crew` capture where a
+  manager uses CrewAI's `delegate_work_to_coworker` tool to delegate research
+  and review work to child agents. The fixture records native manager/worker
+  LLM calls, repeated manager-to-worker child request boundaries, and context
+  flow from research into review through the same external harness.
 - A Docker-backed Microsoft Agent Framework fixture generator runs a real
   `GroupChatBuilder` workflow with deterministic custom `BaseChatClient`
   agents, captures native workflow and group-chat request/response events, and
@@ -690,10 +695,11 @@ Still pending for the adapter-driven slice:
   validate/apply/export/lifecycle metadata and explicit `--acp-policy-id`
   GraphQL paths, especially direct DefraDB policy/resource creation and
   publication API workflows.
-- Broader multi-agent captures for additional Microsoft Agent Framework or
-  CrewAI process shapes, if those expose compatibility issues beyond the
-  current AutoGen round-robin, AutoGen Swarm handoff, CrewAI sequential
-  task-context, and Microsoft Agent Framework group-chat fixtures.
+- Broader multi-agent captures for additional Microsoft Agent Framework shapes
+  or CrewAI edge cases, if those expose compatibility issues beyond the current
+  AutoGen round-robin, AutoGen Swarm handoff, CrewAI sequential task-context,
+  CrewAI hierarchical manager delegation, and Microsoft Agent Framework
+  group-chat fixtures.
 - Broader LangGraph external captures only for provider-specific edge cases
   beyond the current linear, compiled-subgraph, and provider-shaped chat-model
   fixtures.
