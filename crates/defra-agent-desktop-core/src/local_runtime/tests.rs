@@ -1,3 +1,4 @@
+use super::http::http_post_json_signed;
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::pairing::P2pReplicatorRequest;
 use super::{
@@ -6,7 +7,13 @@ use super::{
     reset_desktop_runtime_state, runtime_discovery_url, runtime_graphql_url, runtime_status_url,
     DesktopInitSummary, LOCAL_STANDARD_SOURCE,
 };
-use crate::client::DesktopPaths;
+use crate::client::{DesktopPaths, PrincipalIdentity};
+use crate::remote_admin::http_impl::{
+    hex_encode, signed_admin_path, signing_payload, ACTOR_DID_HEADER, ACTOR_SIGNATURE_HEADER,
+    ACTOR_SIGNATURE_VERSION, ACTOR_SIGNATURE_VERSION_HEADER,
+};
+use wiremock::matchers::{body_json, header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
@@ -166,6 +173,50 @@ fn replicator_request_serializes_runtime_api_field_names() {
             "Addresses": ["127.0.0.1:9999/p2p/example"],
         })
     );
+}
+
+#[tokio::test]
+async fn signed_post_json_attaches_actor_headers() {
+    let server = MockServer::start().await;
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let paths = DesktopPaths::from_root(tempdir.path());
+    let actor = PrincipalIdentity::load_or_create(&paths)
+        .await
+        .expect("principal");
+    let body = vec!["AgentRequest".to_string()];
+    let body_bytes = serde_json::to_vec(&body).expect("body");
+    let expected_signature = hex_encode(
+        &actor
+            .sign(&signing_payload(
+                "POST",
+                &signed_admin_path("/api/v0", "/p2p/collections"),
+                &body_bytes,
+            ))
+            .expect("signature"),
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/api/v0/p2p/collections"))
+        .and(header(ACTOR_DID_HEADER, actor.did()))
+        .and(header(ACTOR_SIGNATURE_HEADER, expected_signature))
+        .and(header(
+            ACTOR_SIGNATURE_VERSION_HEADER,
+            ACTOR_SIGNATURE_VERSION,
+        ))
+        .and(body_json(serde_json::json!(["AgentRequest"])))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    http_post_json_signed(
+        &reqwest::Client::new(),
+        &format!("{}/api/v0/p2p/collections", server.uri()),
+        &signed_admin_path("/api/v0", "/p2p/collections"),
+        &body,
+        &actor,
+    )
+    .await
+    .expect("signed post");
 }
 
 #[test]

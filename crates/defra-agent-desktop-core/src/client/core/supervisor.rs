@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
+use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
     add_replicator_with_retry, configure_local_runtime_pairing_legacy, connect_peer_with_retry,
@@ -36,6 +37,7 @@ pub(super) fn spawn_p2p_supervisor_task(
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_health: watch::Sender<P2PHealth>,
     mut control_rx: mpsc::Receiver<P2PSupervisorCommand>,
+    remote_admin_actor: Arc<PrincipalIdentity>,
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -75,6 +77,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &p2p,
                 &peer_directory,
                 &peer_statuses,
+                &remote_admin_actor,
                 install_replicators_on_bootstrap,
                 manual_repair,
             )
@@ -95,6 +98,7 @@ async fn run_saved_peer_repair_cycle(
     p2p: &Arc<dyn P2POps>,
     peer_directory: &Arc<RwLock<PeerDirectory>>,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    remote_admin_actor: &Arc<PrincipalIdentity>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
 ) {
@@ -123,6 +127,7 @@ async fn run_saved_peer_repair_cycle(
                 current_status,
                 install_replicators_on_bootstrap,
                 force_repair,
+                Some(remote_admin_actor.as_ref()),
             )
             .await;
             still_saved = peer_directory
@@ -138,7 +143,13 @@ async fn run_saved_peer_repair_cycle(
 
         if still_saved && pairing_reconcile_enabled() {
             let desired = load_desired_for_peer(node, &record).await;
-            run_pairing_reconcile_for_peer(&record, desired, peer_statuses).await;
+            run_pairing_reconcile_for_peer(
+                &record,
+                desired,
+                peer_statuses,
+                Arc::clone(remote_admin_actor),
+            )
+            .await;
         }
     }
 }
@@ -267,6 +278,7 @@ pub(super) async fn repair_saved_peer(
     current_status: Option<ClientPeerStatus>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
+    remote_admin_actor: Option<&PrincipalIdentity>,
 ) -> ClientPeerStatus {
     let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
         peer_id: record.peer_id.clone(),
@@ -363,12 +375,22 @@ pub(super) async fn repair_saved_peer(
         if pairing_reconcile_enabled() {
             status.last_error = None;
         } else if p2p_pairing_enabled_for_graphql(graphql) {
-            match configure_local_runtime_pairing_legacy(p2p, graphql).await {
-                Ok(()) => status.last_error = None,
-                Err(error) => {
+            match remote_admin_actor {
+                Some(actor) => {
+                    match configure_local_runtime_pairing_legacy(p2p, graphql, actor).await {
+                        Ok(()) => status.last_error = None,
+                        Err(error) => {
+                            status.last_error = Some(format!(
+                                "peer {} local runtime pairing failed: {}",
+                                record.label, error
+                            ));
+                        }
+                    }
+                }
+                None => {
                     status.last_error = Some(format!(
-                        "peer {} local runtime pairing failed: {}",
-                        record.label, error
+                        "peer {} local runtime pairing failed: desktop principal identity unavailable",
+                        record.label
                     ));
                 }
             }
@@ -444,11 +466,12 @@ async fn run_pairing_reconcile_for_peer(
     record: &PeerRecord,
     desired: PairingDesired,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    remote_admin_actor: Arc<PrincipalIdentity>,
 ) {
     let Some(graphql_url) = record.graphql.as_deref() else {
         return;
     };
-    let admin = match HttpRemoteP2pAdmin::new(graphql_url) {
+    let admin = match HttpRemoteP2pAdmin::new_with_actor(graphql_url, remote_admin_actor) {
         Ok(admin) => admin,
         Err(error) => {
             tracing::warn!(

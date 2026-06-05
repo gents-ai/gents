@@ -483,6 +483,7 @@ impl ClientCore {
                     self.node.as_ref(),
                     &self.p2p,
                     &record,
+                    self.principal(),
                 )
                 .await
                 {

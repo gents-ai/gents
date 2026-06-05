@@ -1,25 +1,48 @@
 //! HTTP transport implementation for `RemoteP2pAdmin`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
+
+use crate::client::PrincipalIdentity;
 
 use super::trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+pub const ACTOR_DID_HEADER: &str = "x-defra-actor-did";
+pub const ACTOR_SIGNATURE_HEADER: &str = "x-defra-actor-signature";
+pub const ACTOR_SIGNATURE_VERSION_HEADER: &str = "x-defra-actor-signature-version";
+pub const ACTOR_SIGNATURE_VERSION: &str = "p2p-admin-v1";
 
 pub struct HttpRemoteP2pAdmin {
     /// `http://host:port/api/v0`, used to compose `/p2p/*` URLs.
     api_base: String,
+    api_base_path: String,
     client: Client,
+    actor: Option<Arc<PrincipalIdentity>>,
 }
 
 impl HttpRemoteP2pAdmin {
     pub fn new(graphql_url: &str) -> RemoteP2pAdminResult<Self> {
+        Self::new_inner(graphql_url, None)
+    }
+
+    pub fn new_with_actor(
+        graphql_url: &str,
+        actor: Arc<PrincipalIdentity>,
+    ) -> RemoteP2pAdminResult<Self> {
+        Self::new_inner(graphql_url, Some(actor))
+    }
+
+    fn new_inner(
+        graphql_url: &str,
+        actor: Option<Arc<PrincipalIdentity>>,
+    ) -> RemoteP2pAdminResult<Self> {
         let trimmed = graphql_url.trim_end_matches('/');
         let api_base = trimmed
             .strip_suffix("/graphql")
@@ -33,11 +56,61 @@ impl HttpRemoteP2pAdmin {
             .timeout(DEFAULT_RPC_TIMEOUT)
             .build()
             .map_err(|e| RemoteP2pAdminError::LocalError(format!("reqwest build: {e}")))?;
-        Ok(Self { api_base, client })
+        let api_base_path = reqwest::Url::parse(&api_base)
+            .map_err(|e| RemoteP2pAdminError::LocalError(format!("invalid API base URL: {e}")))?
+            .path()
+            .trim_end_matches('/')
+            .to_string();
+        Ok(Self {
+            api_base,
+            api_base_path,
+            client,
+            actor,
+        })
     }
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.api_base, path)
+    }
+
+    fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> RemoteP2pAdminResult<RequestBuilder> {
+        let mut request = self.client.request(method.clone(), self.url(path));
+        let body_bytes = body.as_deref().unwrap_or_default();
+
+        if let Some(actor) = self.actor.as_ref() {
+            let signed_path = signed_admin_path(&self.api_base_path, path);
+            let payload = signing_payload(method.as_str(), &signed_path, body_bytes);
+            let signature = actor.sign(&payload).map_err(|error| {
+                RemoteP2pAdminError::LocalError(format!("signing remote admin request: {error:#}"))
+            })?;
+            request = request
+                .header(ACTOR_DID_HEADER, actor.did())
+                .header(ACTOR_SIGNATURE_HEADER, hex_encode(&signature))
+                .header(ACTOR_SIGNATURE_VERSION_HEADER, ACTOR_SIGNATURE_VERSION);
+        }
+
+        if let Some(body) = body {
+            request = request.header(CONTENT_TYPE, "application/json").body(body);
+        }
+
+        Ok(request)
+    }
+
+    fn json_request<T: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &T,
+    ) -> RemoteP2pAdminResult<RequestBuilder> {
+        let body = serde_json::to_vec(body).map_err(|error| {
+            RemoteP2pAdminError::LocalError(format!("encoding remote admin request body: {error}"))
+        })?;
+        self.request(method, path, Some(body))
     }
 }
 
@@ -84,8 +157,7 @@ struct SyncBranchableBody<'a> {
 impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .client
-            .get(self.url("/p2p/info"))
+            .request(Method::GET, "/p2p/info", None)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -97,8 +169,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .client
-            .get(self.url("/p2p/active-peers"))
+            .request(Method::GET, "/p2p/active-peers", None)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -110,9 +181,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .client
-            .post(self.url("/p2p/connect"))
-            .json(addresses)
+            .json_request(Method::POST, "/p2p/connect", addresses)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -132,8 +201,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         }
 
         let resp = self
-            .client
-            .get(self.url("/p2p/replicators"))
+            .request(Method::GET, "/p2p/replicators", None)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -161,9 +229,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             addresses,
         };
         let resp = self
-            .client
-            .post(self.url("/p2p/replicators"))
-            .json(&body)
+            .json_request(Method::POST, "/p2p/replicators", &body)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -178,9 +244,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let body = DeleteReplicatorBody { collections, id };
         let resp = self
-            .client
-            .delete(self.url("/p2p/replicators"))
-            .json(&body)
+            .json_request(Method::DELETE, "/p2p/replicators", &body)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -190,8 +254,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .client
-            .get(self.url("/p2p/collections"))
+            .request(Method::GET, "/p2p/collections", None)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -203,9 +266,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .client
-            .post(self.url("/p2p/collections"))
-            .json(collections)
+            .json_request(Method::POST, "/p2p/collections", collections)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -215,9 +276,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn delete_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .client
-            .delete(self.url("/p2p/collections"))
-            .json(collections)
+            .json_request(Method::DELETE, "/p2p/collections", collections)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -227,8 +286,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn list_p2p_documents(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .client
-            .get(self.url("/p2p/documents"))
+            .request(Method::GET, "/p2p/documents", None)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -240,9 +298,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn add_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .client
-            .post(self.url("/p2p/documents"))
-            .json(doc_ids)
+            .json_request(Method::POST, "/p2p/documents", doc_ids)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -252,9 +308,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn delete_p2p_documents(&self, doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .client
-            .delete(self.url("/p2p/documents"))
-            .json(doc_ids)
+            .json_request(Method::DELETE, "/p2p/documents", doc_ids)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -274,9 +328,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             timeout: format_timeout(timeout),
         };
         let resp = self
-            .client
-            .post(self.url("/p2p/documents/sync"))
-            .json(&body)
+            .json_request(Method::POST, "/p2p/documents/sync", &body)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -294,9 +346,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             timeout: format_timeout(timeout),
         };
         let resp = self
-            .client
-            .post(self.url("/p2p/collections/sync-versions"))
-            .json(&body)
+            .json_request(Method::POST, "/p2p/collections/sync-versions", &body)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -314,9 +364,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             timeout: format_timeout(timeout),
         };
         let resp = self
-            .client
-            .post(self.url("/p2p/collections/sync-branchable"))
-            .json(&body)
+            .json_request(Method::POST, "/p2p/collections/sync-branchable", &body)?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -330,6 +378,39 @@ fn format_timeout(t: Option<Duration>) -> String {
         Some(d) => format!("{}s", d.as_secs()),
         None => String::new(),
     }
+}
+
+pub(crate) fn signing_payload(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        ACTOR_SIGNATURE_VERSION.len() + method.len() + path.len() + body.len() + 3,
+    );
+    payload.extend_from_slice(ACTOR_SIGNATURE_VERSION.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(method.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(path.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(body);
+    payload
+}
+
+pub(crate) fn signed_admin_path(api_base_path: &str, path: &str) -> String {
+    let api_base_path = api_base_path.trim_end_matches('/');
+    if api_base_path.is_empty() {
+        path.to_string()
+    } else {
+        format!("{api_base_path}{path}")
+    }
+}
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn map_reqwest_err(e: reqwest::Error) -> RemoteP2pAdminError {
@@ -362,12 +443,87 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_json, method, path};
+    use crate::client::{DesktopPaths, PrincipalIdentity};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn admin_for(server: &MockServer) -> HttpRemoteP2pAdmin {
         let graphql = format!("{}/api/v0/graphql", server.uri());
         HttpRemoteP2pAdmin::new(&graphql).expect("admin constructs")
+    }
+
+    async fn signed_admin_for(server: &MockServer) -> (HttpRemoteP2pAdmin, Arc<PrincipalIdentity>) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path());
+        let actor = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+        let graphql = format!("{}/api/v0/graphql", server.uri());
+        let admin =
+            HttpRemoteP2pAdmin::new_with_actor(&graphql, Arc::clone(&actor)).expect("admin signs");
+        (admin, actor)
+    }
+
+    #[tokio::test]
+    async fn signed_admin_attaches_actor_headers_to_get_request() {
+        let server = MockServer::start().await;
+        let (admin, actor) = signed_admin_for(&server).await;
+        let expected_signature = hex_encode(
+            &actor
+                .sign(&signing_payload(
+                    "GET",
+                    &signed_admin_path("/api/v0", "/p2p/info"),
+                    &[],
+                ))
+                .expect("signature"),
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/info"))
+            .and(header(ACTOR_DID_HEADER, actor.did()))
+            .and(header(
+                ACTOR_SIGNATURE_VERSION_HEADER,
+                ACTOR_SIGNATURE_VERSION,
+            ))
+            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<String>::new()))
+            .mount(&server)
+            .await;
+
+        admin.peer_info().await.expect("signed peer_info");
+    }
+
+    #[tokio::test]
+    async fn signed_admin_attaches_actor_headers_to_json_request() {
+        let server = MockServer::start().await;
+        let (admin, actor) = signed_admin_for(&server).await;
+        let collections = vec!["c1".to_string()];
+        let body = serde_json::to_vec(&collections).expect("body");
+        let expected_signature = hex_encode(
+            &actor
+                .sign(&signing_payload(
+                    "POST",
+                    &signed_admin_path("/api/v0", "/p2p/collections"),
+                    &body,
+                ))
+                .expect("signature"),
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/api/v0/p2p/collections"))
+            .and(header(ACTOR_DID_HEADER, actor.did()))
+            .and(header(
+                ACTOR_SIGNATURE_VERSION_HEADER,
+                ACTOR_SIGNATURE_VERSION,
+            ))
+            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature))
+            .and(body_json(serde_json::json!(["c1"])))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        admin
+            .add_p2p_collections(&collections)
+            .await
+            .expect("signed add");
     }
 
     #[tokio::test]

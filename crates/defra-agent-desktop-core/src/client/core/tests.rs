@@ -304,6 +304,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
         }),
         false,
         false,
+        None,
     )
     .await;
 
@@ -338,6 +339,7 @@ async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
         }),
         true,
         true,
+        None,
     )
     .await;
 
