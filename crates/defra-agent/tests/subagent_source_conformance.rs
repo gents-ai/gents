@@ -783,6 +783,8 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     .await
     .unwrap();
     let mut behavior = AgentBehaviorDocument {
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         behavior_id: behavior_id.clone(),
         agent_did: agent_did.clone(),
         display_name: Some(behavior_id.clone()),
@@ -1110,6 +1112,8 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     {
         Some(behavior) => behavior,
         None => AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: support::AGENT_NAME.to_string(),
             agent_did: support::AGENT_DID.to_string(),
             display_name: Some(support::AGENT_NAME.to_string()),
@@ -1728,6 +1732,8 @@ async fn upsert_target_behavior_with_cross_deployment(
     .await
     .unwrap();
     let behavior = AgentBehaviorDocument {
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         behavior_id: target_behavior_id.to_string(),
         agent_did: agent_did.to_string(),
         display_name: Some(target_behavior_id.to_string()),

@@ -607,6 +607,8 @@ async fn configure_behavior(
         .await
         .expect("load behavior")
         .unwrap_or_else(|| AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),
