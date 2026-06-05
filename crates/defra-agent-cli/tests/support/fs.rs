@@ -176,6 +176,14 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
             "enable_meta_tools",
             "allowed_mcp_service_ids",
             "delegate_to",
+            "backgroundable_tool_names",
+            "subagent_targets",
+            "subagent_spawn_enabled",
+            "subagent_steering_enabled",
+            "subagent_background_enabled",
+            "cross_deployment_spawn_timeout_seconds",
+            "enable_defra_query",
+            "defra_query_collections",
         ],
     )?;
     write_per_doc_collection(

@@ -87,6 +87,22 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .backgroundable_tool_names
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),
+            selection
+                .subagent_targets
+                .as_ref()
+                .and_then(|values| string_list_field("subagent_targets", values)),
+            optional_bool_field("subagent_spawn_enabled", selection.subagent_spawn_enabled),
+            optional_bool_field(
+                "subagent_steering_enabled",
+                selection.subagent_steering_enabled,
+            ),
+            optional_bool_field(
+                "subagent_background_enabled",
+                selection.subagent_background_enabled,
+            ),
+            selection
+                .cross_deployment_spawn_timeout_seconds
+                .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
             optional_bool_field("enable_defra_query", selection.enable_defra_query),
             selection
                 .defra_query_collections

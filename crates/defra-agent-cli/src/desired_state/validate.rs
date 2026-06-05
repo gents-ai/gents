@@ -110,6 +110,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 ));
             }
         }
+        for (index, target) in selection.subagent_targets.iter().enumerate() {
+            if target.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {} has empty subagent_targets[{index}]",
+                    selection.selection_id
+                ));
+            }
+        }
         if let Some(mode) = selection.command_network_mode.as_deref() {
             if let Err(error) = CommandNetworkMode::parse(mode) {
                 errors.push(format!(

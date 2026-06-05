@@ -586,6 +586,160 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-empty-list-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-empty-list-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+    let behavior = read_json_file(
+        &root
+            .join("agent-behaviors")
+            .join(&behavior_id)
+            .join("object.json"),
+    )?;
+    let selection_id = behavior
+        .get("tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing tool_selection_id after export"))?
+        .to_string();
+    let selection_path = root
+        .join("tool-selections")
+        .join(&selection_id)
+        .join("object.json");
+    let mut selection = read_json_file(&selection_path)?;
+    selection["display_name"] = Value::String("Empty list regression".to_string());
+    for field in [
+        "command_allowed_argv_prefixes",
+        "command_forbidden_argv_prefixes",
+        "cli_tool_names",
+        "allowed_mcp_service_ids",
+        "delegate_to",
+        "backgroundable_tool_names",
+        "subagent_targets",
+        "defra_query_collections",
+    ] {
+        selection[field] = Value::Array(Vec::new());
+    }
+    selection["subagent_spawn_enabled"] = Value::Bool(false);
+    selection["subagent_steering_enabled"] = Value::Bool(false);
+    selection["subagent_background_enabled"] = Value::Bool(false);
+    selection["cross_deployment_spawn_timeout_seconds"] = Value::Null;
+    write_json_file(&selection_path, &selection)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let validated = run_cli_json(&home_dir, &["config", "validate", "--root", root_str])?;
+    assert_eq!(validated.get("ok").and_then(Value::as_bool), Some(true));
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        applied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let reapplied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        reapplied.get("status").and_then(Value::as_str),
+        Some("noop")
+    );
+    assert_eq!(
+        reapplied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    selection_id
+                    display_name
+                    command_allowed_argv_prefixes
+                    command_forbidden_argv_prefixes
+                    cli_tool_names
+                    allowed_mcp_service_ids
+                    delegate_to
+                    backgroundable_tool_names
+                    subagent_targets
+                    subagent_spawn_enabled
+                    subagent_steering_enabled
+                    subagent_background_enabled
+                    defra_query_collections
+                }}
+            }}"#,
+            escape_graphql_string(&selection_id),
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&response, "ToolSelection")?;
+    assert_eq!(
+        row.get("display_name").and_then(Value::as_str),
+        Some("Empty list regression")
+    );
+    for field in [
+        "command_allowed_argv_prefixes",
+        "command_forbidden_argv_prefixes",
+        "cli_tool_names",
+        "allowed_mcp_service_ids",
+        "delegate_to",
+        "backgroundable_tool_names",
+        "subagent_targets",
+        "defra_query_collections",
+    ] {
+        assert!(
+            row.get(field).is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+            }),
+            "expected {field} to query back as null or empty array, got {row}"
+        );
+    }
+
+    Ok(())
+}
+
 /// End-to-end test for the EventTrigger apply path.
 ///
 /// Covers the runtime-ownership contract for `EventTrigger`:

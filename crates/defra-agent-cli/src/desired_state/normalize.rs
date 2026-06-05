@@ -57,6 +57,8 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         selection.delegate_to.dedup();
         selection.backgroundable_tool_names.sort();
         selection.backgroundable_tool_names.dedup();
+        selection.subagent_targets.sort();
+        selection.subagent_targets.dedup();
     }
     for backend in &mut manifest.inference_backends {
         normalize_optional_string(&mut backend.api_key);

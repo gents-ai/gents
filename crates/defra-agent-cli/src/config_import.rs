@@ -1824,6 +1824,11 @@ mod lean_apply_write_boundary_tests {
                 .collect(),
             delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            subagent_targets: Vec::new(),
+            subagent_spawn_enabled: false,
+            subagent_steering_enabled: false,
+            subagent_background_enabled: false,
+            cross_deployment_spawn_timeout_seconds: None,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
         }

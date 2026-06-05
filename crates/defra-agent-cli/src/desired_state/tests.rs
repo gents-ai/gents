@@ -254,6 +254,11 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
+        subagent_targets: Vec::new(),
+        subagent_spawn_enabled: false,
+        subagent_steering_enabled: false,
+        subagent_background_enabled: false,
+        cross_deployment_spawn_timeout_seconds: None,
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
     }
@@ -357,6 +362,51 @@ fn tool_service_registry_round_trip_preserves_send_agent_did() {
     let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
         .expect("manifest should parse back from bundle");
     assert!(round_tripped.tool_service_registries[0].send_agent_did);
+}
+
+#[test]
+fn tool_selection_round_trip_preserves_subagent_controls() {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut selection = sample_tool_selection("default-tools");
+    selection.subagent_targets = vec!["researcher".to_string()];
+    selection.subagent_spawn_enabled = true;
+    selection.subagent_steering_enabled = true;
+    selection.subagent_background_enabled = true;
+    selection.cross_deployment_spawn_timeout_seconds = Some(90);
+    manifest.tool_selections.push(selection);
+
+    let bundle =
+        export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
+    let exported_selection = &bundle.as_bundle().tool_selections[0];
+    assert_eq!(
+        exported_selection["subagent_targets"],
+        json!(["researcher"])
+    );
+    assert_eq!(exported_selection["subagent_spawn_enabled"], json!(true));
+    assert_eq!(exported_selection["subagent_steering_enabled"], json!(true));
+    assert_eq!(
+        exported_selection["subagent_background_enabled"],
+        json!(true)
+    );
+    assert_eq!(
+        exported_selection["cross_deployment_spawn_timeout_seconds"],
+        json!(90)
+    );
+
+    let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
+        .expect("manifest should parse back from bundle");
+    let round_tripped_selection = &round_tripped.tool_selections[0];
+    assert_eq!(
+        round_tripped_selection.subagent_targets,
+        vec!["researcher".to_string()]
+    );
+    assert!(round_tripped_selection.subagent_spawn_enabled);
+    assert!(round_tripped_selection.subagent_steering_enabled);
+    assert!(round_tripped_selection.subagent_background_enabled);
+    assert_eq!(
+        round_tripped_selection.cross_deployment_spawn_timeout_seconds,
+        Some(90)
+    );
 }
 
 #[test]

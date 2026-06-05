@@ -135,6 +135,16 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) delegate_to: Vec<String>,
     #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[serde(default)]
+    pub(crate) subagent_targets: Vec<String>,
+    #[serde(default)]
+    pub(crate) subagent_spawn_enabled: bool,
+    #[serde(default)]
+    pub(crate) subagent_steering_enabled: bool,
+    #[serde(default)]
+    pub(crate) subagent_background_enabled: bool,
+    #[serde(default)]
+    pub(crate) cross_deployment_spawn_timeout_seconds: Option<u32>,
     #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,
     #[serde(default)]
