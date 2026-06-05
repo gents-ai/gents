@@ -634,6 +634,13 @@ Started after the adapter-driven reframing:
   asks `/acp/document/decide` for each runtime row `_docID`, denies the root
   request fail-closed, and filters denied child/content rows before building
   adapter output.
+- An ignored live-inference binary E2E test runs a real tool-backed request
+  against the configured OpenAI-compatible endpoint, then exports the persisted
+  run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
+  OpenAI/Codex training JSONL, LangGraph training JSONL, and multi-agent
+  training JSONL. The assertions check persisted tool evidence, projection
+  provenance, redaction, and adapter invariants without depending on exact
+  model prose.
 
 Still pending for the adapter-driven slice:
 
@@ -645,5 +652,3 @@ Still pending for the adapter-driven slice:
 - Broader LangGraph external captures for subgraphs or provider-backed agents
   if those expose compatibility issues the current state-history fixture does
   not cover.
-- Optional live-inference projection test that asserts persisted state and
-  adapter invariants.
