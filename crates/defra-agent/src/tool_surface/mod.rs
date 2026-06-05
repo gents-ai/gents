@@ -20,8 +20,8 @@ use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TO
 use crate::document_config::SubagentTarget;
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
-    background_tool_names, build_background_tools, build_context_budget_tool, build_subagent_tools,
-    build_session_history_tool, subagent_tool_names, CliToolConfig, ToolSet,
+    background_tool_names, build_background_tools, build_context_budget_tool,
+    build_session_history_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
     CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 
