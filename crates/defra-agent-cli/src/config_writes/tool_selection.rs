@@ -54,11 +54,19 @@ mod tests {
             .await?;
         ensure_runtime_schemas(&node).await?;
 
+        // A valid `subagent_targets` entry is the JSON serialization of a named
+        // SubagentTarget, not a bare behavior id.
+        let target = defra_agent::subagent_target_entry(
+            "amy-research",
+            "did:test:subagent-enablement",
+            "amy-research",
+            None,
+        );
         let selection = ToolSelectionDocument {
             selection_id: "test-subagent-fields".to_string(),
             agent_did: "did:test:subagent-enablement".to_string(),
             subagent_spawn_enabled: Some(true),
-            subagent_targets: Some(vec!["amy-research".to_string()]),
+            subagent_targets: Some(vec![target.clone()]),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
             subagent_allow_cross_deployment: Some(true),
@@ -85,7 +93,7 @@ mod tests {
         );
         assert_eq!(
             loaded.subagent_targets,
-            Some(vec!["amy-research".to_string()]),
+            Some(vec![target.clone()]),
             "subagent_targets must persist"
         );
         assert_eq!(
@@ -129,13 +137,22 @@ mod tests {
         ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Local(node);
 
+        // A valid `subagent_targets` entry is the JSON serialization of a named
+        // SubagentTarget, not a bare behavior id.
+        let target = defra_agent::subagent_target_entry(
+            "amy-research",
+            "did:test:clobber",
+            "amy-research",
+            None,
+        );
+
         // Step 1: an apply-style write enables subagents.
         let applied = ToolSelectionDocument {
             selection_id: "test-clobber".to_string(),
             agent_did: "did:test:clobber".to_string(),
             display_name: Some("Original".to_string()),
             subagent_spawn_enabled: Some(true),
-            subagent_targets: Some(vec!["amy-research".to_string()]),
+            subagent_targets: Some(vec![target.clone()]),
             subagent_background_enabled: Some(true),
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
@@ -181,7 +198,7 @@ mod tests {
         );
         assert_eq!(
             loaded.subagent_targets,
-            Some(vec!["amy-research".to_string()]),
+            Some(vec![target.clone()]),
             "subagent_targets must NOT be clobbered by a None update"
         );
         assert_eq!(
