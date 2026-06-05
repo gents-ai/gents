@@ -27,6 +27,7 @@ use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 enum BackgroundTaskResult {
     Router(Result<()>),
     RouterObserver(Result<()>),
+    ExecutorStatus(Result<()>),
     Reconcile(Result<()>),
     Control(Result<()>),
     SubagentCompletion(Result<()>),
@@ -38,6 +39,9 @@ pub(in crate::agent) async fn run_agent(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
+    crate::migration::ensure_agent_runtime_executor_status_migrations(agent.node.clone())
+        .await
+        .context("ensure AgentRuntime executor status migrations")?;
     let runtime_status =
         RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
     runtime_status
@@ -322,6 +326,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let executor_status_active_snapshot_rx = active_snapshot_rx.clone();
+    let executor_status_runtime_status = runtime_status.clone();
+    let executor_status_shutdown = shutdown.clone();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::ExecutorStatus(
+            crate::runtime_status::run_executor_status_observer(
+                executor_status_active_snapshot_rx,
+                executor_status_runtime_status,
+                executor_status_shutdown,
+            )
+            .await,
+        )
+    });
+
     let reconcile_active_snapshot_tx = active_snapshot_tx.clone();
     let reconcile_shutdown = shutdown.clone();
     background_tasks.spawn(async move {
@@ -366,6 +384,7 @@ pub(in crate::agent) async fn run_agent(
         Some(joined) = background_tasks.join_next() => match joined {
             Ok(BackgroundTaskResult::Router(result)) => (result, false),
             Ok(BackgroundTaskResult::RouterObserver(result)) => (result, false),
+            Ok(BackgroundTaskResult::ExecutorStatus(result)) => (result, false),
             Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),

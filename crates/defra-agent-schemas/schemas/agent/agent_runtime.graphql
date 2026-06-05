@@ -7,6 +7,9 @@ type AgentRuntime @branchable {
     default_behavior_id: String @index
     runnable_behavior_count: Int
     unavailable_behavior_count: Int
+    behavior_executor_capacity: Int
+    behavior_executor_queue_depth: Int
+    behavior_executor_status_json: String
     last_reconcile_result: String @index
     last_reconcile_error: String
     last_reconcile_completed_at: String @index

@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use serde::Serialize;
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::watch;
@@ -274,10 +275,34 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn activate(
         self,
         generation: u64,
         dispatchers: DispatcherMap,
+    ) -> ActiveRuntimeSnapshot {
+        let behavior_executor_capacities = dispatchers
+            .keys()
+            .map(|behavior_id| (behavior_id.clone(), 1))
+            .collect();
+        let behavior_executor_queue_capacities = dispatchers
+            .iter()
+            .map(|(behavior_id, dispatcher)| (behavior_id.clone(), dispatcher.max_capacity()))
+            .collect();
+        self.activate_with_executor_metadata(
+            generation,
+            dispatchers,
+            behavior_executor_capacities,
+            behavior_executor_queue_capacities,
+        )
+    }
+
+    pub(crate) fn activate_with_executor_metadata(
+        self,
+        generation: u64,
+        dispatchers: DispatcherMap,
+        behavior_executor_capacities: HashMap<String, usize>,
+        behavior_executor_queue_capacities: HashMap<String, usize>,
     ) -> ActiveRuntimeSnapshot {
         debug_assert!(
             self.principal.is_some(),
@@ -301,6 +326,8 @@ impl ResolvedRuntimeSnapshot {
             unavailable_event_triggers: self.unavailable_event_triggers,
             active_tasks: self.active_tasks,
             dispatchers,
+            behavior_executor_capacities,
+            behavior_executor_queue_capacities,
         }
     }
 
@@ -339,6 +366,15 @@ pub struct ActiveRuntimeSnapshot {
     pub unavailable_event_triggers: HashSet<String>,
     pub active_tasks: HashMap<String, ResolvedTask>,
     pub dispatchers: DispatcherMap,
+    pub behavior_executor_capacities: HashMap<String, usize>,
+    pub behavior_executor_queue_capacities: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct BehaviorExecutorStatus {
+    pub(crate) worker_capacity: usize,
+    pub(crate) queue_depth: usize,
+    pub(crate) queue_capacity: usize,
 }
 
 impl ActiveRuntimeSnapshot {
@@ -368,6 +404,46 @@ impl ActiveRuntimeSnapshot {
         self.unavailable_behaviors
             .get(behavior_id)
             .map(String::as_str)
+    }
+
+    pub(crate) fn behavior_executor_statuses(&self) -> BTreeMap<String, BehaviorExecutorStatus> {
+        let mut behavior_ids = self
+            .behaviors
+            .keys()
+            .chain(self.dispatchers.keys())
+            .chain(self.behavior_executor_capacities.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        behavior_ids.extend(self.behavior_executor_queue_capacities.keys().cloned());
+
+        behavior_ids
+            .into_iter()
+            .map(|behavior_id| {
+                let dispatcher = self.dispatchers.get(&behavior_id);
+                let queue_capacity = self
+                    .behavior_executor_queue_capacities
+                    .get(&behavior_id)
+                    .copied()
+                    .or_else(|| dispatcher.map(mpsc::Sender::max_capacity))
+                    .unwrap_or_default();
+                let queue_depth = dispatcher
+                    .map(|dispatcher| queue_capacity.saturating_sub(dispatcher.capacity()))
+                    .unwrap_or_default();
+                let worker_capacity = self
+                    .behavior_executor_capacities
+                    .get(&behavior_id)
+                    .copied()
+                    .unwrap_or_else(|| if dispatcher.is_some() { 1 } else { 0 });
+                (
+                    behavior_id,
+                    BehaviorExecutorStatus {
+                        worker_capacity,
+                        queue_depth,
+                        queue_capacity,
+                    },
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn configuration_fingerprint(&self) -> String {

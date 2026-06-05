@@ -24,6 +24,8 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
@@ -41,6 +43,8 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     });
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -114,6 +118,8 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
@@ -131,6 +137,8 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     });
     let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

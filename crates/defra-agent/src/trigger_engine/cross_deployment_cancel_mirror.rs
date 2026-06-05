@@ -420,6 +420,8 @@ mod tests {
             unavailable_event_triggers: HashSet::new(),
             active_tasks: HashMap::new(),
             dispatchers: HashMap::new(),
+            behavior_executor_capacities: HashMap::new(),
+            behavior_executor_queue_capacities: HashMap::new(),
         })
     }
 

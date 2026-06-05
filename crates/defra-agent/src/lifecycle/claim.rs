@@ -293,3 +293,178 @@ impl RequestLifecycle {
         Ok(ClaimOutcome::Claimed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    const TEST_AGENT_DID: &str = "did:defra-agent:claim-order-test";
+    const TEST_BEHAVIOR_ID: &str = "general";
+    const TEST_BACKEND_ID: &str = "backend-order";
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        node
+    }
+
+    async fn insert_pending_request(
+        node: &EmbeddedNode,
+        request_id: &str,
+        session_id: &str,
+        created_at: &str,
+    ) -> AgentRequest {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let escaped_session_id = escape_graphql_string(session_id);
+        let escaped_created_at = escape_graphql_string(created_at);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{escaped_request_id}",
+                    agent_did: "{TEST_AGENT_DID}",
+                    behavior_id: "{TEST_BEHAVIOR_ID}",
+                    session_id: "{escaped_session_id}",
+                    retry_parent_request: "",
+                    retry_root_request: "{escaped_request_id}",
+                    superseded_by_request: "",
+                    content: "same-session request",
+                    status: "pending",
+                    lifecycle_state: "pending",
+                    backend_id: "",
+                    execution_origin: "interactive",
+                    failure_reason: "",
+                    created_at: "{escaped_created_at}",
+                    retry_count: 0,
+                    max_retries: {max_retries},
+                    subagent_depth: 0
+                }}) {{ _docID }}
+            }}"#,
+            max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+        );
+        let response =
+            session::execute_mutation_with_retry(node, &mutation, "insert_pending_request")
+                .await
+                .unwrap();
+        let inline_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("create_AgentRequest"))
+            .and_then(|value| {
+                value
+                    .get("_docID")
+                    .and_then(|doc_id| doc_id.as_str())
+                    .or_else(|| {
+                        value
+                            .as_array()
+                            .and_then(|rows| rows.first())
+                            .and_then(|row| row.get("_docID"))
+                            .and_then(|doc_id| doc_id.as_str())
+                    })
+            })
+            .map(ToOwned::to_owned);
+        let doc_id = match inline_doc_id {
+            Some(doc_id) => doc_id,
+            None => lookup_request_doc_id(node, request_id)
+                .await
+                .expect("created AgentRequest doc id"),
+        };
+
+        AgentRequest {
+            doc_id,
+            request_id: request_id.to_string(),
+            agent_did: TEST_AGENT_DID.to_string(),
+            behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
+            session_id: session_id.to_string(),
+            content: "same-session request".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            execution_origin: Some("interactive".to_string()),
+            created_at: created_at.to_string(),
+            deadline: None,
+            subagent_depth: 0,
+            caused_by_parent_request_id: None,
+            caused_by_parent_tool_call_id: None,
+        }
+    }
+
+    async fn lookup_request_doc_id(
+        node: &EmbeddedNode,
+        request_id: &str,
+    ) -> anyhow::Result<String> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("query created AgentRequest failed: {:?}", response.errors);
+        }
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|value| value.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("AgentRequest {request_id} not found"))
+    }
+
+    #[tokio::test]
+    async fn claim_preserves_same_session_ordering() {
+        let node = test_node().await;
+        let first = insert_pending_request(
+            node.as_ref(),
+            "same-session-request-1",
+            "same-session",
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+        let second = insert_pending_request(
+            node.as_ref(),
+            "same-session-request-2",
+            "same-session",
+            "2026-01-01T00:00:01Z",
+        )
+        .await;
+
+        let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            TEST_BEHAVIOR_ID,
+            TEST_AGENT_DID,
+            first,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
+            node,
+            TEST_BEHAVIOR_ID,
+            TEST_AGENT_DID,
+            second,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+
+        assert_eq!(
+            first_lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            second_lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Queued
+        );
+    }
+}

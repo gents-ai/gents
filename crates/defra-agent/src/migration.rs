@@ -105,6 +105,12 @@ const ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH: &str = r#"[
     {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":5}}
 ]"#;
 
+const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":5}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":5}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -651,6 +657,33 @@ pub async fn ensure_tool_service_health_state_migrations(node: Arc<EmbeddedNode>
     Ok(())
 }
 
+pub async fn ensure_agent_runtime_executor_status_migrations(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentRuntime")
+        .context("get AgentRuntime collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "behavior_executor_status_json") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection("AgentRuntime", ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH)
+        .await
+        .context("patch_collection AgentRuntime executor status fields")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version AgentRuntime executor status fields")?;
+    tracing::info!(
+        version = %next.version_id,
+        "AgentRuntime patched with behavior executor status fields"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
@@ -722,6 +755,7 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
+            ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
@@ -740,5 +774,18 @@ mod patch_kind_tests {
                 "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
             );
         }
+    }
+
+    #[test]
+    fn agent_runtime_executor_status_field_kinds_match_sdl() {
+        let fields = field_kinds(ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH);
+        assert_eq!(
+            fields,
+            vec![
+                ("behavior_executor_capacity".to_string(), 5),
+                ("behavior_executor_queue_depth".to_string(), 5),
+                ("behavior_executor_status_json".to_string(), 11),
+            ]
+        );
     }
 }

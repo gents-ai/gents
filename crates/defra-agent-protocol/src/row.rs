@@ -140,6 +140,12 @@ pub struct AgentRuntimeRow {
     #[serde(default)]
     pub unavailable_behavior_count: Option<i64>,
     #[serde(default)]
+    pub behavior_executor_capacity: Option<i64>,
+    #[serde(default)]
+    pub behavior_executor_queue_depth: Option<i64>,
+    #[serde(default)]
+    pub behavior_executor_status_json: Option<String>,
+    #[serde(default)]
     pub last_reconcile_result: Option<String>,
     #[serde(default)]
     pub last_reconcile_error: Option<String>,
