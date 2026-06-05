@@ -625,6 +625,9 @@ Started after the adapter-driven reframing:
 - A Docker-backed LangGraph fixture generator runs a real LangGraph
   `StateGraph`, captures `get_state_history`, and emits a wrapped
   `langgraph_state_history` adapter fixture for the external harness.
+- The LangGraph fixture generator also emits a compiled-subgraph capture that
+  projects parent/subgraph nodes, nested transitions, subgraph tasks, and the
+  child request boundary through the same external harness.
 - A Docker-backed AutoGen AgentChat fixture generator runs a real
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
@@ -656,6 +659,6 @@ Still pending for the adapter-driven slice:
 - Broader multi-agent captures for CrewAI, AutoGen handoffs/swarm, or Microsoft
   Agent Framework if those expose compatibility issues the current AutoGen team
   fixture does not cover.
-- Broader LangGraph external captures for subgraphs or provider-backed agents
-  if those expose compatibility issues the current state-history fixture does
-  not cover.
+- Broader LangGraph external captures for provider-backed agents if those
+  expose compatibility issues the current linear and compiled-subgraph fixtures
+  do not cover.

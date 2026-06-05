@@ -100,9 +100,10 @@ external outputs satisfy the shared Defra Agent projection contract.
 
 ## Generators
 
-- `generators/langgraph/` builds a Docker image that executes a real LangGraph
-  `StateGraph`, captures `get_state_history`, and writes a wrapped
-  `langgraph_state_history` fixture into the mounted output directory.
+- `generators/langgraph/` builds a Docker image that executes real LangGraph
+  `StateGraph` flows, captures `get_state_history`, and writes wrapped
+  `langgraph_state_history` fixtures into the mounted output directory. It
+  emits both a linear retry/delegation graph and a compiled-subgraph graph.
 - `generators/autogen/` builds a Docker image that executes a real AutoGen
   AgentChat `RoundRobinGroupChat` with deterministic custom agents and writes a
   wrapped `multi_agent_task` fixture into the mounted output directory.
