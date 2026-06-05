@@ -625,14 +625,18 @@ Started after the adapter-driven reframing:
 - A Docker-backed LangGraph fixture generator runs a real LangGraph
   `StateGraph`, captures `get_state_history`, and emits a wrapped
   `langgraph_state_history` adapter fixture for the external harness.
+- A Docker-backed AutoGen AgentChat fixture generator runs a real
+  `RoundRobinGroupChat` with deterministic custom agents, captures the native
+  `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
+  external harness.
 
 Still pending for the adapter-driven slice:
 
 - Native DefraDB ACP decision integration for projection loaders, replacing the
   current explicit document-scope gates where possible.
-- Real upstream fixture generators/captures for multi-agent systems, including
-  Docker or live-framework generation where fixtures alone do not catch
-  compatibility issues.
+- Broader multi-agent captures for CrewAI, AutoGen handoffs/swarm, or Microsoft
+  Agent Framework if those expose compatibility issues the current AutoGen team
+  fixture does not cover.
 - Broader LangGraph external captures for subgraphs or provider-backed agents
   if those expose compatibility issues the current state-history fixture does
   not cover.
