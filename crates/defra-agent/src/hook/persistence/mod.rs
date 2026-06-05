@@ -58,3 +58,22 @@ mod subagent_bridge;
 mod subagent_tools;
 
 use helpers::*;
+
+impl DefraSessionHook {
+    /// Rig 0.35 lets `on_tool_call` substitute `Skip` text, but `on_tool_result`
+    /// cannot replace the result already headed into rig's live message vector.
+    /// Bound every hook-managed skip so defra-owned control tools do not become
+    /// an in-loop context bypass.
+    pub(super) fn skip_tool_result(
+        &self,
+        tool_name: &str,
+        result: impl Into<String>,
+    ) -> ToolCallHookAction {
+        let result = result.into();
+        ToolCallHookAction::skip(bounded_tool_result_for_model(
+            tool_name,
+            &result,
+            &self.truncation_limits,
+        ))
+    }
+}

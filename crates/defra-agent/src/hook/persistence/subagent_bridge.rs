@@ -954,7 +954,7 @@ impl DefraSessionHook {
             deadline_at,
         );
         lifecycle.spawn_failed(failure_class, &result).await?;
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -981,6 +981,6 @@ impl DefraSessionHook {
             deadline_at,
         );
         lifecycle.spawn_failed(failure_class, &result).await?;
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(tool_name, result))
     }
 }

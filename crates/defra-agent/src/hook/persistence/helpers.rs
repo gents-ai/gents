@@ -201,6 +201,26 @@ pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
     }
 }
 
+pub(super) fn bounded_tool_result_for_model(
+    tool_name: &str,
+    raw_result: &str,
+    limits: &crate::truncation::TruncationLimits,
+) -> String {
+    let (bounded, trigger, truncated) =
+        truncate_text(raw_result, truncation_mode_for(tool_name), limits);
+    if truncated {
+        tracing::warn!(
+            tool_name = %tool_name,
+            truncated_by = ?trigger,
+            original_bytes = raw_result.len(),
+            max_lines = limits.max_lines,
+            max_bytes = limits.max_bytes,
+            "bounded hook-managed tool result before returning it to rig"
+        );
+    }
+    bounded
+}
+
 pub(super) fn model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
     if !is_read_file_tool(tool_name) {
         return raw_result.to_string();
@@ -641,6 +661,21 @@ mod tests {
         let raw = r#"{"ok":true,"content":"still structured"}"#;
 
         assert_eq!(model_observation_for_tool_result("grep", raw), raw);
+    }
+
+    #[test]
+    fn hook_managed_tool_result_is_bounded_before_model_loop() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 2,
+            max_bytes: 80,
+        };
+        let raw = "line 1\nline 2\nline 3\nline 4";
+
+        let bounded = bounded_tool_result_for_model("wait_subagent", raw, &limits);
+
+        assert!(bounded.contains("line 1\nline 2"));
+        assert!(!bounded.contains("line 3"));
+        assert!(bounded.contains("[Showing lines 1-2 of 4"));
     }
 
     #[test]

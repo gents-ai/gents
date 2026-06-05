@@ -256,13 +256,16 @@ impl DefraSessionHook {
             executions.remove(&execution_call_id).await;
         });
 
-        Ok(ToolCallHookAction::skip(json_string(json!({
-            "ok": true,
-            "tool_call_id": background_tool_call_id,
-            "tool_name": target_tool_name,
-            "await_mode": "background",
-            "status": "running"
-        }))))
+        Ok(self.skip_tool_result(
+            BACKGROUND_TOOL_NAME,
+            json_string(json!({
+                "ok": true,
+                "tool_call_id": background_tool_call_id,
+                "tool_name": target_tool_name,
+                "await_mode": "background",
+                "status": "running"
+            })),
+        ))
     }
 
     pub(super) async fn persist_wait_tool_call(
@@ -282,7 +285,8 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<WaitToolArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    WAIT_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         WAIT_TOOL_NAME,
                         "/",
@@ -293,7 +297,8 @@ impl DefraSessionHook {
         };
         let background_tool_call_id = parsed.tool_call_id.trim();
         if background_tool_call_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(
+            return Ok(self.skip_tool_result(
+                WAIT_TOOL_NAME,
                 background_invalid_tool_arguments_payload(
                     WAIT_TOOL_NAME,
                     "/tool_call_id",
@@ -308,7 +313,8 @@ impl DefraSessionHook {
         {
             Ok(result) => result,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    WAIT_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         WAIT_TOOL_NAME,
                         "/tool_call_id",
@@ -317,7 +323,7 @@ impl DefraSessionHook {
                 ));
             }
         };
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(WAIT_TOOL_NAME, result))
     }
 
     pub(super) async fn persist_list_background_tools_tool_call(
@@ -337,7 +343,8 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<ListBackgroundToolsArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    LIST_BACKGROUND_TOOLS_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         LIST_BACKGROUND_TOOLS_TOOL_NAME,
                         "/",
@@ -351,7 +358,7 @@ impl DefraSessionHook {
         let result = serde_json::to_value(response).map_err(|error| {
             anyhow::anyhow!("serialize list_background_tools response: {error}")
         })?;
-        Ok(ToolCallHookAction::skip(json_string(result)))
+        Ok(self.skip_tool_result(LIST_BACKGROUND_TOOLS_TOOL_NAME, json_string(result)))
     }
 
     pub(super) async fn persist_read_tool_output_tool_call(
@@ -371,7 +378,8 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<ReadToolOutputArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         READ_TOOL_OUTPUT_TOOL_NAME,
                         "/",
@@ -382,7 +390,8 @@ impl DefraSessionHook {
         };
         let background_tool_call_id = parsed.tool_call_id.trim().to_string();
         if background_tool_call_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(
+            return Ok(self.skip_tool_result(
+                READ_TOOL_OUTPUT_TOOL_NAME,
                 background_invalid_tool_arguments_payload(
                     READ_TOOL_OUTPUT_TOOL_NAME,
                     "/tool_call_id",
@@ -396,16 +405,18 @@ impl DefraSessionHook {
                 let result = serde_json::to_value(response).map_err(|error| {
                     anyhow::anyhow!("serialize read_tool_output response: {error}")
                 })?;
-                Ok(ToolCallHookAction::skip(json_string(result)))
+                Ok(self.skip_tool_result(READ_TOOL_OUTPUT_TOOL_NAME, json_string(result)))
             }
-            ReadToolOutputOutcome::NotBackgrounded => Ok(ToolCallHookAction::skip(
+            ReadToolOutputOutcome::NotBackgrounded => Ok(self.skip_tool_result(
+                READ_TOOL_OUTPUT_TOOL_NAME,
                 background_invalid_tool_arguments_payload(
                     READ_TOOL_OUTPUT_TOOL_NAME,
                     "/tool_call_id",
                     "tool_call_id must identify an ordinary backgrounded tool call",
                 ),
             )),
-            ReadToolOutputOutcome::NotAuthorized => Ok(ToolCallHookAction::skip(
+            ReadToolOutputOutcome::NotAuthorized => Ok(self.skip_tool_result(
+                READ_TOOL_OUTPUT_TOOL_NAME,
                 background_tool_not_allowed_payload(
                     READ_TOOL_OUTPUT_TOOL_NAME,
                     "/tool_call_id",
@@ -434,7 +445,8 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<CancelToolArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    CANCEL_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         CANCEL_TOOL_NAME,
                         "/",
@@ -445,7 +457,8 @@ impl DefraSessionHook {
         };
         let background_tool_call_id = parsed.tool_call_id.trim();
         if background_tool_call_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(
+            return Ok(self.skip_tool_result(
+                CANCEL_TOOL_NAME,
                 background_invalid_tool_arguments_payload(
                     CANCEL_TOOL_NAME,
                     "/tool_call_id",
@@ -458,7 +471,8 @@ impl DefraSessionHook {
             .as_deref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
-            return Ok(ToolCallHookAction::skip(
+            return Ok(self.skip_tool_result(
+                CANCEL_TOOL_NAME,
                 background_invalid_tool_arguments_payload(
                     CANCEL_TOOL_NAME,
                     "/reason",
@@ -473,7 +487,8 @@ impl DefraSessionHook {
         {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(
+                return Ok(self.skip_tool_result(
+                    CANCEL_TOOL_NAME,
                     background_invalid_tool_arguments_payload(
                         CANCEL_TOOL_NAME,
                         "/tool_call_id",
@@ -483,10 +498,10 @@ impl DefraSessionHook {
             }
         };
         if lifecycle.is_terminal() {
-            return self
+            let result = self
                 .background_tool_envelope(lifecycle, "explicit_cancel")
-                .await
-                .map(ToolCallHookAction::skip);
+                .await?;
+            return Ok(self.skip_tool_result(CANCEL_TOOL_NAME, result));
         }
 
         let notification_tool_name = lifecycle.tool_name().to_string();
@@ -515,10 +530,13 @@ impl DefraSessionHook {
                 "failed to append explicitly cancelled background tool notification"
             );
         }
-        Ok(ToolCallHookAction::skip(json_string(json!({
-            "ok": true,
-            "tool_call_id": background_tool_call_id,
-            "status": "cancelled"
-        }))))
+        Ok(self.skip_tool_result(
+            CANCEL_TOOL_NAME,
+            json_string(json!({
+                "ok": true,
+                "tool_call_id": background_tool_call_id,
+                "status": "cancelled"
+            })),
+        ))
     }
 }

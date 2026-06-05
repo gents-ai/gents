@@ -439,7 +439,7 @@ impl DefraSessionHook {
                 .await
                 .insert(internal_call_id.to_string(), lifecycle);
 
-            return Ok(ToolCallHookAction::skip(receipt));
+            return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, receipt));
         }
 
         let child_session_id = if let Err(error) = create_subagent_request_with_request_id(
@@ -473,7 +473,7 @@ impl DefraSessionHook {
                             failure_class: FailureClass::External,
                         })
                         .await?;
-                    return Ok(ToolCallHookAction::skip(result));
+                    return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result));
                 }
                 Err(_) => {
                     let result = service_unavailable_payload(
@@ -488,7 +488,7 @@ impl DefraSessionHook {
                             failure_class: FailureClass::External,
                         })
                         .await?;
-                    return Ok(ToolCallHookAction::skip(result));
+                    return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result));
                 }
             }
         } else if let Some(child_session_id) =
@@ -508,7 +508,7 @@ impl DefraSessionHook {
                     failure_class: FailureClass::External,
                 })
                 .await?;
-            return Ok(ToolCallHookAction::skip(result));
+            return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result));
         };
 
         if await_mode == AwaitMode::Background {
@@ -520,7 +520,7 @@ impl DefraSessionHook {
                 .await
                 .insert(internal_call_id.to_string(), lifecycle);
 
-            return Ok(ToolCallHookAction::skip(receipt));
+            return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, receipt));
         }
 
         self.in_flight_lifecycles
@@ -539,7 +539,7 @@ impl DefraSessionHook {
             )
             .await?;
 
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
 
     pub(super) async fn subagent_target_host(
