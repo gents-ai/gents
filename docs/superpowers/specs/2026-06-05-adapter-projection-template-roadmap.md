@@ -681,6 +681,13 @@ Started after the adapter-driven reframing:
   policy ids, invalid publication states, and rotating bindings without a
   staged policy; real-binary apply/export coverage proves those fields survive
   config publication and re-export.
+- Projection ACP lifecycle coverage now includes the pinned DefraDB ACP policy
+  path at the library boundary: a test builds policy YAML for the runtime
+  projection resources, stores it with validation and DPI enforcement, validates
+  the policy/resource interfaces, registers a projection row document, grants
+  and revokes a reader relationship, exports actor relationships, and checks
+  `DocumentACP::check_doc_access` decisions for owner, reader, and unrelated
+  actors.
 - An ignored live-inference binary E2E test runs a real tool-backed request
   against the configured OpenAI-compatible endpoint, then exports the persisted
   run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
@@ -692,9 +699,10 @@ Started after the adapter-driven reframing:
 Still pending for the adapter-driven slice:
 
 - Broader native ACP lifecycle coverage beyond projection binding
-  validate/apply/export/lifecycle metadata and explicit `--acp-policy-id`
-  GraphQL paths, especially direct DefraDB policy/resource creation and
-  publication API workflows.
+  validate/apply/export/lifecycle metadata, explicit `--acp-policy-id` GraphQL
+  paths, and in-memory DefraDB ACP policy/resource lifecycle coverage,
+  especially HTTP/SourceHub policy publication workflows against a live DefraDB
+  node.
 - Broader multi-agent captures for additional Microsoft Agent Framework shapes
   or CrewAI edge cases, if those expose compatibility issues beyond the current
   AutoGen round-robin, AutoGen Swarm handoff, CrewAI sequential task-context,
