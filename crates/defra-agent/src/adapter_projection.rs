@@ -121,6 +121,37 @@ pub struct AdapterProjectionJsonlRecord {
     pub value: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdapterProjectionTrainingJsonlRecord {
+    pub projection_id: String,
+    pub projection_version: String,
+    pub source_request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+    pub redaction_mode: ProjectionRedactionMode,
+    pub record_index: usize,
+    pub record_id: String,
+    pub sample_kind: String,
+    pub adapter_record_kind: String,
+    pub adapter_record_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_request_id: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdapterProjectionContractError {
     pub violations: Vec<String>,
@@ -513,6 +544,274 @@ pub fn adapter_projection_jsonl_records(
     }
 }
 
+pub fn adapter_projection_training_jsonl_records(
+    envelope: &AdapterProjectionEnvelope,
+) -> Vec<AdapterProjectionTrainingJsonlRecord> {
+    let mut records = Vec::new();
+    match &envelope.output {
+        AdapterProjection::OpenAiCodexRunTrace(projection) => {
+            for item in &projection.items {
+                match item {
+                    OpenAiCodexTraceItem::Request {
+                        id,
+                        status,
+                        lifecycle_state,
+                        input,
+                        timestamp,
+                    } => records.push(training_record(
+                        envelope,
+                        records.len(),
+                        "prompt",
+                        "openai_codex_trace_item",
+                        id,
+                        TrainingRecordFields {
+                            input: input.clone(),
+                            status: lifecycle_state.clone().or(status.clone()),
+                            metadata: metadata([("timestamp", timestamp.clone())]),
+                            ..TrainingRecordFields::default()
+                        },
+                    )),
+                    OpenAiCodexTraceItem::Message {
+                        id,
+                        role,
+                        content,
+                        timestamp,
+                        ..
+                    } => records.push(training_record(
+                        envelope,
+                        records.len(),
+                        "message",
+                        "openai_codex_trace_item",
+                        id,
+                        TrainingRecordFields {
+                            role: Some(role.clone()),
+                            output: Some(content.clone()),
+                            metadata: metadata([("timestamp", timestamp.clone())]),
+                            ..TrainingRecordFields::default()
+                        },
+                    )),
+                    OpenAiCodexTraceItem::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        output,
+                        status,
+                        child_run_id,
+                        started_at,
+                        completed_at,
+                        ..
+                    } => records.push(training_record(
+                        envelope,
+                        records.len(),
+                        "tool_call",
+                        "openai_codex_trace_item",
+                        id,
+                        TrainingRecordFields {
+                            input: Some(arguments.clone()),
+                            output: Some(output.clone()),
+                            tool_name: Some(name.clone()),
+                            status: Some(status.clone()),
+                            child_request_id: child_run_id.clone(),
+                            metadata: metadata([
+                                ("started_at", started_at.clone()),
+                                ("completed_at", completed_at.clone()),
+                            ]),
+                            ..TrainingRecordFields::default()
+                        },
+                    )),
+                    OpenAiCodexTraceItem::Response {
+                        id,
+                        status,
+                        output,
+                        reasoning,
+                        error,
+                        timestamp,
+                    } => records.push(training_record(
+                        envelope,
+                        records.len(),
+                        "response",
+                        "openai_codex_trace_item",
+                        id,
+                        TrainingRecordFields {
+                            output: output.clone(),
+                            status: status.clone(),
+                            metadata: metadata([
+                                ("reasoning", reasoning.clone()),
+                                ("error", error.clone()),
+                                ("timestamp", timestamp.clone()),
+                            ]),
+                            ..TrainingRecordFields::default()
+                        },
+                    )),
+                }
+            }
+        }
+        AdapterProjection::LangGraphStateHistory(projection) => {
+            let output = projection
+                .values
+                .get("final_output")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            records.push(training_record(
+                envelope,
+                records.len(),
+                "state_snapshot",
+                "langgraph_values",
+                &projection.checkpoint_id,
+                TrainingRecordFields {
+                    output,
+                    status: projection
+                        .values
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    metadata: projection.values.clone(),
+                    ..TrainingRecordFields::default()
+                },
+            ));
+            for node in &projection.nodes {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "state_node",
+                    "langgraph_node",
+                    &node.id,
+                    TrainingRecordFields {
+                        status: node.status.clone(),
+                        metadata: metadata([
+                            ("kind", Some(node.kind.clone())),
+                            ("request_id", node.request_id.clone()),
+                        ]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+            for edge in &projection.edges {
+                let mut edge_metadata = BTreeMap::new();
+                edge_metadata.insert("from".to_string(), json!(edge.from));
+                edge_metadata.insert("to".to_string(), json!(edge.to));
+                edge_metadata.insert("kind".to_string(), json!(edge.kind));
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "state_transition",
+                    "langgraph_edge",
+                    &format!("{}->{}:{}", edge.from, edge.to, edge.kind),
+                    TrainingRecordFields {
+                        metadata: edge_metadata,
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+            for task in &projection.tasks {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "task",
+                    "langgraph_task",
+                    &task.id,
+                    TrainingRecordFields {
+                        tool_name: Some(task.name.clone()),
+                        status: Some(task.status.clone()),
+                        child_request_id: task.child_request_id.clone(),
+                        metadata: metadata([("request_id", task.request_id.clone())]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+        }
+        AdapterProjection::MultiAgentTask(projection) => {
+            for participant in &projection.participants {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "participant",
+                    "multi_agent_participant",
+                    participant
+                        .agent_did
+                        .as_deref()
+                        .or(participant.behavior_id.as_deref())
+                        .unwrap_or(participant.role.as_str()),
+                    TrainingRecordFields {
+                        role: Some(participant.role.clone()),
+                        metadata: metadata([
+                            ("agent_did", participant.agent_did.clone()),
+                            ("behavior_id", participant.behavior_id.clone()),
+                        ]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+            for message in &projection.messages {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "message",
+                    "multi_agent_message",
+                    &message.id,
+                    TrainingRecordFields {
+                        role: Some(message.role.clone()),
+                        output: Some(message.content.clone()),
+                        metadata: metadata([("request_id", message.request_id.clone())]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+            for delegation in &projection.delegations {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "delegation",
+                    "multi_agent_delegation",
+                    &format!(
+                        "{}->{}",
+                        delegation.parent_request_id, delegation.child_request_id
+                    ),
+                    TrainingRecordFields {
+                        parent_request_id: Some(delegation.parent_request_id.clone()),
+                        child_request_id: Some(delegation.child_request_id.clone()),
+                        status: delegation.status.clone(),
+                        metadata: metadata([
+                            (
+                                "parent_tool_call_id",
+                                delegation.parent_tool_call_id.clone(),
+                            ),
+                            ("agent_did", delegation.agent_did.clone()),
+                            ("behavior_id", delegation.behavior_id.clone()),
+                        ]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+            for tool_event in &projection.tool_events {
+                records.push(training_record(
+                    envelope,
+                    records.len(),
+                    "tool_call",
+                    "multi_agent_tool_event",
+                    &tool_event.id,
+                    TrainingRecordFields {
+                        tool_name: Some(tool_event.tool_name.clone()),
+                        status: Some(tool_event.status.clone()),
+                        child_request_id: tool_event.child_request_id.clone(),
+                        metadata: metadata([
+                            ("request_id", tool_event.request_id.clone()),
+                            (
+                                "selected_service_id",
+                                tool_event.selected_service_id.clone(),
+                            ),
+                            ("selected_tool_name", tool_event.selected_tool_name.clone()),
+                            ("denial_reason", tool_event.denial_reason.clone()),
+                        ]),
+                        ..TrainingRecordFields::default()
+                    },
+                ));
+            }
+        }
+    }
+    records
+}
+
 pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -581,6 +880,47 @@ pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Va
     })
 }
 
+pub fn adapter_projection_training_jsonl_record_schema(kind: AdapterProjectionKind) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}-training-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "title": format!("{} Training/Eval JSONL Record", kind.title()),
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "projection_id",
+            "projection_version",
+            "source_request_id",
+            "redaction_mode",
+            "record_index",
+            "record_id",
+            "sample_kind",
+            "adapter_record_kind",
+            "adapter_record_id"
+        ],
+        "properties": {
+            "projection_id": { "const": kind.id() },
+            "projection_version": { "const": ADAPTER_PROJECTION_VERSION },
+            "source_request_id": string_schema(),
+            "source_session_id": optional_string_schema(),
+            "redaction_mode": redaction_mode_schema(),
+            "record_index": { "type": "integer", "minimum": 0 },
+            "record_id": string_schema(),
+            "sample_kind": training_sample_kind_schema(kind),
+            "adapter_record_kind": jsonl_record_kind_schema(kind),
+            "adapter_record_id": string_schema(),
+            "role": optional_string_schema(),
+            "input": optional_string_schema(),
+            "output": optional_string_schema(),
+            "tool_name": optional_string_schema(),
+            "status": optional_string_schema(),
+            "parent_request_id": optional_string_schema(),
+            "child_request_id": optional_string_schema(),
+            "metadata": { "type": "object" }
+        }
+    })
+}
+
 pub fn adapter_projection_schema_index() -> Value {
     let projections = [
         AdapterProjectionKind::OpenAiCodexRunTrace,
@@ -597,7 +937,8 @@ pub fn adapter_projection_schema_index() -> Value {
                     "projection_id": kind.id(),
                     "title": kind.title(),
                     "json_schema_id": adapter_projection_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
-                    "jsonl_record_schema_id": adapter_projection_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null)
+                    "jsonl_record_schema_id": adapter_projection_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
+                    "training_jsonl_record_schema_id": adapter_projection_training_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null)
                 })
             })
             .collect::<Vec<_>>()
@@ -851,6 +1192,20 @@ fn jsonl_record_kind_schema(kind: AdapterProjectionKind) -> Value {
     }
 }
 
+fn training_sample_kind_schema(kind: AdapterProjectionKind) -> Value {
+    match kind {
+        AdapterProjectionKind::OpenAiCodexRunTrace => {
+            json!({ "enum": ["prompt", "message", "tool_call", "response"] })
+        }
+        AdapterProjectionKind::LangGraphStateHistory => {
+            json!({ "enum": ["state_snapshot", "state_node", "state_transition", "task"] })
+        }
+        AdapterProjectionKind::MultiAgentTask => {
+            json!({ "enum": ["participant", "message", "delegation", "tool_call"] })
+        }
+    }
+}
+
 fn redaction_mode_schema() -> Value {
     json!({ "enum": ["full", "training_safe", "public"] })
 }
@@ -866,6 +1221,58 @@ fn optional_string_schema() -> Value {
             { "type": "null" }
         ]
     })
+}
+
+#[derive(Default)]
+struct TrainingRecordFields {
+    role: Option<String>,
+    input: Option<String>,
+    output: Option<String>,
+    tool_name: Option<String>,
+    status: Option<String>,
+    parent_request_id: Option<String>,
+    child_request_id: Option<String>,
+    metadata: BTreeMap<String, Value>,
+}
+
+fn training_record(
+    envelope: &AdapterProjectionEnvelope,
+    record_index: usize,
+    sample_kind: &str,
+    adapter_record_kind: &str,
+    adapter_record_id: &str,
+    fields: TrainingRecordFields,
+) -> AdapterProjectionTrainingJsonlRecord {
+    AdapterProjectionTrainingJsonlRecord {
+        projection_id: envelope.projection_id.clone(),
+        projection_version: envelope.projection_version.clone(),
+        source_request_id: envelope.source_request_id.clone(),
+        source_session_id: envelope.source_session_id.clone(),
+        redaction_mode: envelope.redaction_mode,
+        record_index,
+        record_id: format!("{adapter_record_kind}:{adapter_record_id}:{record_index}"),
+        sample_kind: sample_kind.to_string(),
+        adapter_record_kind: adapter_record_kind.to_string(),
+        adapter_record_id: adapter_record_id.to_string(),
+        role: fields.role,
+        input: fields.input,
+        output: fields.output,
+        tool_name: fields.tool_name,
+        status: fields.status,
+        parent_request_id: fields.parent_request_id,
+        child_request_id: fields.child_request_id,
+        metadata: fields.metadata,
+    }
+}
+
+fn metadata<'a, I>(entries: I) -> BTreeMap<String, Value>
+where
+    I: IntoIterator<Item = (&'a str, Option<String>)>,
+{
+    entries
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_string(), Value::String(value))))
+        .collect()
 }
 
 fn jsonl_record(
@@ -1433,6 +1840,16 @@ mod tests {
                 &format!("{} JSONL record {}", kind.id(), record.record_id),
             );
         }
+
+        let training_jsonl_record_schema = adapter_projection_training_jsonl_record_schema(kind);
+        for record in adapter_projection_training_jsonl_records(envelope) {
+            let record_value = serde_json::to_value(&record).unwrap();
+            assert_json_schema_valid(
+                &training_jsonl_record_schema,
+                &record_value,
+                &format!("{} training JSONL record {}", kind.id(), record.record_id),
+            );
+        }
     }
 
     #[test]
@@ -1669,6 +2086,21 @@ mod tests {
                 assert!(
                     observed_record_kinds.contains(*expected),
                     "{fixture_name} missing expected JSONL record kind {expected}"
+                );
+            }
+
+            let training_records = adapter_projection_training_jsonl_records(&envelope);
+            assert!(
+                !training_records.is_empty(),
+                "{fixture_name} fixture should produce training JSONL records"
+            );
+            for (index, record) in training_records.iter().enumerate() {
+                assert_eq!(record.projection_id, kind.id());
+                assert_eq!(record.record_index, index);
+                assert_json_schema_valid(
+                    &adapter_projection_training_jsonl_record_schema(*kind),
+                    &serde_json::to_value(record).unwrap(),
+                    &format!("{fixture_name} training JSONL record {}", record.record_id),
                 );
             }
         }

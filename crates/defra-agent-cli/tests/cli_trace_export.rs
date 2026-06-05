@@ -294,6 +294,27 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
             jsonl_schema, expected_jsonl_schema,
             "{cli_projection} JSONL schema drifted from checked-in snapshot"
         );
+
+        let training_jsonl_schema_output = run_cli_text(
+            tempdir.path(),
+            &[
+                "trace",
+                "project-schema",
+                "--projection",
+                cli_projection,
+                "--format",
+                "training-jsonl",
+            ],
+        )?;
+        let training_jsonl_schema = serde_json::from_str::<Value>(&training_jsonl_schema_output)
+            .context("parsing training JSONL schema")?;
+        let expected_training_jsonl_schema = read_schema_snapshot(&format!(
+            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.training-jsonl-record.schema.json"
+        ))?;
+        assert_eq!(
+            training_jsonl_schema, expected_training_jsonl_schema,
+            "{cli_projection} training JSONL schema drifted from checked-in snapshot"
+        );
     }
 
     Ok(())
@@ -442,6 +463,30 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         !serialized_openai_jsonl.contains("Inspect the repo and show README.md"),
         "public JSONL adapter projection leaked request content: {openai_jsonl:#?}"
     );
+    let openai_training_jsonl =
+        trace_project_training_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
+    assert!(
+        !openai_training_jsonl.is_empty(),
+        "expected openai-codex training JSONL records"
+    );
+    assert!(openai_training_jsonl.iter().all(|record| {
+        record.get("projection_id").and_then(Value::as_str) == Some("openai_codex_run_trace")
+            && record.get("source_request_id").and_then(Value::as_str) == Some("req-1")
+            && record.get("adapter_record_kind").and_then(Value::as_str)
+                == Some("openai_codex_trace_item")
+    }));
+    assert!(
+        openai_training_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
+                && record.get("tool_name").and_then(Value::as_str) == Some("bash")
+        }),
+        "training JSONL should retain tool-call evidence: {openai_training_jsonl:#?}"
+    );
+    let serialized_openai_training_jsonl = serde_json::to_string(&openai_training_jsonl)?;
+    assert!(
+        !serialized_openai_training_jsonl.contains("Inspect the repo and show README.md"),
+        "public training JSONL adapter projection leaked request content: {openai_training_jsonl:#?}"
+    );
 
     let langgraph = trace_project_json(tempdir.path(), home, "langgraph", "full")?;
     assert_eq!(
@@ -485,6 +530,16 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
                 && delegation.get("child_request_id").and_then(Value::as_str) == Some("req-child")
         }),
         "multi-agent projection missing child delegation: {multi_agent:#}"
+    );
+    let multi_agent_training_jsonl =
+        trace_project_training_jsonl_lines(tempdir.path(), home, "multi-agent", "full")?;
+    assert!(
+        multi_agent_training_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("delegation")
+                && record.get("parent_request_id").and_then(Value::as_str) == Some("req-1")
+                && record.get("child_request_id").and_then(Value::as_str) == Some("req-child")
+        }),
+        "multi-agent training JSONL projection missing delegation sample: {multi_agent_training_jsonl:#?}"
     );
 
     Ok(())
@@ -544,6 +599,39 @@ fn trace_project_jsonl_lines(
     output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).context("parsing adapter projection JSONL"))
+        .collect::<Result<Vec<_>>>()
+}
+
+fn trace_project_training_jsonl_lines(
+    cwd: &std::path::Path,
+    home: &str,
+    projection: &str,
+    redaction: &str,
+) -> Result<Vec<Value>> {
+    let output = run_cli_text(
+        cwd,
+        &[
+            "trace",
+            "project",
+            "--home",
+            home,
+            "--request-id",
+            "req-1",
+            "--projection",
+            projection,
+            "--redaction",
+            redaction,
+            "--format",
+            "training-jsonl",
+            "--actor-did",
+            "did:defra-agent:test-viewer",
+        ],
+    )?;
+    output
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).context("parsing adapter projection training JSONL")
+        })
         .collect::<Result<Vec<_>>>()
 }
 

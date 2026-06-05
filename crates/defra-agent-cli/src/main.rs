@@ -209,7 +209,8 @@ Examples:
   defra-agent trace timeline --request-id REQUEST_ID --home /path/to/home
   defra-agent trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
   defra-agent trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
-  defra-agent trace project-schema --projection multi-agent --format jsonl";
+  defra-agent trace project --projection multi-agent --request-id REQUEST_ID --format training-jsonl --home /path/to/home
+  defra-agent trace project-schema --projection multi-agent --format training-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default

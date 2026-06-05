@@ -4,7 +4,8 @@ use std::fs;
 use anyhow::{Context, Result};
 use defra_agent::adapter_projection::{
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, build_adapter_projection,
+    adapter_projection_jsonl_records, adapter_projection_training_jsonl_record_schema,
+    adapter_projection_training_jsonl_records, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
@@ -80,6 +81,10 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
             let records = adapter_projection_jsonl_records(&projection);
             write_jsonl(args.output_file.as_deref(), &records)?;
         }
+        TraceProjectionFormatArg::TrainingJsonl => {
+            let records = adapter_projection_training_jsonl_records(&projection);
+            write_jsonl(args.output_file.as_deref(), &records)?;
+        }
     }
     Ok(())
 }
@@ -89,6 +94,9 @@ fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
     let schema = match args.format {
         TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
         TraceProjectionFormatArg::Jsonl => adapter_projection_jsonl_record_schema(kind),
+        TraceProjectionFormatArg::TrainingJsonl => {
+            adapter_projection_training_jsonl_record_schema(kind)
+        }
     };
     if let Some(path) = args.output_file.as_deref() {
         write_json_output_file(path, &schema)?;

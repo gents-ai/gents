@@ -605,14 +605,18 @@ Started after the adapter-driven reframing:
 - Core adapter tests compile the generated JSON Schemas with a dev-only
   validator and validate emitted adapter envelopes, emitted JSONL records, and
   checked-in conformance fixture envelopes against those schemas.
+- `trace project --format training-jsonl` emits normalized training/eval
+  records derived from each adapter projection, and
+  `trace project-schema --format training-jsonl` exports the matching schema
+  snapshots.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL export path. Tests also verify schema export against the checked-in
-  snapshots and validate conformance fixtures without booting DefraDB.
+  JSONL and training/eval JSONL export paths. Tests also verify schema export
+  against the checked-in snapshots and validate conformance fixtures without
+  booting DefraDB.
 
 Still pending for the adapter-driven slice:
 
-- Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
   actor/redaction context and public/training-safe/full redaction modes.
 - Broader real external adapter fixtures captured from upstream examples.
