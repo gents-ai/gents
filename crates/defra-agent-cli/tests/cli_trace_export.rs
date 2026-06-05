@@ -8,6 +8,21 @@ use rig::completion::message::{AssistantContent, Message, ToolCall, ToolFunction
 use rig::one_or_many::OneOrMany;
 use serde_json::{json, Value};
 
+fn workspace_root() -> Result<std::path::PathBuf> {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("unable to resolve workspace root"))
+}
+
+fn read_schema_snapshot(relative_path: &str) -> Result<Value> {
+    let path = workspace_root()?.join(relative_path);
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str::<Value>(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
 #[tokio::test]
 async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -238,54 +253,48 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
 #[test]
 fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let schema_cases = [
+        ("openai-codex", "openai_codex_run_trace"),
+        ("langgraph", "langgraph_state_history"),
+        ("multi-agent", "multi_agent_task"),
+    ];
 
-    let json_schema_output = run_cli_text(
-        tempdir.path(),
-        &["trace", "project-schema", "--projection", "openai-codex"],
-    )?;
-    let json_schema =
-        serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
-    assert_eq!(
-        json_schema
-            .pointer("/properties/projection_id/const")
-            .and_then(Value::as_str),
-        Some("openai_codex_run_trace")
-    );
-    assert_eq!(
-        json_schema
-            .pointer("/properties/output/properties/adapter/const")
-            .and_then(Value::as_str),
-        Some("openai_codex_run_trace")
-    );
+    for (cli_projection, snapshot_name) in schema_cases {
+        let json_schema_output = run_cli_text(
+            tempdir.path(),
+            &["trace", "project-schema", "--projection", cli_projection],
+        )?;
+        let json_schema =
+            serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
+        let expected_json_schema = read_schema_snapshot(&format!(
+            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.schema.json"
+        ))?;
+        assert_eq!(
+            json_schema, expected_json_schema,
+            "{cli_projection} JSON schema drifted from checked-in snapshot"
+        );
 
-    let jsonl_schema_output = run_cli_text(
-        tempdir.path(),
-        &[
-            "trace",
-            "project-schema",
-            "--projection",
-            "multi-agent",
-            "--format",
-            "jsonl",
-        ],
-    )?;
-    let jsonl_schema =
-        serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
-    assert_eq!(
-        jsonl_schema
-            .pointer("/properties/projection_id/const")
-            .and_then(Value::as_str),
-        Some("multi_agent_task")
-    );
-    assert!(
-        jsonl_schema
-            .pointer("/properties/record_kind/enum")
-            .and_then(Value::as_array)
-            .is_some_and(|values| values
-                .iter()
-                .any(|value| { value.as_str() == Some("multi_agent_delegation") })),
-        "multi-agent JSONL schema missing delegation record kind: {jsonl_schema:#}"
-    );
+        let jsonl_schema_output = run_cli_text(
+            tempdir.path(),
+            &[
+                "trace",
+                "project-schema",
+                "--projection",
+                cli_projection,
+                "--format",
+                "jsonl",
+            ],
+        )?;
+        let jsonl_schema =
+            serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
+        let expected_jsonl_schema = read_schema_snapshot(&format!(
+            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.jsonl-record.schema.json"
+        ))?;
+        assert_eq!(
+            jsonl_schema, expected_jsonl_schema,
+            "{cli_projection} JSONL schema drifted from checked-in snapshot"
+        );
+    }
 
     Ok(())
 }

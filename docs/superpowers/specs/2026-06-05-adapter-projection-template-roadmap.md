@@ -595,14 +595,16 @@ Started after the adapter-driven reframing:
 - `trace project-schema --projection ... --format json|jsonl` prints
   dependency-light JSON Schema documents for adapter envelope and JSONL record
   shapes without requiring a live runtime.
+- Checked-in adapter projection schema snapshots live under
+  `docs/superpowers/contracts/adapter-projections/v1/`, covering all three
+  initial adapter projections and their JSONL record schemas.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL export path. CLI tests also verify schema export without booting
-  DefraDB.
+  JSONL export path. CLI tests also verify schema export against the checked-in
+  snapshots without booting DefraDB.
 
 Still pending for the adapter-driven slice:
 
-- Checked-in schema snapshot files that external consumers can pin.
 - Real JSON Schema validator coverage for emitted adapter fixtures.
 - Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
