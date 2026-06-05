@@ -139,6 +139,8 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) delegate_to: Vec<String>,
     #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[serde(default)]
+    pub(crate) enable_memory: bool,
     #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,
     #[serde(default)]

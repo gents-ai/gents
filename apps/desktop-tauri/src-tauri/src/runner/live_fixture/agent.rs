@@ -141,6 +141,7 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
+        enable_memory: Some(false),
         subagent_targets: vec![subagent_target_entry(
             "repo-audit-subagent",
             agent_did,
@@ -174,6 +175,7 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
+        enable_memory: Some(false),
         subagent_targets: Vec::new(),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),

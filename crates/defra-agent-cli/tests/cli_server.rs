@@ -301,22 +301,25 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         );
     }
 
-    // /self is an alias for /status and carries the behavior join + context budget.
-    let self_response = client
-        .get(format!("http://127.0.0.1:{port}/self"))
+    // /status carries the behavior join plus context budget/indicator.
+    let status_response = client
+        .get(format!("http://127.0.0.1:{port}/status"))
         .send()
         .await
-        .context("fetching /self")?;
+        .context("fetching /status after seeding context fixtures")?;
     assert!(
-        self_response.status().is_success(),
-        "unexpected /self response: {self_response:?}"
+        status_response.status().is_success(),
+        "unexpected /status response: {status_response:?}"
     );
-    let self_view: Value = self_response.json().await.context("reading /self body")?;
-    let behaviors = self_view
+    let status: Value = status_response
+        .json()
+        .await
+        .context("reading /status body")?;
+    let behaviors = status
         .get("behaviors")
         .and_then(Value::as_array)
         .filter(|rows| !rows.is_empty())
-        .unwrap_or_else(|| panic!("expected /self to include behaviors: {self_view}"));
+        .unwrap_or_else(|| panic!("expected /status to include behaviors: {status}"));
     assert!(
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
@@ -325,20 +328,33 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| !endpoint.is_empty())
         }),
-        "expected /self behavior joined with backend endpoint for model {model_name}: {self_view}"
+        "expected /status behavior joined with backend endpoint for model {model_name}: {status}"
     );
-    let budget = self_view
+    let budget = status
         .get("context_budget")
-        .unwrap_or_else(|| panic!("expected /self to include context_budget: {self_view}"));
+        .unwrap_or_else(|| panic!("expected /status to include context_budget: {status}"));
     assert_eq!(
         budget.get("compaction_count").and_then(Value::as_i64),
         Some(1),
-        "expected agent-scoped context_budget to count exactly the seeded compaction: {self_view}"
+        "expected agent-scoped context_budget to count exactly the seeded compaction: {status}"
     );
     assert_eq!(
         budget.get("latest_original_tokens").and_then(Value::as_i64),
         Some(1234),
-        "expected context_budget latest tokens from the seeded compaction: {self_view}"
+        "expected context_budget latest tokens from the seeded compaction: {status}"
+    );
+    let context = status
+        .get("context")
+        .unwrap_or_else(|| panic!("expected /status to include context indicator: {status}"));
+    assert_eq!(
+        context.get("compaction_count").and_then(Value::as_i64),
+        Some(1),
+        "expected /status context to mirror compaction count: {status}"
+    );
+    assert_eq!(
+        context.get("current_estimate").and_then(Value::as_i64),
+        Some(567),
+        "expected /status context current_estimate from latest compacted tokens: {status}"
     );
 
     let sessions_response = client

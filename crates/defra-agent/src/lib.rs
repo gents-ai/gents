@@ -109,6 +109,8 @@ pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
     ResolvedTask, ScheduleCadence,
 };
+#[cfg(feature = "agent-memory")]
+pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,

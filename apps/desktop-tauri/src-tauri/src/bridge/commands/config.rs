@@ -235,6 +235,7 @@ pub(crate) async fn save_tool_selection_config(
             subagent_background_enabled: Some(false),
             subagent_allow_cross_deployment: Some(false),
             cross_deployment_spawn_timeout_seconds: None,
+            enable_memory: Some(false),
             enable_defra_query: Some(false),
             defra_query_collections: Vec::new(),
         });
@@ -303,6 +304,7 @@ pub(crate) async fn save_tool_selection_config(
         .subagent_allow_cross_deployment
         .or(row.subagent_allow_cross_deployment);
     row.cross_deployment_spawn_timeout_seconds = request.cross_deployment_spawn_timeout_seconds;
+    row.enable_memory = request.enable_memory.or(row.enable_memory);
     core.save_tool_selection(&row).await?;
     Ok(())
 }
