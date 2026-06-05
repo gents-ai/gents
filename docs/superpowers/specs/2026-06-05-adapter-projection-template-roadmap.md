@@ -592,13 +592,18 @@ Started after the adapter-driven reframing:
   fields and adapter-specific required fields before CLI output is written.
 - `trace project` supports both JSON envelopes and JSONL record streams through
   `--format json|jsonl`.
+- `trace project-schema --projection ... --format json|jsonl` prints
+  dependency-light JSON Schema documents for adapter envelope and JSONL record
+  shapes without requiring a live runtime.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL export path.
+  JSONL export path. CLI tests also verify schema export without booting
+  DefraDB.
 
 Still pending for the adapter-driven slice:
 
-- JSON schema or snapshot files that external consumers can pin.
+- Checked-in schema snapshot files that external consumers can pin.
+- Real JSON Schema validator coverage for emitted adapter fixtures.
 - Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
   actor/redaction context and public/training-safe/full redaction modes.

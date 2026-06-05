@@ -208,7 +208,8 @@ Examples:
   defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
   defra-agent trace timeline --request-id REQUEST_ID --home /path/to/home
   defra-agent trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
-  defra-agent trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home";
+  defra-agent trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
+  defra-agent trace project-schema --projection multi-agent --format jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default

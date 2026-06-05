@@ -3,6 +3,7 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use defra_agent::adapter_projection::{
+    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
@@ -21,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::args::{
-    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectionArg, TraceProjectionFormatArg,
-    TraceProjectionRedactionArg, TraceTimelineArgs,
+    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectSchemaArgs, TraceProjectionArg,
+    TraceProjectionFormatArg, TraceProjectionRedactionArg, TraceTimelineArgs,
 };
 use crate::config_writes::ConfigAccess;
 use crate::{
@@ -35,6 +36,7 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
         TraceCommand::Export(args) => trace_export(args).await,
         TraceCommand::Timeline(args) => trace_timeline(args).await,
         TraceCommand::Project(args) => trace_project(args).await,
+        TraceCommand::ProjectSchema(args) => trace_project_schema(args),
     }
 }
 
@@ -78,6 +80,20 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
             let records = adapter_projection_jsonl_records(&projection);
             write_jsonl(args.output_file.as_deref(), &records)?;
         }
+    }
+    Ok(())
+}
+
+fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
+    let kind = adapter_projection_kind(args.projection);
+    let schema = match args.format {
+        TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
+        TraceProjectionFormatArg::Jsonl => adapter_projection_jsonl_record_schema(kind),
+    };
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &schema)?;
+    } else {
+        print_json(&schema)?;
     }
     Ok(())
 }

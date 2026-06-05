@@ -29,6 +29,14 @@ impl AdapterProjectionKind {
             Self::MultiAgentTask => "multi_agent_task",
         }
     }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::OpenAiCodexRunTrace => "OpenAI/Codex Run Trace Projection",
+            Self::LangGraphStateHistory => "LangGraph State History Projection",
+            Self::MultiAgentTask => "Multi-Agent Task Projection",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -503,6 +511,361 @@ pub fn adapter_projection_jsonl_records(
             records
         }
     }
+}
+
+pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "title": kind.title(),
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "projection_id",
+            "projection_version",
+            "source_request_id",
+            "redaction_mode",
+            "provenance",
+            "output"
+        ],
+        "properties": {
+            "projection_id": { "const": kind.id() },
+            "projection_version": { "const": ADAPTER_PROJECTION_VERSION },
+            "source_request_id": string_schema(),
+            "source_session_id": optional_string_schema(),
+            "source_agent_did": optional_string_schema(),
+            "source_behavior_id": optional_string_schema(),
+            "redaction_mode": redaction_mode_schema(),
+            "provenance": provenance_schema(),
+            "output": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["adapter", "projection"],
+                "properties": {
+                    "adapter": { "const": kind.id() },
+                    "projection": projection_json_schema(kind)
+                }
+            }
+        }
+    })
+}
+
+pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "title": format!("{} JSONL Record", kind.title()),
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "projection_id",
+            "projection_version",
+            "source_request_id",
+            "redaction_mode",
+            "record_kind",
+            "record_index",
+            "record_id",
+            "value"
+        ],
+        "properties": {
+            "projection_id": { "const": kind.id() },
+            "projection_version": { "const": ADAPTER_PROJECTION_VERSION },
+            "source_request_id": string_schema(),
+            "source_session_id": optional_string_schema(),
+            "redaction_mode": redaction_mode_schema(),
+            "record_kind": jsonl_record_kind_schema(kind),
+            "record_index": { "type": "integer", "minimum": 0 },
+            "record_id": string_schema(),
+            "value": { "type": "object" }
+        }
+    })
+}
+
+pub fn adapter_projection_schema_index() -> Value {
+    let projections = [
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        AdapterProjectionKind::LangGraphStateHistory,
+        AdapterProjectionKind::MultiAgentTask,
+    ];
+    json!({
+        "projection_version": ADAPTER_PROJECTION_VERSION,
+        "source_projection_id": RUN_TIMELINE_PROJECTION_ID,
+        "schemas": projections
+            .iter()
+            .map(|kind| {
+                json!({
+                    "projection_id": kind.id(),
+                    "title": kind.title(),
+                    "json_schema_id": adapter_projection_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
+                    "jsonl_record_schema_id": adapter_projection_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null)
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+fn projection_json_schema(kind: AdapterProjectionKind) -> Value {
+    match kind {
+        AdapterProjectionKind::OpenAiCodexRunTrace => openai_codex_projection_schema(),
+        AdapterProjectionKind::LangGraphStateHistory => langgraph_projection_schema(),
+        AdapterProjectionKind::MultiAgentTask => multi_agent_projection_schema(),
+    }
+}
+
+fn openai_codex_projection_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run_id", "items"],
+        "properties": {
+            "run_id": string_schema(),
+            "thread_id": optional_string_schema(),
+            "status": optional_string_schema(),
+            "items": {
+                "type": "array",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["type", "id"],
+                            "properties": {
+                                "type": { "const": "request" },
+                                "id": string_schema(),
+                                "status": optional_string_schema(),
+                                "lifecycle_state": optional_string_schema(),
+                                "input": optional_string_schema(),
+                                "timestamp": optional_string_schema()
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["type", "id", "role", "content"],
+                            "properties": {
+                                "type": { "const": "message" },
+                                "id": string_schema(),
+                                "request_id": optional_string_schema(),
+                                "role": string_schema(),
+                                "content": string_schema(),
+                                "timestamp": optional_string_schema()
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["type", "id", "name", "arguments", "output", "status"],
+                            "properties": {
+                                "type": { "const": "tool_call" },
+                                "id": string_schema(),
+                                "request_id": optional_string_schema(),
+                                "name": string_schema(),
+                                "arguments": string_schema(),
+                                "output": string_schema(),
+                                "status": string_schema(),
+                                "child_run_id": optional_string_schema(),
+                                "started_at": optional_string_schema(),
+                                "completed_at": optional_string_schema()
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["type", "id", "status"],
+                            "properties": {
+                                "type": { "const": "response" },
+                                "id": string_schema(),
+                                "status": optional_string_schema(),
+                                "output": optional_string_schema(),
+                                "reasoning": optional_string_schema(),
+                                "error": optional_string_schema(),
+                                "timestamp": optional_string_schema()
+                            }
+                        }
+                    ]
+                }
+            },
+            "child_run_ids": {
+                "type": "array",
+                "items": string_schema()
+            }
+        }
+    })
+}
+
+fn langgraph_projection_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["checkpoint_id", "root_request_id", "values", "nodes", "edges", "tasks"],
+        "properties": {
+            "thread_id": optional_string_schema(),
+            "checkpoint_id": string_schema(),
+            "root_request_id": string_schema(),
+            "values": { "type": "object" },
+            "nodes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "kind"],
+                    "properties": {
+                        "id": string_schema(),
+                        "kind": string_schema(),
+                        "request_id": optional_string_schema(),
+                        "status": optional_string_schema()
+                    }
+                }
+            },
+            "edges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["from", "to", "kind"],
+                    "properties": {
+                        "from": string_schema(),
+                        "to": string_schema(),
+                        "kind": string_schema()
+                    }
+                }
+            },
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "name", "status"],
+                    "properties": {
+                        "id": string_schema(),
+                        "request_id": optional_string_schema(),
+                        "name": string_schema(),
+                        "status": string_schema(),
+                        "child_request_id": optional_string_schema()
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn multi_agent_projection_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "participants", "messages", "delegations", "tool_events"],
+        "properties": {
+            "task_id": string_schema(),
+            "context_id": optional_string_schema(),
+            "status": optional_string_schema(),
+            "participants": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["role"],
+                    "properties": {
+                        "agent_did": optional_string_schema(),
+                        "behavior_id": optional_string_schema(),
+                        "role": string_schema()
+                    }
+                }
+            },
+            "messages": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "role", "content"],
+                    "properties": {
+                        "id": string_schema(),
+                        "request_id": optional_string_schema(),
+                        "role": string_schema(),
+                        "content": string_schema()
+                    }
+                }
+            },
+            "delegations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["parent_request_id", "child_request_id"],
+                    "properties": {
+                        "parent_request_id": string_schema(),
+                        "child_request_id": string_schema(),
+                        "parent_tool_call_id": optional_string_schema(),
+                        "agent_did": optional_string_schema(),
+                        "behavior_id": optional_string_schema(),
+                        "status": optional_string_schema()
+                    }
+                }
+            },
+            "tool_events": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "tool_name", "status"],
+                    "properties": {
+                        "id": string_schema(),
+                        "request_id": optional_string_schema(),
+                        "tool_name": string_schema(),
+                        "status": string_schema(),
+                        "selected_service_id": optional_string_schema(),
+                        "selected_tool_name": optional_string_schema(),
+                        "denial_reason": optional_string_schema(),
+                        "child_request_id": optional_string_schema()
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn provenance_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runtime", "source_projection_id", "source_projection_version"],
+        "properties": {
+            "runtime": { "const": "defra-agent" },
+            "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
+            "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
+            "actor_did": optional_string_schema()
+        }
+    })
+}
+
+fn jsonl_record_kind_schema(kind: AdapterProjectionKind) -> Value {
+    match kind {
+        AdapterProjectionKind::OpenAiCodexRunTrace => {
+            json!({ "enum": ["openai_codex_trace_item"] })
+        }
+        AdapterProjectionKind::LangGraphStateHistory => {
+            json!({ "enum": ["langgraph_values", "langgraph_node", "langgraph_edge", "langgraph_task"] })
+        }
+        AdapterProjectionKind::MultiAgentTask => {
+            json!({ "enum": ["multi_agent_participant", "multi_agent_message", "multi_agent_delegation", "multi_agent_tool_event"] })
+        }
+    }
+}
+
+fn redaction_mode_schema() -> Value {
+    json!({ "enum": ["full", "training_safe", "public"] })
+}
+
+fn string_schema() -> Value {
+    json!({ "type": "string" })
+}
+
+fn optional_string_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    })
 }
 
 fn jsonl_record(
@@ -1091,6 +1454,43 @@ mod tests {
         );
         let multi =
             build_adapter_projection(AdapterProjectionKind::MultiAgentTask, &timeline, &context);
+
+        for kind in [
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            AdapterProjectionKind::LangGraphStateHistory,
+            AdapterProjectionKind::MultiAgentTask,
+        ] {
+            let envelope_schema = adapter_projection_json_schema(kind);
+            assert_eq!(
+                envelope_schema
+                    .pointer("/properties/projection_id/const")
+                    .and_then(Value::as_str),
+                Some(kind.id())
+            );
+            assert_eq!(
+                envelope_schema
+                    .pointer("/properties/output/properties/adapter/const")
+                    .and_then(Value::as_str),
+                Some(kind.id())
+            );
+
+            let jsonl_schema = adapter_projection_jsonl_record_schema(kind);
+            assert_eq!(
+                jsonl_schema
+                    .pointer("/properties/projection_id/const")
+                    .and_then(Value::as_str),
+                Some(kind.id())
+            );
+            assert!(jsonl_schema.pointer("/properties/record_kind").is_some());
+        }
+        let schema_index = adapter_projection_schema_index();
+        assert_eq!(
+            schema_index
+                .get("schemas")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
 
         assert_eq!(codex.projection_id, "openai_codex_run_trace");
         assert_eq!(langgraph.projection_id, "langgraph_state_history");

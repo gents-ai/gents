@@ -235,6 +235,61 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     Ok(())
 }
 
+#[test]
+fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+
+    let json_schema_output = run_cli_text(
+        tempdir.path(),
+        &["trace", "project-schema", "--projection", "openai-codex"],
+    )?;
+    let json_schema =
+        serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
+    assert_eq!(
+        json_schema
+            .pointer("/properties/projection_id/const")
+            .and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+    assert_eq!(
+        json_schema
+            .pointer("/properties/output/properties/adapter/const")
+            .and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+
+    let jsonl_schema_output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "project-schema",
+            "--projection",
+            "multi-agent",
+            "--format",
+            "jsonl",
+        ],
+    )?;
+    let jsonl_schema =
+        serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
+    assert_eq!(
+        jsonl_schema
+            .pointer("/properties/projection_id/const")
+            .and_then(Value::as_str),
+        Some("multi_agent_task")
+    );
+    assert!(
+        jsonl_schema
+            .pointer("/properties/record_kind/enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values
+                .iter()
+                .any(|value| { value.as_str() == Some("multi_agent_delegation") })),
+        "multi-agent JSONL schema missing delegation record kind: {jsonl_schema:#}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

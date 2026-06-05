@@ -710,6 +710,11 @@ pub(crate) enum TraceCommand {
         about = "Project a reconstructed run into an adapter-facing interop shape"
     )]
     Project(TraceProjectArgs),
+    #[command(
+        name = "project-schema",
+        about = "Print the JSON Schema for an adapter projection output"
+    )]
+    ProjectSchema(TraceProjectSchemaArgs),
 }
 
 #[derive(clap::Args)]
@@ -780,6 +785,24 @@ pub(crate) struct TraceProjectArgs {
     #[arg(
         long = "output-file",
         help = "Write projection output to a file instead of stdout"
+    )]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceProjectSchemaArgs {
+    #[arg(long, value_enum, help = "Adapter projection schema to print")]
+    pub(crate) projection: TraceProjectionArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionFormatArg::Json,
+        help = "Output schema for a JSON projection envelope or JSONL record"
+    )]
+    pub(crate) format: TraceProjectionFormatArg,
+    #[arg(
+        long = "output-file",
+        help = "Write JSON Schema to a file instead of stdout"
     )]
     pub(crate) output_file: Option<PathBuf>,
 }
