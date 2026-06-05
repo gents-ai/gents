@@ -8,6 +8,7 @@ pub(crate) mod prometheus;
 pub(crate) mod r5_dispatch;
 pub(crate) mod router;
 pub(crate) mod self_view;
+pub(crate) mod sessions;
 pub(crate) mod subagent_tree;
 pub(crate) mod version;
 
