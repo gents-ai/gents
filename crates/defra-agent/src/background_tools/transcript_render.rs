@@ -86,14 +86,16 @@ pub(crate) fn render_transcript(
             // content-honest contract and produces a non-advancing cursor.
             if included_count == 0 {
                 // Force-emit the oversized block so the page always makes
-                // progress. `capped` stays true and `has_more` will be set
-                // correctly from the remaining messages after the cursor
-                // advances past this block.
+                // progress — but TRUNCATE it to respect the budget (context-honest).
+                // We snap to a char boundary, append a marker, and advance the
+                // cursor so paging never re-serves this message.
+                let separator_overhead = usize::from(!transcript.is_empty()); // 1 newline or 0
+                let budget = (opts.max_chars as usize).saturating_sub(separator_overhead);
+                let emitted = truncate_to_budget(&block, budget);
                 if !transcript.is_empty() {
                     transcript.push('\n');
                 }
-                transcript.push_str(&block);
-                included_count += 1;
+                transcript.push_str(&emitted);
                 first_included.get_or_insert(msg.sequence);
                 last_included = msg.sequence;
             }
@@ -130,6 +132,27 @@ pub(crate) fn render_transcript(
         next_sequence,
         has_more,
     }
+}
+
+/// Truncate `text` to at most `budget` chars (char-boundary-safe) and, when
+/// truncation was needed, append a human-readable marker of the form
+/// `…[truncated: showed N of M chars]`.
+///
+/// The prefix is exactly `budget` chars (or fewer if the text is shorter).
+/// When truncation occurs the total result is `budget + marker_len` chars.
+/// The marker is a small constant overhead (~40-60 chars); the budget cap
+/// ensures the main body content never exceeds `budget` chars.
+fn truncate_to_budget(text: &str, budget: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= budget {
+        return text.to_string();
+    }
+    // Take exactly `budget` chars — char-boundary-safe via the chars iterator.
+    let keep = budget.min(total_chars);
+    let prefix: String = text.chars().take(keep).collect();
+    let shown = prefix.chars().count();
+    // Append the marker as a small constant overhead on top of the budget.
+    format!("{prefix}\u{2026}[truncated: showed {shown} of {total_chars} chars]")
 }
 
 /// Whether a message would produce a rendered block under the given options
@@ -405,32 +428,69 @@ mod tests {
     }
 
     #[test]
-    fn oversized_single_block_is_always_emitted_not_silently_dropped() {
-        // A single assistant turn whose rendered block exceeds max_chars must
-        // still be returned — never silently dropped.  The cursor must advance
-        // past it so a subsequent read terminates honestly.
+    fn oversized_single_block_is_truncated_not_dropped_and_respects_budget() {
+        // A single assistant turn whose rendered block exceeds max_chars must:
+        //   (a) return a NON-EMPTY transcript containing a TRUNCATED prefix
+        //   (b) include a truncation MARKER ("…[truncated: showed N of M chars]")
+        //   (c) NOT blow the context budget — transcript length within max_chars + small slack
+        //   (d) NOT contain the full oversized body
+        //   (e) advance the cursor so a follow-up read terminates honestly (has_more=false)
         let big_body = "y".repeat(500);
         let msgs = vec![assistant(1, &big_body), assistant(2, "small")];
         let opts = RenderOptions {
             max_chars: 50, // far smaller than the 500-char block
             ..OPTS_DEFAULT
         };
-        // Page 1: the oversized block must appear despite the budget.
+        // Page 1: the oversized block must be TRUNCATED and still emitted.
         let page1 = render_transcript(&msgs, 0, opts);
+
+        // (a) Non-empty; contains the header and a prefix of the body.
         assert!(
-            page1.transcript.contains("[assistant seq=1]"),
-            "oversized first block must be emitted: {:?}",
-            page1.transcript
+            !page1.transcript.is_empty(),
+            "page1 must not be empty for an oversized first block"
         );
         assert!(
+            page1.transcript.contains("[assistant seq=1]"),
+            "oversized first block header must be present: {:?}",
+            page1.transcript
+        );
+
+        // (b) Truncation marker is present.
+        assert!(
+            page1.transcript.contains("[truncated:"),
+            "truncation marker must be present: {:?}",
+            page1.transcript
+        );
+
+        // (c) Budget respected — allow a small marker slack (80 chars above max_chars).
+        let marker_slack = 80usize;
+        assert!(
+            page1.transcript.len() <= opts.max_chars as usize + marker_slack,
+            "transcript ({} chars) must stay within budget ({} + {} slack): {:?}",
+            page1.transcript.len(),
+            opts.max_chars,
+            marker_slack,
+            page1.transcript
+        );
+
+        // (d) Full oversized body must NOT appear.
+        assert!(
+            !page1.transcript.contains(&big_body),
+            "full oversized body must NOT be present (budget violation): transcript len={}",
+            page1.transcript.len()
+        );
+
+        // (e) Cursor advanced.
+        assert!(
             page1.through_sequence >= 1,
-            "cursor must advance past sequence 1"
+            "through_sequence must cover sequence 1"
         );
         assert!(
             page1.next_sequence >= 2,
             "next_sequence must point past the emitted block"
         );
-        // Page 2: resume cursor picks up the second (small) message.
+
+        // Page 2: resume cursor picks up the second (small) message and terminates.
         let page2 = render_transcript(&msgs, page1.next_sequence, opts);
         assert!(
             page2.transcript.contains("[assistant seq=2]"),
