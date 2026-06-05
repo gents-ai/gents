@@ -598,10 +598,14 @@ Started after the adapter-driven reframing:
 - Checked-in adapter projection schema snapshots live under
   `docs/superpowers/contracts/adapter-projections/v1/`, covering all three
   initial adapter projections and their JSONL record schemas.
+- Dependency-light adapter conformance fixtures live under
+  `docs/superpowers/fixtures/adapter-projections/v1/`, covering representative
+  OpenAI/Codex, LangGraph, and multi-agent envelopes without Docker or live
+  service startup.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL export path. CLI tests also verify schema export against the checked-in
-  snapshots without booting DefraDB.
+  JSONL export path. Tests also verify schema export against the checked-in
+  snapshots and validate conformance fixtures without booting DefraDB.
 
 Still pending for the adapter-driven slice:
 
@@ -609,7 +613,8 @@ Still pending for the adapter-driven slice:
 - Training/eval-specific JSONL projections.
 - Actual DefraDB ACP subject scoping in projection loaders beyond the current
   actor/redaction context and public/training-safe/full redaction modes.
-- Dependency-light contract tests against real external adapter fixtures.
-- Ignored/env-gated Docker or live-framework interoperability tests.
+- Broader real external adapter fixtures captured from upstream examples.
+- Ignored/env-gated Docker or live-framework interoperability tests for cases
+  where fixtures are not enough.
 - Optional live-inference projection test that asserts persisted state and
   adapter invariants.

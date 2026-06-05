@@ -1380,6 +1380,27 @@ mod tests {
         TimelineResponseRow, TimelineToolCallRow,
     };
 
+    fn workspace_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf)
+            .expect("workspace root")
+    }
+
+    fn read_adapter_projection_fixture(fixture_name: &str) -> (AdapterProjectionEnvelope, Value) {
+        let path = workspace_root().join(format!(
+            "docs/superpowers/fixtures/adapter-projections/v1/{fixture_name}.envelope.json"
+        ));
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+        let value = serde_json::from_str::<Value>(&raw)
+            .unwrap_or_else(|error| panic!("parsing {} as JSON: {error}", path.display()));
+        let envelope = serde_json::from_value::<AdapterProjectionEnvelope>(value.clone())
+            .unwrap_or_else(|error| panic!("deserializing {}: {error}", path.display()));
+        (envelope, value)
+    }
+
     #[test]
     fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
         let timeline = build_run_timeline(RunTimelineRows {
@@ -1522,5 +1543,87 @@ mod tests {
         assert!(serde_json::to_string(&multi)
             .unwrap()
             .contains("\"role\":\"delegate\""));
+    }
+
+    #[test]
+    fn external_contract_fixtures_validate_without_runtime_dependencies() {
+        let cases: &[(AdapterProjectionKind, &str, &[&str])] = &[
+            (
+                AdapterProjectionKind::OpenAiCodexRunTrace,
+                "openai_codex_run_trace",
+                &["openai_codex_trace_item"],
+            ),
+            (
+                AdapterProjectionKind::LangGraphStateHistory,
+                "langgraph_state_history",
+                &[
+                    "langgraph_values",
+                    "langgraph_node",
+                    "langgraph_edge",
+                    "langgraph_task",
+                ],
+            ),
+            (
+                AdapterProjectionKind::MultiAgentTask,
+                "multi_agent_task",
+                &[
+                    "multi_agent_participant",
+                    "multi_agent_message",
+                    "multi_agent_delegation",
+                    "multi_agent_tool_event",
+                ],
+            ),
+        ];
+
+        for (kind, fixture_name, expected_record_kinds) in cases {
+            let (envelope, fixture_value) = read_adapter_projection_fixture(fixture_name);
+            assert_eq!(envelope.projection_id, kind.id());
+            assert_eq!(envelope.output.kind(), *kind);
+            validate_adapter_projection_contract(&envelope)
+                .unwrap_or_else(|error| panic!("{fixture_name} failed contract: {error}"));
+
+            let round_trip = serde_json::to_value(&envelope).unwrap();
+            assert_eq!(
+                round_trip, fixture_value,
+                "{fixture_name} fixture drifted from adapter DTO serialization"
+            );
+
+            let allowed_record_kinds = adapter_projection_jsonl_record_schema(*kind)
+                .pointer("/properties/record_kind/enum")
+                .and_then(Value::as_array)
+                .expect("JSONL record kind enum")
+                .iter()
+                .map(|value| value.as_str().expect("string record kind").to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            let records = adapter_projection_jsonl_records(&envelope);
+            assert!(
+                !records.is_empty(),
+                "{fixture_name} fixture should produce JSONL records"
+            );
+
+            let mut observed_record_kinds = std::collections::BTreeSet::new();
+            for (index, record) in records.iter().enumerate() {
+                assert_eq!(record.projection_id, kind.id());
+                assert_eq!(record.projection_version, ADAPTER_PROJECTION_VERSION);
+                assert_eq!(record.source_request_id, envelope.source_request_id);
+                assert_eq!(record.record_index, index);
+                assert!(
+                    record.value.is_object(),
+                    "{fixture_name} JSONL value must be an object: {record:#?}"
+                );
+                assert!(
+                    allowed_record_kinds.contains(&record.record_kind),
+                    "{fixture_name} produced unsupported JSONL record kind {}",
+                    record.record_kind
+                );
+                observed_record_kinds.insert(record.record_kind.clone());
+            }
+            for expected in *expected_record_kinds {
+                assert!(
+                    observed_record_kinds.contains(*expected),
+                    "{fixture_name} missing expected JSONL record kind {expected}"
+                );
+            }
+        }
     }
 }

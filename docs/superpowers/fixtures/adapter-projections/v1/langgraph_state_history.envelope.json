@@ -1,0 +1,90 @@
+{
+  "output": {
+    "adapter": "langgraph_state_history",
+    "projection": {
+      "checkpoint_id": "defra:req-langgraph-1:v1",
+      "edges": [
+        {
+          "from": "request:req-langgraph-1",
+          "kind": "timeline_order",
+          "to": "message:thread-langgraph-1:1"
+        },
+        {
+          "from": "message:thread-langgraph-1:1",
+          "kind": "timeline_order",
+          "to": "tool_call:call-search-1"
+        },
+        {
+          "from": "tool_call:call-search-1",
+          "kind": "child_request",
+          "to": "request:req-langgraph-child-1"
+        },
+        {
+          "from": "tool_call:call-search-1",
+          "kind": "timeline_order",
+          "to": "response:req-langgraph-1"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "request:req-langgraph-1",
+          "kind": "request",
+          "request_id": "req-langgraph-1",
+          "status": "completed"
+        },
+        {
+          "id": "message:thread-langgraph-1:1",
+          "kind": "message",
+          "request_id": "req-langgraph-1",
+          "status": "assistant"
+        },
+        {
+          "id": "tool_call:call-search-1",
+          "kind": "tool_call",
+          "request_id": "req-langgraph-1",
+          "status": "completed"
+        },
+        {
+          "id": "response:req-langgraph-1",
+          "kind": "response",
+          "request_id": "req-langgraph-1",
+          "status": "completed"
+        }
+      ],
+      "root_request_id": "req-langgraph-1",
+      "tasks": [
+        {
+          "child_request_id": "req-langgraph-child-1",
+          "id": "call-search-1",
+          "name": "search_docs",
+          "request_id": "req-langgraph-1",
+          "status": "completed"
+        }
+      ],
+      "thread_id": "thread-langgraph-1",
+      "values": {
+        "agent_did": "did:defra-agent:graph-runner",
+        "behavior_id": "graph-runner",
+        "child_request_ids": [
+          "req-langgraph-child-1"
+        ],
+        "final_output": "The graph produced a summarized answer.",
+        "request_id": "req-langgraph-1",
+        "session_id": "thread-langgraph-1",
+        "status": "completed"
+      }
+    }
+  },
+  "projection_id": "langgraph_state_history",
+  "projection_version": "v1",
+  "provenance": {
+    "runtime": "defra-agent",
+    "source_projection_id": "run_timeline",
+    "source_projection_version": "v1"
+  },
+  "redaction_mode": "full",
+  "source_agent_did": "did:defra-agent:graph-runner",
+  "source_behavior_id": "graph-runner",
+  "source_request_id": "req-langgraph-1",
+  "source_session_id": "thread-langgraph-1"
+}
