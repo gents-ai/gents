@@ -565,6 +565,7 @@ fn standard_tool_selection(
         subagent_background_enabled: Some(false),
         subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
+        enable_memory: Some(false),
         enable_defra_query: None,
         defra_query_collections: None,
     }

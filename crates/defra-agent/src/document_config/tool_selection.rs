@@ -57,6 +57,7 @@ pub struct ToolSelectionDocument {
     pub subagent_background_enabled: Option<bool>,
     pub subagent_allow_cross_deployment: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
+    pub enable_memory: Option<bool>,
     pub enable_defra_query: Option<bool>,
     #[serde(
         default,
@@ -157,6 +158,7 @@ pub(crate) async fn load_tool_selection_record(
                 subagent_background_enabled
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
+                enable_memory
                 enable_defra_query
                 defra_query_collections
             }}
@@ -208,6 +210,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 subagent_background_enabled
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
+                enable_memory
                 enable_defra_query
                 defra_query_collections
             }}
@@ -259,6 +262,7 @@ pub(crate) async fn list_tool_selection_records(
                 subagent_background_enabled
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
+                enable_memory
                 enable_defra_query
                 defra_query_collections
             }}
@@ -304,6 +308,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 subagent_background_enabled
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
+                enable_memory
                 enable_defra_query
                 defra_query_collections
             }
@@ -400,6 +405,7 @@ pub async fn upsert_tool_selection(
         selection
             .cross_deployment_spawn_timeout_seconds
             .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+        graphql_fields::graphql_optional_bool_field("enable_memory", selection.enable_memory),
         graphql_fields::graphql_optional_bool_field(
             "enable_defra_query",
             selection.enable_defra_query,
@@ -486,6 +492,7 @@ pub async fn upsert_tool_selection(
         selection
             .cross_deployment_spawn_timeout_seconds
             .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+        graphql_fields::graphql_optional_bool_field("enable_memory", selection.enable_memory),
         graphql_fields::graphql_optional_bool_field(
             "enable_defra_query",
             selection.enable_defra_query,

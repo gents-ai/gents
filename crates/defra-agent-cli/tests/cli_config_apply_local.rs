@@ -140,6 +140,307 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locally() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-prune-local-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-prune-local-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+
+    let task_id = format!("prune-task-{}", Uuid::new_v4().simple());
+    let schedule_id = format!("prune-schedule-{}", Uuid::new_v4().simple());
+    let task_dir = root.join("tasks").join(&task_id);
+    let schedule_dir = root.join("schedules").join(&schedule_id);
+    write_json_file(
+        &task_dir.join("object.json"),
+        &serde_json::json!({
+            "task_id": task_id.clone(),
+            "name": "Prune Me",
+            "description": "Temporary task for prune regression coverage.",
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Summarize stale config.",
+            "enabled": false,
+        }),
+    )?;
+    write_json_file(
+        &schedule_dir.join("object.json"),
+        &serde_json::json!({
+            "schedule_id": schedule_id.clone(),
+            "task_id": task_id.clone(),
+            "interval_secs": 3600,
+            "enabled": false,
+            "concurrency": "serial",
+        }),
+    )?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home_str = explicit_home
+        .to_str()
+        .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
+
+    let created = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        created.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        created.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        created
+            .pointer("/applied/schedules")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        created.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        created.pointer("/pruned/schedules").and_then(Value::as_u64),
+        Some(0)
+    );
+
+    fs::remove_dir_all(&schedule_dir)
+        .with_context(|| format!("removing {}", schedule_dir.display()))?;
+    fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
+
+    let drift = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(drift.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        drift
+            .pointer("/counts/tasks/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        drift
+            .pointer("/counts/schedules/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let no_prune = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(no_prune.get("status").and_then(Value::as_str), Some("noop"));
+    assert_eq!(
+        no_prune.get("changed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        no_prune.get("exact_match").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        no_prune.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        no_prune
+            .pointer("/remaining/tasks/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        no_prune
+            .pointer("/remaining/schedules/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let first_prune = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        first_prune.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        first_prune.get("changed").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        first_prune.get("exact_match").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/planned/tasks/delete")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/planned/schedules/delete")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/applied/tasks")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        first_prune.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/pruned/schedules")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/remaining/tasks/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/remaining/schedules/live_only")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let pruned = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        pruned.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(pruned.get("changed").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        pruned.get("exact_match").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        pruned
+            .pointer("/planned/tasks/delete")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        pruned.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        pruned.pointer("/pruned/schedules").and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let exact = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(exact.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        exact
+            .pointer("/counts/tasks/live_only")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        exact
+            .pointer("/counts/schedules/live_only")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let source_home_env = tempdir.path().join("source-home-env");

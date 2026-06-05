@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use defra_agent::Collection;
 use std::path::Path;
 
 use crate::cli::*;
@@ -69,12 +70,16 @@ pub(crate) async fn apply_bound_desired_manifest(
         prune,
     );
 
-    let applied = {
+    let (applied, pruned) = {
         let txn = access
             .begin_apply_txn()
             .await
             .context("config apply: begin transaction")?;
-        let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+        let result = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+            Ok(applied_total) => Ok(split_apply_counts(applied_total, &planned, prune)),
+            Err(error) => Err(error),
+        };
+        let counts = match result {
             Ok(counts) => counts,
             Err(error) => {
                 if let Err(discard_err) = txn.discard().await {
@@ -95,30 +100,54 @@ pub(crate) async fn apply_bound_desired_manifest(
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
+    // Report remaining drift as a plain diff. A prune pass may delete a
+    // referrer and make another live-only dependency safe to prune on a later
+    // invocation; that later-safe doc should remain visible as live_only
+    // instead of turning this already-applied pass into a failed convergence.
     let remaining = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
         remaining_principal.as_ref(),
         &remaining_manifest,
-        prune,
+        false,
     );
 
+    let changed = config_apply_counts_changed(&applied) || config_apply_counts_changed(&pruned);
     let report = ConfigApplyReport {
-        status: if config_apply_counts_changed(&applied) {
-            "applied"
-        } else {
-            "noop"
-        },
+        status: if changed { "applied" } else { "noop" },
         ok: !diff_has_pending_apply(&remaining.counts),
         exact_match: remaining.ok,
-        changed: config_apply_counts_changed(&applied),
+        changed,
         root: root.display().to_string(),
         access_mode: access.mode().to_string(),
         agent_did: bound.context.target_agent_did.clone(),
         planned: planned.counts.clone(),
         applied,
+        pruned,
         remaining: remaining.counts.clone(),
     };
     Ok(report)
+}
+
+fn split_apply_counts(
+    applied_total: ConfigApplyCounts,
+    planned: &desired_state::DesiredStateDiffReport,
+    prune: bool,
+) -> (ConfigApplyCounts, ConfigApplyCounts) {
+    let pruned = if prune {
+        prune_counts_from_plan(planned)
+    } else {
+        ConfigApplyCounts::default()
+    };
+    let applied = applied_total.saturating_sub(&pruned);
+    (applied, pruned)
+}
+
+fn prune_counts_from_plan(planned: &desired_state::DesiredStateDiffReport) -> ConfigApplyCounts {
+    let mut counts = ConfigApplyCounts::default();
+    for collection in Collection::ALL {
+        counts.set(collection, planned.collections.get(collection).delete.len());
+    }
+    counts
 }

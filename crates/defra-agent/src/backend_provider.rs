@@ -118,6 +118,15 @@ pub async fn discover_models(
     } else if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
     }
+    for (name, value) in crate::runtime_trace::current_trace_context_headers() {
+        let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = reqwest::header::HeaderValue::from_str(&value) else {
+            continue;
+        };
+        request = request.header(name, value);
+    }
     let response = request
         .send()
         .await

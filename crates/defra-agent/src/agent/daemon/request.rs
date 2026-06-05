@@ -5,6 +5,7 @@ use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, AdmissionCallContext, CallKind};
 use crate::compaction::{self, CompactionOptions, Compactor};
 use crate::prompt::PromptBuilder;
+use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
 use crate::streaming::{StreamStatus, StreamWriter};
 
@@ -22,6 +23,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
+        let trace_attrs = RequestTraceAttrs::from_request(&request);
         let behavior_name = self.behavior.behavior_id.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
@@ -47,7 +49,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
 
             let mut built = async {
-                let full_history = session::load_history(&self.node, &request.session_id).await?;
+                let full_history = session::load_history(&self.node, &request.session_id)
+                    .instrument(tracing::info_span!(
+                        "request.load_history",
+                        request_id = %request.request_id,
+                        session_id = %request.session_id,
+                        behavior_id = %behavior_name,
+                    ))
+                    .await?;
                 let (stripped_history, file_activity) =
                     compaction::strip_tool_results(full_history);
                 if !file_activity.is_empty() {
@@ -61,7 +70,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 }
 
                 let compaction_entries =
-                    session::load_compaction_entries(&self.node, &request.session_id).await?;
+                    session::load_compaction_entries(&self.node, &request.session_id)
+                        .instrument(tracing::info_span!(
+                            "request.load_compaction_entries",
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            behavior_id = %behavior_name,
+                        ))
+                        .await?;
                 let mut history = drop_compacted_prefix(
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
@@ -71,7 +87,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .map(|entry| entry.summary)
                     .collect::<Vec<_>>();
 
-                let mut built = self.prompt_builder.build(&history, &summaries).await?;
+                let mut built = self
+                    .prompt_builder
+                    .build(&history, &summaries)
+                    .instrument(tracing::info_span!(
+                        "request.build_prompt",
+                        request_id = %request.request_id,
+                        session_id = %request.session_id,
+                        behavior_id = %behavior_name,
+                        history_messages = history.len(),
+                        summary_count = summaries.len(),
+                    ))
+                    .await?;
                 // Count the to-be-injected skill bodies toward the threshold.
                 built.estimated_tokens =
                     built.estimated_tokens.saturating_add(skill_reminder_tokens);
@@ -111,7 +138,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         summaries.push(entry.summary);
                     }
 
-                    built = self.prompt_builder.build(&history, &summaries).await?;
+                    built = self
+                        .prompt_builder
+                        .build(&history, &summaries)
+                        .instrument(tracing::info_span!(
+                            "request.build_prompt",
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            behavior_id = %behavior_name,
+                            history_messages = history.len(),
+                            summary_count = summaries.len(),
+                            compacted = true,
+                        ))
+                        .await?;
                     built.estimated_tokens =
                         built.estimated_tokens.saturating_add(skill_reminder_tokens);
                 }
@@ -122,7 +161,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 "request.prepare_prompt",
                 request_id = %request.request_id,
                 session_id = %request.session_id,
+                agent_did = %request.agent_did,
                 behavior_id = %behavior_name,
+                deadline_at = %trace_attrs.deadline_at,
+                has_deadline = trace_attrs.has_deadline,
+                subagent_depth = trace_attrs.subagent_depth,
+                is_subagent = trace_attrs.is_subagent,
+                selected_skill_count = trace_attrs.selected_skill_count,
+                workspace_cwd_set = trace_attrs.workspace_cwd_set,
             ))
             .await?;
 
@@ -149,7 +195,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     "request.begin_response",
                     request_id = %request.request_id,
                     session_id = %request.session_id,
+                    agent_did = %request.agent_did,
                     behavior_id = %response_behavior_id,
+                    subagent_depth = trace_attrs.subagent_depth,
+                    is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
             lifecycle.set_response_doc_id(&doc_id);
@@ -171,8 +220,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     "request.run_inference",
                     request_id = %request.request_id,
                     session_id = %request.session_id,
+                    agent_did = %request.agent_did,
                     behavior_id = %inference_behavior_id,
                     backend_id = %inference_backend_id,
+                    deadline_at = %trace_attrs.deadline_at,
+                    has_deadline = trace_attrs.has_deadline,
+                    subagent_depth = trace_attrs.subagent_depth,
+                    is_subagent = trace_attrs.is_subagent,
+                    selected_skill_count = trace_attrs.selected_skill_count,
+                    workspace_cwd_set = trace_attrs.workspace_cwd_set,
                 ))
                 .await;
 

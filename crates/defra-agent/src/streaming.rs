@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use tokio::sync::Mutex;
+use tracing::Instrument;
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
@@ -88,6 +89,15 @@ pub struct DefraStreamWriter {
 enum RequestFinalizeMode {
     UpdateRequest,
     ResponseOnly,
+}
+
+impl RequestFinalizeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::UpdateRequest => "update_request",
+            Self::ResponseOnly => "response_only",
+        }
+    }
 }
 
 struct StreamBuffer {
@@ -356,106 +366,141 @@ impl DefraStreamWriter {
                 token_count: buf.token_count,
             })
         };
-        let now = chrono::Utc::now().to_rfc3339();
-        let mutation = build_finalize_mutation(
-            existing.as_ref(),
-            doc_id,
-            &status,
-            &now,
-            snapshot.as_ref(),
-            error_message,
-            request_mode,
-        );
-        let operation = if snapshot.is_some() {
-            "finalize_streaming_response"
-        } else {
-            "finalize_streaming_response_without_buffer"
-        };
-
-        let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
-            Ok(resp) => resp,
-            Err(error) => {
-                if let Some(snapshot) = snapshot.as_ref() {
-                    tracing::error!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        token_count = snapshot.token_count,
-                        lost_content_len = snapshot.content.len(),
-                        lost_reasoning_len = snapshot.reasoning.len(),
-                        error = %error,
-                        "failed to finalize streaming response after retries; leaving buffer in place for crash-recovery"
-                    );
-                } else {
-                    tracing::error!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        error = %error,
-                        "failed to finalize streaming response without in-memory buffer"
-                    );
-                }
-                return Err(error);
-            }
-        };
-
-        let persisted = if resp
-            .data
+        let request_id = existing
             .as_ref()
-            .and_then(|data| data.get("update_AgentResponse"))
-            .is_some_and(response_has_documents)
-        {
-            load_response_state(&self.node, doc_id).await?
-        } else {
-            match load_response_state(&self.node, doc_id).await? {
-                Some(existing) if existing.status == status.as_str() => {
-                    tracing::warn!(
-                        doc_id = %doc_id,
-                        status = %status.as_str(),
-                        "finalize became an idempotent no-op because response was already terminal"
-                    );
-                    Some(existing)
-                }
-                Some(existing) => {
-                    anyhow::bail!(
-                        "cannot finalize AgentResponse {} as {} because it is already {}",
-                        doc_id,
-                        status.as_str(),
-                        existing.status
-                    );
-                }
-                None => anyhow::bail!(
-                    "cannot finalize AgentResponse {} as {} because the response document is missing",
-                    doc_id,
-                    status.as_str()
-                ),
-            }
-        };
-
-        self.buffers.lock().await.remove(doc_id);
-
-        let content = persisted
+            .map(|response| response.request_id.as_str())
+            .unwrap_or("");
+        let session_id = existing
             .as_ref()
-            .map(|response| response.content.clone())
-            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.content.clone()))
-            .unwrap_or_default();
-        let token_count = persisted
+            .and_then(|response| response.session_id.as_deref())
+            .unwrap_or("");
+        let agent_did = existing
             .as_ref()
-            .map(|response| response.token_count)
-            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.token_count))
-            .unwrap_or_default();
-
-        tracing::info!(
+            .and_then(|response| response.agent_did.as_deref())
+            .unwrap_or("");
+        let behavior_id = existing
+            .as_ref()
+            .and_then(|response| response.behavior_id.as_deref())
+            .unwrap_or("");
+        let span = tracing::info_span!(
+            "stream.finalize",
             doc_id = %doc_id,
+            request_id = %request_id,
+            session_id = %session_id,
+            agent_did = %agent_did,
+            behavior_id = %behavior_id,
             status = %status.as_str(),
-            tokens = token_count,
-            "finalized streaming response"
+            has_buffer = snapshot.is_some(),
+            has_error_message = error_message.is_some(),
+            request_finalize_mode = %request_mode.as_str(),
+            token_count = tracing::field::Empty,
         );
 
-        Ok(StreamResult {
-            doc_id: doc_id.to_string(),
-            content,
-            status,
-            token_count,
-        })
+        async {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mutation = build_finalize_mutation(
+                existing.as_ref(),
+                doc_id,
+                &status,
+                &now,
+                snapshot.as_ref(),
+                error_message,
+                request_mode,
+            );
+            let operation = if snapshot.is_some() {
+                "finalize_streaming_response"
+            } else {
+                "finalize_streaming_response_without_buffer"
+            };
+
+            let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
+                Ok(resp) => resp,
+                Err(error) => {
+                    if let Some(snapshot) = snapshot.as_ref() {
+                        tracing::error!(
+                            doc_id = %doc_id,
+                            status = %status.as_str(),
+                            token_count = snapshot.token_count,
+                            lost_content_len = snapshot.content.len(),
+                            lost_reasoning_len = snapshot.reasoning.len(),
+                            error = %error,
+                            "failed to finalize streaming response after retries; leaving buffer in place for crash-recovery"
+                        );
+                    } else {
+                        tracing::error!(
+                            doc_id = %doc_id,
+                            status = %status.as_str(),
+                            error = %error,
+                            "failed to finalize streaming response without in-memory buffer"
+                        );
+                    }
+                    return Err(error);
+                }
+            };
+
+            let persisted = if resp
+                .data
+                .as_ref()
+                .and_then(|data| data.get("update_AgentResponse"))
+                .is_some_and(response_has_documents)
+            {
+                load_response_state(&self.node, doc_id).await?
+            } else {
+                match load_response_state(&self.node, doc_id).await? {
+                    Some(existing) if existing.status == status.as_str() => {
+                        tracing::warn!(
+                            doc_id = %doc_id,
+                            status = %status.as_str(),
+                            "finalize became an idempotent no-op because response was already terminal"
+                        );
+                        Some(existing)
+                    }
+                    Some(existing) => {
+                        anyhow::bail!(
+                            "cannot finalize AgentResponse {} as {} because it is already {}",
+                            doc_id,
+                            status.as_str(),
+                            existing.status
+                        );
+                    }
+                    None => anyhow::bail!(
+                        "cannot finalize AgentResponse {} as {} because the response document is missing",
+                        doc_id,
+                        status.as_str()
+                    ),
+                }
+            };
+
+            self.buffers.lock().await.remove(doc_id);
+
+            let content = persisted
+                .as_ref()
+                .map(|response| response.content.clone())
+                .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.content.clone()))
+                .unwrap_or_default();
+            let token_count = persisted
+                .as_ref()
+                .map(|response| response.token_count)
+                .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.token_count))
+                .unwrap_or_default();
+
+            tracing::Span::current().record("token_count", token_count as i64);
+            tracing::info!(
+                doc_id = %doc_id,
+                status = %status.as_str(),
+                tokens = token_count,
+                "finalized streaming response"
+            );
+
+            Ok(StreamResult {
+                doc_id: doc_id.to_string(),
+                content,
+                status,
+                token_count,
+            })
+        }
+        .instrument(span)
+        .await
     }
 }
 

@@ -150,6 +150,19 @@ pub struct AgentRuntimeRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentMemoryRow {
+    pub memory_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentConversationRow {
     pub session_id: String,
     #[serde(default)]
@@ -556,6 +569,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     #[serde(default)]
+    pub enable_memory: Option<bool>,
+    #[serde(default)]
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,
@@ -791,7 +806,8 @@ mod tests {
             "subagent_steering_enabled": true,
             "subagent_background_enabled": true,
             "subagent_allow_cross_deployment": true,
-            "cross_deployment_spawn_timeout_seconds": 45
+            "cross_deployment_spawn_timeout_seconds": 45,
+            "enable_memory": true
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert_eq!(row.subagent_targets, vec!["amy-research".to_string()]);
@@ -800,6 +816,7 @@ mod tests {
         assert_eq!(row.subagent_background_enabled, Some(true));
         assert_eq!(row.subagent_allow_cross_deployment, Some(true));
         assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
+        assert_eq!(row.enable_memory, Some(true));
 
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");

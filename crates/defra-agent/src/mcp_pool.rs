@@ -78,15 +78,30 @@ fn streamable_http_transport_config(
     agent_did_header: Option<&str>,
 ) -> Result<StreamableHttpClientTransportConfig> {
     let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_string());
+    let mut headers = std::collections::HashMap::new();
     if let Some(agent_did) = agent_did_header {
-        let mut headers = std::collections::HashMap::new();
         headers.insert(
             HeaderName::from_static(AGENT_DID_HEADER),
             HeaderValue::from_str(agent_did).context("invalid agent DID header value")?,
         );
+    }
+    insert_trace_context_headers(&mut headers);
+    if !headers.is_empty() {
         config = config.custom_headers(headers);
     }
     Ok(config)
+}
+
+fn insert_trace_context_headers(headers: &mut HashMap<HeaderName, HeaderValue>) {
+    for (name, value) in crate::runtime_trace::current_trace_context_headers() {
+        let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_str(&value) else {
+            continue;
+        };
+        headers.entry(name).or_insert(value);
+    }
 }
 
 async fn connect_mcp_service(

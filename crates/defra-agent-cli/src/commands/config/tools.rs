@@ -54,6 +54,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         subagent_background_enabled: None,
         subagent_allow_cross_deployment: None,
         cross_deployment_spawn_timeout_seconds: None,
+        enable_memory: args.enable_memory,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections: Some(args.defra_query_collections.clone()),
     };
@@ -75,6 +76,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "enable_meta_tools": args.enable_meta_tools,
         "allowed_mcp_service_ids": args.allowed_mcp_service_ids,
         "backgroundable_tool_names": args.backgroundable_tool_names,
+        "enable_memory": args.enable_memory,
         "enable_defra_query": args.enable_defra_query,
         "defra_query_collections": args.defra_query_collections,
     });

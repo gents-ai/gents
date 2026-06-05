@@ -258,6 +258,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
+        enable_memory: false,
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
         subagent_targets: Vec::new(),
@@ -788,6 +789,53 @@ fn diff_manifests_creates_schedule_when_live_is_empty() {
     assert_eq!(report.counts.schedules.update, 0);
     assert_eq!(report.counts.schedules.unchanged, 0);
     assert_eq!(report.counts.schedules.live_only, 0);
+}
+
+#[test]
+fn diff_manifests_reports_live_only_without_delete_by_default() {
+    let desired = manifest_with_default_behavior();
+    let mut live = desired.clone();
+    live.tasks.push(sample_task("stale-task"));
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+
+    assert_eq!(report.collections.tasks.live_only, vec!["stale-task"]);
+    assert!(report.collections.tasks.delete.is_empty());
+    assert_eq!(report.counts.tasks.live_only, 1);
+    assert_eq!(report.counts.tasks.delete, 0);
+}
+
+#[test]
+fn diff_manifests_with_prune_deletes_only_unreferenced_live_only_docs() {
+    let desired = manifest_with_default_behavior();
+    let mut live = desired.clone();
+    live.tasks.push(sample_task("stale-task"));
+    live.schedules
+        .push(sample_schedule("stale-schedule", "stale-task"));
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+        true,
+    );
+
+    assert_eq!(report.collections.tasks.live_only, vec!["stale-task"]);
+    assert!(report.collections.schedules.live_only.is_empty());
+    assert!(
+        report.collections.tasks.delete.is_empty(),
+        "task remains protected while the live schedule references it"
+    );
+    assert_eq!(report.collections.schedules.delete, vec!["stale-schedule"]);
 }
 
 #[test]

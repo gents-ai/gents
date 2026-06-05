@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use tracing::Instrument;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::graphql::escape_graphql_string;
@@ -366,38 +367,50 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
         if backend.probe_status == HEALTHY_PROBE_STATUS {
             continue;
         }
-        let api_key = backend.resolved_api_key();
-        match crate::backend_provider::discover_models(
-            &client,
-            backend.provider_kind,
-            &backend.endpoint,
-            api_key.as_deref(),
-        )
-        .await
-        {
-            Ok(_) => {
-                match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
-                    .await
-                {
-                    Ok(()) => tracing::info!(
-                        backend_id = %backend.backend_id,
-                        endpoint = %backend.endpoint,
-                        "startup backend probe: promoted to healthy"
-                    ),
-                    Err(error) => tracing::warn!(
-                        backend_id = %backend.backend_id,
-                        error = %error,
-                        "startup backend probe: reachable but failed to persist healthy status"
-                    ),
+        async {
+            let api_key = backend.resolved_api_key();
+            match crate::backend_provider::discover_models(
+                &client,
+                backend.provider_kind,
+                &backend.endpoint,
+                api_key.as_deref(),
+            )
+            .await
+            {
+                Ok(models) => {
+                    tracing::Span::current().record("model_count", models.len() as i64);
+                    match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
+                        .await
+                    {
+                        Ok(()) => tracing::info!(
+                            backend_id = %backend.backend_id,
+                            endpoint = %backend.endpoint,
+                            "startup backend probe: promoted to healthy"
+                        ),
+                        Err(error) => tracing::warn!(
+                            backend_id = %backend.backend_id,
+                            error = %error,
+                            "startup backend probe: reachable but failed to persist healthy status"
+                        ),
+                    }
                 }
+                Err(error) => tracing::warn!(
+                    backend_id = %backend.backend_id,
+                    endpoint = %backend.endpoint,
+                    error = %error,
+                    "startup backend probe: unreachable, leaving probe_status unchanged"
+                ),
             }
-            Err(error) => tracing::warn!(
-                backend_id = %backend.backend_id,
-                endpoint = %backend.endpoint,
-                error = %error,
-                "startup backend probe: unreachable, leaving probe_status unchanged"
-            ),
         }
+        .instrument(tracing::info_span!(
+            "backend.startup_probe",
+            backend_id = %backend.backend_id,
+            endpoint = %backend.endpoint,
+            provider_kind = %backend.provider_kind,
+            previous_probe_status = %backend.probe_status,
+            model_count = tracing::field::Empty,
+        ))
+        .await;
     }
 }
 
