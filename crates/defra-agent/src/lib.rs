@@ -37,6 +37,7 @@ pub mod oneshot;
 pub mod prompt;
 pub(crate) mod registry;
 pub mod retry;
+pub mod run_timeline;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub mod schedule_cron;
@@ -104,6 +105,11 @@ pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
+pub use run_timeline::{
+    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
+    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
+    TimelineToolCallRow,
+};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
     ResolvedTask, ScheduleCadence,

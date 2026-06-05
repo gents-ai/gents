@@ -235,6 +235,94 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     Ok(())
 }
 
+#[tokio::test]
+async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let agent_home = tempdir.path().join("agent-home");
+    let data_dir = agent_home.join("data");
+
+    {
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await
+            .context("opening embedded node")?;
+        ensure_runtime_schemas(&node).await?;
+        seed_trace_export_rows(&node).await?;
+    }
+
+    let output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "timeline",
+            "--home",
+            agent_home.to_str().context("agent home utf8")?,
+            "--request-id",
+            "req-1",
+        ],
+    )?;
+    let timeline = serde_json::from_str::<Value>(&output).context("parsing timeline JSON")?;
+
+    assert_eq!(
+        timeline.get("request_id").and_then(Value::as_str),
+        Some("req-1")
+    );
+    assert_eq!(
+        timeline.get("session_id").and_then(Value::as_str),
+        Some("session-1")
+    );
+    assert_eq!(
+        timeline
+            .get("conversation")
+            .and_then(|conversation| conversation.get("title"))
+            .and_then(Value::as_str),
+        Some("Trace export test")
+    );
+    let events = timeline
+        .get("events")
+        .and_then(Value::as_array)
+        .context("timeline events array")?;
+    assert!(
+        events
+            .iter()
+            .any(|event| event.get("kind").and_then(Value::as_str) == Some("request")),
+        "timeline missing request event: {timeline:#}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("message")
+                && event.get("sequence").and_then(Value::as_i64) == Some(2)
+        }),
+        "timeline missing assistant message event: {timeline:#}"
+    );
+    let failed_tool = events
+        .iter()
+        .find(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("tool_call")
+                && event.get("tool_call_id").and_then(Value::as_str) == Some("call-fail")
+        })
+        .unwrap_or_else(|| panic!("missing call-fail tool event: {timeline:#}"));
+    assert_eq!(
+        failed_tool.get("request_id").and_then(Value::as_str),
+        Some("req-1")
+    );
+    assert_eq!(
+        failed_tool.get("tool_name").and_then(Value::as_str),
+        Some("bash")
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("response")
+                && event.get("request_id").and_then(Value::as_str) == Some("req-1")
+        }),
+        "timeline missing response event: {timeline:#}"
+    );
+
+    Ok(())
+}
+
 async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,

@@ -205,7 +205,8 @@ state.
 Examples:
   defra-agent trace export --home /path/to/home
   defra-agent trace export --graphql http://127.0.0.1:9191/api/v0/graphql
-  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl";
+  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
+  defra-agent trace timeline --request-id REQUEST_ID --home /path/to/home";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default

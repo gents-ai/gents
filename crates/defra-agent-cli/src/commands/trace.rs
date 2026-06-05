@@ -3,6 +3,10 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::run_timeline::{
+    build_run_timeline, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
+    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+};
 use defra_agent::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
     raw_message_json, AmyToolCallTraceRecord,
@@ -11,14 +15,72 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::cli::args::{TraceCommand, TraceExportArgs};
+use crate::cli::args::{TraceCommand, TraceExportArgs, TraceTimelineArgs};
 use crate::config_writes::ConfigAccess;
-use crate::{graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal};
+use crate::{
+    graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal, print_json,
+    write_json_output_file,
+};
 
 pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
     match command {
         TraceCommand::Export(args) => trace_export(args).await,
+        TraceCommand::Timeline(args) => trace_timeline(args).await,
     }
+}
+
+async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
+    let (access, _home_dir) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let request = load_timeline_request_by_id(&access, &args.request_id).await?;
+    let session_id = request.session_id.as_deref();
+
+    let mut requests = match session_id {
+        Some(session_id) => load_timeline_requests_for_session(&access, session_id).await?,
+        None => Vec::new(),
+    };
+    merge_timeline_request(&mut requests, request.clone());
+    for child in load_timeline_child_requests(&access, &request.request_id).await? {
+        merge_timeline_request(&mut requests, child);
+    }
+
+    let messages = match session_id {
+        Some(session_id) => load_timeline_messages_for_session(&access, session_id).await?,
+        None => Vec::new(),
+    };
+    let tool_calls = match session_id {
+        Some(session_id) => load_timeline_tool_calls_for_session(&access, session_id).await?,
+        None => Vec::new(),
+    };
+    let responses = match session_id {
+        Some(session_id) => load_timeline_responses_for_session(&access, session_id).await?,
+        None => load_timeline_responses_for_request(&access, &request.request_id).await?,
+    };
+    let session = match session_id {
+        Some(session_id) => load_timeline_session(&access, session_id).await?,
+        None => None,
+    };
+    let conversation = match session_id {
+        Some(session_id) => load_timeline_conversation(&access, session_id).await?,
+        None => None,
+    };
+
+    let timeline = build_run_timeline(RunTimelineRows {
+        request,
+        session,
+        conversation,
+        requests,
+        messages,
+        tool_calls,
+        responses,
+    });
+    let value = serde_json::to_value(&timeline)?;
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &value)?;
+    } else {
+        print_json(&value)?;
+    }
+    Ok(())
 }
 
 async fn trace_export(args: TraceExportArgs) -> Result<()> {
@@ -287,6 +349,306 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+}
+
+async fn load_timeline_request_by_id(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<TimelineRequestRow> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(request_id)
+    );
+    load_rows::<TimelineRequestRow>(access, "AgentRequest", &query)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+}
+
+async fn load_timeline_requests_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineRequestRow>> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentRequest", &query).await
+}
+
+async fn load_timeline_child_requests(
+    access: &ConfigAccess,
+    parent_request_id: &str,
+) -> Result<Vec<TimelineRequestRow>> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(parent_request_id)
+    );
+    load_rows(access, "AgentRequest", &query).await
+}
+
+async fn load_timeline_messages_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineMessageRow>> {
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                session_id
+                sequence
+                role
+                content
+                timestamp
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentMessage", &query).await
+}
+
+async fn load_timeline_tool_calls_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineToolCallRow>> {
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ started_at: ASC }}
+            ) {{
+                request_id
+                session_id
+                message_sequence
+                tool_name
+                tool_call_id
+                args
+                result
+                status
+                lifecycle_state
+                started_at
+                deadline_at
+                completed_at
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                denial_reason
+                denied_argv
+                denied_command
+                denied_argument
+                denied_subcommand
+                denied_prefix
+                policy_mode
+                policy_network
+                latency_ms
+                await_mode
+                cancel_policy
+                cancel_cause
+                child_request_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentToolCall", &query).await
+}
+
+async fn load_timeline_responses_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineResponseRow>> {
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                reasoning
+                status
+                error_message
+                token_count
+                progress_seq
+                materialized_message_sequence
+                materialized_at
+                created_at
+                completed_at
+                interrupted_at
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentResponse", &query).await
+}
+
+async fn load_timeline_responses_for_request(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Vec<TimelineResponseRow>> {
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                reasoning
+                status
+                error_message
+                token_count
+                progress_seq
+                materialized_message_sequence
+                materialized_at
+                created_at
+                completed_at
+                interrupted_at
+            }}
+        }}"#,
+        escape_graphql_string(request_id)
+    );
+    load_rows(access, "AgentResponse", &query).await
+}
+
+async fn load_timeline_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Option<TimelineSessionRow>> {
+    let query = format!(
+        r#"{{
+            AgentSession(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                limit: 1
+            ) {{
+                session_id
+                agent_name
+                behavior_id
+                started
+                ended
+                status
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    Ok(
+        load_rows::<TimelineSessionRow>(access, "AgentSession", &query)
+            .await?
+            .into_iter()
+            .next(),
+    )
+}
+
+async fn load_timeline_conversation(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Option<TimelineConversationRow>> {
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                limit: 1
+            ) {{
+                session_id
+                agent_name
+                agent_did
+                behavior_id
+                title
+                title_source
+                preview_text
+                status
+                created_at
+                updated_at
+                latest_request_id
+                forked_from_session_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    Ok(
+        load_rows::<TimelineConversationRow>(access, "AgentConversation", &query)
+            .await?
+            .into_iter()
+            .next(),
+    )
+}
+
+fn merge_timeline_request(rows: &mut Vec<TimelineRequestRow>, request: TimelineRequestRow) {
+    if !rows.iter().any(|row| row.request_id == request.request_id) {
+        rows.push(request);
+    }
 }
 
 async fn load_requests_for_sessions(

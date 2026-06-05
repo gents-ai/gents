@@ -700,6 +700,11 @@ pub(crate) struct RuntimeShowArgs {
 pub(crate) enum TraceCommand {
     #[command(name = "export", about = "Export Amy-style tool-call JSONL")]
     Export(TraceExportArgs),
+    #[command(
+        name = "timeline",
+        about = "Export a reconstructed run timeline for one AgentRequest"
+    )]
+    Timeline(TraceTimelineArgs),
 }
 
 #[derive(clap::Args)]
@@ -723,6 +728,18 @@ pub(crate) struct TraceExportArgs {
     )]
     pub(crate) limit: usize,
     #[arg(long = "output-file", help = "Write JSONL to a file instead of stdout")]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceTimelineArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id", help = "Request id to reconstruct")]
+    pub(crate) request_id: String,
+    #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
     pub(crate) output_file: Option<PathBuf>,
 }
 
