@@ -24,6 +24,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
+        projection_acp_bindings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),
@@ -466,6 +467,7 @@ fn round_trip_load_write_load_is_identity() {
 
 mod load_manifest_root {
     use crate::desired_state::load::load_manifest_root;
+    use crate::desired_state::write_manifest_root;
     use std::fs;
     use tempfile::tempdir;
 
@@ -639,6 +641,75 @@ mod load_manifest_root {
         );
         assert_eq!(manifest.event_triggers[0].event_kind, "created");
         assert!(manifest.event_triggers[0].enabled);
+    }
+
+    #[test]
+    fn projection_acp_binding_round_trips_per_doc_dir() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
+
+        let binding_dir = tmp
+            .path()
+            .join("projection-acp-bindings")
+            .join("codex-read");
+        fs::create_dir_all(&binding_dir).unwrap();
+        fs::write(
+            binding_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "binding_id": "codex-read",
+                "agent_did": "did:key:example",
+                "behavior_id": "default",
+                "projection_id": "codex_thread",
+                "policy_id": "policy-codex-read",
+                "resource_map_json": "{\"AgentRequest\":\"AgentRequest\"}",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (manifest, report) = load_manifest_root(tmp.path());
+        assert!(
+            report.ok,
+            "expected valid manifest, got {:?}",
+            report.errors
+        );
+        assert_eq!(report.counts.projection_acp_bindings, 1);
+        let manifest = manifest.expect("manifest should load");
+        assert_eq!(manifest.projection_acp_bindings.len(), 1);
+        assert_eq!(
+            manifest.projection_acp_bindings[0].projection_id.as_deref(),
+            Some("codex_thread")
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].resource_map_json =
+            Some(r#"{"":"AgentRequest"}"#.to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("resource_map_json must map non-empty")),
+            "expected resource-map validation error, got {errors:?}"
+        );
+
+        let out = tempdir().unwrap();
+        write_manifest_root(out.path(), &manifest, false).unwrap();
+        let written_path = out
+            .path()
+            .join("projection-acp-bindings")
+            .join("codex-read")
+            .join("object.json");
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(written_path).unwrap()).unwrap();
+        assert_eq!(
+            written
+                .get("binding_id")
+                .and_then(serde_json::Value::as_str),
+            Some("codex-read")
+        );
+        assert!(written.get("created_at").is_none());
+        assert!(written.get("updated_at").is_none());
     }
 
     // Ported from PR #68: deprecated capability fields on DesiredInferenceBackend
@@ -1823,6 +1894,7 @@ pub(super) mod write_manifest_root {
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
+            projection_acp_bindings: Vec::new(),
             tasks: vec![DesiredTask {
                 task_id: "seed-health".to_string(),
                 name: "Seed fleet health".to_string(),

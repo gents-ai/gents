@@ -170,6 +170,8 @@ pub(crate) struct ConfigExportBundle {
     #[serde(default)]
     pub(crate) tool_service_registries: Vec<Value>,
     #[serde(default)]
+    pub(crate) projection_acp_bindings: Vec<Value>,
+    #[serde(default)]
     pub(crate) tasks: Vec<Value>,
     #[serde(default)]
     pub(crate) schedules: Vec<Value>,
@@ -187,6 +189,7 @@ impl ConfigExportBundle {
             Collection::InferenceBackend => Some(&self.inference_backends),
             Collection::InferenceProfile => Some(&self.inference_profiles),
             Collection::ToolServiceRegistry => Some(&self.tool_service_registries),
+            Collection::ProjectionAcpBinding => Some(&self.projection_acp_bindings),
             Collection::Task => Some(&self.tasks),
             Collection::Schedule => Some(&self.schedules),
             Collection::EventTrigger => Some(&self.event_triggers),
@@ -203,6 +206,7 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
+    pub(crate) projection_acp_bindings: usize,
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
     pub(crate) event_triggers: usize,
@@ -218,6 +222,7 @@ impl ConfigApplyCounts {
             Collection::InferenceBackend => self.inference_backends = count,
             Collection::InferenceProfile => self.inference_profiles = count,
             Collection::ToolServiceRegistry => self.tool_service_registries = count,
+            Collection::ProjectionAcpBinding => self.projection_acp_bindings = count,
             Collection::Task => self.tasks = count,
             Collection::Schedule => self.schedules = count,
             Collection::EventTrigger => self.event_triggers = count,
@@ -233,6 +238,7 @@ impl ConfigApplyCounts {
             Collection::InferenceBackend => self.inference_backends += count,
             Collection::InferenceProfile => self.inference_profiles += count,
             Collection::ToolServiceRegistry => self.tool_service_registries += count,
+            Collection::ProjectionAcpBinding => self.projection_acp_bindings += count,
             Collection::Task => self.tasks += count,
             Collection::Schedule => self.schedules += count,
             Collection::EventTrigger => self.event_triggers += count,
@@ -249,6 +255,7 @@ impl ConfigApplyCounts {
                 Collection::InferenceBackend => self.inference_backends,
                 Collection::InferenceProfile => self.inference_profiles,
                 Collection::ToolServiceRegistry => self.tool_service_registries,
+                Collection::ProjectionAcpBinding => self.projection_acp_bindings,
                 Collection::Task => self.tasks,
                 Collection::Schedule => self.schedules,
                 Collection::EventTrigger => self.event_triggers,

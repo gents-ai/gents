@@ -22,6 +22,9 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         .tool_service_registries
         .sort_by(|left, right| left.service_id.cmp(&right.service_id));
     manifest
+        .projection_acp_bindings
+        .sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
+    manifest
         .tasks
         .sort_by(|left, right| left.task_id.cmp(&right.task_id));
     manifest
@@ -71,6 +74,12 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     }
     for trigger in &mut manifest.event_triggers {
         normalize_optional_string(&mut trigger.filter);
+    }
+    for binding in &mut manifest.projection_acp_bindings {
+        normalize_optional_string(&mut binding.agent_did);
+        normalize_optional_string(&mut binding.behavior_id);
+        normalize_optional_string(&mut binding.projection_id);
+        normalize_optional_string(&mut binding.resource_map_json);
     }
 }
 

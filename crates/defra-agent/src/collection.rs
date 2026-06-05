@@ -18,6 +18,7 @@ pub enum Collection {
     InferenceBackend,
     InferenceProfile,
     ToolServiceRegistry,
+    ProjectionAcpBinding,
     Task,
     Schedule,
     EventTrigger,
@@ -26,7 +27,7 @@ pub enum Collection {
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub const ALL: [Collection; 10] = [
+    pub const ALL: [Collection; 11] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::Skill,
@@ -34,6 +35,7 @@ impl Collection {
         Collection::InferenceBackend,
         Collection::InferenceProfile,
         Collection::ToolServiceRegistry,
+        Collection::ProjectionAcpBinding,
         Collection::Task,
         Collection::Schedule,
         Collection::EventTrigger,
@@ -57,6 +59,7 @@ impl Collection {
             Collection::InferenceBackend => Some("inference-backends"),
             Collection::InferenceProfile => Some("inference-profiles"),
             Collection::ToolServiceRegistry => Some("tool-services"),
+            Collection::ProjectionAcpBinding => Some("projection-acp-bindings"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
             // EventTrigger uses underscore (not hyphen) to match the schema
@@ -76,6 +79,7 @@ impl Collection {
             Collection::InferenceBackend => "InferenceBackend",
             Collection::InferenceProfile => "InferenceProfile",
             Collection::ToolServiceRegistry => "ToolServiceRegistry",
+            Collection::ProjectionAcpBinding => "ProjectionAcpBinding",
             Collection::Task => "Task",
             Collection::Schedule => "Schedule",
             Collection::EventTrigger => "EventTrigger",
@@ -92,6 +96,7 @@ impl Collection {
             Collection::InferenceBackend => "backend_id",
             Collection::InferenceProfile => "profile_id",
             Collection::ToolServiceRegistry => "service_id",
+            Collection::ProjectionAcpBinding => "binding_id",
             Collection::Task => "task_id",
             Collection::Schedule => "schedule_id",
             Collection::EventTrigger => "trigger_id",
@@ -109,6 +114,7 @@ impl Collection {
             | Collection::ToolServiceRegistry
             | Collection::Skill => 0,
             Collection::AgentBehavior => 1,
+            Collection::ProjectionAcpBinding => 2,
             Collection::Task => 2,
             Collection::Schedule => 2,
             Collection::AgentPrincipal => 3,
@@ -131,6 +137,7 @@ impl fmt::Display for Collection {
             Collection::InferenceBackend => "inference_backends",
             Collection::InferenceProfile => "inference_profiles",
             Collection::ToolServiceRegistry => "tool_service_registries",
+            Collection::ProjectionAcpBinding => "projection_acp_bindings",
             Collection::Task => "tasks",
             Collection::Schedule => "schedules",
             Collection::EventTrigger => "event_triggers",
@@ -192,6 +199,7 @@ mod tests {
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
+            (Collection::ProjectionAcpBinding, 2, "ProjectionAcpBinding"),
             (Collection::Task, 2, "Task"),
             (Collection::Schedule, 2, "Schedule"),
             (Collection::EventTrigger, 3, "EventTrigger"),
@@ -245,6 +253,10 @@ mod tests {
         );
         assert!(Collection::AgentBehavior.apply_order() < Collection::Task.apply_order());
         assert!(Collection::AgentBehavior.apply_order() < Collection::Schedule.apply_order());
+        assert!(
+            Collection::AgentBehavior.apply_order()
+                < Collection::ProjectionAcpBinding.apply_order()
+        );
         // Rank-0 members must all agree on rank 0.
         assert_eq!(
             Collection::InferenceBackend.apply_order(),

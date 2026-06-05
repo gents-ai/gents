@@ -297,6 +297,22 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredProjectionAcpBinding {
+    pub(crate) binding_id: String,
+    #[serde(default)]
+    pub(crate) agent_did: Option<String>,
+    #[serde(default)]
+    pub(crate) behavior_id: Option<String>,
+    #[serde(default)]
+    pub(crate) projection_id: Option<String>,
+    pub(crate) policy_id: String,
+    #[serde(default)]
+    pub(crate) resource_map_json: Option<String>,
+    pub(crate) enabled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DesiredStateManifest {
     pub(crate) agent_principal: DesiredAgentPrincipal,
@@ -306,6 +322,7 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
     pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
+    pub(crate) projection_acp_bindings: Vec<DesiredProjectionAcpBinding>,
     pub(crate) tasks: Vec<DesiredTask>,
     pub(crate) schedules: Vec<DesiredSchedule>,
     pub(crate) event_triggers: Vec<DesiredEventTrigger>,
@@ -350,6 +367,7 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) inference_backends: DesiredStateCollectionDiff,
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
     pub(crate) tool_service_registries: DesiredStateCollectionDiff,
+    pub(crate) projection_acp_bindings: DesiredStateCollectionDiff,
     pub(crate) tasks: DesiredStateCollectionDiff,
     pub(crate) schedules: DesiredStateCollectionDiff,
     pub(crate) event_triggers: DesiredStateCollectionDiff,
@@ -365,6 +383,7 @@ impl DesiredStateDiffCollections {
             Collection::InferenceBackend => &self.inference_backends,
             Collection::InferenceProfile => &self.inference_profiles,
             Collection::ToolServiceRegistry => &self.tool_service_registries,
+            Collection::ProjectionAcpBinding => &self.projection_acp_bindings,
             Collection::Task => &self.tasks,
             Collection::Schedule => &self.schedules,
             Collection::EventTrigger => &self.event_triggers,
@@ -380,6 +399,7 @@ impl DesiredStateDiffCollections {
             Collection::InferenceBackend => &mut self.inference_backends,
             Collection::InferenceProfile => &mut self.inference_profiles,
             Collection::ToolServiceRegistry => &mut self.tool_service_registries,
+            Collection::ProjectionAcpBinding => &mut self.projection_acp_bindings,
             Collection::Task => &mut self.tasks,
             Collection::Schedule => &mut self.schedules,
             Collection::EventTrigger => &mut self.event_triggers,
@@ -408,6 +428,7 @@ impl DesiredStateDiffCollections {
             inference_backends: self.inference_backends.counts(),
             inference_profiles: self.inference_profiles.counts(),
             tool_service_registries: self.tool_service_registries.counts(),
+            projection_acp_bindings: self.projection_acp_bindings.counts(),
             tasks: self.tasks.counts(),
             schedules: self.schedules.counts(),
             event_triggers: self.event_triggers.counts(),
@@ -424,6 +445,7 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) inference_backends: DesiredStateDiffCounts,
     pub(crate) inference_profiles: DesiredStateDiffCounts,
     pub(crate) tool_service_registries: DesiredStateDiffCounts,
+    pub(crate) projection_acp_bindings: DesiredStateDiffCounts,
     pub(crate) tasks: DesiredStateDiffCounts,
     pub(crate) schedules: DesiredStateDiffCounts,
     pub(crate) event_triggers: DesiredStateDiffCounts,
@@ -446,6 +468,7 @@ impl DesiredStateDiffCollectionsCounts {
             Collection::InferenceBackend => &self.inference_backends,
             Collection::InferenceProfile => &self.inference_profiles,
             Collection::ToolServiceRegistry => &self.tool_service_registries,
+            Collection::ProjectionAcpBinding => &self.projection_acp_bindings,
             Collection::Task => &self.tasks,
             Collection::Schedule => &self.schedules,
             Collection::EventTrigger => &self.event_triggers,
@@ -484,6 +507,7 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
+    pub(crate) projection_acp_bindings: usize,
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
     pub(crate) event_triggers: usize,
@@ -499,6 +523,7 @@ impl DesiredStateCounts {
             inference_backends: 0,
             inference_profiles: 0,
             tool_service_registries: 0,
+            projection_acp_bindings: 0,
             tasks: 0,
             schedules: 0,
             event_triggers: 0,
@@ -559,6 +584,11 @@ impl DesiredFields for DesiredToolServiceRegistry {
         "tool_service_registries"
     }
 }
+impl DesiredFields for DesiredProjectionAcpBinding {
+    fn collection_tag(&self) -> &'static str {
+        "projection_acp_bindings"
+    }
+}
 impl DesiredFields for DesiredTask {
     fn collection_tag(&self) -> &'static str {
         "tasks"
@@ -613,6 +643,11 @@ impl HasUniqueId for DesiredInferenceProfile {
 impl HasUniqueId for DesiredToolServiceRegistry {
     fn unique_id(&self) -> &str {
         &self.service_id
+    }
+}
+impl HasUniqueId for DesiredProjectionAcpBinding {
+    fn unique_id(&self) -> &str {
+        &self.binding_id
     }
 }
 impl HasUniqueId for DesiredTask {

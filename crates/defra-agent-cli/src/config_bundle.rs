@@ -12,8 +12,8 @@ use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
     EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
-    EXPORT_SCHEDULE_FIELDS, EXPORT_SKILL_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
-    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_PROJECTION_ACP_BINDING_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_SKILL_FIELDS,
+    EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 pub(crate) async fn build_config_export_bundle(
@@ -213,6 +213,24 @@ pub(crate) async fn build_config_export_bundle(
     .await?;
     sort_document_rows(&mut skill_rows, "skill_id");
 
+    let mut projection_acp_binding_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ProjectionAcpBinding",
+        &format!(
+            r#"{{
+                ProjectionAcpBinding(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_PROJECTION_ACP_BINDING_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -225,6 +243,7 @@ pub(crate) async fn build_config_export_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
+        projection_acp_bindings: projection_acp_binding_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -471,6 +490,33 @@ pub(crate) async fn build_desired_state_live_bundle(
     .await?;
     sort_document_rows(&mut skill_rows, "skill_id");
 
+    let desired_binding_ids = desired_manifest
+        .projection_acp_bindings
+        .iter()
+        .map(|value| value.binding_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut projection_acp_binding_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ProjectionAcpBinding",
+        &format!(
+            r#"{{
+                ProjectionAcpBinding {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_PROJECTION_ACP_BINDING_FIELDS,
+        ),
+    )
+    .await?;
+    projection_acp_binding_rows.retain(|row| {
+        row.get("agent_did").and_then(Value::as_str) == Some(agent_did)
+            || row
+                .get("binding_id")
+                .and_then(Value::as_str)
+                .is_some_and(|binding_id| desired_binding_ids.contains(binding_id))
+    });
+    sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
+
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: agent_did.to_string(),
@@ -483,6 +529,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
+        projection_acp_bindings: projection_acp_binding_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -510,6 +557,7 @@ pub(crate) fn live_manifest_from_bundle(
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
+                projection_acp_bindings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
@@ -713,6 +761,15 @@ pub(crate) fn sanitize_import_document(
                 _ => {
                     object.insert("status".to_string(), Value::String("online".to_string()));
                 }
+            }
+        }
+        "ProjectionAcpBinding" => {
+            for field in ["created_at", "updated_at"] {
+                object.remove(field);
+            }
+            if for_update {
+                object.insert("created_at".to_string(), Value::Null);
+                object.insert("updated_at".to_string(), Value::Null);
             }
         }
         // AgentBehavior, ToolSelection, Skill, AgentPrincipal: no per-collection

@@ -48,6 +48,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
+        projection_acp_bindings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),

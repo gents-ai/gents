@@ -33,24 +33,26 @@ const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 // realizes the Lean retry model by rebuilding the live diff at the start of
 // each `config apply` attempt, then applying selected documents with
 // unique-field upserts or equivalent override writers.
-const CONFIG_APPLY_ORDER: [Collection; 10] = [
+const CONFIG_APPLY_ORDER: [Collection; 11] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
     Collection::ToolSelection,
     Collection::Skill,
     Collection::AgentBehavior,
+    Collection::ProjectionAcpBinding,
     Collection::Task,
     Collection::Schedule,
     Collection::EventTrigger,
     Collection::AgentPrincipal,
 ];
 
-const CONFIG_PRUNE_ORDER: [Collection; 10] = [
+const CONFIG_PRUNE_ORDER: [Collection; 11] = [
     Collection::AgentPrincipal,
     Collection::EventTrigger,
     Collection::Schedule,
     Collection::Task,
+    Collection::ProjectionAcpBinding,
     Collection::AgentBehavior,
     Collection::Skill,
     Collection::ToolSelection,
@@ -1735,6 +1737,10 @@ mod lean_apply_write_boundary_tests {
                 .into_iter()
                 .map(desired_tool_service)
                 .collect(),
+            projection_acp_bindings: docs_for_collection(case, Collection::ProjectionAcpBinding)
+                .into_iter()
+                .map(|doc| desired_projection_acp_binding(doc, &agent_did))
+                .collect(),
             tasks: docs_for_collection(case, Collection::Task)
                 .into_iter()
                 .map(desired_task)
@@ -1880,6 +1886,21 @@ mod lean_apply_write_boundary_tests {
         }
     }
 
+    fn desired_projection_acp_binding(
+        doc: &LeanApplyDesiredDoc,
+        agent_did: &str,
+    ) -> desired_state::DesiredProjectionAcpBinding {
+        desired_state::DesiredProjectionAcpBinding {
+            binding_id: doc.id.clone(),
+            agent_did: Some(agent_did.to_string()),
+            behavior_id: ref_id(doc, Collection::AgentBehavior),
+            projection_id: Some(format!("projection-{}", doc.id)),
+            policy_id: format!("policy-{}", doc.content),
+            resource_map_json: Some(r#"{"AgentRequest":"AgentRequest"}"#.to_string()),
+            enabled: true,
+        }
+    }
+
     fn desired_task(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredTask {
         desired_state::DesiredTask {
             task_id: doc.id.clone(),
@@ -1929,6 +1950,7 @@ mod lean_apply_write_boundary_tests {
             inference_backends: diff_for_collection(case, Collection::InferenceBackend),
             inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
             tool_service_registries: diff_for_collection(case, Collection::ToolServiceRegistry),
+            projection_acp_bindings: diff_for_collection(case, Collection::ProjectionAcpBinding),
             tasks: diff_for_collection(case, Collection::Task),
             schedules: diff_for_collection(case, Collection::Schedule),
             event_triggers: diff_for_collection(case, Collection::EventTrigger),
@@ -2061,6 +2083,7 @@ mod lean_apply_write_boundary_tests {
             Collection::InferenceBackend => counts.inference_backends,
             Collection::InferenceProfile => counts.inference_profiles,
             Collection::ToolServiceRegistry => counts.tool_service_registries,
+            Collection::ProjectionAcpBinding => counts.projection_acp_bindings,
             Collection::Task => counts.tasks,
             Collection::Schedule => counts.schedules,
             Collection::EventTrigger => counts.event_triggers,
@@ -2071,6 +2094,7 @@ mod lean_apply_write_boundary_tests {
         match collection {
             Collection::InferenceBackend => &["probe_status"],
             Collection::ToolServiceRegistry => &["tools", "version"],
+            Collection::ProjectionAcpBinding => &[],
             Collection::Schedule => &[
                 "next_run_at",
                 "last_attempt_at",

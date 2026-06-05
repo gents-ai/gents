@@ -363,6 +363,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let model_name = format!("mock-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
+    let binding_id = format!("projection-acp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
     let schedule_id = format!("{task_id}-hourly");
     let second_task_id = format!("weekly-audit-{}", Uuid::new_v4().simple());
@@ -391,6 +392,24 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
                 "lan_ip": "192.168.1.10",
                 "mcp_port": 8080,
                 "mcp_path": "/mcp"
+            }),
+        )?;
+    }
+    {
+        let dir = initial_root
+            .join("projection-acp-bindings")
+            .join(&binding_id);
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "binding_id": binding_id,
+                "agent_did": agent_did,
+                "behavior_id": behavior_id,
+                "projection_id": "codex_thread",
+                "policy_id": format!("policy-{}", agent_name),
+                "resource_map_json": "{\"AgentRequest\":\"AgentRequest\",\"AgentMessage\":\"AgentMessage\"}",
+                "enabled": true
             }),
         )?;
     }
@@ -469,6 +488,12 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(1)
     );
     assert_eq!(
+        applied
+            .pointer("/applied/projection_acp_bindings")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         applied.pointer("/applied/tasks").and_then(Value::as_u64),
         Some(2)
     );
@@ -518,6 +543,24 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     assert!(
         ts_object.get("tools").is_none(),
         "tool-service export should omit discovered tools: {ts_object}"
+    );
+
+    let projection_bindings = read_per_doc_collection(&export_root, "projection-acp-bindings")?;
+    let binding_doc = projection_bindings
+        .iter()
+        .find(|b| b.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str()))
+        .ok_or_else(|| anyhow!("projection ACP binding {binding_id} not found in export root"))?;
+    assert_eq!(
+        binding_doc.get("projection_id").and_then(Value::as_str),
+        Some("codex_thread")
+    );
+    assert_eq!(
+        binding_doc.get("behavior_id").and_then(Value::as_str),
+        Some(behavior_id.as_str())
+    );
+    assert!(
+        binding_doc.get("created_at").is_none() && binding_doc.get("updated_at").is_none(),
+        "projection ACP binding export should omit apply-owned timestamps: {binding_doc}"
     );
 
     let tasks = read_per_doc_collection(&export_root, "tasks")?;
@@ -583,6 +626,12 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(1)
     );
     assert_eq!(
+        reapplied
+            .pointer("/applied/projection_acp_bindings")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         reapplied.pointer("/applied/tasks").and_then(Value::as_u64),
         Some(2)
     );
@@ -602,6 +651,17 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     );
 
     let reexported_tasks = read_per_doc_collection(&reapply_root, "tasks")?;
+    let reexported_bindings = read_per_doc_collection(&reapply_root, "projection-acp-bindings")?;
+    assert_eq!(
+        reexported_bindings
+            .iter()
+            .find(|b| b.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str()))
+            .and_then(|b| b.get("binding_id"))
+            .and_then(Value::as_str),
+        Some(binding_id.as_str()),
+        "expected projection ACP binding {binding_id} in re-exported root"
+    );
+
     assert_eq!(
         reexported_tasks
             .iter()

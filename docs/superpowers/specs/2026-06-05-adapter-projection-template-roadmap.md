@@ -647,6 +647,13 @@ Started after the adapter-driven reframing:
   a matching binding only wins when its scope is a strict superset of other
   matches, ambiguous or incomparable matches fail closed, and explicit CLI
   policy ids remain the override path.
+- Agent manifest roots can now own `ProjectionAcpBinding` documents under
+  `projection-acp-bindings/<binding_id>/object.json`. Desired-state
+  validate/load/write/diff/apply/export paths treat the binding as a closed
+  config collection with `binding_id` upserts, agent-scope validation,
+  resource-map validation, timestamp stripping, prune safety for
+  `behavior_id`, Lean apply-order parity, and real-binary export/apply
+  roundtrip coverage.
 - An ignored live-inference binary E2E test runs a real tool-backed request
   against the configured OpenAI-compatible endpoint, then exports the persisted
   run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
@@ -657,9 +664,9 @@ Started after the adapter-driven reframing:
 
 Still pending for the adapter-driven slice:
 
-- Broader native ACP coverage beyond the projection binding and explicit
-  `--acp-policy-id` GraphQL paths, especially write-time policy/resource
-  binding from agent manifests.
+- Broader native ACP lifecycle coverage beyond projection binding
+  validate/apply/export and explicit `--acp-policy-id` GraphQL paths,
+  especially policy/resource creation, rotation, and publication workflows.
 - Broader multi-agent captures for CrewAI or Microsoft Agent Framework if
   those expose compatibility issues beyond the current AutoGen round-robin and
   Swarm handoff fixtures.

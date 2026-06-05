@@ -27,6 +27,7 @@ def profileA : DocRef := doc .inferenceProfile "profile-a"
 def serviceA : DocRef := doc .toolServiceRegistry "service-a"
 def skillA : DocRef := doc .skill "skill-a"
 def behaviorA : DocRef := doc .agentBehavior "behavior-a"
+def projectionBindingA : DocRef := doc .projectionAcpBinding "projection-binding-a"
 def taskA : DocRef := doc .task "task-a"
 def scheduleA : DocRef := doc .schedule "schedule-a"
 def eventTriggerA : DocRef := doc .eventTrigger "trigger-a"
@@ -116,6 +117,8 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
         , desired .skill "skill-a" "skill-desired"
         , desired .agentBehavior "behavior-a" "behavior-desired"
             [backendA, selectionA, profileA, serviceA, skillA]
+        , desired .projectionAcpBinding "projection-binding-a" "projection-binding-desired"
+            [behaviorA]
         , desired .task "task-a" "task-desired" [behaviorA]
         , desired .schedule "schedule-a" "schedule-desired"
         , desired .eventTrigger "trigger-a" "trigger-desired" [taskA]

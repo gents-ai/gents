@@ -26,6 +26,7 @@
 //! | Schedule | `task_id` | Task |
 //! | EventTrigger | `task_id` | Task |
 //! | ToolSelection | `allowed_mcp_service_ids[]` | ToolServiceRegistry |
+//! | ProjectionAcpBinding | `behavior_id` | AgentBehavior |
 //!
 //! ### Open questions for review
 //! - **Schedule → Task is same-rank** (both apply_order 2), so it is NOT a
@@ -121,6 +122,18 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
         );
     }
 
+    for binding in &m.projection_acp_bindings {
+        let refs = binding
+            .behavior_id
+            .as_deref()
+            .map(|behavior_id| vec![doc(Collection::AgentBehavior, behavior_id)])
+            .unwrap_or_default();
+        desired.insert(
+            doc(Collection::ProjectionAcpBinding, &binding.binding_id),
+            DesiredFields::with_refs("", refs),
+        );
+    }
+
     // Leaf dependencies (no outgoing structural references for prune safety).
     for s in &m.skills {
         desired.insert(
@@ -210,6 +223,12 @@ fn manifest_from_desired(m: &DesiredStateManifest) -> Manifest {
     for e in &m.event_triggers {
         docs.insert(
             doc(Collection::EventTrigger, &e.trigger_id),
+            DesiredFields::opaque(""),
+        );
+    }
+    for binding in &m.projection_acp_bindings {
+        docs.insert(
+            doc(Collection::ProjectionAcpBinding, &binding.binding_id),
             DesiredFields::opaque(""),
         );
     }

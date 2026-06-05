@@ -321,6 +321,8 @@ pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did";
+pub(crate) const EXPORT_PROJECTION_ACP_BINDING_FIELDS: &str =
+    "binding_id agent_did behavior_id projection_id policy_id resource_map_json enabled created_at updated_at";
 pub(crate) const EXPORT_TASK_FIELDS: &str =
     "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
 pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =

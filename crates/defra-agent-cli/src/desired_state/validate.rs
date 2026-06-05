@@ -21,6 +21,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     let mut tool_selection_ids = BTreeSet::new();
     let mut profile_ids = BTreeSet::new();
     let mut service_ids = BTreeSet::new();
+    let mut projection_binding_ids = BTreeSet::new();
 
     for backend in &manifest.inference_backends {
         let backend_id = backend.backend_id.trim();
@@ -302,6 +303,54 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         }
     }
 
+    for binding in &manifest.projection_acp_bindings {
+        let binding_id = binding.binding_id.trim();
+        if binding_id.is_empty() {
+            errors.push(
+                "projection-acp-bindings manifest contains a binding with an empty binding_id"
+                    .to_string(),
+            );
+        } else if !projection_binding_ids.insert(binding_id.to_string()) {
+            errors.push(format!(
+                "duplicate binding_id in projection-acp-bindings manifest: {binding_id}"
+            ));
+        }
+
+        if non_empty(&binding.agent_did).is_none() {
+            errors.push(format!(
+                "projection ACP binding {} must contain a non-empty agent_did",
+                binding.binding_id
+            ));
+        } else if !principal_agent_did.is_empty()
+            && non_empty(&binding.agent_did) != Some(principal_agent_did)
+        {
+            errors.push(format!(
+                "projection ACP binding {} belongs to {} not {}",
+                binding.binding_id,
+                binding.agent_did.as_deref().unwrap_or_default(),
+                manifest.agent_principal.agent_did
+            ));
+        }
+
+        if binding.policy_id.trim().is_empty() {
+            errors.push(format!(
+                "projection ACP binding {} must contain a non-empty policy_id",
+                binding.binding_id
+            ));
+        }
+
+        if let Some(behavior_id) = non_empty(&binding.behavior_id) {
+            if !behavior_ids.contains(behavior_id) {
+                errors.push(format!(
+                    "projection ACP binding {} references missing behavior_id {}",
+                    binding.binding_id, behavior_id
+                ));
+            }
+        }
+
+        validate_projection_resource_map_json(binding, errors);
+    }
+
     match non_empty(&manifest.agent_principal.default_behavior_id) {
         Some(default_behavior_id) => {
             if !behavior_ids.contains(default_behavior_id) {
@@ -487,6 +536,35 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                     )),
                 }
             }
+        }
+    }
+}
+
+fn validate_projection_resource_map_json(
+    binding: &super::DesiredProjectionAcpBinding,
+    errors: &mut Vec<String>,
+) {
+    let Some(raw) = non_empty(&binding.resource_map_json) else {
+        return;
+    };
+    let parsed = serde_json::from_str::<std::collections::BTreeMap<String, String>>(raw);
+    let resource_map = match parsed {
+        Ok(resource_map) => resource_map,
+        Err(error) => {
+            errors.push(format!(
+                "projection ACP binding {} has invalid resource_map_json: {}",
+                binding.binding_id, error
+            ));
+            return;
+        }
+    };
+    for (collection, resource_name) in resource_map {
+        if collection.trim().is_empty() || resource_name.trim().is_empty() {
+            errors.push(format!(
+                "projection ACP binding {} resource_map_json must map non-empty collection names to non-empty ACP resource names",
+                binding.binding_id
+            ));
+            break;
         }
     }
 }
@@ -869,6 +947,7 @@ mod live_tests {
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
+            projection_acp_bindings: Vec::new(),
             tasks: Vec::new(),
             schedules: Vec::new(),
             event_triggers: Vec::new(),
@@ -1030,6 +1109,7 @@ mod live_tests {
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
+                projection_acp_bindings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
@@ -1208,6 +1288,7 @@ mod live_tests {
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
+                projection_acp_bindings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
