@@ -619,6 +619,8 @@ async fn configure_behavior(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-06-02T00:00:00Z".to_string()),
         });

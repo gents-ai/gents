@@ -317,8 +317,6 @@ async fn setup_parent_hook_on_db(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: parent_behavior_id.clone(),
             agent_did: PARENT_AGENT_DID.to_string(),
             display_name: Some(parent_behavior_id.clone()),
@@ -331,6 +329,8 @@ async fn setup_parent_hook_on_db(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-20T00:00:00Z".to_string()),
         },
@@ -342,8 +342,6 @@ async fn setup_parent_hook_on_db(
         upsert_agent_behavior(
             db.node.as_ref(),
             &AgentBehaviorDocument {
-                skill_refs: Vec::new(),
-                skill_excludes: Vec::new(),
                 behavior_id: case.target_behavior_id.clone(),
                 agent_did: PARENT_AGENT_DID.to_string(),
                 display_name: Some(case.target_behavior_id.clone()),
@@ -356,6 +354,8 @@ async fn setup_parent_hook_on_db(
                 inference_profile_id: None,
                 compaction_strategy: None,
                 compaction_threshold: None,
+                skill_refs: Vec::new(),
+                skill_excludes: Vec::new(),
                 enabled: true,
                 created_at: Some("2026-05-20T00:00:01Z".to_string()),
             },

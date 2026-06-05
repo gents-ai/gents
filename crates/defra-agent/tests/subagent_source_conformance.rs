@@ -131,8 +131,6 @@ async fn ensure_parent_subagent_authorization(
     let mut behavior = match load_agent_behavior(node, behavior_id).await.unwrap() {
         Some(behavior) => behavior,
         None => AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),
@@ -145,6 +143,8 @@ async fn ensure_parent_subagent_authorization(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-12T00:00:00Z".to_string()),
         },
@@ -795,6 +795,8 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         inference_profile_id: None,
         compaction_strategy: None,
         compaction_threshold: None,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         enabled: true,
         created_at: Some("2026-06-04T00:00:00Z".to_string()),
     };
@@ -1122,6 +1124,8 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-06-04T00:00:00Z".to_string()),
         },
@@ -1740,6 +1744,8 @@ async fn upsert_target_behavior_with_cross_deployment(
         inference_profile_id: None,
         compaction_strategy: None,
         compaction_threshold: None,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         enabled: true,
         created_at: Some("2026-06-04T00:00:00Z".to_string()),
     };

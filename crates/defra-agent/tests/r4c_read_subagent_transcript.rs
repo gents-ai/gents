@@ -77,8 +77,6 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
@@ -91,6 +89,8 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-14T00:00:00Z".to_string()),
         },
@@ -100,8 +100,6 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),
@@ -114,6 +112,8 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-14T00:00:01Z".to_string()),
         },
