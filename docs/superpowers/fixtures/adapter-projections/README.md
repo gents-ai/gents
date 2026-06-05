@@ -98,19 +98,34 @@ harness against that output directory. This keeps framework installation and
 network access out of the default test suite while still proving that real
 external outputs satisfy the shared Defra Agent projection contract.
 
+To run every Dockerized generator and validate the combined output with the
+Rust harness:
+
+```sh
+docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh
+```
+
+The script writes to `/tmp/defra-agent-adapter-interop-fixtures` by default.
+Pass a directory as the first argument or set `DEFRA_AGENT_DOCKER_INTEROP_OUT`
+to choose another output root. Set `DEFRA_AGENT_DOCKER_INTEROP_KEEP=1` to keep
+existing files in that root, or `DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST=1` to
+only generate fixtures without invoking the Rust harness.
+
 ## Generators
 
 - `generators/langgraph/` builds a Docker image that executes real LangGraph
   `StateGraph` flows, captures `get_state_history`, and writes wrapped
   `langgraph_state_history` fixtures into the mounted output directory. It
-  emits both a linear retry/delegation graph and a compiled-subgraph graph.
+  emits a linear retry/delegation graph, a compiled-subgraph graph, and a
+  provider-shaped chat-model graph.
 - `generators/autogen/` builds a Docker image that executes real AutoGen
   AgentChat teams with deterministic custom agents and writes wrapped
   `multi_agent_task` fixtures into the mounted output directory. It emits both
   a `RoundRobinGroupChat` team fixture and a `Swarm` handoff fixture.
 - `generators/crewai/` builds a Docker image that executes a real CrewAI
-  sequential `Crew` with deterministic custom `BaseLLM` instances and writes a
-  wrapped `multi_agent_task` fixture into the mounted output directory.
+  sequential `Crew` and hierarchical manager-delegation `Crew` with
+  deterministic custom `BaseLLM` instances and writes wrapped
+  `multi_agent_task` fixtures into the mounted output directory.
 - `generators/microsoft-agent-framework/` builds a Docker image that executes
   a real Microsoft Agent Framework group-chat workflow with deterministic
   custom `BaseChatClient` instances and writes a wrapped `multi_agent_task`

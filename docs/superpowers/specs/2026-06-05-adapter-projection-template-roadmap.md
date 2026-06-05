@@ -622,6 +622,12 @@ Started after the adapter-driven reframing:
   Docker-generated adapter captures through the same DTO contract, envelope
   schema, adapter JSONL schema, and training/eval JSONL schema path used by the
   checked-in fixtures.
+- `docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh` builds
+  and runs every Dockerized upstream fixture generator into one output
+  directory, then invokes the ignored Rust external adapter harness against the
+  combined captures. This makes the LangGraph, AutoGen, CrewAI, and Microsoft
+  Agent Framework interoperability proof repeatable as one binary/Docker
+  command.
 - A Docker-backed LangGraph fixture generator runs a real LangGraph
   `StateGraph`, captures `get_state_history`, and emits a wrapped
   `langgraph_state_history` adapter fixture for the external harness.
