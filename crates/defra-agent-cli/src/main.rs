@@ -297,6 +297,7 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentToolCall", "tool_call_key"),
     ("CompactionEntry", "compaction_key"),
     ("CodexThreadProjection", "session_id"),
+    ("ProjectionAcpBinding", "binding_id"),
     ("Task", "task_id"),
     ("Schedule", "schedule_id"),
     ("ToolServiceRegistry", "service_id"),

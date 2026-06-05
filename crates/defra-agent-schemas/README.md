@@ -9,8 +9,8 @@ need to share with defra-agent:
 - agent identity, behavior, runtime, and tool selection
 - requests, responses, sessions, conversations, messages, tool calls, and tool
   results
-- compaction, Codex thread projection, tasks, schedules, event triggers, and
-  peer pairing desired state
+- compaction, Codex thread projection, projection ACP bindings, tasks,
+  schedules, event triggers, and peer pairing desired state
 
 The crate intentionally has no runtime dependencies. Consumers that only need
 the collection contract should depend on this crate instead of

@@ -1,0 +1,11 @@
+type ProjectionAcpBinding {
+    binding_id: String @index(unique: true)
+    agent_did: String @index
+    behavior_id: String @index
+    projection_id: String @index
+    policy_id: String @index
+    resource_map_json: String
+    enabled: Boolean @index
+    created_at: String @index(direction: DESC)
+    updated_at: String @index(direction: DESC)
+}

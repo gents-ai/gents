@@ -60,14 +60,21 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
     let actor_did = args.actor_did;
-    let acp_scope =
-        projection_acp_read_scope(&access, args.acp_policy_id.as_deref(), actor_did.as_deref())?;
+    let projection_kind = adapter_projection_kind(args.projection);
     let scope = ProjectionDocumentScope {
         agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
         behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
     let rows = load_run_timeline_rows(&access, &args.request_id).await?;
+    let acp_scope = projection_acp_read_scope(
+        &access,
+        args.acp_policy_id.as_deref(),
+        actor_did.as_deref(),
+        projection_kind,
+        &rows.request,
+    )
+    .await?;
     let rows = match acp_scope.as_ref() {
         Some(acp_scope) => apply_projection_acp_read_filter(rows, acp_scope).await?,
         None => rows,
@@ -77,11 +84,7 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
         actor_did,
         redaction_mode: projection_redaction_mode(args.redaction),
     };
-    let projection = build_adapter_projection(
-        adapter_projection_kind(args.projection),
-        &timeline,
-        &context,
-    );
+    let projection = build_adapter_projection(projection_kind, &timeline, &context);
     validate_adapter_projection_contract(&projection)?;
     match args.format {
         TraceProjectionFormatArg::Json => {
@@ -180,6 +183,16 @@ struct ProjectionAcpReadScope {
     actor_did: String,
     policy_id: String,
     api_base: String,
+    resource_names: BTreeMap<String, String>,
+}
+
+impl ProjectionAcpReadScope {
+    fn resource_name<'a>(&'a self, collection: &'a str) -> &'a str {
+        self.resource_names
+            .get(collection)
+            .map(String::as_str)
+            .unwrap_or(collection)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,26 +200,188 @@ struct ProjectionAcpDecisionResponse {
     allowed: bool,
 }
 
-fn projection_acp_read_scope(
+#[derive(Debug, Clone, Deserialize)]
+struct ProjectionAcpBindingRow {
+    #[serde(default)]
+    binding_id: String,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    behavior_id: Option<String>,
+    #[serde(default)]
+    projection_id: Option<String>,
+    #[serde(default)]
+    policy_id: String,
+    #[serde(default)]
+    resource_map_json: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+async fn projection_acp_read_scope(
     access: &ConfigAccess,
     policy_id: Option<&str>,
     actor_did: Option<&str>,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
 ) -> Result<Option<ProjectionAcpReadScope>> {
-    let Some(policy_id) = policy_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
+    let (policy_id, resource_names) =
+        match policy_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(policy_id) => (policy_id.to_string(), BTreeMap::new()),
+            None => {
+                let Some(binding) =
+                    discover_projection_acp_binding(access, projection_kind, request).await?
+                else {
+                    return Ok(None);
+                };
+                (
+                    binding.policy_id.trim().to_string(),
+                    parse_projection_resource_map(binding.resource_map_json.as_deref())?,
+                )
+            }
+        };
     let actor_did = actor_did
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("--acp-policy-id requires --actor-did"))?;
+        .ok_or_else(|| anyhow::anyhow!("projection ACP enforcement requires --actor-did"))?;
     let ConfigAccess::Graphql(graphql) = access else {
-        anyhow::bail!("--acp-policy-id requires --graphql so DefraDB ACP can decide documents");
+        anyhow::bail!(
+            "projection ACP enforcement requires --graphql so DefraDB ACP can decide documents"
+        );
     };
     Ok(Some(ProjectionAcpReadScope {
         actor_did: actor_did.to_string(),
-        policy_id: policy_id.to_string(),
+        policy_id,
         api_base: crate::graphql_access::graphql_api_base(graphql)?,
+        resource_names,
     }))
+}
+
+async fn discover_projection_acp_binding(
+    access: &ConfigAccess,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
+) -> Result<Option<ProjectionAcpBindingRow>> {
+    let query = r#"{
+        ProjectionAcpBinding(filter: { enabled: { _eq: true } }) {
+            binding_id
+            agent_did
+            behavior_id
+            projection_id
+            policy_id
+            resource_map_json
+            enabled
+        }
+    }"#;
+    let rows = load_rows::<ProjectionAcpBindingRow>(access, "ProjectionAcpBinding", query).await?;
+    select_projection_acp_binding(rows, projection_kind, request)
+}
+
+fn select_projection_acp_binding(
+    rows: Vec<ProjectionAcpBindingRow>,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
+) -> Result<Option<ProjectionAcpBindingRow>> {
+    let mut best = None::<(u8, ProjectionAcpBindingRow)>;
+    let projection_id = projection_kind.id();
+    for row in rows {
+        if row.enabled == Some(false) {
+            continue;
+        }
+        if row.policy_id.trim().is_empty() {
+            continue;
+        }
+        let Some(scope_mask) = projection_binding_scope_mask(&row, projection_id, request) else {
+            continue;
+        };
+        match &best {
+            None => best = Some((scope_mask, row)),
+            Some((best_mask, _)) if projection_binding_scope_dominates(scope_mask, *best_mask) => {
+                best = Some((scope_mask, row));
+            }
+            Some((best_mask, _)) if projection_binding_scope_dominates(*best_mask, scope_mask) => {}
+            Some((_, best_row)) => {
+                anyhow::bail!(
+                    "ambiguous ProjectionAcpBinding rows for projection {} request {}: {} and {}",
+                    projection_id,
+                    request.request_id,
+                    projection_binding_label(best_row),
+                    projection_binding_label(&row)
+                );
+            }
+        }
+    }
+    Ok(best.map(|(_, row)| row))
+}
+
+const PROJECTION_ACP_BINDING_PROJECTION_SCOPE: u8 = 0b100;
+const PROJECTION_ACP_BINDING_AGENT_SCOPE: u8 = 0b010;
+const PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE: u8 = 0b001;
+
+fn projection_binding_scope_mask(
+    row: &ProjectionAcpBindingRow,
+    projection_id: &str,
+    request: &TimelineRequestRow,
+) -> Option<u8> {
+    let mut scope_mask = 0;
+    if let Some(row_projection_id) =
+        normalize_projection_binding_field(row.projection_id.as_deref())
+    {
+        if row_projection_id != projection_id {
+            return None;
+        }
+        scope_mask |= PROJECTION_ACP_BINDING_PROJECTION_SCOPE;
+    }
+    if let Some(row_agent_did) = normalize_projection_binding_field(row.agent_did.as_deref()) {
+        if request.agent_did.as_deref() != Some(row_agent_did) {
+            return None;
+        }
+        scope_mask |= PROJECTION_ACP_BINDING_AGENT_SCOPE;
+    }
+    if let Some(row_behavior_id) = normalize_projection_binding_field(row.behavior_id.as_deref()) {
+        if request.behavior_id.as_deref() != Some(row_behavior_id) {
+            return None;
+        }
+        scope_mask |= PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE;
+    }
+    Some(scope_mask)
+}
+
+fn projection_binding_scope_dominates(candidate: u8, current: u8) -> bool {
+    candidate != current && (candidate & current) == current
+}
+
+fn normalize_projection_binding_field(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn projection_binding_label(row: &ProjectionAcpBindingRow) -> &str {
+    normalize_projection_binding_field(Some(&row.binding_id)).unwrap_or("<unnamed>")
+}
+
+fn parse_projection_resource_map(
+    resource_map_json: Option<&str>,
+) -> Result<BTreeMap<String, String>> {
+    let Some(raw) = resource_map_json
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let raw_map = serde_json::from_str::<BTreeMap<String, String>>(raw)
+        .context("parsing ProjectionAcpBinding.resource_map_json")?;
+    let mut map = BTreeMap::new();
+    for (collection, resource_name) in raw_map {
+        let collection = collection.trim();
+        let resource_name = resource_name.trim();
+        if collection.is_empty() || resource_name.is_empty() {
+            anyhow::bail!(
+                "ProjectionAcpBinding.resource_map_json must map non-empty collection names to non-empty ACP resource names"
+            );
+        }
+        map.insert(collection.to_string(), resource_name.to_string());
+    }
+    Ok(map)
 }
 
 async fn apply_projection_acp_read_filter(
@@ -219,7 +394,10 @@ async fn apply_projection_acp_read_filter(
         rows.request.request_id.as_str(),
         &rows.request.doc_id,
     )?;
-    if !decider.read_allowed("AgentRequest", request_doc_id).await? {
+    if !decider
+        .read_allowed(scope.resource_name("AgentRequest"), request_doc_id)
+        .await?
+    {
         anyhow::bail!(
             "DefraDB ACP denied read access to root request {}",
             rows.request.request_id
@@ -229,7 +407,10 @@ async fn apply_projection_acp_read_filter(
     let mut filtered_requests = Vec::new();
     for request in rows.requests {
         let doc_id = required_doc_id("AgentRequest", request.request_id.as_str(), &request.doc_id)?;
-        if decider.read_allowed("AgentRequest", doc_id).await? {
+        if decider
+            .read_allowed(scope.resource_name("AgentRequest"), doc_id)
+            .await?
+        {
             filtered_requests.push(request);
         }
     }
@@ -238,7 +419,10 @@ async fn apply_projection_acp_read_filter(
     for message in rows.messages {
         let label = format!("{}:{}", message.session_id, message.sequence);
         let doc_id = required_doc_id("AgentMessage", &label, &message.doc_id)?;
-        if decider.read_allowed("AgentMessage", doc_id).await? {
+        if decider
+            .read_allowed(scope.resource_name("AgentMessage"), doc_id)
+            .await?
+        {
             filtered_messages.push(message);
         }
     }
@@ -250,7 +434,10 @@ async fn apply_projection_acp_read_filter(
             tool_call.tool_call_id.as_str(),
             &tool_call.doc_id,
         )?;
-        if decider.read_allowed("AgentToolCall", doc_id).await? {
+        if decider
+            .read_allowed(scope.resource_name("AgentToolCall"), doc_id)
+            .await?
+        {
             filtered_tool_calls.push(tool_call);
         }
     }
@@ -262,7 +449,10 @@ async fn apply_projection_acp_read_filter(
             response.request_id.as_str(),
             &response.doc_id,
         )?;
-        if decider.read_allowed("AgentResponse", doc_id).await? {
+        if decider
+            .read_allowed(scope.resource_name("AgentResponse"), doc_id)
+            .await?
+        {
             filtered_responses.push(response);
         }
     }
@@ -271,7 +461,10 @@ async fn apply_projection_acp_read_filter(
         Some(session) => {
             let doc_id =
                 required_doc_id("AgentSession", session.session_id.as_str(), &session.doc_id)?;
-            if decider.read_allowed("AgentSession", doc_id).await? {
+            if decider
+                .read_allowed(scope.resource_name("AgentSession"), doc_id)
+                .await?
+            {
                 Some(session)
             } else {
                 None
@@ -286,7 +479,10 @@ async fn apply_projection_acp_read_filter(
                 conversation.session_id.as_str(),
                 &conversation.doc_id,
             )?;
-            if decider.read_allowed("AgentConversation", doc_id).await? {
+            if decider
+                .read_allowed(scope.resource_name("AgentConversation"), doc_id)
+                .await?
+            {
                 Some(conversation)
             } else {
                 None
@@ -1717,6 +1913,7 @@ mod tests {
             actor_did: "did:defra-agent:projection-reader".to_string(),
             policy_id: "projection-policy".to_string(),
             api_base: format!("http://{addr}/api/v0"),
+            resource_names: BTreeMap::new(),
         })
     }
 
@@ -1781,6 +1978,120 @@ mod tests {
         assert_eq!(request.request_id, "req-1");
     }
 
+    #[test]
+    fn projection_acp_binding_selects_most_specific_matching_row() -> Result<()> {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            behavior_id: Some("amy:default".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let selected = select_projection_acp_binding(
+            vec![
+                projection_binding("global", None, None, None),
+                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+                projection_binding(
+                    "exact",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    Some("openai_codex_run_trace"),
+                ),
+                projection_binding(
+                    "other-projection",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    Some("langgraph_state_history"),
+                ),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )?
+        .expect("binding");
+
+        assert_eq!(selected.binding_id, "exact");
+        Ok(())
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_ambiguous_rows() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let error = select_projection_acp_binding(
+            vec![
+                projection_binding("first", Some("did:defra-agent:amy"), None, None),
+                projection_binding("second", Some("did:defra-agent:amy"), None, None),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("ambiguous rows should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ambiguous ProjectionAcpBinding rows"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_incomparable_matching_scopes() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let error = select_projection_acp_binding(
+            vec![
+                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+                projection_binding("projection", None, None, Some("openai_codex_run_trace")),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("overlapping incomparable scopes should fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ambiguous ProjectionAcpBinding rows"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_resource_map_parses_nonempty_collection_resource_pairs() -> Result<()> {
+        let map = parse_projection_resource_map(Some(
+            r#"{"AgentRequest":"runtime_request"," AgentToolCall ":" runtime_tool_call "}"#,
+        ))?;
+
+        assert_eq!(
+            map.get("AgentRequest").map(String::as_str),
+            Some("runtime_request")
+        );
+        assert_eq!(
+            map.get("AgentToolCall").map(String::as_str),
+            Some("runtime_tool_call")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn projection_resource_map_rejects_empty_resource_names() {
+        let error = parse_projection_resource_map(Some(r#"{"AgentRequest":""}"#))
+            .expect_err("empty resource names should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must map non-empty collection names"),
+            "unexpected error: {error:#}"
+        );
+    }
+
     #[tokio::test]
     async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> Result<()> {
         let mut allowed = BTreeMap::new();
@@ -1837,6 +2148,41 @@ mod tests {
             filtered.conversation.is_some(),
             "conversation row should remain when ACP allows it"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_uses_configured_resource_names() -> Result<()> {
+        let mut allowed = BTreeMap::new();
+        for (resource_name, doc_id) in [
+            ("runtime_request", "doc-request-root"),
+            ("runtime_message", "doc-message-allowed"),
+            ("runtime_tool_call", "doc-tool-allowed"),
+            ("runtime_response", "doc-response-allowed"),
+            ("runtime_conversation", "doc-conversation"),
+        ] {
+            allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
+        }
+        let mut scope = spawn_mock_acp(allowed).await?;
+        scope.resource_names = BTreeMap::from([
+            ("AgentRequest".to_string(), "runtime_request".to_string()),
+            ("AgentMessage".to_string(), "runtime_message".to_string()),
+            ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
+            ("AgentResponse".to_string(), "runtime_response".to_string()),
+            (
+                "AgentConversation".to_string(),
+                "runtime_conversation".to_string(),
+            ),
+        ]);
+
+        let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
+
+        assert_eq!(filtered.requests.len(), 1);
+        assert_eq!(filtered.messages.len(), 1);
+        assert_eq!(filtered.tool_calls.len(), 1);
+        assert_eq!(filtered.responses.len(), 1);
+        assert!(filtered.conversation.is_some());
+        assert!(filtered.session.is_none());
         Ok(())
     }
 
@@ -1943,6 +2289,23 @@ mod tests {
                     ..TimelineResponseRow::default()
                 },
             ],
+        }
+    }
+
+    fn projection_binding(
+        binding_id: &str,
+        agent_did: Option<&str>,
+        behavior_id: Option<&str>,
+        projection_id: Option<&str>,
+    ) -> ProjectionAcpBindingRow {
+        ProjectionAcpBindingRow {
+            binding_id: binding_id.to_string(),
+            agent_did: agent_did.map(ToOwned::to_owned),
+            behavior_id: behavior_id.map(ToOwned::to_owned),
+            projection_id: projection_id.map(ToOwned::to_owned),
+            policy_id: "projection-policy".to_string(),
+            resource_map_json: None,
+            enabled: Some(true),
         }
     }
 

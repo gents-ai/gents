@@ -634,6 +634,12 @@ Started after the adapter-driven reframing:
   asks `/acp/document/decide` for each runtime row `_docID`, denies the root
   request fail-closed, and filters denied child/content rows before building
   adapter output.
+- `ProjectionAcpBinding` documents let `trace project` discover a projection
+  ACP policy and collection-to-resource-name map when `--acp-policy-id` is not
+  passed. Bindings can be scoped by agent DID, behavior id, and projection id;
+  a matching binding only wins when its scope is a strict superset of other
+  matches, ambiguous or incomparable matches fail closed, and explicit CLI
+  policy ids remain the override path.
 - An ignored live-inference binary E2E test runs a real tool-backed request
   against the configured OpenAI-compatible endpoint, then exports the persisted
   run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
@@ -644,8 +650,9 @@ Started after the adapter-driven reframing:
 
 Still pending for the adapter-driven slice:
 
-- Automatic projection policy/resource discovery for ACP, plus broader native
-  ACP coverage beyond the current explicit `--acp-policy-id` GraphQL path.
+- Broader native ACP coverage beyond the projection binding and explicit
+  `--acp-policy-id` GraphQL paths, especially write-time policy/resource
+  binding from agent manifests.
 - Broader multi-agent captures for CrewAI, AutoGen handoffs/swarm, or Microsoft
   Agent Framework if those expose compatibility issues the current AutoGen team
   fixture does not cover.
