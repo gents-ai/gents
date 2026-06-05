@@ -1095,6 +1095,8 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
     defra_agent::upsert_agent_behavior(
         node,
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: AGENT_NAME.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("Queue deadline parent".to_string()),
@@ -1116,6 +1118,8 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
     defra_agent::upsert_agent_behavior(
         node,
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("Queue deadline child".to_string()),

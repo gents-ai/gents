@@ -4,8 +4,8 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
     load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id, load_event_trigger_by_doc_id,
-    load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_task_by_doc_id,
-    load_tool_selection_by_doc_id,
+    load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_skill_by_doc_id,
+    load_task_by_doc_id, load_tool_selection_by_doc_id,
 };
 
 use super::snapshot::behavior_references_ready;
@@ -82,6 +82,30 @@ pub(crate) async fn apply_control_update(
     }
     if view.has_tool_selection_doc_id(doc_id) {
         return Ok(ControlUpdateOutcome::PendingVisibility);
+    }
+
+    // Skills are agent_did-scoped and composed into a behavior's prompt at
+    // resolve time; any create/update/delete must drive a snapshot reload so a
+    // running agent picks up the change without a restart.
+    if let Some((loaded_doc_id, skill)) = load_skill_by_doc_id(node, doc_id).await? {
+        if skill.agent_did != agent_did {
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        view.remove_skill_by_doc_id(doc_id);
+        view.skills.insert(
+            skill.skill_id.clone(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: skill,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_skill_doc_id(doc_id) {
+        // Skill was deleted -- drop it so the next resolve recomputes effective
+        // skill sets without it.
+        view.remove_skill_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
     }
 
     if let Some((loaded_doc_id, profile)) = load_inference_profile_by_doc_id(node, doc_id).await? {

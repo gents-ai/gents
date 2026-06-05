@@ -10,8 +10,9 @@ use crate::graphql::escape_graphql_string;
 ///
 /// Each field is optional so callers can update a subset — the helper only
 /// emits GraphQL input entries for the fields that are `Some`, leaving
-/// apply-owned fields (`enabled`, `interval_secs`, `task_id`, `concurrency`)
-/// untouched. `fire_count_delta` expresses the desired increment (typically
+/// apply-owned fields (`enabled`, `interval_secs`, `cron`, `timezone`,
+/// `missed_run_policy`, `task_id`, `concurrency`) untouched.
+/// `fire_count_delta` expresses the desired increment (typically
 /// `+1` on a successful fire); the helper performs a read-then-write because
 /// DefraDB does not currently expose atomic increments. Racing writes may
 /// undercount, which is acceptable for PR 1 (fire_count is bookkeeping, not a
@@ -76,8 +77,9 @@ pub(crate) async fn load_schedule_next_run_at(
 /// apply-owned `schedule_id`.
 ///
 /// Only writes fields present in `updates`; apply-owned fields (`enabled`,
-/// `interval_secs`, `task_id`, `concurrency`) are never touched. Returns `Ok`
-/// even when the schedule doc is missing — the caller is assumed to have
+/// `interval_secs`, `cron`, `timezone`, `missed_run_policy`, `task_id`,
+/// `concurrency`) are never touched. Returns `Ok` even when the schedule doc
+/// is missing — the caller is assumed to have
 /// raced a delete from apply, which the reconcile path will resolve.
 ///
 /// `fire_count_delta` triggers a read-then-write: the current `fire_count` is
@@ -193,9 +195,10 @@ pub(crate) async fn update_schedule_runtime_fields(
 /// Description of a scheduled trigger for a task.
 ///
 /// Mirrors the `Schedule` GraphQL schema in
-/// `crates/defra-agent-protocol/schemas/agent/schedule.graphql`. Includes both
-/// apply-owned fields (`schedule_id`, `task_id`, `interval_secs`, `enabled`,
-/// `concurrency`, `created_at`, `updated_at`) and runtime-owned fields
+/// `crates/defra-agent-schemas/schemas/agent/schedule.graphql`. Includes both
+/// apply-owned fields (`schedule_id`, `task_id`, `interval_secs`, `cron`,
+/// `timezone`, `missed_run_policy`, `enabled`, `concurrency`, `created_at`,
+/// `updated_at`) and runtime-owned fields
 /// (`next_run_at`, `last_attempt_at`, `last_status`, `last_error`,
 /// `fire_count`) because `DocumentRuntimeView` is a DB-read view.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -203,6 +206,9 @@ pub struct Schedule {
     pub schedule_id: String,
     pub task_id: Option<String>,
     pub interval_secs: Option<i64>,
+    pub cron: Option<String>,
+    pub timezone: Option<String>,
+    pub missed_run_policy: Option<String>,
     pub enabled: bool,
     pub concurrency: Option<String>,
     pub next_run_at: Option<String>,
@@ -226,6 +232,9 @@ pub(crate) async fn list_schedule_records(node: &EmbeddedNode) -> Result<Vec<(St
                 schedule_id
                 task_id
                 interval_secs
+                cron
+                timezone
+                missed_run_policy
                 enabled
                 concurrency
                 next_run_at
@@ -265,6 +274,9 @@ pub(crate) async fn load_schedule_by_doc_id(
                 schedule_id
                 task_id
                 interval_secs
+                cron
+                timezone
+                missed_run_policy
                 enabled
                 concurrency
                 next_run_at

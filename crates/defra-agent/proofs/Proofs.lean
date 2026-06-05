@@ -38,5 +38,6 @@ import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
 import Proofs.ReversePairingHandlers
 import Proofs.Identity
+import Proofs.Skills
 import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery

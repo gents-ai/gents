@@ -759,6 +759,11 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: ConfigTaskCommand,
     },
+    #[command(about = "Create, list, show, delete, enable, or disable Skill documents")]
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
     #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
@@ -790,6 +795,122 @@ pub(crate) enum BehaviorCommand {
 pub(crate) enum ToolSelectionCommand {
     #[command(name = "set")]
     Set(ToolSelectionUpsertArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SkillCommand {
+    #[command(name = "add", about = "Create or update a Skill document")]
+    Add(SkillAddArgs),
+    #[command(
+        name = "import",
+        about = "Import a directory tree of Codex-format SKILL.md files as Skill documents"
+    )]
+    Import(SkillImportArgs),
+    #[command(
+        name = "export",
+        about = "Export an agent's Skill documents as a SKILL.md directory tree"
+    )]
+    Export(SkillExportArgs),
+    #[command(name = "list", about = "List Skill documents for an agent")]
+    List(SkillListArgs),
+    #[command(name = "show", about = "Show a single Skill document")]
+    Show(SkillShowArgs),
+    #[command(name = "rm", about = "Delete a Skill document")]
+    Rm(SkillRefArgs),
+    #[command(name = "enable", about = "Enable a Skill document")]
+    Enable(SkillRefArgs),
+    #[command(name = "disable", about = "Disable a Skill document")]
+    Disable(SkillRefArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillAddArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    #[arg(long)]
+    pub(crate) skill_id: String,
+    #[arg(long)]
+    pub(crate) name: Option<String>,
+    /// Activation scope: "principal" (inherited by all the agent's behaviors)
+    /// or "behavior" (only where a behavior opts in via skill_refs).
+    #[arg(long, default_value = "behavior")]
+    pub(crate) scope: String,
+    #[arg(long)]
+    pub(crate) description: Option<String>,
+    /// Inline skill instructions (the body composed into the prompt).
+    #[arg(long)]
+    pub(crate) instructions: Option<String>,
+    /// Read instructions from a file (takes precedence over --instructions).
+    #[arg(long)]
+    pub(crate) instructions_file: Option<PathBuf>,
+    /// Declared tool dependency (repeatable). Intersected with the behavior
+    /// tool ceiling at activation; never grants a tool.
+    #[arg(long = "tool-ref")]
+    pub(crate) tool_refs: Vec<String>,
+    #[arg(long)]
+    pub(crate) display_name: Option<String>,
+    #[arg(long, default_value_t = true)]
+    pub(crate) enabled: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillImportArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    /// Directory tree to scan for `SKILL.md` files (Codex skill layout:
+    /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
+    #[arg(value_name = "DIR")]
+    pub(crate) dir: PathBuf,
+    /// Scope applied to every imported skill: "principal" or "behavior".
+    #[arg(long, default_value = "behavior")]
+    pub(crate) scope: String,
+    /// Import skills as disabled.
+    #[arg(long)]
+    pub(crate) disabled: bool,
+    /// Parse and report what would be imported without writing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillExportArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    /// Output directory. Each skill is written to `<dir>/<skill_id>/SKILL.md`
+    /// (plus `agents/openai.yaml` when it has tool_refs or a display name).
+    #[arg(value_name = "DIR")]
+    pub(crate) dir: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillListArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SkillShowArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) skill_id: String,
+}
+
+/// Shared args for skill commands that target a single skill by id.
+#[derive(clap::Args)]
+pub(crate) struct SkillRefArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) skill_id: String,
 }
 
 #[derive(clap::Args)]
@@ -1087,6 +1208,12 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete live-only desired-state documents absent from the manifest, routed through the proven ApplyReconcile delete-safety model"
+    )]
+    pub(crate) prune: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -1556,8 +1683,7 @@ pub(crate) struct SessionForkArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
-        help = "Reserved — remote GraphQL-mode fork is not yet implemented. \
-                Passing this flag today errors."
+        help = "GraphQL endpoint for forking through a running runtime instead of opening local state"
     )]
     pub(crate) graphql: Option<String>,
     #[arg(

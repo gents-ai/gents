@@ -33,11 +33,12 @@ const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 // realizes the Lean retry model by rebuilding the live diff at the start of
 // each `config apply` attempt, then applying selected documents with
 // unique-field upserts or equivalent override writers.
-const CONFIG_APPLY_ORDER: [Collection; 9] = [
+const CONFIG_APPLY_ORDER: [Collection; 10] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
     Collection::ToolSelection,
+    Collection::Skill,
     Collection::AgentBehavior,
     Collection::Task,
     Collection::Schedule,
@@ -45,8 +46,23 @@ const CONFIG_APPLY_ORDER: [Collection; 9] = [
     Collection::AgentPrincipal,
 ];
 
+const CONFIG_PRUNE_ORDER: [Collection; 10] = [
+    Collection::AgentPrincipal,
+    Collection::EventTrigger,
+    Collection::Schedule,
+    Collection::Task,
+    Collection::AgentBehavior,
+    Collection::Skill,
+    Collection::ToolSelection,
+    Collection::ToolServiceRegistry,
+    Collection::InferenceProfile,
+    Collection::InferenceBackend,
+];
+
 #[cfg(test)]
 pub(crate) const CONFIG_APPLY_ORDER_FOR_TESTS: &[Collection] = &CONFIG_APPLY_ORDER;
+#[cfg(test)]
+pub(crate) const CONFIG_PRUNE_ORDER_FOR_TESTS: &[Collection] = &CONFIG_PRUNE_ORDER;
 
 #[derive(Debug, Clone)]
 struct PreparedImportDocument {
@@ -137,6 +153,25 @@ pub(crate) async fn apply_import_collection(
     }
 
     Ok(docs.len())
+}
+
+pub(crate) async fn apply_delete_collection(
+    txn: &ConfigApplyTxn<'_>,
+    collection_name: &str,
+    unique_field: &str,
+    ids: &[String],
+) -> Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let fields = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| delete_mutation_field(index, collection_name, unique_field, id))
+        .collect::<Vec<_>>();
+    execute_aliased_mutation_batches(txn, collection_name, &fields).await?;
+    Ok(ids.len())
 }
 
 fn prepare_import_documents(
@@ -252,6 +287,22 @@ fn generic_import_mutation_field(
         format!(r#"{alias}: create_{collection_name}(input: {add_literal}) {{ _docID }}"#)
     };
     Ok(AliasedMutationField { alias, field })
+}
+
+fn delete_mutation_field(
+    index: usize,
+    collection_name: &str,
+    unique_field: &str,
+    unique_value: &str,
+) -> AliasedMutationField {
+    let alias = format!("doc_{index}");
+    let field = format!(
+        r#"{alias}: delete_{collection_name}(
+            filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }}
+        ) {{ _docID }}"#,
+        unique_value = escape_graphql_string(unique_value),
+    );
+    AliasedMutationField { alias, field }
 }
 
 async fn apply_generic_import_document(
@@ -617,6 +668,22 @@ pub(crate) async fn apply_desired_state_changes(
         }
     }
 
+    for collection in CONFIG_PRUNE_ORDER {
+        let diff = planned.collections.get(collection);
+        let deleted = apply_delete_collection(
+            txn,
+            collection.graphql_type(),
+            collection.unique_field(),
+            &diff.delete,
+        )
+        .await?;
+        counts.add(collection, deleted);
+
+        if let Some(sleep) = per_collection_sleep {
+            tokio::time::sleep(sleep).await;
+        }
+    }
+
     Ok(counts)
 }
 
@@ -660,6 +727,18 @@ mod tests {
     }
 
     #[test]
+    fn config_prune_order_contains_each_collection_once() {
+        let actual = CONFIG_PRUNE_ORDER_FOR_TESTS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected = Collection::ALL.into_iter().collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+        assert_eq!(CONFIG_PRUNE_ORDER_FOR_TESTS.len(), Collection::ALL.len());
+    }
+
+    #[test]
     fn config_apply_order_has_retry_safe_prefixes() {
         for prefix_len in 0..=CONFIG_APPLY_ORDER_FOR_TESTS.len() {
             let prefix = &CONFIG_APPLY_ORDER_FOR_TESTS[..prefix_len];
@@ -670,6 +749,24 @@ mod tests {
                         written.apply_order() <= pending.apply_order(),
                         "prefix {prefix_len} writes {:?} before lower-rank {:?}",
                         written,
+                        pending,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn config_prune_order_deletes_referrers_before_dependencies() {
+        for prefix_len in 0..=CONFIG_PRUNE_ORDER_FOR_TESTS.len() {
+            let prefix = &CONFIG_PRUNE_ORDER_FOR_TESTS[..prefix_len];
+            let suffix = &CONFIG_PRUNE_ORDER_FOR_TESTS[prefix_len..];
+            for deleted in prefix {
+                for pending in suffix {
+                    assert!(
+                        pending.apply_order() <= deleted.apply_order(),
+                        "prefix {prefix_len} deletes lower-rank {:?} before higher-rank {:?}",
+                        deleted,
                         pending,
                     );
                 }
@@ -716,6 +813,19 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
             extract_aliased_mutation_doc_id(&response, "doc_1", "Task").unwrap(),
             "doc-b"
         );
+    }
+
+    #[test]
+    fn delete_mutation_field_targets_unique_field() {
+        let field = delete_mutation_field(0, "Task", "task_id", "task-a");
+
+        assert_eq!(field.alias, "doc_0");
+        assert!(
+            field.field.contains(r#"doc_0: delete_Task("#),
+            "expected delete field, got {}",
+            field.field
+        );
+        assert!(field.field.contains(r#"task_id: { _eq: "task-a" }"#));
     }
 
     #[test]
@@ -811,6 +921,7 @@ mod lean_apply_write_boundary_tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ObservedWrite {
+        kind: String,
         collection: Collection,
         unique_value: String,
     }
@@ -893,7 +1004,10 @@ mod lean_apply_write_boundary_tests {
 
         for case in cases {
             assert_write_order_projection_matches_production(case);
+            assert_prune_order_projection_matches_production(case);
             assert!(case.write_order_prefix_safe);
+            assert!(case.prune_order_referrers_before_dependencies);
+            assert!(case.delete_safety_holds);
             assert!(case.production_prefixes_referrers_closed);
 
             let desired_manifest = desired_manifest_from_lean(case);
@@ -928,11 +1042,16 @@ mod lean_apply_write_boundary_tests {
             assert_counts_match_lean(case, &counts);
 
             let observed = recorder.committed_state();
-            let expected = case
+            let mut expected = case
                 .expected_selected_writes
                 .iter()
                 .map(observed_write_from_lean)
                 .collect::<Vec<_>>();
+            expected.extend(
+                case.expected_selected_delete_docs
+                    .iter()
+                    .map(observed_write_from_lean),
+            );
             assert_eq!(
                 observed, expected,
                 "production mutation sequence drifted from Lean write-boundary projection for case {}",
@@ -949,7 +1068,7 @@ mod lean_apply_write_boundary_tests {
                 case.name,
             );
 
-            if case.prefix_len > 0 {
+            if case.prefix_len > 0 && case.prefix_len < expected.len() {
                 let initial_external_state = case
                     .pre_live
                     .iter()
@@ -1049,6 +1168,41 @@ mod lean_apply_write_boundary_tests {
         );
     }
 
+    fn assert_prune_order_projection_matches_production(case: &LeanApplyReconcileCase) {
+        let expected_order = case
+            .expected_prune_order
+            .iter()
+            .map(|entry| {
+                let collection = collection_from_lean_name(&entry.collection);
+                assert_eq!(
+                    entry.graphql_type,
+                    collection.graphql_type(),
+                    "Lean prune GraphQL type mapping drifted for {:?}",
+                    collection
+                );
+                assert_eq!(
+                    entry.unique_field,
+                    collection.unique_field(),
+                    "Lean prune unique-field mapping drifted for {:?}",
+                    collection
+                );
+                assert_eq!(
+                    entry.apply_order,
+                    collection.apply_order() as usize,
+                    "Lean prune apply-order mapping drifted for {:?}",
+                    collection
+                );
+                collection
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            expected_order, CONFIG_PRUNE_ORDER,
+            "CONFIG_PRUNE_ORDER must match Lean's production prune order projection for case {}",
+            case.name
+        );
+    }
+
     fn assert_selected_documents_match_lean(
         case: &LeanApplyReconcileCase,
         desired_bundle: &ConfigExportBundle,
@@ -1061,6 +1215,11 @@ mod lean_apply_write_boundary_tests {
             .collect::<Vec<_>>();
         let update_docs = case
             .expected_selected_update_docs
+            .iter()
+            .map(observed_write_from_lean)
+            .collect::<Vec<_>>();
+        let delete_docs = case
+            .expected_selected_delete_docs
             .iter()
             .map(observed_write_from_lean)
             .collect::<Vec<_>>();
@@ -1078,6 +1237,13 @@ mod lean_apply_write_boundary_tests {
                 diff.update,
                 ids_for_collection(&update_docs, collection),
                 "planned update ids must match Lean selected-update docs for case {} / {:?}",
+                case.name,
+                collection
+            );
+            assert_eq!(
+                diff.delete,
+                ids_for_collection(&delete_docs, collection),
+                "planned delete ids must match Lean selected-delete docs for case {} / {:?}",
                 case.name,
                 collection
             );
@@ -1203,14 +1369,19 @@ mod lean_apply_write_boundary_tests {
 
     fn assert_counts_match_lean(case: &LeanApplyReconcileCase, counts: &ConfigApplyCounts) {
         for collection in Collection::ALL {
-            let expected = case
+            let expected_writes = case
                 .expected_selected_writes
+                .iter()
+                .filter(|doc| collection_from_lean_ref(&doc.target) == collection)
+                .count();
+            let expected_deletes = case
+                .expected_selected_delete_docs
                 .iter()
                 .filter(|doc| collection_from_lean_ref(&doc.target) == collection)
                 .count();
             assert_eq!(
                 count_for_collection(counts, collection),
-                expected,
+                expected_writes + expected_deletes,
                 "apply_desired_state_changes count mismatch for Lean case {} / {:?}",
                 case.name,
                 collection
@@ -1222,9 +1393,10 @@ mod lean_apply_write_boundary_tests {
         case: &LeanApplyReconcileCase,
         observed: &[ObservedWrite],
     ) {
-        let manifest_refs = case
-            .manifest
+        let refs_by_key = case
+            .pre_desired
             .iter()
+            .chain(case.manifest.iter())
             .map(|doc| {
                 (
                     doc_key_from_desired(doc),
@@ -1238,29 +1410,52 @@ mod lean_apply_write_boundary_tests {
             .map(doc_key_from_desired)
             .collect::<BTreeSet<_>>();
 
-        for prefix_len in 0..=observed.len() {
-            if prefix_len > 0 {
-                let written = &observed[prefix_len - 1];
-                present.insert((written.collection, written.unique_value.clone()));
+        assert_present_refs_closed(case, 0, &present, &refs_by_key);
+
+        for (index, mutation) in observed.iter().enumerate() {
+            let prefix_len = index + 1;
+            let key = (mutation.collection, mutation.unique_value.clone());
+            match mutation.kind.as_str() {
+                "write" => {
+                    present.insert(key.clone());
+                }
+                "delete" => {
+                    for referrer in &present {
+                        let refs = refs_by_key.get(referrer).cloned().unwrap_or_default();
+                        assert!(
+                            !refs.contains(&key),
+                            "production delete prefix {prefix_len} deletes {:?} while live referrer {:?} still references it in Lean case {}",
+                            key,
+                            referrer,
+                            case.name
+                        );
+                    }
+                    present.remove(&key);
+                }
+                "live" => {}
+                other => panic!("unknown observed mutation kind {other:?}"),
             }
 
-            for written in &observed[..prefix_len] {
-                let key = (written.collection, written.unique_value.clone());
-                let refs = manifest_refs.get(&key).unwrap_or_else(|| {
-                    panic!(
-                        "observed production write is not in Lean manifest for case {}: {:?}",
-                        case.name, key
-                    )
-                });
-                for reference in refs {
-                    assert!(
-                        present.contains(reference),
-                        "production prefix {prefix_len} leaves referrer {:?} dangling on {:?} in Lean case {}",
-                        key,
-                        reference,
-                        case.name
-                    );
-                }
+            assert_present_refs_closed(case, prefix_len, &present, &refs_by_key);
+        }
+    }
+
+    fn assert_present_refs_closed(
+        case: &LeanApplyReconcileCase,
+        prefix_len: usize,
+        present: &BTreeSet<(Collection, String)>,
+        refs_by_key: &BTreeMap<(Collection, String), Vec<(Collection, String)>>,
+    ) {
+        for key in present {
+            let refs = refs_by_key.get(key).cloned().unwrap_or_default();
+            for reference in refs {
+                assert!(
+                    present.contains(&reference),
+                    "production prefix {prefix_len} leaves referrer {:?} dangling on {:?} in Lean case {}",
+                    key,
+                    reference,
+                    case.name
+                );
             }
         }
     }
@@ -1446,32 +1641,41 @@ mod lean_apply_write_boundary_tests {
 
     fn parse_mutation_writes(query: &str) -> Vec<ObservedWrite> {
         let field_re =
-            Regex::new(r"(?:\bdoc_\d+\s*:\s*)?(?:create|update|upsert)_([A-Za-z]+)\s*\(")
+            Regex::new(r"(?:\bdoc_\d+\s*:\s*)?(create|update|upsert|delete)_([A-Za-z]+)\s*\(")
                 .expect("mutation field regex");
         let matches = field_re
             .captures_iter(query)
             .map(|capture| {
                 let whole = capture.get(0).expect("whole match");
-                let collection_name = capture.get(1).expect("collection match").as_str();
-                (whole.start(), collection_from_lean_name(collection_name))
+                let action = capture.get(1).expect("action match").as_str();
+                let collection_name = capture.get(2).expect("collection match").as_str();
+                (
+                    whole.start(),
+                    if action == "delete" {
+                        "delete"
+                    } else {
+                        "write"
+                    },
+                    collection_from_lean_name(collection_name),
+                )
             })
             .collect::<Vec<_>>();
 
         let mut writes = Vec::new();
-        for (index, (start, collection)) in matches.iter().copied().enumerate() {
+        for (index, (start, kind, collection)) in matches.iter().copied().enumerate() {
             let end = matches
                 .get(index + 1)
-                .map(|(next_start, _)| *next_start)
+                .map(|(next_start, _, _)| *next_start)
                 .unwrap_or(query.len());
             let segment = &query[start..end];
             let value_re = Regex::new(&format!(
-                r#"\b{}\s*:\s*"([^"]+)""#,
+                r#"\b{}\s*:\s*(?:"([^"]+)"|\{{\s*_eq\s*:\s*"([^"]+)"\s*\}})"#,
                 regex::escape(collection.unique_field())
             ))
             .expect("unique-field regex");
             let unique_value = value_re
                 .captures(segment)
-                .and_then(|capture| capture.get(1))
+                .and_then(|capture| capture.get(1).or_else(|| capture.get(2)))
                 .unwrap_or_else(|| {
                     panic!(
                         "mutation segment for {:?} did not carry unique field {}: {}",
@@ -1483,6 +1687,7 @@ mod lean_apply_write_boundary_tests {
                 .as_str()
                 .to_string();
             writes.push(ObservedWrite {
+                kind: kind.to_string(),
                 collection,
                 unique_value,
             });
@@ -1509,6 +1714,10 @@ mod lean_apply_write_boundary_tests {
             agent_behaviors: docs_for_collection(case, Collection::AgentBehavior)
                 .into_iter()
                 .map(|doc| desired_behavior(doc, &agent_did))
+                .collect(),
+            skills: docs_for_collection(case, Collection::Skill)
+                .into_iter()
+                .map(|doc| desired_skill(doc, &agent_did))
                 .collect(),
             tool_selections: docs_for_collection(case, Collection::ToolSelection)
                 .into_iter()
@@ -1567,6 +1776,23 @@ mod lean_apply_write_boundary_tests {
             inference_profile_id: ref_id(doc, Collection::InferenceProfile),
             compaction_strategy: None,
             compaction_threshold: None,
+            enabled: true,
+            skill_refs: ref_ids_for_collection(&doc.refs, Collection::Skill),
+            skill_excludes: Vec::new(),
+        }
+    }
+
+    fn desired_skill(doc: &LeanApplyDesiredDoc, agent_did: &str) -> desired_state::DesiredSkill {
+        desired_state::DesiredSkill {
+            skill_id: doc.id.clone(),
+            agent_did: agent_did.to_string(),
+            scope: "behavior".to_string(),
+            name: doc.content.clone(),
+            description: Some(doc.content.clone()),
+            instructions: None,
+            tool_refs: ref_ids_for_collection(&doc.refs, Collection::ToolServiceRegistry),
+            display_name: Some(doc.content.clone()),
+            interface_json: None,
             enabled: true,
         }
     }
@@ -1671,7 +1897,10 @@ mod lean_apply_write_boundary_tests {
         desired_state::DesiredSchedule {
             schedule_id: doc.id.clone(),
             task_id: ref_id(doc, Collection::Task).unwrap_or_else(|| DEFAULT_TASK_ID.to_string()),
-            interval_secs: 60,
+            interval_secs: Some(60),
+            cron: None,
+            timezone: None,
+            missed_run_policy: None,
             enabled: true,
             concurrency: doc.content.clone(),
         }
@@ -1695,6 +1924,7 @@ mod lean_apply_write_boundary_tests {
         let collections = desired_state::DesiredStateDiffCollections {
             agent_principal: diff_for_collection(case, Collection::AgentPrincipal),
             agent_behaviors: diff_for_collection(case, Collection::AgentBehavior),
+            skills: diff_for_collection(case, Collection::Skill),
             tool_selections: diff_for_collection(case, Collection::ToolSelection),
             inference_backends: diff_for_collection(case, Collection::InferenceBackend),
             inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
@@ -1723,6 +1953,7 @@ mod lean_apply_write_boundary_tests {
         desired_state::DesiredStateCollectionDiff {
             create: ref_ids_for_collection(&case.expected_create, collection),
             update: ref_ids_for_collection(&case.expected_update, collection),
+            delete: ref_ids_for_collection(&case.expected_delete, collection),
             unchanged: ref_ids_for_collection(&case.expected_unchanged, collection),
             live_only: ref_ids_for_collection(&case.expected_live_only, collection),
         }
@@ -1789,6 +2020,11 @@ mod lean_apply_write_boundary_tests {
         let collection = collection_from_lean_ref(&doc.target);
         assert_eq!(doc.unique_field, collection.unique_field());
         ObservedWrite {
+            kind: if doc.action == "delete" {
+                "delete".to_string()
+            } else {
+                "write".to_string()
+            },
             collection,
             unique_value: doc.unique_value.clone(),
         }
@@ -1796,6 +2032,7 @@ mod lean_apply_write_boundary_tests {
 
     fn observed_write_from_lean_live_doc(doc: &LeanApplyLiveDoc) -> ObservedWrite {
         ObservedWrite {
+            kind: "live".to_string(),
             collection: collection_from_lean_name(&doc.collection),
             unique_value: doc.id.clone(),
         }
@@ -1819,6 +2056,7 @@ mod lean_apply_write_boundary_tests {
         match collection {
             Collection::AgentPrincipal => counts.agent_principal,
             Collection::AgentBehavior => counts.agent_behaviors,
+            Collection::Skill => counts.skills,
             Collection::ToolSelection => counts.tool_selections,
             Collection::InferenceBackend => counts.inference_backends,
             Collection::InferenceProfile => counts.inference_profiles,

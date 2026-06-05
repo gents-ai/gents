@@ -25,7 +25,7 @@ use crate::lean_vocab_test::{
 };
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
-    ResolvedSchedule, ResolvedTask,
+    ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
 use crate::tool_surface::BehaviorToolConfig;
 use crate::trigger_engine::event_source::EventSource;
@@ -314,7 +314,7 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
-        interval_secs: 60,
+        cadence: ScheduleCadence::Interval { interval_secs: 60 },
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     }
@@ -329,7 +329,7 @@ fn resolved_schedule_with_concurrency(
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
-        interval_secs: 60,
+        cadence: ScheduleCadence::Interval { interval_secs: 60 },
         enabled: true,
         concurrency,
     }
@@ -432,6 +432,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         enabled: true,
     });
     Arc::new(AgentBehavior {
+        skills: Vec::new(),
         behavior_id: behavior_name.to_string(),
         principal,
         backend_id: Some("backend-it".to_string()),

@@ -4204,3 +4204,1145 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
     );
     Ok(())
 }
+
+/// End-to-end (#340 slice 4): add a skill via the `config skill` CLI, then list
+/// and enable/disable it through the Codex shim protocol (skills/list +
+/// skills/config/write) — the management flow from the Codex CLI.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-skill-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-skill-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Add a principal-scoped skill via the CLI management command.
+    let added = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    assert_eq!(
+        added.get("skill_id").and_then(Value::as_str),
+        Some("research")
+    );
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    // skills/list surfaces the skill, enabled, with principal scope -> System.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsList {
+            request_id: request_id(2),
+            params: codex::SkillsListParams::default(),
+        },
+    )
+    .await?;
+    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(2)).await?;
+    let research = list
+        .data
+        .iter()
+        .flat_map(|entry| entry.skills.iter())
+        .find(|skill| skill.name == "Research")
+        .expect("Research skill should be listed");
+    assert!(research.enabled, "newly added skill should be enabled");
+    assert_eq!(research.scope, codex::SkillScope::System);
+
+    // skills/config/write disables it by name.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsConfigWrite {
+            request_id: request_id(3),
+            params: codex::SkillsConfigWriteParams {
+                path: None,
+                name: Some("Research".to_string()),
+                enabled: false,
+            },
+        },
+    )
+    .await?;
+    let write: codex::SkillsConfigWriteResponse =
+        read_typed_response(&mut ws, request_id(3)).await?;
+    assert!(
+        !write.effective_enabled,
+        "config write should report disabled"
+    );
+
+    // skills/list reflects the disable.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsList {
+            request_id: request_id(4),
+            params: codex::SkillsListParams::default(),
+        },
+    )
+    .await?;
+    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(4)).await?;
+    let research = list
+        .data
+        .iter()
+        .flat_map(|entry| entry.skills.iter())
+        .find(|skill| skill.name == "Research")
+        .expect("Research skill should still be listed");
+    assert!(
+        !research.enabled,
+        "skill should be disabled after skills/config/write"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// End-to-end "agent discovers a skill in a live conversation" (#340): with the
+/// agent already running, `config skill add` reconciles the runtime live (no
+/// restart), and a subsequent turn carries the skill's catalog entry into the
+/// request the agent sends the model (progressive disclosure — the model would
+/// then call load_skill for the body).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("skill-live-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-live-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-live-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+
+    // Add a principal-scoped skill LIVE; the catalog phrase is distinctive.
+    let catalog_phrase = format!("cite-sources-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "live-skill",
+            "--scope",
+            "principal",
+            "--name",
+            &catalog_phrase,
+            "--description",
+            "find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    // The live skill add must reconcile the running runtime (no restart).
+    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    // The skill catalog (name + load_skill mandate) must have reached the model.
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured.iter().any(|request| {
+            let text = request.to_string();
+            text.contains(&catalog_phrase) && text.contains("load_skill")
+        }),
+        "live-added skill's catalog entry did not reach the model; captured={captured:?}"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// End-to-end proof that an EXPLICIT Codex skill selection (`UserInput::Skill`,
+/// the skill "pill") deterministically activates the skill (#340). The shim
+/// forwards only the id; the RUNTIME resolves it against the behavior's
+/// effective set and injects the body as a per-turn system reminder (rather than
+/// relying on the model to pull it). A skill-only turn (no text) must (a) not be
+/// rejected as empty and (b) carry the skill body to the model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("skill-inject-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-inject-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-inject-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+
+    // A skill with a distinctive instruction body (the injected-body marker).
+    let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "inject-skill",
+            "--scope",
+            "principal",
+            "--name",
+            "Injectable",
+            "--description",
+            "a skill to inject",
+            "--instructions",
+            &body_phrase,
+        ],
+    )?;
+    // The runtime resolves the explicit selection from its effective set, so the
+    // principal-scoped skill must reconcile into the running snapshot first.
+    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+
+    // Turn input is ONLY the skill selection (no text) — proves it isn't
+    // rejected as empty and that the body is injected.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Skill {
+                    name: "Injectable".to_string(),
+                    path: std::path::PathBuf::from("/defra/skills/inject-skill"),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    // The full skill body must have reached the model, wrapped as a <skill> block.
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured.iter().any(|request| {
+            let text = request.to_string();
+            text.contains(&body_phrase) && text.contains("system-reminder")
+        }),
+        "explicit skill selection did not inject the body; captured={captured:?}"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// An explicit Codex skill selection must still respect the bound behavior's
+/// effective set (D5): a behavior-scoped skill NOT opted into the bound behavior
+/// (empty skill_refs) cannot be force-activated via the pill (#340). Privilege
+/// scoping — the Codex UI lists all the agent's skills, but selecting one the
+/// behavior didn't opt into must not inject it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("scope-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-scope-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-scope-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // A BEHAVIOR-scoped skill, enabled, but NOT referenced by the bound behavior
+    // (skill_refs is empty by default) -> not in its effective set.
+    let body_phrase = format!("UNSCOPED-BODY-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "unscoped-skill",
+            "--scope",
+            "behavior",
+            "--name",
+            "Unscoped",
+            "--description",
+            "not opted in",
+            "--instructions",
+            &body_phrase,
+        ],
+    )?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+
+    // Select the unscoped skill, with text so the turn is non-empty regardless.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![
+                    codex::UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                    codex::UserInput::Skill {
+                        name: "Unscoped".to_string(),
+                        path: std::path::PathBuf::from("/defra/skills/unscoped-skill"),
+                    },
+                ],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    // The un-opted-in skill body must NOT have been injected.
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured
+            .iter()
+            .all(|request| !request.to_string().contains(&body_phrase)),
+        "a behavior-scoped skill not in the effective set must not be injected; captured={captured:?}"
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// End-to-end proof that a Codex-shim-driven `skills/config/write` disable
+/// reconciles a RUNNING agent without a restart (#340): the shim commits the
+/// toggle in a transaction, the COMMIT wakes the control watcher, the runtime
+/// fingerprint changes (skills now contribute to `AgentBehavior`'s Debug), the
+/// generation bumps, and the disabled skill's catalog entry stops reaching the
+/// model on the next turn. This closes the gap where the shim's enable/disable
+/// used an auto-committed mutation (no `Update` event) and only took effect on
+/// restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("skill-toggle-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-skill-toggle-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-toggle-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+
+    // Add a principal-scoped skill LIVE (enabled) so it composes into the prompt.
+    let catalog_phrase = format!("toggle-cite-{}", Uuid::new_v4().simple());
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "toggle-skill",
+            "--scope",
+            "principal",
+            "--name",
+            &catalog_phrase,
+            "--description",
+            "find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    let gen1 =
+        wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let thread_start: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+
+    // Turn 1: the enabled skill's catalog entry reaches the model.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+    assert!(
+        mock_endpoint
+            .captured_chat_requests()
+            .iter()
+            .any(|request| {
+                let text = request.to_string();
+                text.contains(&catalog_phrase) && text.contains("load_skill")
+            }),
+        "enabled skill's catalog entry should reach the model before the disable"
+    );
+
+    // Disable the skill THROUGH THE CODEX SHIM (skills/config/write).
+    let captured_before_toggle = mock_endpoint.captured_chat_requests().len();
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsConfigWrite {
+            request_id: request_id(4),
+            params: codex::SkillsConfigWriteParams {
+                path: None,
+                name: Some(catalog_phrase.clone()),
+                enabled: false,
+            },
+        },
+    )
+    .await?;
+    let write: codex::SkillsConfigWriteResponse =
+        read_typed_response(&mut ws, request_id(4)).await?;
+    assert!(
+        !write.effective_enabled,
+        "shim should report the skill disabled"
+    );
+
+    // The shim's committed toggle must reconcile the running runtime (no restart).
+    wait_for_runtime_quiescence(&graphql, &agent_did, gen1 + 1, Duration::from_secs(2)).await?;
+
+    // Turn 2: the disabled skill's catalog entry no longer reaches the model.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(5),
+            params: codex::TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "hello again".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(5)).await?;
+    let (_text, completed) = read_turn_to_completion(&mut ws).await?;
+    assert_eq!(completed.status, codex::TurnStatus::Completed);
+
+    let captured = mock_endpoint.captured_chat_requests();
+    assert!(
+        captured.len() > captured_before_toggle,
+        "turn 2 should have produced at least one new captured request"
+    );
+    assert!(
+        captured[captured_before_toggle..]
+            .iter()
+            .all(|request| !request.to_string().contains(&catalog_phrase)),
+        "disabled skill's catalog entry must NOT reach the model after the shim toggle reconciled; \
+         captured tail={:?}",
+        &captured[captured_before_toggle..]
+    );
+
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// CLI management round-trip for the `config skill` surface that the other
+/// tests don't exercise directly: disable -> enable -> rm, verified through
+/// `config skill show`/`list` (#340). Covers `skill_set_enabled` and `skill_rm`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-skill-crud-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-crud-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
+    wait_for_port(server_port, &mut serve)?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+            "--tool-ref",
+            "web_search",
+        ],
+    )?;
+
+    let show = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        show.get("tool_refs")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1),
+        "tool_ref should be stored on add"
+    );
+
+    // Re-add without --tool-ref must CLEAR the list (upsert update writes null),
+    // not leave the stale ["web_search"] in place.
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--skill-id",
+            "research",
+            "--scope",
+            "principal",
+            "--name",
+            "Research",
+            "--description",
+            "Find and cite sources",
+            "--instructions",
+            "Always cite your sources.",
+        ],
+    )?;
+    let show = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    let tool_refs_empty = match show.get("tool_refs") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(items)) => items.is_empty(),
+        _ => false,
+    };
+    assert!(
+        tool_refs_empty,
+        "re-add without --tool-ref must clear tool_refs; got {:?}",
+        show.get("tool_refs")
+    );
+
+    // disable
+    let disabled = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "disable",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(disabled.get("updated").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        disabled.get("enabled").and_then(Value::as_bool),
+        Some(false)
+    );
+    let show = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
+
+    // re-enable
+    let enabled = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "enable",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(enabled.get("enabled").and_then(Value::as_bool), Some(true));
+
+    // rm, then it's gone from list
+    let removed = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "rm",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(removed.get("deleted").and_then(Value::as_u64), Some(1));
+    let list = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "list",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
+
+    Ok(())
+}
+
+/// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
+/// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
+/// the export. Gated on the hermes skills directory existing (override with
+/// HERMES_SKILLS_DIR); skipped otherwise so CI stays green without that checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
+    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").unwrap_or_else(|_| {
+        "/Users/johnzampolin/go/src/github.com/NousResearch/hermes-agent/skills".to_string()
+    });
+    if !std::path::Path::new(&hermes_dir).is_dir() {
+        eprintln!("skipping config_skill_import_export_roundtrip_hermes: {hermes_dir} not found");
+        return Ok(());
+    }
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-skill-import-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-skill-import-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Import the hermes skill tree.
+    let imported = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "import",
+            &hermes_dir,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--scope",
+            "behavior",
+        ],
+    )?;
+    let imported_count = imported
+        .get("imported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert!(
+        imported_count >= 50,
+        "expected to import many hermes skills, got {imported_count}: {imported}"
+    );
+
+    // List reflects the distinct skills (≤ import count if dir names collide).
+    let listed = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "list",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    let listed_count = listed.get("count").and_then(Value::as_u64).unwrap_or(0);
+    assert!(
+        listed_count >= 50 && listed_count <= imported_count,
+        "list count {listed_count}"
+    );
+
+    // Export back to a SKILL.md tree.
+    let out_dir = tempdir.path().join("export");
+    let exported = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "export",
+            out_dir.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    let exported_count = exported
+        .get("exported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(
+        exported_count, listed_count,
+        "export count must match distinct skills"
+    );
+    assert!(
+        out_dir.join("notion").join("SKILL.md").is_file(),
+        "exported notion/SKILL.md should exist"
+    );
+
+    // Re-import the export: round-trips cleanly (same skill_ids upsert in place).
+    let reimported = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "import",
+            out_dir.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--scope",
+            "behavior",
+        ],
+    )?;
+    let reimported_count = reimported
+        .get("imported_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(
+        reimported_count, exported_count,
+        "re-import of export must round-trip"
+    );
+
+    Ok(())
+}

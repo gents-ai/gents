@@ -16,8 +16,9 @@ use stream::stream_defra_turn;
 use submission::create_agent_request_with_retry;
 
 use super::protocol::{
-    codex_steering_metadata, codex_turn_metadata, send_committed_user_message, send_error,
-    send_notification, send_result, turn_value, user_text_from_input,
+    codex_steering_metadata, codex_turn_metadata, selected_skill_ids_from_input,
+    send_committed_user_message, send_error, send_notification, send_result, turn_value,
+    user_text_from_input,
 };
 use super::turn_projection::TurnProjection;
 use super::{
@@ -34,7 +35,12 @@ pub(super) async fn start_defra_turn(
     input: Vec<codex::UserInput>,
 ) -> Result<()> {
     let user_text = user_text_from_input(&input);
-    if user_text.trim().is_empty() {
+    // Explicitly-selected skills (the Codex "pill") are forwarded as id
+    // REFERENCES on the request; the runtime resolves + injects their bodies
+    // (deterministic activation, scoped to the effective set). A skill-only turn
+    // is therefore non-empty even with no text.
+    let selected_skill_ids = selected_skill_ids_from_input(&input);
+    if user_text.trim().is_empty() && selected_skill_ids.is_empty() {
         return send_error(
             &connection.outbound,
             request_id,
@@ -51,7 +57,7 @@ pub(super) async fn start_defra_turn(
         .get(&thread_id)
         .cloned()
         .unwrap_or_else(|| state.cwd.clone());
-    let metadata = codex_turn_metadata(&cwd);
+    let metadata = codex_turn_metadata(&cwd, &selected_skill_ids);
 
     let submitted = match create_agent_request_with_retry(
         state,
@@ -145,8 +151,12 @@ pub(super) async fn steer_defra_turn(
         .await;
     }
 
+    // Steering honors explicit skill selections the same way TurnStart does:
+    // forward the selected ids on the steering request so the runtime injects
+    // their bodies; a skill-only (or text+skill) steer is therefore not dropped.
     let user_text = user_text_from_input(&params.input);
-    if user_text.trim().is_empty() {
+    let selected_skill_ids = selected_skill_ids_from_input(&params.input);
+    if user_text.trim().is_empty() && selected_skill_ids.is_empty() {
         return send_error(
             &connection.outbound,
             request_id,
@@ -188,7 +198,7 @@ pub(super) async fn steer_defra_turn(
 
     let turn_id = active_turn.turn_id.clone();
     let queued_after_request_id = active_turn.current_request_id.clone();
-    let metadata = codex_steering_metadata(&cwd, &queued_after_request_id);
+    let metadata = codex_steering_metadata(&cwd, &queued_after_request_id, &selected_skill_ids);
     let submitted = match create_agent_request_with_retry(
         state,
         &user_text,

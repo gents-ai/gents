@@ -31,6 +31,7 @@ fn build_stub_behavior_factory(
 > {
     Box::new(move |principal| {
         Ok(AgentBehavior {
+            skills: Vec::new(),
             behavior_id: behavior_id.clone(),
             principal,
             backend_id: None,

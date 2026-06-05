@@ -45,6 +45,7 @@ rmcp = { version = "1.2.0", features = [
 schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
@@ -52,7 +53,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", tag = "v0.14.1" }
+acp.workspace = true
 defra-agent-lean-contract.workspace = true
 identity.workspace = true
 regex = "1"

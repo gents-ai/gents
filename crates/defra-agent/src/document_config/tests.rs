@@ -130,6 +130,8 @@ async fn agent_behavior_description_and_summary_round_trip() {
         compaction_strategy: None,
         compaction_threshold: None,
         enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: None,
     };
     upsert_agent_behavior(&node, &doc)

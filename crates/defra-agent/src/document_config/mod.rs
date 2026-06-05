@@ -5,6 +5,7 @@ mod inference_profile;
 mod principal;
 mod schedule;
 mod serde_helpers;
+mod skill;
 mod subagent_target;
 mod task;
 mod tool_selection;
@@ -39,6 +40,9 @@ pub(crate) use tool_selection::{
 pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelectionDocument};
 
 pub use subagent_target::{subagent_target_entry, SubagentTarget};
+
+#[allow(unused_imports)]
+pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
 
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{

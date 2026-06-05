@@ -105,18 +105,26 @@ pub(crate) struct LeanApplySelectedDoc {
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanApplyReconcileCase {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) prune_mode: bool,
     pub(crate) manifest: Vec<LeanApplyDesiredDoc>,
     pub(crate) pre_desired: Vec<LeanApplyDesiredDoc>,
     pub(crate) pre_live: Vec<LeanApplyLiveDoc>,
     pub(crate) expected_external_state_after_abort: Vec<LeanApplyLiveDoc>,
     pub(crate) expected_create: Vec<LeanApplyDocRef>,
     pub(crate) expected_update: Vec<LeanApplyDocRef>,
+    #[serde(default)]
+    pub(crate) expected_delete: Vec<LeanApplyDocRef>,
     pub(crate) expected_unchanged: Vec<LeanApplyDocRef>,
     pub(crate) expected_live_only: Vec<LeanApplyDocRef>,
     pub(crate) expected_steps: Vec<LeanApplyStep>,
     pub(crate) expected_write_order: Vec<LeanApplyCollectionWrite>,
+    #[serde(default)]
+    pub(crate) expected_prune_order: Vec<LeanApplyCollectionWrite>,
     pub(crate) expected_selected_create_docs: Vec<LeanApplySelectedDoc>,
     pub(crate) expected_selected_update_docs: Vec<LeanApplySelectedDoc>,
+    #[serde(default)]
+    pub(crate) expected_selected_delete_docs: Vec<LeanApplySelectedDoc>,
     pub(crate) expected_selected_writes: Vec<LeanApplySelectedDoc>,
     pub(crate) prefix_len: usize,
     pub(crate) expected_prefix_desired: Vec<LeanApplyDesiredDoc>,
@@ -129,7 +137,11 @@ pub(crate) struct LeanApplyReconcileCase {
     pub(crate) retry_converges: bool,
     pub(crate) idempotent_after: bool,
     pub(crate) write_order_prefix_safe: bool,
+    #[serde(default)]
+    pub(crate) prune_order_referrers_before_dependencies: bool,
     pub(crate) production_prefixes_referrers_closed: bool,
     pub(crate) prefix_referrers_closed: bool,
     pub(crate) desired_references_closed_after_prefix: bool,
+    #[serde(default)]
+    pub(crate) delete_safety_holds: bool,
 }

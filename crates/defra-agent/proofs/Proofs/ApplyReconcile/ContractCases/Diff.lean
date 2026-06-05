@@ -29,11 +29,18 @@ def selectedDocsByAction
 def selectedWriteDocs (steps : List ContractStep) : List ContractSelectedDoc :=
   (productionOrderedSteps steps).map stepToSelectedDoc
 
+def selectedDeleteDocs (steps : List ContractStep) : List ContractSelectedDoc :=
+  (productionPruneOrderedSteps steps).filterMap fun step =>
+    if step.action == "delete" then some (stepToSelectedDoc step) else none
+
 def createStep (doc : ContractDoc) : ContractStep :=
   { action := "create", target := doc.ref, content := doc.content, refs := doc.refs }
 
 def updateStep (doc : ContractDoc) : ContractStep :=
   { action := "update", target := doc.ref, content := doc.content, refs := doc.refs }
+
+def deleteStep (ref : DocRef) : ContractStep :=
+  { action := "delete", target := ref, content := "", refs := [] }
 
 def diffSteps (manifest preDesired : List ContractDoc) : List ContractStep :=
   sortedSteps <|
@@ -42,6 +49,32 @@ def diffSteps (manifest preDesired : List ContractDoc) : List ContractStep :=
       | none => some (createStep doc)
       | some live =>
           if desiredDocEq doc live then none else some (updateStep doc)
+
+def docReferencesTarget (doc : ContractDoc) (target : DocRef) : Bool :=
+  doc.refs.any fun ref => docRefBEq ref target
+
+def noDesiredDocReferencesTarget (desired : List ContractDoc) (target : DocRef) : Bool :=
+  !(desired.any fun doc => docReferencesTarget doc target)
+
+def diffDelete (scenario : ApplyReconcileScenario) : List DocRef :=
+  if scenario.pruneMode then
+    productionPruneOrder.flatMap fun collection =>
+      (sortedDocRefs <|
+        scenario.preDesired.filterMap fun doc =>
+          if collectionBEq doc.ref.collection collection &&
+              !(containsDoc scenario.manifest doc.ref) &&
+              noDesiredDocReferencesTarget scenario.preDesired doc.ref then
+            some doc.ref
+          else
+            none)
+  else
+    []
+
+def diffDeleteSteps (scenario : ApplyReconcileScenario) : List ContractStep :=
+  (diffDelete scenario).map deleteStep
+
+def scenarioSteps (scenario : ApplyReconcileScenario) : List ContractStep :=
+  diffSteps scenario.manifest scenario.preDesired ++ diffDeleteSteps scenario
 
 def diffCreate (scenario : ApplyReconcileScenario) : List DocRef :=
   sortedDocRefs <|
@@ -74,8 +107,11 @@ def diffLiveOnly (scenario : ApplyReconcileScenario) : List DocRef :=
       | none => some doc.ref
 
 def applyOne (desired : List ContractDoc) (step : ContractStep) : List ContractDoc :=
-  sortedDocs <| stepToDoc step ::
-    desired.filter (fun doc => !(docRefBEq doc.ref step.target))
+  if step.action == "delete" then
+    sortedDocs <| desired.filter (fun doc => !(docRefBEq doc.ref step.target))
+  else
+    sortedDocs <| stepToDoc step ::
+      desired.filter (fun doc => !(docRefBEq doc.ref step.target))
 
 def applyAll (desired : List ContractDoc) (steps : List ContractStep) : List ContractDoc :=
   steps.foldl applyOne desired
@@ -102,9 +138,12 @@ def prefixReferrersClosed
     (desired : List ContractDoc)
     (steps : List ContractStep) : Bool :=
   steps.all fun step =>
-    match lookupDoc? desired step.target with
-    | some doc => doc.refs.all fun ref => containsDoc desired ref
-    | none => false
+    if step.action == "delete" then
+      true
+    else
+      match lookupDoc? desired step.target with
+      | some doc => doc.refs.all fun ref => containsDoc desired ref
+      | none => false
 
 def adjacentCollectionsPrefixSafe : List Collection → Bool
   | [] => true
@@ -112,6 +151,16 @@ def adjacentCollectionsPrefixSafe : List Collection → Bool
   | left :: right :: rest =>
       (left.applyOrder <= right.applyOrder) &&
         adjacentCollectionsPrefixSafe (right :: rest)
+
+def adjacentCollectionsPruneSafe : List Collection → Bool
+  | [] => true
+  | [_] => true
+  | left :: right :: rest =>
+      (right.applyOrder <= left.applyOrder) &&
+        adjacentCollectionsPruneSafe (right :: rest)
+
+def deleteSafetyHolds (preDesired : List ContractDoc) (deleteRefs : List DocRef) : Bool :=
+  deleteRefs.all fun target => noDesiredDocReferencesTarget preDesired target
 
 def allProductionPrefixesReferrersClosed
     (preDesired : List ContractDoc)
@@ -141,29 +190,37 @@ theorem abort_prefix_preserves_external_state
   applyPrefix_preserves_live p
 
 def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
-  let steps := diffSteps scenario.manifest scenario.preDesired
-  let productionSteps := productionOrderedSteps steps
+  let writeSteps := diffSteps scenario.manifest scenario.preDesired
+  let deleteSteps := diffDeleteSteps scenario
+  let steps := writeSteps ++ deleteSteps
+  let productionSteps := productionOrderedSteps writeSteps
   let prefixSteps := steps.take scenario.prefixLen
   let prefixDesired := applyAll scenario.preDesired prefixSteps
   let after := applyAll scenario.preDesired steps
-  let retrySteps := diffSteps scenario.manifest prefixDesired
+  let retryScenario := { scenario with preDesired := prefixDesired }
+  let retrySteps := scenarioSteps retryScenario
   let retry := applyAll prefixDesired retrySteps
-  let rediff := diffSteps scenario.manifest after
+  let rediffScenario := { scenario with preDesired := after }
+  let rediff := scenarioSteps rediffScenario
   let reapplied := applyAll after rediff
   { name := scenario.name
+  , pruneMode := scenario.pruneMode
   , manifest := scenario.manifest
   , preDesired := scenario.preDesired
   , preLive := scenario.preLive
   , expectedExternalStateAfterAbort := expectedExternalStateAfterAbort scenario
   , expectedCreate := diffCreate scenario
   , expectedUpdate := diffUpdate scenario
+  , expectedDelete := diffDelete scenario
   , expectedUnchanged := diffUnchanged scenario
   , expectedLiveOnly := diffLiveOnly scenario
   , expectedSteps := steps
   , expectedWriteOrder := productionWriteOrder.map collectionWriteProjection
-  , expectedSelectedCreateDocs := selectedDocsByAction "create" steps
-  , expectedSelectedUpdateDocs := selectedDocsByAction "update" steps
-  , expectedSelectedWrites := selectedWriteDocs steps
+  , expectedPruneOrder := productionPruneOrder.map collectionWriteProjection
+  , expectedSelectedCreateDocs := selectedDocsByAction "create" writeSteps
+  , expectedSelectedUpdateDocs := selectedDocsByAction "update" writeSteps
+  , expectedSelectedDeleteDocs := selectedDeleteDocs deleteSteps
+  , expectedSelectedWrites := selectedWriteDocs writeSteps
   , prefixLen := scenario.prefixLen
   , expectedPrefixDesired := sortedDocs prefixDesired
   , expectedAfterDesired := sortedDocs after
@@ -177,11 +234,13 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , retryConverges := desiredDocsEq retry after
   , idempotentAfter := desiredDocsEq reapplied after
   , writeOrderPrefixSafe := adjacentCollectionsPrefixSafe productionWriteOrder
+  , pruneOrderReferrersBeforeDependencies := adjacentCollectionsPruneSafe productionPruneOrder
   , productionPrefixesReferrersClosed :=
       allProductionPrefixesReferrersClosed scenario.preDesired productionSteps
   , prefixReferrersClosed :=
       prefixReferrersClosed prefixDesired prefixSteps
   , desiredReferencesClosedAfterPrefix := desiredReferencesClosed prefixDesired
+  , deleteSafetyHolds := deleteSafetyHolds scenario.preDesired (diffDelete scenario)
   }
 
 /-- Current finite witnesses expose the same external state after abort that

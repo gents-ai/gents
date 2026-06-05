@@ -13,6 +13,7 @@ use std::fmt;
 pub enum Collection {
     AgentPrincipal,
     AgentBehavior,
+    Skill,
     ToolSelection,
     InferenceBackend,
     InferenceProfile,
@@ -25,9 +26,10 @@ pub enum Collection {
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub const ALL: [Collection; 9] = [
+    pub const ALL: [Collection; 10] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
+        Collection::Skill,
         Collection::ToolSelection,
         Collection::InferenceBackend,
         Collection::InferenceProfile,
@@ -50,6 +52,7 @@ impl Collection {
         match self {
             Collection::AgentPrincipal => None,
             Collection::AgentBehavior => Some("agent-behaviors"),
+            Collection::Skill => Some("skills"),
             Collection::ToolSelection => Some("tool-selections"),
             Collection::InferenceBackend => Some("inference-backends"),
             Collection::InferenceProfile => Some("inference-profiles"),
@@ -68,6 +71,7 @@ impl Collection {
         match self {
             Collection::AgentPrincipal => "AgentPrincipal",
             Collection::AgentBehavior => "AgentBehavior",
+            Collection::Skill => "Skill",
             Collection::ToolSelection => "ToolSelection",
             Collection::InferenceBackend => "InferenceBackend",
             Collection::InferenceProfile => "InferenceProfile",
@@ -83,6 +87,7 @@ impl Collection {
         match self {
             Collection::AgentPrincipal => "agent_did",
             Collection::AgentBehavior => "behavior_id",
+            Collection::Skill => "skill_id",
             Collection::ToolSelection => "selection_id",
             Collection::InferenceBackend => "backend_id",
             Collection::InferenceProfile => "profile_id",
@@ -101,7 +106,8 @@ impl Collection {
             Collection::InferenceBackend
             | Collection::ToolSelection
             | Collection::InferenceProfile
-            | Collection::ToolServiceRegistry => 0,
+            | Collection::ToolServiceRegistry
+            | Collection::Skill => 0,
             Collection::AgentBehavior => 1,
             Collection::Task => 2,
             Collection::Schedule => 2,
@@ -120,6 +126,7 @@ impl fmt::Display for Collection {
         let name = match self {
             Collection::AgentPrincipal => "agent_principal",
             Collection::AgentBehavior => "agent_behaviors",
+            Collection::Skill => "skills",
             Collection::ToolSelection => "tool_selections",
             Collection::InferenceBackend => "inference_backends",
             Collection::InferenceProfile => "inference_profiles",
@@ -180,6 +187,7 @@ mod tests {
         let canonical: &[(Collection, u8, &str)] = &[
             (Collection::AgentPrincipal, 3, "AgentPrincipal"),
             (Collection::AgentBehavior, 1, "AgentBehavior"),
+            (Collection::Skill, 0, "Skill"),
             (Collection::ToolSelection, 0, "ToolSelection"),
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),

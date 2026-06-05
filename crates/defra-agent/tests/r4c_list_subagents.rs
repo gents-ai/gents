@@ -76,6 +76,8 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
@@ -97,6 +99,8 @@ async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSo
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),

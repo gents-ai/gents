@@ -160,6 +160,8 @@ pub(crate) struct ConfigExportBundle {
     #[serde(default)]
     pub(crate) agent_behaviors: Vec<Value>,
     #[serde(default)]
+    pub(crate) skills: Vec<Value>,
+    #[serde(default)]
     pub(crate) tool_selections: Vec<Value>,
     #[serde(default)]
     pub(crate) inference_backends: Vec<Value>,
@@ -180,6 +182,7 @@ impl ConfigExportBundle {
         match collection {
             Collection::AgentPrincipal => None,
             Collection::AgentBehavior => Some(&self.agent_behaviors),
+            Collection::Skill => Some(&self.skills),
             Collection::ToolSelection => Some(&self.tool_selections),
             Collection::InferenceBackend => Some(&self.inference_backends),
             Collection::InferenceProfile => Some(&self.inference_profiles),
@@ -195,6 +198,7 @@ impl ConfigExportBundle {
 pub(crate) struct ConfigApplyCounts {
     pub(crate) agent_principal: usize,
     pub(crate) agent_behaviors: usize,
+    pub(crate) skills: usize,
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
@@ -209,6 +213,7 @@ impl ConfigApplyCounts {
         match collection {
             Collection::AgentPrincipal => self.agent_principal = count,
             Collection::AgentBehavior => self.agent_behaviors = count,
+            Collection::Skill => self.skills = count,
             Collection::ToolSelection => self.tool_selections = count,
             Collection::InferenceBackend => self.inference_backends = count,
             Collection::InferenceProfile => self.inference_profiles = count,
@@ -219,11 +224,27 @@ impl ConfigApplyCounts {
         }
     }
 
+    pub(crate) fn add(&mut self, collection: Collection, count: usize) {
+        match collection {
+            Collection::AgentPrincipal => self.agent_principal += count,
+            Collection::AgentBehavior => self.agent_behaviors += count,
+            Collection::Skill => self.skills += count,
+            Collection::ToolSelection => self.tool_selections += count,
+            Collection::InferenceBackend => self.inference_backends += count,
+            Collection::InferenceProfile => self.inference_profiles += count,
+            Collection::ToolServiceRegistry => self.tool_service_registries += count,
+            Collection::Task => self.tasks += count,
+            Collection::Schedule => self.schedules += count,
+            Collection::EventTrigger => self.event_triggers += count,
+        }
+    }
+
     pub(crate) fn changed(&self) -> bool {
         Collection::ALL.iter().copied().any(|collection| {
             let count = match collection {
                 Collection::AgentPrincipal => self.agent_principal,
                 Collection::AgentBehavior => self.agent_behaviors,
+                Collection::Skill => self.skills,
                 Collection::ToolSelection => self.tool_selections,
                 Collection::InferenceBackend => self.inference_backends,
                 Collection::InferenceProfile => self.inference_profiles,

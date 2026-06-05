@@ -192,6 +192,16 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<i64>,
+    #[serde(default)]
+    pub max_tokens: Option<i64>,
+    #[serde(default)]
+    pub metadata: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
@@ -394,7 +404,7 @@ pub struct CompactionEntryRow {
 
 /// Serde mirror of the `Task` replicated document.
 ///
-/// Mirrors `crates/defra-agent-protocol/schemas/agent/task.graphql`.
+/// Mirrors `crates/defra-agent-schemas/schemas/agent/task.graphql`.
 /// Tasks are apply-owned descriptions of a prompt template bound to a
 /// behavior. They are globally addressed by `task_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -420,7 +430,7 @@ pub struct TaskRow {
 
 /// Serde mirror of the `Schedule` replicated document.
 ///
-/// Mirrors `crates/defra-agent-protocol/schemas/agent/schedule.graphql`.
+/// Mirrors `crates/defra-agent-schemas/schemas/agent/schedule.graphql`.
 /// Schedules bind a `Task` to a recurring trigger. The runtime owns the
 /// fire bookkeeping fields (`next_run_at`, `last_attempt_at`, `last_status`,
 /// `last_error`, `fire_count`); apply owns everything else.
@@ -431,6 +441,12 @@ pub struct ScheduleRow {
     pub task_id: Option<String>,
     #[serde(default)]
     pub interval_secs: Option<i64>,
+    #[serde(default)]
+    pub cron: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub missed_run_policy: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -453,7 +469,7 @@ pub struct ScheduleRow {
 
 /// Serde mirror of the `EventTrigger` replicated document.
 ///
-/// Mirrors `crates/defra-agent-protocol/schemas/agent/event_trigger.graphql`.
+/// Mirrors `crates/defra-agent-schemas/schemas/agent/event_trigger.graphql`.
 /// EventTriggers bind a `Task` to a document-created event on a source
 /// collection. The apply path owns the description of the trigger
 /// (`trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`,
@@ -678,6 +694,11 @@ mod tests {
             "retry_root_request": "req-1",
             "superseded_by_request": "",
             "content": "hello",
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_tokens": 512,
+            "metadata": "{\"run_id\":\"run-1\"}",
             "status": "pending",
             "lifecycle_state": "pending",
             "backend_id": "",
@@ -690,6 +711,11 @@ mod tests {
         let row: AgentRequestRow = serde_json::from_str(json).expect("parse");
         assert_eq!(row.request_id, "req-1");
         assert_eq!(row.retry_count, Some(0));
+        assert_eq!(row.temperature, Some(0.0));
+        assert_eq!(row.top_p, Some(0.95));
+        assert_eq!(row.top_k, Some(40));
+        assert_eq!(row.max_tokens, Some(512));
+        assert_eq!(row.metadata.as_deref(), Some(r#"{"run_id":"run-1"}"#));
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
         assert_eq!(row, round);

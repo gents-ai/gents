@@ -12,7 +12,9 @@ use crate::document_config::{
 };
 use crate::runtime_snapshot::{
     ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
+    ScheduleCadence,
 };
+use crate::schedule_cron::{validate_cron_schedule, CronMissedRunPolicy};
 use crate::tool_surface::ToolSelection;
 
 use super::{validate_subagent_targets_resolve, DocumentRuntimeView};
@@ -69,6 +71,14 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 + Send,
         >,
     > = Vec::new();
+
+    // Convert the principal's Skill documents once; each behavior then filters
+    // this set to its D5 effective candidates (see `crate::skills`).
+    let all_skills: Vec<crate::skills::Skill> = view
+        .skills
+        .values()
+        .map(|record| skill_from_document(&record.value))
+        .collect();
 
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
@@ -160,6 +170,15 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 let behavior_id = behavior.behavior_id.clone();
                 let behavior_value = behavior.clone();
                 let tool_ceiling = context.tool_ceiling.clone();
+                let behavior_skills = crate::skills::effective_skills(
+                    &all_skills,
+                    &behavior.agent_did,
+                    &behavior.skill_refs,
+                    &behavior.skill_excludes,
+                )
+                .into_iter()
+                .cloned()
+                .collect::<Vec<crate::skills::Skill>>();
                 let factory: Box<
                     dyn FnOnce(
                             Arc<AgentPrincipal>,
@@ -175,6 +194,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         tool_selection,
                         subagent_tools,
                         &tool_ceiling,
+                        behavior_skills,
                     )
                     .map_err(|error| BehaviorBuildError {
                         behavior_id: behavior_id.clone(),
@@ -437,6 +457,14 @@ fn resolve_schedules(
             continue;
         }
 
+        let cadence = match resolve_schedule_cadence(schedule) {
+            Ok(cadence) => cadence,
+            Err(_) => {
+                unavailable_schedules.insert(schedule_id);
+                continue;
+            }
+        };
+
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
             name: task.name.clone(),
@@ -448,7 +476,7 @@ fn resolve_schedules(
             schedule_id: schedule.schedule_id.clone(),
             task_id: schedule.task_id.clone().unwrap_or_default(),
             task: resolved_task,
-            interval_secs: schedule.interval_secs.unwrap_or(0),
+            cadence,
             enabled: schedule.enabled,
             concurrency,
         };
@@ -456,6 +484,46 @@ fn resolve_schedules(
     }
 
     (active_schedules, unavailable_schedules)
+}
+
+fn resolve_schedule_cadence(
+    schedule: &crate::document_config::Schedule,
+) -> Result<ScheduleCadence> {
+    let cron = schedule
+        .cron
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let interval = schedule.interval_secs;
+
+    match (interval, cron) {
+        (Some(interval_secs), None) if interval_secs >= 1 => {
+            Ok(ScheduleCadence::Interval { interval_secs })
+        }
+        (Some(_), Some(_)) => Err(anyhow!(
+            "schedule cannot define both interval_secs and cron"
+        )),
+        (Some(interval_secs), None) => Err(anyhow!(
+            "schedule interval_secs must be >= 1; got {interval_secs}"
+        )),
+        (None, Some(expression)) => {
+            let timezone = schedule
+                .timezone
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("cron schedule requires timezone"))?;
+            let missed_run_policy =
+                CronMissedRunPolicy::parse(schedule.missed_run_policy.as_deref())?;
+            validate_cron_schedule(expression, timezone, schedule.missed_run_policy.as_deref())?;
+            Ok(ScheduleCadence::Cron {
+                expression: expression.to_string(),
+                timezone: timezone.to_string(),
+                missed_run_policy,
+            })
+        }
+        (None, None) => Err(anyhow!("schedule must define interval_secs or cron")),
+    }
 }
 
 /// Classify every `EventTrigger` in `view` into either `active_event_triggers`
@@ -595,4 +663,26 @@ pub(super) fn behavior_references_ready(
 pub(super) fn non_empty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Convert a `Skill` document into the runtime resolution type. An unknown or
+/// missing `scope` defaults to `Behavior` (the most restrictive — never
+/// auto-inherited); apply-time validation rejects invalid scopes before they
+/// reach the runtime, so this is defensive.
+fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
+    crate::skills::Skill {
+        skill_id: doc.skill_id.clone(),
+        agent_did: doc.agent_did.clone(),
+        scope: doc
+            .scope
+            .as_deref()
+            .and_then(crate::skills::SkillScope::parse)
+            .unwrap_or(crate::skills::SkillScope::Behavior),
+        name: doc.name.clone().unwrap_or_default(),
+        description: doc.description.clone().unwrap_or_default(),
+        instructions: doc.instructions.clone().unwrap_or_default(),
+        tool_refs: doc.tool_refs.clone(),
+        display_name: doc.display_name.clone(),
+        enabled: doc.enabled,
+    }
 }

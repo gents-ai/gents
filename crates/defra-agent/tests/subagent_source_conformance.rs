@@ -131,6 +131,8 @@ async fn ensure_parent_subagent_authorization(
     let mut behavior = match load_agent_behavior(node, behavior_id).await.unwrap() {
         Some(behavior) => behavior,
         None => AgentBehaviorDocument {
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),

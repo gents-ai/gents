@@ -283,7 +283,14 @@ async fn retry_request_with_request_id(
         max_retries,
         backend_id,
         execution_origin,
-        "",
+        &submit_request_extra_fields(&SubmitRequestOptions {
+            temperature: parent.temperature,
+            top_p: parent.top_p,
+            top_k: parent.top_k,
+            max_tokens: parent.max_tokens,
+            metadata: parent.metadata.clone(),
+            ..SubmitRequestOptions::default()
+        }),
     );
     let conversation_field = build_upsert_conversation_field(
         "conversation",
@@ -779,6 +786,11 @@ mod tests {
         behavior_id: String,
         session_id: String,
         content: String,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        top_k: Option<i64>,
+        max_tokens: Option<i64>,
+        metadata: Option<String>,
         status: String,
         lifecycle_state: String,
         backend_id: String,
@@ -1090,6 +1102,11 @@ mod tests {
             retry_root_request: Some(request_id.to_string()),
             superseded_by_request: Some(String::new()),
             content: Some(format!("missing request for {}", case.name)),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
             status: Some(retry_parent_status_for_case(case).to_string()),
             lifecycle_state: Some(case.pre_failed_state.clone()),
             backend_id: Some(case.pre_backend.clone()),
@@ -1389,6 +1406,11 @@ mod tests {
                         behavior_id
                         session_id
                         content
+                        temperature
+                        top_p
+                        top_k
+                        max_tokens
+                        metadata
                         status
                         lifecycle_state
                         backend_id
@@ -1619,6 +1641,67 @@ mod tests {
             1,
             "failed duplicate retry must not add another row with the colliding request_id"
         );
+
+        core.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?;
+
+        let created = core
+            .create_conversation("did:defra:amy", Some("amy-code"))
+            .await?;
+        let metadata = r#"{"eval":"amygdala","case":"retry"}"#.to_string();
+        let original = core
+            .submit_request_with_options(
+                &created.session_id,
+                "did:defra:amy",
+                "retry should preserve overrides",
+                None,
+                SubmitRequestOptions {
+                    temperature: Some(0.35),
+                    top_p: Some(0.92),
+                    top_k: Some(32),
+                    max_tokens: Some(2048),
+                    metadata: Some(metadata.clone()),
+                    ..SubmitRequestOptions::default()
+                },
+            )
+            .await?;
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+        force_retry_parent_eligible_for_test(
+            core.node(),
+            &original.request_id,
+            1,
+            i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+            &deadline.to_rfc3339(),
+        )
+        .await?;
+        core.refresh_store().await?;
+
+        let parent = request_from_store_for_test(&core, &original.request_id)?;
+        assert_eq!(parent.temperature, Some(0.35));
+        assert_eq!(parent.top_p, Some(0.92));
+        assert_eq!(parent.top_k, Some(32));
+        assert_eq!(parent.max_tokens, Some(2048));
+        assert_eq!(parent.metadata.as_deref(), Some(metadata.as_str()));
+
+        let submitted = core.retry_request(&parent).await?;
+        let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
+        assert_eq!(retried.retry_parent_request, original.request_id);
+        assert_eq!(retried.retry_root_request, original.request_id);
+        assert_eq!(retried.temperature, Some(0.35));
+        assert_eq!(retried.top_p, Some(0.92));
+        assert_eq!(retried.top_k, Some(32));
+        assert_eq!(retried.max_tokens, Some(2048));
+        assert_eq!(retried.metadata.as_deref(), Some(metadata.as_str()));
 
         core.shutdown().await?;
         Ok(())

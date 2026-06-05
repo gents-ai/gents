@@ -8,27 +8,51 @@ Apply-step vocabulary, diff construction, and ordering lemmas.
 
 namespace ApplyReconcile
 
-/-- A single write landing in the DB from the apply agent.
-    By construction carries only `DesiredFields` — no `LiveFields`
+/-- A single mutation landing in the DB from the apply agent.
+    Create/update carry only `DesiredFields` -- no `LiveFields`
     constructor exists, which is the Lean-side restatement of the
-    Rust `DesiredFields` bound on the apply boundary. -/
+    Rust `DesiredFields` bound on the apply boundary. Delete targets a
+    document by identity only; it has no desired payload. -/
 inductive ApplyStep where
   | create (d : DocRef) (f : DesiredFields)
   | update (d : DocRef) (f : DesiredFields)
+  | delete (d : DocRef)
 
 namespace ApplyStep
 
 def target : ApplyStep → DocRef
   | .create d _ => d
   | .update d _ => d
+  | .delete d => d
 
+/-- Optional desired payload. Delete intentionally returns `none`; this keeps
+    delete outside the payload-bearing write path. -/
+def payload? : ApplyStep → Option DesiredFields
+  | .create _ f => some f
+  | .update _ f => some f
+  | .delete _ => none
+
+/-- Payload projection for write-step proofs over non-prune diffs. For delete
+    this returns an inert empty payload; semantic apply/delete behavior must use
+    `payload?`, not this helper. -/
 def payload : ApplyStep → DesiredFields
   | .create _ f => f
   | .update _ f => f
+  | .delete _ => { content := "", refs := ∅ }
+
+def isDelete : ApplyStep → Bool
+  | .delete _ => true
+  | _ => false
+
+def isWrite (s : ApplyStep) : Bool := s.payload?.isSome
 
 /-- Step-level comparator: orders by target's DocRef ordering.
     `Bool`-valued so it can drive `List.mergeSort`. -/
 def le (a b : ApplyStep) : Bool := DocRef.le a.target b.target
+
+/-- Delete comparator: reverse target order, so referrers (higher apply ranks)
+    are visited before dependencies (lower apply ranks). -/
+def deleteLe (a b : ApplyStep) : Bool := DocRef.le b.target a.target
 
 end ApplyStep
 
@@ -54,6 +78,89 @@ noncomputable def diff (M : Manifest) (L : LiveState) : List ApplyStep :=
     | some f, none     => some (ApplyStep.create d f)
     | some f, some g   => if f = g then none else some (ApplyStep.update d f)
     | none,   _        => none)).mergeSort ApplyStep.le
+
+/-- Finite support witness for live desired rows. `LiveState.desired` is a
+    partial function, so prune mode takes the finite support supplied by the
+    concrete diff implementation. -/
+abbrev LiveSupport := Finset DocRef
+
+/-- The caller-supplied live support is complete when it includes every present
+    desired row. This is the bridge from the executable finite check used by
+    prune generation to the globally-quantified `deleteSafe` property. -/
+def LiveSupportComplete (L : LiveState) (support : LiveSupport) : Prop :=
+  ∀ d : DocRef, L.contains d = true → d ∈ support
+
+/-- A live desired row `referrer` declares a structural reference to `target`. -/
+def liveReferences (L : LiveState) (referrer target : DocRef) : Prop :=
+  ∃ f, L.desired referrer = some f ∧ target ∈ referencesOf f
+
+/-- Boolean counterpart used by executable prune witnesses. -/
+def liveReferencesBool (L : LiveState) (referrer target : DocRef) : Bool :=
+  match L.desired referrer with
+  | some f => target ∈ referencesOf f
+  | none => false
+
+/-- Delete is permitted at a state only when no live desired row references the
+    target. `AgentRequest.caused_by_trigger_id`-style lineage strings are not
+    modeled here: only structural desired-state references in `DesiredFields.refs`
+    participate in this relation. -/
+def deleteSafe (L : LiveState) (target : DocRef) : Prop :=
+  ∀ referrer : DocRef, ¬ liveReferences L referrer target
+
+/-- Finite executable check for the concrete live support supplied to prune
+    diff generation. -/
+noncomputable def noLiveReferencesIn (L : LiveState) (support : LiveSupport) (target : DocRef) : Bool :=
+  support.toList.all (fun referrer => !(liveReferencesBool L referrer target))
+
+lemma liveReferencesBool_eq_true
+    {L : LiveState} {referrer target : DocRef} :
+    liveReferencesBool L referrer target = true ↔ liveReferences L referrer target := by
+  unfold liveReferencesBool liveReferences
+  cases h : L.desired referrer with
+  | none =>
+      simp [h]
+  | some f =>
+      simp [h]
+
+/-- A successful finite prune-support check implies the global delete-safety
+    predicate when the support covers every present desired row. -/
+lemma noLiveReferencesIn_deleteSafe
+    {L : LiveState} {support : LiveSupport} {target : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hcheck : noLiveReferencesIn L support target = true) :
+    deleteSafe L target := by
+  intro referrer href
+  unfold noLiveReferencesIn at hcheck
+  rcases href with ⟨f, hdesired, hrefTarget⟩
+  have hcontains : L.contains referrer = true := by
+    simp [LiveState.contains, hdesired]
+  have hsupport : referrer ∈ support := hcomplete referrer hcontains
+  have hlist : referrer ∈ support.toList := by
+    exact (Finset.mem_toList).2 hsupport
+  have hnot := (List.all_eq_true.mp hcheck) referrer hlist
+  have hfalse : liveReferencesBool L referrer target = false := by
+    simpa [Bool.not_eq_true] using hnot
+  have htrue : liveReferencesBool L referrer target = true :=
+    liveReferencesBool_eq_true.mpr ⟨f, hdesired, hrefTarget⟩
+  rw [htrue] at hfalse
+  cases hfalse
+
+/-- Prune-mode delete steps for live-only desired rows. The default `diff`
+    above remains byte-for-byte create/update only; callers opt into these
+    deletes explicitly and must supply the finite live desired support. -/
+noncomputable def pruneDeletes
+    (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
+  (support.toList.filterMap (fun d =>
+    if M.contains d then none
+    else if L.contains d then
+      if noLiveReferencesIn L support d then some (ApplyStep.delete d) else none
+    else none)).mergeSort ApplyStep.deleteLe
+
+/-- Prune-mode apply diff: write desired create/update steps first, then the
+    opt-in delete sequence over live-only rows. -/
+noncomputable def diffPrune
+    (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
+  diff M L ++ pruneDeletes M L support
 
 /-- Extract rank and id-level obligations from a true `DocRef.le`. -/
 private lemma DocRef.le_elim {a b : DocRef} (h : DocRef.le a b = true) :
@@ -126,6 +233,111 @@ lemma diff_pairwise_le (M : Manifest) (L : LiveState) :
       | some f, some g   => if f = g then none else some (ApplyStep.update d f)
       | none,   _        => none)))
   exact hsort
+
+/-- The default (non-prune) diff emits only create/update steps. -/
+lemma diff_step_payload_eq_some
+    {M : Manifest} {L : LiveState} {s : ApplyStep}
+    (hmem : s ∈ diff M L) :
+    s.payload? = some s.payload := by
+  unfold diff at hmem
+  rw [List.mem_mergeSort, List.mem_filterMap] at hmem
+  obtain ⟨d, _hd, hprod⟩ := hmem
+  revert hprod
+  cases hMd : M.docs d with
+  | none =>
+      cases hLd : L.desired d with
+      | none => intro h; simp at h
+      | some _ => intro h; simp at h
+  | some f =>
+      cases hLd : L.desired d with
+      | none =>
+          intro h
+          simp at h
+          rw [← h]
+          rfl
+      | some g =>
+          intro h
+          by_cases hfg : f = g
+          · subst hfg
+            simp at h
+          · simp [hfg] at h
+            rw [← h]
+            rfl
+
+/-- The default (non-prune) diff emits only create/update steps. -/
+lemma diff_step_payload_isSome
+    {M : Manifest} {L : LiveState} {s : ApplyStep}
+    (hmem : s ∈ diff M L) :
+    s.payload?.isSome = true := by
+  rw [diff_step_payload_eq_some hmem]
+  rfl
+
+/-- A reverse delete order visits a referrer before any lower-rank dependency it
+    references. This is the Lean shape of the production prune-order safety
+    argument. -/
+theorem delete_order_referrers_before_dependencies
+    {referrer dependency : DocRef}
+    (hrank : dependency.collection.applyOrder < referrer.collection.applyOrder) :
+    ApplyStep.deleteLe (ApplyStep.delete referrer) (ApplyStep.delete dependency) = true := by
+  unfold ApplyStep.deleteLe ApplyStep.target
+  exact DocRef.le_intro (Or.inl hrank)
+
+/-- Every emitted prune-delete is globally delete-safe, provided the finite
+    support supplied to prune generation covers every live desired row. -/
+theorem pruneDeletes_emits_only_safe_deletes
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {s : ApplyStep}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : s ∈ pruneDeletes M L support) :
+    ∃ d, s = ApplyStep.delete d ∧ deleteSafe L d := by
+  unfold pruneDeletes at hmem
+  rw [List.mem_mergeSort, List.mem_filterMap] at hmem
+  rcases hmem with ⟨d, _hd, hprod⟩
+  by_cases hM : M.contains d = true
+  · simp [hM] at hprod
+  · have hMfalse : M.contains d = false := by
+      cases h : M.contains d <;> simp [h] at hM ⊢
+    by_cases hL : L.contains d = true
+    · by_cases hcheck : noLiveReferencesIn L support d = true
+      · simp [hMfalse, hL, hcheck] at hprod
+        subst hprod
+        exact ⟨d, rfl, noLiveReferencesIn_deleteSafe hcomplete hcheck⟩
+      · have hcheckFalse : noLiveReferencesIn L support d = false := by
+          cases h : noLiveReferencesIn L support d <;> simp [h] at hcheck ⊢
+        simp [hMfalse, hL, hcheckFalse] at hprod
+    · have hLfalse : L.contains d = false := by
+        cases h : L.contains d <;> simp [h] at hL ⊢
+      simp [hMfalse, hLfalse] at hprod
+
+theorem pruneDeletes_deleteSafe
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ pruneDeletes M L support) :
+    deleteSafe L d := by
+  rcases pruneDeletes_emits_only_safe_deletes hcomplete hmem with ⟨d', hstep, hsafe⟩
+  cases hstep
+  exact hsafe
+
+theorem diffPrune_deleteSafe
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ diffPrune M L support) :
+    deleteSafe L d := by
+  unfold diffPrune at hmem
+  rw [List.mem_append] at hmem
+  rcases hmem with hdiff | hprune
+  · have hpayload := diff_step_payload_isSome hdiff
+    simp [ApplyStep.payload?] at hpayload
+  · exact pruneDeletes_deleteSafe hcomplete hprune
+
+/-- T-Delete-safety: any delete emitted by prune-mode diff has no structural
+    live referrer at the state where the diff is computed, assuming the finite
+    live support supplied to prune generation is complete. -/
+theorem t_delete_safety
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ diffPrune M L support) :
+    ∀ referrer : DocRef, ¬ liveReferences L referrer d :=
+  diffPrune_deleteSafe hcomplete hmem
 
 /-- `diff M L` is sorted by `applyOrder`: any step at position `i` has
     `applyOrder` no greater than any step at position `j ≥ i`. Consumed

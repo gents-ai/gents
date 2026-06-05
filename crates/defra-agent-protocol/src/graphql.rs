@@ -31,6 +31,11 @@ pub struct CreateAgentRequestInput<'a> {
     pub content: &'a str,
     pub session_id: &'a str,
     pub behavior_id: Option<&'a str>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub max_tokens: Option<i64>,
+    pub metadata: Option<&'a str>,
     pub created_at: &'a str,
     pub caused_by_trigger_id: Option<&'a str>,
     pub caused_by_trigger_kind: Option<&'a str>,
@@ -154,6 +159,22 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
             )
         })
         .unwrap_or_default();
+    let request_override_fields = vec![
+        optional_f64_field("temperature", input.temperature),
+        optional_f64_field("top_p", input.top_p),
+        optional_i64_field("top_k", input.top_k),
+        optional_i64_field("max_tokens", input.max_tokens),
+        optional_string_field("metadata", input.metadata),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|field| {
+        format!(
+            r#"
+                {field},"#
+        )
+    })
+    .collect::<String>();
     format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -165,6 +186,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "{content}",
+                {request_override_fields}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -180,6 +202,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
         behavior_field = behavior_field,
         session_id = escape_graphql_string(input.session_id),
         content = escape_graphql_string(input.content),
+        request_override_fields = request_override_fields,
         created_at = escape_graphql_string(input.created_at),
         caused_by_trigger_id_field = caused_by_trigger_id_field,
         caused_by_trigger_kind_field = caused_by_trigger_kind_field,
@@ -620,6 +643,11 @@ pub fn turn_state_query(request_id: &str) -> String {
                 request_id
                 retry_parent_request
                 superseded_by_request
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
                 lifecycle_state
                 interrupt_requested_at
                 valid_until
@@ -791,8 +819,14 @@ fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> 
         return None;
     }
     let rendered = serde_json::Value::Array(errors).to_string();
-    (rendered.contains("transaction conflict") || rendered.contains("Please retry"))
-        .then_some(rendered)
+    retryable_graphql_error_text(&rendered).then_some(rendered)
+}
+
+fn retryable_graphql_error_text(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("transaction conflict")
+        || message.contains("please retry")
+        || message.contains("database is locked")
 }
 
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
@@ -868,6 +902,11 @@ mod tests {
     #[test]
     fn shared_graphql_queries_include_recent_row_fields() {
         let turn_query = turn_state_query("req-1");
+        assert!(turn_query.contains("temperature"));
+        assert!(turn_query.contains("top_p"));
+        assert!(turn_query.contains("top_k"));
+        assert!(turn_query.contains("max_tokens"));
+        assert!(turn_query.contains("metadata"));
         assert!(turn_query.contains("interrupt_requested_at"));
         assert!(turn_query.contains("valid_until"));
         assert!(turn_query.contains("interrupted_at"));
@@ -898,6 +937,31 @@ mod tests {
     }
 
     #[test]
+    fn create_agent_request_mutation_includes_sampling_and_metadata() {
+        let mutation = create_agent_request_mutation(&CreateAgentRequestInput {
+            request_id: "req-1",
+            agent_did: "did:defra:amy",
+            content: "hello",
+            session_id: "session-1",
+            behavior_id: Some("amy-default"),
+            temperature: Some(0.0),
+            top_p: Some(0.95),
+            top_k: Some(40),
+            max_tokens: Some(512),
+            metadata: Some(r#"{"run_id":"run-1"}"#),
+            created_at: "2026-04-13T12:00:00Z",
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+        });
+
+        assert!(mutation.contains("temperature: 0"));
+        assert!(mutation.contains("top_p: 0.95"));
+        assert!(mutation.contains("top_k: 40"));
+        assert!(mutation.contains("max_tokens: 512"));
+        assert!(mutation.contains(r#"metadata: "{\"run_id\":\"run-1\"}""#));
+    }
+
+    #[test]
     fn graphql_input_literal_renders_nested_values() {
         let value = serde_json::json!({
             "enabled": true,
@@ -923,9 +987,19 @@ mod tx_tests {
         last_tx_header: Arc<Mutex<Option<String>>>,
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct RetryRecorder {
         attempts: Arc<Mutex<usize>>,
+        first_error_message: Arc<String>,
+    }
+
+    impl RetryRecorder {
+        fn new(first_error_message: impl Into<String>) -> Self {
+            Self {
+                attempts: Arc::new(Mutex::new(0)),
+                first_error_message: Arc::new(first_error_message.into()),
+            }
+        }
     }
 
     async fn capture_handler(
@@ -949,7 +1023,7 @@ mod tx_tests {
         if *attempts == 1 {
             return Json(serde_json::json!({
                 "errors": [{
-                    "message": "commit error: datastore error: storage error: transaction conflict. Please retry"
+                    "message": state.first_error_message.as_str()
                 }]
             }));
         }
@@ -985,9 +1059,8 @@ mod tx_tests {
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_transaction_conflict_errors() {
-        let state = RetryRecorder::default();
+    async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {
+        let state = RetryRecorder::new(first_error_message);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let app = Router::new()
@@ -1014,5 +1087,28 @@ mod tx_tests {
             Some(true)
         );
         assert_eq!(*state.attempts.lock().unwrap(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_transaction_conflict_errors() {
+        assert_execute_graphql_async_retries_error(
+            "commit error: datastore error: storage error: transaction conflict. Please retry",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_database_locked_errors() {
+        assert_execute_graphql_async_retries_error("database is locked").await;
+    }
+
+    #[test]
+    fn retryable_graphql_error_text_matches_store_conflict_variants() {
+        assert!(retryable_graphql_error_text("Transaction conflict"));
+        assert!(retryable_graphql_error_text("please retry"));
+        assert!(retryable_graphql_error_text("database is locked"));
+        assert!(!retryable_graphql_error_text(
+            "validation error: unknown collection"
+        ));
     }
 }

@@ -135,6 +135,7 @@ pub fn test_behavior(
     let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(name));
     let principal = test_principal_for(identity, name);
     AgentBehavior {
+        skills: Vec::new(),
         behavior_id: name.to_string(),
         principal,
         backend_id: Some(backend_id.to_string()),
@@ -167,6 +168,7 @@ pub fn test_behavior_for_principal(
 ) -> AgentBehavior {
     let behavior_id = behavior_id.into();
     AgentBehavior {
+        skills: Vec::new(),
         behavior_id,
         principal,
         backend_id: None,

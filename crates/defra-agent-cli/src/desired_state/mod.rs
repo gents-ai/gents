@@ -3,6 +3,7 @@ pub(crate) mod convert;
 pub(crate) mod diff;
 pub(crate) mod load;
 pub(crate) mod normalize;
+pub(crate) mod prune;
 #[cfg(test)]
 mod tests;
 pub(crate) mod validate;
@@ -53,6 +54,10 @@ pub(crate) struct DesiredAgentBehavior {
     pub(crate) compaction_strategy: Option<String>,
     pub(crate) compaction_threshold: Option<f64>,
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) skill_refs: Vec<String>,
+    #[serde(default)]
+    pub(crate) skill_excludes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,7 +77,14 @@ pub(crate) struct DesiredTask {
 pub(crate) struct DesiredSchedule {
     pub(crate) schedule_id: String,
     pub(crate) task_id: String,
-    pub(crate) interval_secs: i64,
+    #[serde(default)]
+    pub(crate) interval_secs: Option<i64>,
+    #[serde(default)]
+    pub(crate) cron: Option<String>,
+    #[serde(default)]
+    pub(crate) timezone: Option<String>,
+    #[serde(default)]
+    pub(crate) missed_run_policy: Option<String>,
     pub(crate) enabled: bool,
     pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
 }
@@ -141,6 +153,26 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) subagent_allow_cross_deployment: Option<bool>,
     #[serde(default)]
     pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredSkill {
+    pub(crate) skill_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) scope: String,
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) instructions: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_refs: Vec<String>,
+    #[serde(default)]
+    pub(crate) display_name: Option<String>,
+    #[serde(default)]
+    pub(crate) interface_json: Option<String>,
+    pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -269,6 +301,7 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
 pub(crate) struct DesiredStateManifest {
     pub(crate) agent_principal: DesiredAgentPrincipal,
     pub(crate) agent_behaviors: Vec<DesiredAgentBehavior>,
+    pub(crate) skills: Vec<DesiredSkill>,
     pub(crate) tool_selections: Vec<DesiredToolSelection>,
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
@@ -282,6 +315,7 @@ pub(crate) struct DesiredStateManifest {
 pub(crate) struct DesiredStateCollectionDiff {
     pub(crate) create: Vec<String>,
     pub(crate) update: Vec<String>,
+    pub(crate) delete: Vec<String>,
     pub(crate) unchanged: Vec<String>,
     pub(crate) live_only: Vec<String>,
 }
@@ -291,6 +325,7 @@ impl DesiredStateCollectionDiff {
         DesiredStateDiffCounts {
             create: self.create.len(),
             update: self.update.len(),
+            delete: self.delete.len(),
             unchanged: self.unchanged.len(),
             live_only: self.live_only.len(),
         }
@@ -301,6 +336,7 @@ impl DesiredStateCollectionDiff {
 pub(crate) struct DesiredStateDiffCounts {
     pub(crate) create: usize,
     pub(crate) update: usize,
+    pub(crate) delete: usize,
     pub(crate) unchanged: usize,
     pub(crate) live_only: usize,
 }
@@ -309,6 +345,7 @@ pub(crate) struct DesiredStateDiffCounts {
 pub(crate) struct DesiredStateDiffCollections {
     pub(crate) agent_principal: DesiredStateCollectionDiff,
     pub(crate) agent_behaviors: DesiredStateCollectionDiff,
+    pub(crate) skills: DesiredStateCollectionDiff,
     pub(crate) tool_selections: DesiredStateCollectionDiff,
     pub(crate) inference_backends: DesiredStateCollectionDiff,
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
@@ -323,6 +360,7 @@ impl DesiredStateDiffCollections {
         match collection {
             Collection::AgentPrincipal => &self.agent_principal,
             Collection::AgentBehavior => &self.agent_behaviors,
+            Collection::Skill => &self.skills,
             Collection::ToolSelection => &self.tool_selections,
             Collection::InferenceBackend => &self.inference_backends,
             Collection::InferenceProfile => &self.inference_profiles,
@@ -333,10 +371,39 @@ impl DesiredStateDiffCollections {
         }
     }
 
+    fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
+        match collection {
+            Collection::AgentPrincipal => &mut self.agent_principal,
+            Collection::AgentBehavior => &mut self.agent_behaviors,
+            Collection::Skill => &mut self.skills,
+            Collection::ToolSelection => &mut self.tool_selections,
+            Collection::InferenceBackend => &mut self.inference_backends,
+            Collection::InferenceProfile => &mut self.inference_profiles,
+            Collection::ToolServiceRegistry => &mut self.tool_service_registries,
+            Collection::Task => &mut self.tasks,
+            Collection::Schedule => &mut self.schedules,
+            Collection::EventTrigger => &mut self.event_triggers,
+        }
+    }
+
+    /// Record proven-safe prune deletes: move each pruned id from its
+    /// collection's `live_only` into `delete`. The deletes come from
+    /// `prune::prune_safe_deletes`, i.e. `apply_model::diff_prune`.
+    pub(crate) fn record_prune_deletes(&mut self, deletes: &[defra_agent::apply_model::DocRef]) {
+        for doc in deletes {
+            let diff = self.get_mut(doc.collection);
+            diff.live_only.retain(|id| id != &doc.id);
+            if !diff.delete.contains(&doc.id) {
+                diff.delete.push(doc.id.clone());
+            }
+        }
+    }
+
     pub(crate) fn counts(&self) -> DesiredStateDiffCollectionsCounts {
         DesiredStateDiffCollectionsCounts {
             agent_principal: self.agent_principal.counts(),
             agent_behaviors: self.agent_behaviors.counts(),
+            skills: self.skills.counts(),
             tool_selections: self.tool_selections.counts(),
             inference_backends: self.inference_backends.counts(),
             inference_profiles: self.inference_profiles.counts(),
@@ -352,6 +419,7 @@ impl DesiredStateDiffCollections {
 pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) agent_principal: DesiredStateDiffCounts,
     pub(crate) agent_behaviors: DesiredStateDiffCounts,
+    pub(crate) skills: DesiredStateDiffCounts,
     pub(crate) tool_selections: DesiredStateDiffCounts,
     pub(crate) inference_backends: DesiredStateDiffCounts,
     pub(crate) inference_profiles: DesiredStateDiffCounts,
@@ -373,6 +441,7 @@ impl DesiredStateDiffCollectionsCounts {
         match collection {
             Collection::AgentPrincipal => &self.agent_principal,
             Collection::AgentBehavior => &self.agent_behaviors,
+            Collection::Skill => &self.skills,
             Collection::ToolSelection => &self.tool_selections,
             Collection::InferenceBackend => &self.inference_backends,
             Collection::InferenceProfile => &self.inference_profiles,
@@ -384,13 +453,14 @@ impl DesiredStateDiffCollectionsCounts {
     }
 
     pub(crate) fn is_exact_match(&self) -> bool {
-        self.iter()
-            .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0)
+        self.iter().all(|count| {
+            count.create == 0 && count.update == 0 && count.delete == 0 && count.live_only == 0
+        })
     }
 
     pub(crate) fn has_pending_apply(&self) -> bool {
         self.iter()
-            .any(|count| count.create > 0 || count.update > 0)
+            .any(|count| count.create > 0 || count.update > 0 || count.delete > 0)
     }
 }
 
@@ -409,6 +479,7 @@ pub(crate) struct DesiredStateDiffReport {
 pub(crate) struct DesiredStateCounts {
     pub(crate) agent_principal: usize,
     pub(crate) agent_behaviors: usize,
+    pub(crate) skills: usize,
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
@@ -423,6 +494,7 @@ impl DesiredStateCounts {
         Self {
             agent_principal: 0,
             agent_behaviors: 0,
+            skills: 0,
             tool_selections: 0,
             inference_backends: 0,
             inference_profiles: 0,
@@ -465,6 +537,11 @@ impl DesiredFields for DesiredAgentBehavior {
 impl DesiredFields for DesiredToolSelection {
     fn collection_tag(&self) -> &'static str {
         "tool_selections"
+    }
+}
+impl DesiredFields for DesiredSkill {
+    fn collection_tag(&self) -> &'static str {
+        "skills"
     }
 }
 impl DesiredFields for DesiredInferenceBackend {
@@ -516,6 +593,11 @@ impl HasUniqueId for DesiredAgentBehavior {
 impl HasUniqueId for DesiredToolSelection {
     fn unique_id(&self) -> &str {
         &self.selection_id
+    }
+}
+impl HasUniqueId for DesiredSkill {
+    fn unique_id(&self) -> &str {
+        &self.skill_id
     }
 }
 impl HasUniqueId for DesiredInferenceBackend {

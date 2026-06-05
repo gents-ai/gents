@@ -39,8 +39,10 @@ pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
+pub mod schedule_cron;
 pub mod schema;
 pub mod session;
+pub mod skills;
 pub mod streaming;
 pub mod template;
 pub mod tool_call_lifecycle;
@@ -104,7 +106,7 @@ pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunR
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
-    ResolvedTask,
+    ResolvedTask, ScheduleCadence,
 };
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
@@ -116,7 +118,10 @@ pub use schema::{
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
-pub use session::{fork, ForkError, ForkOutcome, ForkParams};
+pub use session::{
+    fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
+    GraphqlExecutor, HttpGraphqlExecutor,
+};
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,

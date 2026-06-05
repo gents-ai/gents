@@ -264,6 +264,7 @@ pub(crate) fn behavior_config_from_documents(
     tool_selection: ToolSelection,
     subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
+    skills: Vec<crate::skills::Skill>,
 ) -> anyhow::Result<AgentBehavior> {
     let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
     let stream_batch_ms = inference_profile
@@ -321,6 +322,7 @@ pub(crate) fn behavior_config_from_documents(
             top_k: None,
             max_tokens: profile_max_tokens,
         },
+        skills,
     })
 }
 

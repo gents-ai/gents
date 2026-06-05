@@ -33,6 +33,8 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         compaction_strategy: args.compaction_strategy.clone(),
         compaction_threshold: args.compaction_threshold,
         enabled: args.enabled,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     let doc_id = write_agent_behavior_document(&access, &behavior).await?;

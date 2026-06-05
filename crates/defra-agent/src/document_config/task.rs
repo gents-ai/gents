@@ -8,7 +8,7 @@ use crate::graphql::escape_graphql_string;
 /// Apply-owned description of a task.
 ///
 /// Mirrors the `Task` GraphQL schema in
-/// `crates/defra-agent-protocol/schemas/agent/task.graphql`. All fields are
+/// `crates/defra-agent-schemas/schemas/agent/task.graphql`. All fields are
 /// apply-owned: the runtime does not mutate any `Task` document field at
 /// runtime. Optional fields use `Option<...>` and `DateTime` fields are carried
 /// as RFC3339 `String`s to match the rest of `document_config`.

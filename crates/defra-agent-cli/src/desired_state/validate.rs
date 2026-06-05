@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, CommandExecutionMode, CommandNetworkMode, SubagentTarget,
-    VariableRef,
+    parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
+    CommandNetworkMode, SubagentTarget, VariableRef,
 };
 
 use super::DesiredStateManifest;
@@ -201,6 +201,37 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         }
     }
 
+    let mut skill_ids = BTreeSet::new();
+    for skill in &manifest.skills {
+        let skill_id = skill.skill_id.trim();
+        if skill_id.is_empty() {
+            errors.push("skills manifest contains a skill with an empty skill_id".to_string());
+        } else if !skill_ids.insert(skill_id.to_string()) {
+            errors.push(format!("duplicate skill_id in skills manifest: {skill_id}"));
+        }
+
+        if !principal_agent_did.is_empty() && skill.agent_did.trim() != principal_agent_did {
+            errors.push(format!(
+                "skill {} belongs to {} not {}",
+                skill.skill_id, skill.agent_did, manifest.agent_principal.agent_did
+            ));
+        }
+
+        if !matches!(skill.scope.trim(), "principal" | "behavior") {
+            errors.push(format!(
+                "skill {} has invalid scope {:?}; expected \"principal\" or \"behavior\"",
+                skill.skill_id, skill.scope
+            ));
+        }
+
+        if skill.name.trim().is_empty() {
+            errors.push(format!(
+                "skill {} in skills manifest must contain a non-empty name",
+                skill.skill_id
+            ));
+        }
+    }
+
     for behavior in &manifest.agent_behaviors {
         let behavior_id = behavior.behavior_id.trim();
         if behavior_id.is_empty() {
@@ -243,6 +274,29 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 errors.push(format!(
                     "behavior {} references missing inference_profile_id {}",
                     behavior.behavior_id, profile_id
+                ));
+            }
+        }
+
+        // skill_refs / skill_excludes must resolve to skills in this manifest.
+        // Because every skill is validated above to belong to this principal,
+        // this also enforces D6 (no live cross-principal skill references —
+        // share by importing a copy instead).
+        for skill_ref in &behavior.skill_refs {
+            let skill_ref = skill_ref.trim();
+            if !skill_ref.is_empty() && !skill_ids.contains(skill_ref) {
+                errors.push(format!(
+                    "behavior {} references missing skill_ref {} (import the skill first)",
+                    behavior.behavior_id, skill_ref
+                ));
+            }
+        }
+        for skill_exclude in &behavior.skill_excludes {
+            let skill_exclude = skill_exclude.trim();
+            if !skill_exclude.is_empty() && !skill_ids.contains(skill_exclude) {
+                errors.push(format!(
+                    "behavior {} references missing skill_exclude {}",
+                    behavior.behavior_id, skill_exclude
                 ));
             }
         }
@@ -317,12 +371,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
-        if schedule.interval_secs < 1 {
-            errors.push(format!(
-                "schedule {} in schedules manifest must contain an interval_secs >= 1",
-                schedule.schedule_id
-            ));
-        }
+        validate_schedule_cadence(schedule, errors);
 
         match schedule.concurrency.trim() {
             "parallel" | "serial" | "latest_only" => {}
@@ -439,6 +488,53 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 }
             }
         }
+    }
+}
+
+fn validate_schedule_cadence(schedule: &super::DesiredSchedule, errors: &mut Vec<String>) {
+    let interval_secs = schedule.interval_secs;
+    let cron = schedule
+        .cron
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (interval_secs, cron) {
+        (Some(interval_secs), None) if interval_secs >= 1 => {}
+        (Some(_), Some(_)) => errors.push(format!(
+            "schedule {} in schedules manifest must contain exactly one of interval_secs or cron",
+            schedule.schedule_id
+        )),
+        (Some(_), None) => errors.push(format!(
+            "schedule {} in schedules manifest must contain an interval_secs >= 1",
+            schedule.schedule_id
+        )),
+        (None, Some(expression)) => {
+            let timezone = schedule
+                .timezone
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let Some(timezone) = timezone else {
+                errors.push(format!(
+                    "schedule {} in schedules manifest must contain a timezone when cron is set",
+                    schedule.schedule_id
+                ));
+                return;
+            };
+            if let Err(error) =
+                validate_cron_schedule(expression, timezone, schedule.missed_run_policy.as_deref())
+            {
+                errors.push(format!(
+                    "schedule {} in schedules manifest has invalid cron schedule: {}",
+                    schedule.schedule_id, error
+                ));
+            }
+        }
+        (None, None) => errors.push(format!(
+            "schedule {} in schedules manifest must contain exactly one of interval_secs or cron",
+            schedule.schedule_id
+        )),
     }
 }
 
@@ -743,6 +839,7 @@ mod live_tests {
                 enabled: true,
             },
             agent_behaviors: Vec::new(),
+            skills: Vec::new(),
             tool_selections: vec![DesiredToolSelection {
                 selection_id: "live-test-sel".to_string(),
                 agent_did: "did:key:test-live-validate".to_string(),
@@ -897,6 +994,7 @@ mod live_tests {
                     enabled: true,
                 },
                 agent_behaviors: Vec::new(),
+                skills: Vec::new(),
                 tool_selections: vec![DesiredToolSelection {
                     selection_id: "subagent-idempotency-sel".to_string(),
                     agent_did: "did:key:test-subagent-idempotency".to_string(),
@@ -951,6 +1049,7 @@ mod live_tests {
             &desired_manifest,
             live_principal.as_ref(),
             &live_manifest,
+            false,
         );
 
         let txn = access.begin_apply_txn().await?;
@@ -1012,6 +1111,7 @@ mod live_tests {
             &desired_manifest,
             remaining_principal.as_ref(),
             &remaining_manifest,
+            false,
         );
 
         assert!(
@@ -1100,7 +1200,10 @@ mod live_tests {
                     compaction_strategy: None,
                     compaction_threshold: None,
                     enabled: true,
+                    skill_refs: Vec::new(),
+                    skill_excludes: Vec::new(),
                 }],
+                skills: Vec::new(),
                 tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
@@ -1124,6 +1227,7 @@ mod live_tests {
             &desired_manifest,
             live_principal.as_ref(),
             &live_manifest,
+            false,
         );
 
         let txn = access.begin_apply_txn().await?;
@@ -1159,6 +1263,7 @@ mod live_tests {
             &desired_manifest,
             remaining_principal.as_ref(),
             &remaining_manifest,
+            false,
         );
 
         assert!(
