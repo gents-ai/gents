@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
+use crate::http::mcp_pool::load_mcp_pool_snapshot;
 use crate::http::prometheus::{
     load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
     MetricsRuntimeRow,
@@ -59,6 +60,7 @@ pub(crate) fn runtime_contract_router(
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
         .route("/fleet/slots", get(fleet_slots_handler))
+        .route("/mcp/pool", get(mcp_pool_handler))
         .route(
             "/subagents/dispatches",
             get(crate::http::r5_dispatch::subagent_dispatches_handler),
@@ -341,6 +343,18 @@ async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response 
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
             format!("fleet slot snapshot failed: {error:#}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match load_mcp_pool_snapshot(&state.graphql, &state.agent_did).await {
+        Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("mcp pool snapshot failed: {error:#}"),
         )
             .into_response(),
     }

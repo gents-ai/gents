@@ -9,6 +9,7 @@ type ToolServiceHealthState {
     agent_did: String @index
     endpoint: String
     status: String @index
+    tool_count: Int
     failure_count: Int
     k_max: Int
     backoff_until: DateTime

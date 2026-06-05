@@ -73,6 +73,7 @@ struct ServiceHealthEntry {
     health: ServiceHealth,
     model: ServiceModelInternal,
     endpoint: Option<String>,
+    tool_count: Option<i64>,
     last_probe_at: DateTime<Utc>,
 }
 
@@ -85,6 +86,7 @@ impl ServiceHealthEntry {
             health,
             model,
             endpoint: None,
+            tool_count: None,
             last_probe_at,
         }
     }
@@ -94,6 +96,7 @@ impl ServiceHealthEntry {
         last_seen: DateTime<Utc>,
         last_error: Option<String>,
         endpoint: Option<String>,
+        tool_count: Option<i64>,
         last_probe_at: DateTime<Utc>,
     ) -> Self {
         Self {
@@ -104,6 +107,7 @@ impl ServiceHealthEntry {
             },
             model,
             endpoint,
+            tool_count,
             last_probe_at,
         }
     }
@@ -201,6 +205,7 @@ pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
     pub endpoint: Option<String>,
     pub status: String,
+    pub tool_count: Option<i64>,
     pub failure_count: u32,
     pub k_max: u32,
     pub backoff_until: Option<DateTime<Utc>>,
@@ -252,6 +257,7 @@ impl ServiceHealthMap {
                 service_id: service_id.clone(),
                 endpoint: entry.endpoint.clone(),
                 status: entry.model.state.to_defradb().to_string(),
+                tool_count: entry.tool_count,
                 failure_count: entry.model.failure_count,
                 k_max,
                 backoff_until: entry.model.backoff_until,
@@ -465,6 +471,7 @@ pub async fn run_health_check_cycle(
             .map(|entry| entry.health.last_seen)
             .unwrap_or(heartbeat_seen_at);
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
+        let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
         // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
         // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
@@ -487,6 +494,7 @@ pub async fn run_health_check_cycle(
                 previous_model,
                 previous_last_seen,
                 previous_endpoint,
+                previous_tool_count,
                 "registry entry missing mcp_port".to_string(),
                 now,
                 options,
@@ -506,6 +514,7 @@ pub async fn run_health_check_cycle(
                 previous_model,
                 previous_last_seen,
                 previous_endpoint,
+                previous_tool_count,
                 "registry entry missing address fields".to_string(),
                 now,
                 options,
@@ -543,7 +552,7 @@ pub async fn run_health_check_cycle(
         )
         .await
         {
-            Ok(Ok(_)) => {
+            Ok(Ok(tools)) => {
                 let next_model = step_service(
                     previous_model,
                     ProbeEvent::ProbeSuccess { stale: is_stale },
@@ -551,6 +560,7 @@ pub async fn run_health_check_cycle(
                     options,
                 )
                 .expect("probeSuccess must preserve the service model");
+                let tool_count = Some(tools.tools.len() as i64);
                 health_map
                     .set_entry(
                         service_id.clone(),
@@ -559,6 +569,7 @@ pub async fn run_health_check_cycle(
                             now,
                             None,
                             Some(endpoint.clone()),
+                            tool_count,
                             now,
                         ),
                     )
@@ -578,6 +589,7 @@ pub async fn run_health_check_cycle(
                     previous_model,
                     previous_last_seen,
                     Some(endpoint.clone()),
+                    previous_tool_count,
                     error.to_string(),
                     now,
                     options,
@@ -597,6 +609,7 @@ pub async fn run_health_check_cycle(
                     previous_model,
                     previous_last_seen,
                     Some(endpoint.clone()),
+                    previous_tool_count,
                     "probe timed out".to_string(),
                     now,
                     options,
@@ -646,6 +659,7 @@ async fn apply_probe_failure(
     previous_model: ServiceModelInternal,
     previous_last_seen: DateTime<Utc>,
     endpoint: Option<String>,
+    tool_count: Option<i64>,
     error: String,
     now: DateTime<Utc>,
     options: &HealthCheckerOptions,
@@ -663,6 +677,7 @@ async fn apply_probe_failure(
                 previous_last_seen,
                 Some(error),
                 endpoint,
+                tool_count,
                 now,
             ),
         )
@@ -803,6 +818,10 @@ async fn upsert_persisted_health_state(
     let last_seen = entry.last_seen.to_rfc3339();
     let last_probe_at = entry.last_probe_at.to_rfc3339();
     let updated_at = now.to_rfc3339();
+    let tool_count_fragment = entry
+        .tool_count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "null".to_string());
     let backoff_until_fragment = match entry.backoff_until {
         Some(dt) => format!(r#""{}""#, dt.to_rfc3339()),
         None => "null".to_string(),
@@ -835,6 +854,7 @@ async fn upsert_persisted_health_state(
                     agent_did: "{agent_did}",
                     endpoint: "{endpoint}",
                     status: "{status}",
+                    tool_count: {tool_count_fragment},
                     failure_count: {failure_count},
                     k_max: {k_max},
                     backoff_until: {backoff_until_fragment},
@@ -847,6 +867,7 @@ async fn upsert_persisted_health_state(
                 update: {{
                     endpoint: "{endpoint}",
                     status: "{status}",
+                    tool_count: {tool_count_fragment},
                     failure_count: {failure_count},
                     k_max: {k_max},
                     backoff_until: {backoff_until_fragment},

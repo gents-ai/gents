@@ -256,6 +256,7 @@ pub(crate) struct MCPServiceHealthView {
     pub agent_did: Option<String>,
     pub endpoint: Option<String>,
     pub status: Option<String>,
+    pub tool_count: Option<i64>,
     pub failure_count: Option<i64>,
     pub k_max: Option<i64>,
     pub backoff_until: Option<String>,

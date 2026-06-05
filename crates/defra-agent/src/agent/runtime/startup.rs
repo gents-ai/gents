@@ -63,6 +63,14 @@ pub(in crate::agent) async fn run_agent(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    if let Err(error) =
+        crate::migration::ensure_tool_service_health_state_migrations(agent.node.clone())
+            .await
+            .context("ensure ToolServiceHealthState migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
     if let Err(error) = crate::migration::ensure_agent_behavior_migrations(agent.node.clone())
         .await
         .context("ensure AgentBehavior migrations")
