@@ -78,6 +78,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         delegate_to: Vec::new(),
         backgroundable_tool_names: vec!["read_file".to_string()],
         enable_memory: Some(false),
+        enable_session_history_tool: Some(false),
         enable_defra_query: Some(true),
         defra_query_collections: Vec::new(),
         subagent_targets: vec!["amy-research".to_string()],

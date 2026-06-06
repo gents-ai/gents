@@ -996,6 +996,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_memory: Option<bool>,
     #[arg(
         long,
+        help = "Enable or disable the sessions history convenience tool: --enable-session-history-tool true|false. Omit to leave the existing document setting unchanged (default is disabled)"
+    )]
+    pub(crate) enable_session_history_tool: Option<bool>,
+    #[arg(
+        long,
         help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
     )]
     pub(crate) enable_defra_query: Option<bool>,
@@ -1803,6 +1808,20 @@ mod tests {
         );
         assert_eq!(
             parse_tools_set(&["--enable-memory", "true"]).enable_memory,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn enable_session_history_tool_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_session_history_tool, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-session-history-tool", "false"])
+                .enable_session_history_tool,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-session-history-tool", "true"]).enable_session_history_tool,
             Some(true)
         );
     }

@@ -292,6 +292,11 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_session_history_tool(mut self, enable_session_history_tool: bool) -> Self {
+        self.behavior.tool_selection.enable_session_history_tool = enable_session_history_tool;
+        self
+    }
+
     pub fn defra_query_collections<I, S>(mut self, collections: I) -> Self
     where
         I: IntoIterator<Item = S>,

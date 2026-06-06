@@ -107,6 +107,7 @@ pub(crate) struct ToolSelectionView {
     pub subagent_allow_cross_deployment: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_memory: Option<bool>,
+    pub enable_session_history_tool: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

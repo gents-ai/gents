@@ -274,6 +274,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),
             optional_bool_field("enable_memory", selection.enable_memory),
+            optional_bool_field(
+                "enable_session_history_tool",
+                selection.enable_session_history_tool,
+            ),
             optional_bool_field("enable_defra_query", selection.enable_defra_query),
             selection
                 .defra_query_collections

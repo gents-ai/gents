@@ -145,6 +145,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "delegate_to",
                         "backgroundable_tool_names",
                         "enable_memory",
+                        "enable_session_history_tool",
                         "enable_defra_query",
                         "defra_query_collections",
                         "subagent_targets",

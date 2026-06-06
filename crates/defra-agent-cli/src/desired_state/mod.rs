@@ -141,6 +141,8 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[serde(default)]
     pub(crate) enable_memory: bool,
+    #[serde(default)]
+    pub(crate) enable_session_history_tool: bool,
     #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,
     #[serde(default)]

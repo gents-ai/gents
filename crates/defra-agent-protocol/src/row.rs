@@ -571,6 +571,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub enable_memory: Option<bool>,
     #[serde(default)]
+    pub enable_session_history_tool: Option<bool>,
+    #[serde(default)]
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,
@@ -807,7 +809,8 @@ mod tests {
             "subagent_background_enabled": true,
             "subagent_allow_cross_deployment": true,
             "cross_deployment_spawn_timeout_seconds": 45,
-            "enable_memory": true
+            "enable_memory": true,
+            "enable_session_history_tool": true
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert_eq!(row.subagent_targets, vec!["amy-research".to_string()]);
@@ -817,6 +820,7 @@ mod tests {
         assert_eq!(row.subagent_allow_cross_deployment, Some(true));
         assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
         assert_eq!(row.enable_memory, Some(true));
+        assert_eq!(row.enable_session_history_tool, Some(true));
 
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");

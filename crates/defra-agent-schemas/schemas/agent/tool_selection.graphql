@@ -24,6 +24,7 @@ type ToolSelection {
     subagent_allow_cross_deployment: Boolean
     cross_deployment_spawn_timeout_seconds: Int
     enable_memory: Boolean
+    enable_session_history_tool: Boolean
     enable_defra_query: Boolean
     defra_query_collections: [String]
 }
