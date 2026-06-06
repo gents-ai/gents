@@ -195,10 +195,7 @@ pub(super) async fn load_stored_tool_call_result(
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
-    match tool_name {
-        "bash" | "shell" | "command" => TruncationMode::Tail,
-        _ => TruncationMode::Head,
-    }
+    crate::truncation::tool_result_truncation_mode(tool_name)
 }
 
 pub(super) fn bounded_tool_result_for_model(

@@ -267,6 +267,12 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 None,
                 tool_call_id.as_deref(),
             );
+            crate::tool_call_lifecycle::runtime::register_pending_tool_result(
+                tool_name,
+                args,
+                internal_call_id,
+            )
+            .await;
 
             let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
                 self.node.clone(),
@@ -366,11 +372,18 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             let truncator =
                 DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id);
+            let recorded =
+                crate::tool_call_lifecycle::runtime::take_recorded_tool_result(internal_call_id)
+                    .await;
+            let result_for_persistence = recorded
+                .as_ref()
+                .map(|record| record.full_result.as_str())
+                .unwrap_or(result);
             let truncated = truncator
                 .truncate(
                     tool_name,
                     args,
-                    result,
+                    result_for_persistence,
                     truncation_mode_for(tool_name),
                     &self.truncation_limits,
                     None,
@@ -388,7 +401,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     )
                 })?;
 
-            if let Some(failure) = classify_runtime_failure(result) {
+            if let Some(failure) = classify_runtime_failure(result_for_persistence) {
                 if let Some(denial) = failure.command_denial.as_ref() {
                     lc.fail_with_command_denial(&truncated.text, denial).await?;
                 } else {

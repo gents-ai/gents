@@ -11,6 +11,8 @@ use rig::completion::{
 };
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
+use rig::tool::{ToolDyn, ToolError};
+use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::json;
 
 use super::*;
@@ -48,6 +50,40 @@ impl CompletionModel for TestModel {
         Err(CompletionError::ProviderError(
             "streaming is unused in hook tests".to_string(),
         ))
+    }
+}
+
+struct OversizedHookTool {
+    output: String,
+}
+
+impl OversizedHookTool {
+    fn new(output: String) -> Self {
+        Self { output }
+    }
+}
+
+impl ToolDyn for OversizedHookTool {
+    fn name(&self) -> String {
+        "oversized".to_string()
+    }
+
+    fn definition<'a>(
+        &'a self,
+        _prompt: String,
+    ) -> WasmBoxedFuture<'a, rig::completion::ToolDefinition> {
+        Box::pin(async {
+            rig::completion::ToolDefinition {
+                name: "oversized".to_string(),
+                description: "test tool".to_string(),
+                parameters: json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        let output = self.output.clone();
+        Box::pin(async move { Ok(output) })
     }
 }
 
@@ -450,6 +486,44 @@ async fn fetch_tool_call_row(
         .expect("tool call row")
 }
 
+async fn fetch_tool_result_spill_row(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_name: &str,
+) -> serde_json::Value {
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let tool_name = crate::graphql::escape_graphql_string(tool_name);
+    let resp = node
+        .execute(&format!(
+            r#"{{
+                AgentToolResult(
+                    filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        tool_name: {{ _eq: "{tool_name}" }}
+                    }},
+                    limit: 1
+                ) {{
+                    output_text
+                    truncated
+                    truncation_metadata
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query spilled tool result failed: {:?}",
+        resp.errors
+    );
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolResult"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("spilled tool result row")
+}
+
 #[tokio::test]
 async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
@@ -562,6 +636,127 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         .get("result")
         .and_then(|value| value.as_str())
         .is_some_and(|result| result.contains("deadline exceeded")));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn hook_spills_recorded_full_tool_output_after_bounded_runtime_result() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(
+            &hook,
+            &user_text_message("Run an oversized tool"),
+            &[],
+        )
+        .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-oversized".to_string()))
+        .await;
+
+    let full_output = (0..2101)
+        .map(|index| format!("line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tool_args = "{}";
+    let tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(OversizedHookTool::new(
+        full_output.clone(),
+    )));
+
+    let bounded_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        async {
+            assert!(matches!(
+                PromptHook::<TestModel>::on_tool_call(
+                    &hook,
+                    "oversized",
+                    None,
+                    "internal-oversized",
+                    tool_args,
+                )
+                .await,
+                ToolCallHookAction::Continue
+            ));
+
+            let bounded_result = tool
+                .call(tool_args.to_string())
+                .await
+                .expect("oversized tool should complete");
+            assert!(bounded_result.contains("[Showing lines 1-2000 of 2101"));
+            assert!(!bounded_result.contains("line-2100"));
+            assert!(!bounded_result.contains("[Full output: DefraDB doc"));
+
+            assert!(matches!(
+                PromptHook::<TestModel>::on_tool_result(
+                    &hook,
+                    "oversized",
+                    None,
+                    "internal-oversized",
+                    tool_args,
+                    &bounded_result,
+                )
+                .await,
+                HookAction::Continue
+            ));
+            bounded_result
+        },
+    )
+    .await;
+
+    let tool_call = fetch_tool_call_row(&node, &session_id, "internal-oversized").await;
+    let persisted_result = tool_call
+        .get("result")
+        .and_then(|value| value.as_str())
+        .expect("persisted tool call result");
+    assert!(persisted_result.contains("[Showing lines 1-2000 of 2101"));
+    assert!(persisted_result.contains("[Full output: DefraDB doc"));
+    assert!(!persisted_result.contains("line-2100"));
+    assert_ne!(
+        persisted_result, bounded_result,
+        "hook persistence should append the spill pointer after seeing the full result"
+    );
+
+    let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;
+    assert_eq!(
+        spill.get("truncated").and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        spill.get("output_text").and_then(|value| value.as_str()),
+        Some(full_output.as_str())
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        spill
+            .get("truncation_metadata")
+            .and_then(|value| value.as_str())
+            .expect("truncation metadata"),
+    )
+    .expect("metadata json");
+    assert_eq!(
+        metadata
+            .get("original_lines")
+            .and_then(|value| value.as_u64()),
+        Some(2101)
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
