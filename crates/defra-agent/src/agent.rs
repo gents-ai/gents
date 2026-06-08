@@ -386,6 +386,7 @@ pub(crate) fn tool_selection_from_document(
             .defra_query_collections
             .clone()
             .unwrap_or_default(),
+        write_tools: selection.write_tools.clone().unwrap_or_default(),
     })
 }
 

@@ -66,6 +66,8 @@ pub struct ToolSelection {
     pub enable_defra_query: bool,
     /// Optional allowlist of collections `defra_query` may read. Empty = all.
     pub defra_query_collections: Vec<String>,
+    /// Declarative write-tool bindings from the ToolSelection document.
+    pub write_tools: Vec<crate::document_config::WriteToolDecl>,
 }
 
 impl Default for ToolSelection {
@@ -83,6 +85,7 @@ impl Default for ToolSelection {
             enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         }
     }
 }

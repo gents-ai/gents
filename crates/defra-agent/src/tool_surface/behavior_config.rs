@@ -80,6 +80,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool,
             enable_defra_query,
             defra_query_collections,
+            write_tools: _,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
