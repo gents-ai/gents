@@ -49,6 +49,7 @@ mod tests;
 ///
 /// Variant-for-variant mirror of rig's `MultiTurnStreamItem<R>` so consumers
 /// that previously matched on the rig type port across by name only.
+#[derive(Debug)]
 pub(crate) enum LoopStreamItem<R> {
     /// Streamed assistant content for the current turn (text, reasoning, or a
     /// tool call), forwarded verbatim to the consumer.
@@ -62,6 +63,7 @@ pub(crate) enum LoopStreamItem<R> {
 
 /// Terminal payload of a completed loop: the concatenated final-turn assistant
 /// text plus the usage aggregated across every turn.
+#[derive(Debug)]
 pub(crate) struct LoopFinalResponse {
     response: String,
     usage: Usage,
