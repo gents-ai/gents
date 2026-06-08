@@ -25,10 +25,12 @@ without rotating the agent's operational identity.
 This doc proposes a five-layer build (Layer 0 is the root of trust), sequenced by
 increasing risk:
 
-0. **On-chain ownership & authority** — a Solidity contract is the front-end:
-   an ownership NFT denominates the owner; the owner splits spend authority and
-   contract authority into separate keys, distinct from the agent's signing
-   identity. *(External contract; the root of the trust model.)*
+0. **Ownership & authority** — a tradeable ownership token denominates the owner;
+   the **SourceHub** ACP `owner` relation is the cryptographic control point and
+   **Orbis** threshold key-management re-keys the agent's secrets on transfer, so
+   ownership is *real* and not back-doored (§3.5–§3.7). The owner splits spend
+   authority from contract authority from the agent's signing identity.
+   *(Root of the trust model.)*
 1. **Attestation** — emit signed, content-addressed `SignedAttestation`
    documents at lifecycle transitions; anchor them outward Shinzō-style.
    *(Days–2 weeks. No money moves.)*
@@ -182,7 +184,7 @@ why it is sequenced last.
   balances.
 - Multi-region distributed DefraDB sync (out of scope; tracked elsewhere).
 
-## 3. Layer 0 — On-chain ownership and authority
+## 3. Layer 0 — Ownership, authority, and what makes ownership real
 
 The root of the trust model, and the piece that makes the custody concern *easy*
 rather than the biggest footgun. This is an external Solidity contract on an EVM
@@ -234,10 +236,104 @@ it is the seam where on-chain truth meets off-chain action.
 
 In the prior draft, "spend keys must be separate custody from signing keys" was
 flagged as the single biggest footgun. Layer 0 turns it into a structural default:
-funds never touch the signing DID, spend is gated by an on-chain contract with
-hard limits, and ownership is just a transferable token. The residual risks (§9)
-are about *bounding* the spend key and *trust-minimizing the bridge* — not about
-key co-mingling, which the design forbids by construction.
+funds never touch the signing DID, spend is gated by a contract with hard limits,
+and ownership is just a transferable token. The residual risks (§9) are about
+*bounding* the spend key and *trust-minimizing the bridge* — not about key
+co-mingling, which the design forbids by construction.
+
+### 3.5 Threat model — the four assets, and where ownership leaks
+
+The treasury is the *easy* asset to transfer because it is on-chain. The trap is
+that an agent's value is mostly **off-chain, stateful, key-holding** — and that is
+where "the NFT is just theater" hides.
+
+| Asset of value | Where it lives | Transfers cleanly with the token? |
+|---|---|---|
+| Treasury funds | on-chain / contract escrow | ✅ enforced by the contract |
+| Signing DID key | the running process | ❌ off-chain secret |
+| The corpus | DefraDB on the host | ❌ off-chain state |
+| Behavior / config | DefraDB | ❌ off-chain state |
+
+**"Backdoored" = the seller (or the host operator) keeps a copy of the signing key
+or an unencrypted corpus dump.** Post-sale they can sign *as the agent*, read its
+private data, or fork the whole thing. The buyer holds title; the seller holds a
+shadow copy. Nothing in a naive on-chain transfer prevents this.
+
+There is also a tension that rules out the lazy fix: **the asset's value is the
+attested track record, and that résumé is bound to a stable DID** (§4). So you
+cannot just rotate the signing key on every sale — that throws away the reputation
+you are selling. Real ownership therefore requires transferring *custody* of a
+secret **without rotating the identity that secret represents**, and doing it so
+the prior holder provably loses access.
+
+Plain encryption-at-rest only half-helps: it turns a seller's stale DB dump into
+ciphertext (good), but the live agent must decrypt to operate, so the key sits in
+host memory and a malicious operator can still extract it (bad).
+
+### 3.6 The native answer — SourceHub ACP + Orbis
+
+We do not need to invent this, and we should not reach for a generic TEE first.
+The Source Network stack already provides the two primitives this threat model
+demands, and binds them to DefraDB:
+
+- **[SourceHub ACP](https://docs.source.network/sourcehub/) is the ownership
+  primitive.** DefraDB wraps the SourceHub Access Control Policy module; a policy
+  models relations/permissions/actors, **actors are DIDs**, and registering an
+  object grants the actor a built-in **`owner` relation**
+  ([ACP intro](https://docs.source.network/defradb/0.20.0/references/acp/)). So
+  "who owns this agent" is a first-class, cryptographically gated, on-chain
+  (CometBFT / Cosmos SDK) relation — not a bolted-on concept. The tradeable title
+  is just the handle that controls who holds the `owner` relation.
+
+- **[Orbis](https://docs.source.network/orbis/) is the key-custody primitive.** It
+  is decentralized threshold secrets management
+  ([orbis-go](https://github.com/sourcenetwork/orbis-go)): **DKG** so no single
+  party ever holds the full key, **Proxy Re-Encryption (PRE)** to re-key ciphertext
+  to a new public key without exposing plaintext, and **Proactive Secret Sharing
+  (PSS)** so adversaries can't slowly accumulate shares. Critically, Orbis manages
+  DefraDB document-encryption keys *gated by the policy engine* — "any future
+  update to a policy document automatically handles the necessary re-encryption."
+
+Put together, the leaks close:
+
+- **Corpus.** Encrypted with Orbis-managed keys, gated by the SourceHub `owner`
+  relation. Selling the title updates the policy → Orbis proxy-re-encrypts → the
+  old owner's shares can no longer decrypt, the new owner's can. A seller's DB dump
+  becomes permanent ciphertext.
+- **Signing key.** Make the agent's DID key itself an Orbis-managed secret (a secret
+  ring) that an authorized deployment reconstructs only via threshold. **No single
+  party — not the seller, not the host — ever holds the full key** (DKG). Transfer
+  re-shares it (PSS/PRE) so the prior deployment loses reconstruction ability —
+  custody moves **without rotating the DID**, preserving the résumé. This is the
+  property §3.5 said we needed and the lazy fix couldn't give.
+
+The trust assumption shifts from "trust a chip vendor's TEE attestation" to "trust
+the Orbis threshold network's honest majority" — which is the right kind of
+assumption for this stack.
+
+### 3.7 What's resolved, what's residual
+
+Resolved: data-at-rest leak, host extraction of a whole key, clean re-key on
+transfer, and identity continuity across owners (re-share, don't rotate).
+
+Residual (the honest list):
+
+- **Orbis liveness/honest-majority is now a dependency.** Bootstrapping a deployment
+  needs the threshold network available; that's a new availability and trust
+  surface (a better one, but real).
+- **Token ↔ `owner`-relation binding is the new trust seam** — it replaces the EVM
+  bridge of §3.3. Whatever issues the tradeable title must atomically and
+  tamper-proofly drive the SourceHub policy's `owner` relation. If that mapping can
+  be forged or desynced, ownership is again theater.
+- **A live deployment still holds a reconstructed key in memory** during operation.
+  Orbis protects custody and transfer; it does not protect a running process from
+  its own host. Confidential compute (TEE / Akash confidential VMs) is therefore
+  *complementary* here — in-use protection on top of Orbis's at-rest/in-transit
+  custody, not a replacement for it.
+
+**Design fork (carried to §11):** does the tradeable title live as an EVM NFT
+bridged to a SourceHub actor, or as a SourceHub-native ownership token? Either way
+the ACP `owner` relation is the control point; the token is its handle.
 
 ## 4. Layer 1 — Signed lifecycle attestation (the wedge)
 
@@ -489,8 +585,16 @@ from the runtime's perspective.
 
 ## 11. Open questions
 
-- Which EVM chain hosts the contract, and can Source Network / a `TriggerSource`
-  watch its events directly (§3.3) or do we need an oracle in between?
+- **Where does the tradeable title live** — an EVM NFT bridged to a SourceHub
+  actor, or a SourceHub-native ownership token? Either way the ACP `owner` relation
+  is the control point (§3.6); what is the atomic, tamper-proof binding between
+  token and relation (§3.7)?
+- **Does the pinned `defradb.rs` expose SourceHub ACP + Orbis-managed document
+  encryption today**, or is that integration work we'd land first? The whole
+  ownership-is-real argument (§3.6) rests on it.
+- Can the agent's **signing DID key** itself be held as an Orbis secret ring and
+  reconstructed only by a policy-authorized deployment — i.e. is DKG custody of the
+  operational identity (not just the corpus key) actually supported?
 - What is the minimal contract surface for the spend/contract authority split —
   is a standard ownable + role-gated treasury enough, or do we need custom limit
   logic on-chain?
