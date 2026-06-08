@@ -94,6 +94,8 @@ pub fn spawn_subagent_source_with_paired_peers(
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     };
     let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(snapshot));
     let cancel = CancellationToken::new();
