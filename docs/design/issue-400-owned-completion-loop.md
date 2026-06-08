@@ -232,16 +232,49 @@ The issue asks for a go/no-go after the design doc. Decided:
 - **D5 — Delete the PR #416 `ToolResultRecorder` shim** as part of this work,
   once the owned loop makes the in-loop and persisted tool-result bounds the same
   code path (the shim's reason to exist goes away).
+- **D6 — Structure the owned loop as a stream generator, not an imperative
+  loop** (replace the *producer*, keep the *consumer*). We write our own
+  multi-turn `Stream` that mirrors rig's `prompt_request/streaming.rs::send()`:
+  build request → `model.stream()` one turn → yield assistant items → execute
+  tool calls and yield tool-result items → thread results into history → loop
+  until a turn has no tool calls → yield `FinalResponse`. It yields the same
+  item shape we consume today, so `StreamProcessor` and the `inference.rs`
+  lifecycle envelope (shutdown/interrupt/deadline/liveness/retry) are essentially
+  unchanged — only retargeted from rig's `MultiTurnStreamItem` to our own item
+  enum.
+
+  **Rationale:** the stream-drives-everything shape (including in-stream tool
+  execution) is what we already ship via rig and is proven in production; we
+  re-home it rather than redesign it. This preserves conformance behavior *by
+  construction* (the consumed item contract is stable), keeps the blast radius
+  to the new generator module, still closes #401 (tool-result threading is now
+  inside our generator, bounded natively → delete the #416 shim), and still
+  collapses `PromptHook` into direct `DefraSessionHook` calls at the four points
+  inside the generator. The single-turn-`model.stream()` + imperative-dispatch
+  alternative was rejected: it churns the consumer side (`StreamProcessor`,
+  `inference.rs`) for no benefit and risks behavioral drift.
 
 ### Sequencing for implementation
 
 1. Confirm no formal-spec change (per CLAUDE.md): this is loop-driver plumbing,
-   not transition legality — verify before code.
-2. Build the owned loop driver + retarget `StreamProcessor` to single-turn items;
-   convert `inference.rs` streaming path. Delete the #416 recorder shim here.
-3. Convert `oneshot`, then `compaction` (hardest), then `daemon/title` — one
-   commit each.
-4. Delete `completion_factory.rs` agent-builder plumbing and the `PromptHook`
+   not transition legality — verify before code. (Done: the loop-relevant Lean
+   specs — `StreamingResponse`, `InferenceCall`, `ToolExecution`, `Transcript` —
+   model observable persisted state, not the rig loop; provider/streaming bytes
+   are explicitly outside the proof boundary. The conformance suite is the
+   contract the owned loop must keep green.)
+2. Build the owned multi-turn **stream generator** (`agent::loop_stream`, D6):
+   our own `Stream` mirroring rig's `send()`, owning request construction, turn
+   iteration, in-stream tool execution (via `tool_call_lifecycle::runtime`),
+   native in-loop result bounding (closes #401), and message threading. Fire the
+   former `PromptHook` points as direct `DefraSessionHook` calls. TDD against a
+   mock `CompletionModel` (pattern exists in `agent/stream_processor/tests.rs`).
+3. Retarget `StreamProcessor` + `inference.rs` from rig's `MultiTurnStreamItem`
+   to our item enum (mechanical) and swap the `stream_prompt` call for our
+   generator. Delete the #416 recorder shim here.
+4. Convert `oneshot`, then `compaction` (hardest), then `daemon/title` — one
+   commit each — onto the owned generator (a non-streaming collector over the
+   same generator, or a thin `model.completion()` variant).
+5. Delete `completion_factory.rs` agent-builder plumbing and the `PromptHook`
    trait wiring once no path uses rig's `Agent`.
 
 ### Follow-up issues (deferred, not in scope here)
