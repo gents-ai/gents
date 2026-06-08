@@ -547,6 +547,34 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
     )
 }
 
+/// Converts a `serde_json::Value` into a GraphQL input literal for use in
+/// DefraDB document mutations (create/update/upsert payloads).
+///
+/// This is the generic renderer used by the apply and import code paths
+/// (and the direct writers for `Task`, `Schedule`, and `EventTrigger`) when
+/// materializing desired-state documents as GraphQL `input:` arguments.
+///
+/// # Empty list handling
+///
+/// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
+/// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
+/// `NillableStringArray` (`[String]`) columns (used for `cli_tool_names`,
+/// `subagent_targets`, `tool_refs`, `skill_refs`, `models`, `allowed_mcp_service_ids`,
+/// etc.). A create may appear to succeed while storing the wrong type; any
+/// subsequent update then fails re-validation.
+///
+/// This behaviour matches the dedicated helpers (`string_list_field`,
+/// `graphql_string_list_field` etc.) introduced for the same quirk in #382.
+///
+/// The primary upstream defence lives in `sanitize_import_document` (and the
+/// filtering in `desired_from_value`), which omits empty lists on create and
+/// writes explicit `null` on update for most collections. `graphql_input_literal`
+/// acts as a defensive backstop for any path that reaches it with an explicit
+/// empty array value.
+///
+/// All array fields that currently flow through this function for DefraDB
+/// collections are list-of-string columns. The blanket rule is therefore
+/// safe for the documented use cases in the apply/desired-state machinery.
 pub fn graphql_input_literal(value: &Value) -> Result<String> {
     match value {
         Value::Null => Ok("null".to_string()),
@@ -995,7 +1023,10 @@ mod tests {
         let rendered = graphql_input_literal(&value).expect("render literal");
         assert!(rendered.contains("tool_refs: null"), "rendered: {rendered}");
         assert!(rendered.contains("skill_refs: null"), "rendered: {rendered}");
-        assert!(!rendered.contains("[]"), "rendered: {rendered}");
+        // Field-specific checks are stronger than a generic !contains("[]")
+        // (the latter could be defeated by unrelated substrings in complex values).
+        assert!(!rendered.contains("tool_refs: []"), "rendered: {rendered}");
+        assert!(!rendered.contains("skill_refs: []"), "rendered: {rendered}");
     }
 }
 
