@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rig::client::CompletionClient;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
@@ -178,6 +178,10 @@ pub(crate) struct AdmissionCallContext {
     /// error. `None` means no cancellation observation (e.g. one-shot CLI
     /// calls without a daemon-side interrupt observer).
     pub(super) inference_token: Option<CancellationToken>,
+    /// Daemon-owned terminal failure reason for cases where an outer runtime
+    /// condition intentionally drops a guarded stream before the stream can
+    /// yield a provider error itself.
+    pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
 }
 
 impl AdmissionCallContext {
@@ -195,6 +199,7 @@ impl AdmissionCallContext {
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
             inference_token: None,
+            terminal_failure_reason: None,
         }
     }
 
@@ -240,6 +245,7 @@ pub(crate) async fn scope_call<T>(
 /// `AdmittedCompletionModel` observes during the inner completion/stream
 /// call. When the token cancels, the permit is marked as interrupted so
 /// the `InferenceCall` row lands as `cancelled` rather than `failed`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn scope_call_with_token<T>(
     call_kind: CallKind,
     attempt: i64,
@@ -250,6 +256,38 @@ pub(crate) async fn scope_call_with_token<T>(
     context.call_kind = call_kind;
     context.attempt = attempt;
     context.inference_token = Some(token);
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
+pub(crate) type TerminalFailureReasonObserver = Arc<Mutex<Option<String>>>;
+
+pub(crate) fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {
+    Arc::new(Mutex::new(None))
+}
+
+pub(crate) fn set_terminal_failure_reason(
+    observer: &TerminalFailureReasonObserver,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    match observer.lock() {
+        Ok(mut slot) => *slot = Some(reason),
+        Err(poisoned) => *poisoned.into_inner() = Some(reason),
+    }
+}
+
+pub(crate) async fn scope_call_with_token_and_failure_reason<T>(
+    call_kind: CallKind,
+    attempt: i64,
+    token: CancellationToken,
+    terminal_failure_reason: TerminalFailureReasonObserver,
+    future: impl Future<Output = T>,
+) -> T {
+    let mut context = current_context().expect("admission call scope requires request context");
+    context.call_kind = call_kind;
+    context.attempt = attempt;
+    context.inference_token = Some(token);
+    context.terminal_failure_reason = Some(terminal_failure_reason);
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 

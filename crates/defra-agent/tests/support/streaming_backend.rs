@@ -6,7 +6,7 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -97,19 +97,23 @@ impl MockStreamingBackend {
         self.state.release(marker);
     }
 
+    pub fn observed_chunks(&self, marker: &str) -> usize {
+        self.state.chunk_count(marker)
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let actual = self.state.chunk_count(marker);
-            if actual >= expected {
-                return;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "timed out waiting for {expected} chunk(s) for marker {marker}, observed {actual}"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        let state = self.state.clone();
+        let marker = marker.to_string();
+        let marker_for_wait = marker.clone();
+        let observed = tokio::task::spawn_blocking(move || {
+            state.wait_for_chunk_count(&marker_for_wait, expected, Duration::from_secs(5))
+        })
+        .await
+        .expect("streaming backend chunk wait task should join");
+        assert!(
+            observed >= expected,
+            "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
+        );
     }
 }
 
@@ -166,6 +170,25 @@ impl StreamingState {
             .get(marker)
             .copied()
             .unwrap_or_default()
+    }
+
+    fn wait_for_chunk_count(&self, marker: &str, expected: usize, timeout: Duration) -> usize {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
+        loop {
+            let actual = inner.chunk_counts.get(marker).copied().unwrap_or_default();
+            if actual >= expected || started.elapsed() >= timeout {
+                return actual;
+            }
+            let remaining = timeout
+                .checked_sub(started.elapsed())
+                .unwrap_or(Duration::ZERO);
+            inner = self
+                .condvar
+                .wait_timeout(inner, remaining.min(Duration::from_millis(25)))
+                .expect("streaming backend condvar poisoned")
+                .0;
+        }
     }
 
     fn release(&self, marker: &str) {

@@ -169,6 +169,12 @@ async fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract
         .await;
 }
 
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
+    streaming_compaction::generated_streaming_response_idle_timeout_case_drives_daemon_contract()
+        .await;
+}
+
 #[test]
 fn generated_compaction_reducer_cases_pin_contract() {
     streaming_compaction::generated_compaction_reducer_cases_pin_contract();
