@@ -18,6 +18,7 @@ use rmcp::{
     RoleClient, ServiceExt,
 };
 use tokio::sync::RwLock;
+use tracing::Instrument;
 
 pub const AGENT_DID_HEADER: &str = "x-agent-did";
 
@@ -29,11 +30,14 @@ type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send
 type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
 type ListToolsFn = dyn Fn() -> ListToolsFuture + Send + Sync;
 type CallToolFn = dyn Fn(CallToolRequestParams) -> CallToolFuture + Send + Sync;
-type ConnectFn = dyn Fn(String, String, Option<String>) -> ConnectFuture + Send + Sync;
+type ConnectFn =
+    dyn Fn(String, String, Option<String>, HashMap<String, String>) -> ConnectFuture + Send + Sync;
+type TraceContextHeadersFn = dyn Fn() -> HashMap<String, String> + Send + Sync;
 
 struct McpConnection {
     endpoint: String,
     agent_did_header: Option<String>,
+    trace_context_headers: HashMap<String, String>,
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
 }
@@ -52,6 +56,7 @@ where
     McpConnection {
         endpoint,
         agent_did_header: None,
+        trace_context_headers: HashMap::new(),
         list_tools_fn: Box::new(move || {
             let c = Arc::clone(&c1);
             Box::pin(async move {
@@ -76,6 +81,7 @@ where
 fn streamable_http_transport_config(
     endpoint: &str,
     agent_did_header: Option<&str>,
+    trace_context_headers: &HashMap<String, String>,
 ) -> Result<StreamableHttpClientTransportConfig> {
     let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_string());
     let mut headers = std::collections::HashMap::new();
@@ -85,19 +91,22 @@ fn streamable_http_transport_config(
             HeaderValue::from_str(agent_did).context("invalid agent DID header value")?,
         );
     }
-    insert_trace_context_headers(&mut headers);
+    insert_trace_context_headers(&mut headers, trace_context_headers);
     if !headers.is_empty() {
         config = config.custom_headers(headers);
     }
     Ok(config)
 }
 
-fn insert_trace_context_headers(headers: &mut HashMap<HeaderName, HeaderValue>) {
-    for (name, value) in crate::runtime_trace::current_trace_context_headers() {
+fn insert_trace_context_headers(
+    headers: &mut HashMap<HeaderName, HeaderValue>,
+    trace_context_headers: &HashMap<String, String>,
+) {
+    for (name, value) in trace_context_headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        let Ok(value) = HeaderValue::from_str(&value) else {
+        let Ok(value) = HeaderValue::from_str(value.as_str()) else {
             continue;
         };
         headers.entry(name).or_insert(value);
@@ -108,8 +117,10 @@ async fn connect_mcp_service(
     service_id: &str,
     endpoint: &str,
     agent_did_header: Option<&str>,
+    trace_context_headers: HashMap<String, String>,
 ) -> Result<McpConnection> {
-    let config = streamable_http_transport_config(endpoint, agent_did_header)?;
+    let config =
+        streamable_http_transport_config(endpoint, agent_did_header, &trace_context_headers)?;
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
     let client = ()
         .serve(transport)
@@ -117,14 +128,24 @@ async fn connect_mcp_service(
         .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
     let mut connection = wrap_connection(endpoint.to_string(), client);
     connection.agent_did_header = agent_did_header.map(ToOwned::to_owned);
+    connection.trace_context_headers = trace_context_headers;
     Ok(connection)
 }
 
 fn default_connect_fn() -> Arc<ConnectFn> {
     Arc::new(
-        |service_id: String, endpoint: String, agent_did_header: Option<String>| {
+        |service_id: String,
+         endpoint: String,
+         agent_did_header: Option<String>,
+         trace_context_headers: HashMap<String, String>| {
             Box::pin(async move {
-                connect_mcp_service(&service_id, &endpoint, agent_did_header.as_deref()).await
+                connect_mcp_service(
+                    &service_id,
+                    &endpoint,
+                    agent_did_header.as_deref(),
+                    trace_context_headers,
+                )
+                .await
             })
         },
     )
@@ -201,6 +222,7 @@ pub(crate) fn tool_retry_disposition(
 pub struct McpPool {
     inner: Arc<RwLock<HashMap<String, McpConnection>>>,
     connect_fn: Arc<ConnectFn>,
+    trace_context_headers_fn: Arc<TraceContextHeadersFn>,
 }
 
 impl McpPool {
@@ -208,21 +230,42 @@ impl McpPool {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
             connect_fn: default_connect_fn(),
+            trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
         }
     }
 
     #[cfg(test)]
     fn new_with_connector<F, Fut>(connector: F) -> Self
     where
-        F: Fn(String, String, Option<String>) -> Fut + Send + Sync + 'static,
+        F: Fn(String, String, Option<String>, HashMap<String, String>) -> Fut
+            + Send
+            + Sync
+            + 'static,
         Fut: Future<Output = Result<McpConnection>> + Send + 'static,
     {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
-            connect_fn: Arc::new(move |service_id, endpoint, agent_did_header| {
-                Box::pin(connector(service_id, endpoint, agent_did_header))
-            }),
+            connect_fn: Arc::new(
+                move |service_id, endpoint, agent_did_header, trace_headers| {
+                    Box::pin(connector(
+                        service_id,
+                        endpoint,
+                        agent_did_header,
+                        trace_headers,
+                    ))
+                },
+            ),
+            trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
         }
+    }
+
+    #[cfg(test)]
+    fn with_trace_context_headers<F>(mut self, headers: F) -> Self
+    where
+        F: Fn() -> HashMap<String, String> + Send + Sync + 'static,
+    {
+        self.trace_context_headers_fn = Arc::new(headers);
+        self
     }
 
     #[cfg(test)]
@@ -232,26 +275,29 @@ impl McpPool {
         Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
     {
         let handler = Arc::new(handler);
-        Self::new_with_connector(move |service_id, endpoint, agent_did_header| {
-            let handler = Arc::clone(&handler);
-            async move {
-                let service_id_for_list = service_id.clone();
-                let endpoint_for_list = endpoint.clone();
-                Ok(McpConnection {
-                    endpoint,
-                    agent_did_header,
-                    list_tools_fn: Box::new(move || {
-                        let handler = Arc::clone(&handler);
-                        let service_id = service_id_for_list.clone();
-                        let endpoint = endpoint_for_list.clone();
-                        Box::pin(async move { handler(service_id, endpoint).await })
-                    }),
-                    call_tool_fn: Box::new(|_params| {
-                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
-                    }),
-                })
-            }
-        })
+        Self::new_with_connector(
+            move |service_id, endpoint, agent_did_header, trace_headers| {
+                let handler = Arc::clone(&handler);
+                async move {
+                    let service_id_for_list = service_id.clone();
+                    let endpoint_for_list = endpoint.clone();
+                    Ok(McpConnection {
+                        endpoint,
+                        agent_did_header,
+                        trace_context_headers: trace_headers,
+                        list_tools_fn: Box::new(move || {
+                            let handler = Arc::clone(&handler);
+                            let service_id = service_id_for_list.clone();
+                            let endpoint = endpoint_for_list.clone();
+                            Box::pin(async move { handler(service_id, endpoint).await })
+                        }),
+                        call_tool_fn: Box::new(|_params| {
+                            Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                        }),
+                    })
+                }
+            },
+        )
     }
 
     /// List the tools exposed by the MCP server at `endpoint`.
@@ -270,20 +316,37 @@ impl McpPool {
         endpoint: &str,
         agent_did: Option<&str>,
     ) -> Result<ListToolsResult> {
-        self.get_or_connect(service_id, endpoint, agent_did).await?;
-        match self.list_tools_once(service_id).await {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                tracing::warn!(
-                    service_id = %service_id,
-                    error = %error,
-                    "MCP list_tools failed, evicting connection and retrying"
-                );
-                self.remove(service_id).await;
-                self.get_or_connect(service_id, endpoint, agent_did).await?;
-                self.list_tools_once(service_id).await
+        async {
+            self.get_or_connect(service_id, endpoint, agent_did).await?;
+            match self.list_tools_once(service_id).await {
+                Ok(result) => {
+                    tracing::Span::current().record("tool_count", result.tools.len() as i64);
+                    Ok(result)
+                }
+                Err(error) => {
+                    tracing::Span::current().record("retried", true);
+                    tracing::warn!(
+                        service_id = %service_id,
+                        error = %error,
+                        "MCP list_tools failed, evicting connection and retrying"
+                    );
+                    self.remove(service_id).await;
+                    self.get_or_connect(service_id, endpoint, agent_did).await?;
+                    let result = self.list_tools_once(service_id).await?;
+                    tracing::Span::current().record("tool_count", result.tools.len() as i64);
+                    Ok(result)
+                }
             }
         }
+        .instrument(tracing::info_span!(
+            "mcp.list_tools",
+            service_id = %service_id,
+            endpoint = %endpoint,
+            agent_did_bound = agent_did.is_some(),
+            retried = false,
+            tool_count = tracing::field::Empty,
+        ))
+        .await
     }
 
     /// Call a tool on the MCP server at `endpoint`.
@@ -314,9 +377,28 @@ impl McpPool {
         arguments: serde_json::Value,
         agent_did: Option<&str>,
     ) -> Result<CallToolResult> {
-        self.get_or_connect(service_id, endpoint, agent_did).await?;
-        self.call_tool_once(service_id, build_call_tool_params(tool_name, arguments))
-            .await
+        let argument_count = argument_count(&arguments);
+        async {
+            self.get_or_connect(service_id, endpoint, agent_did).await?;
+            let result = self
+                .call_tool_once(service_id, build_call_tool_params(tool_name, arguments))
+                .await;
+            if let Ok(result) = &result {
+                tracing::Span::current()
+                    .record("mcp_result_is_error", result.is_error.unwrap_or(false));
+            }
+            result
+        }
+        .instrument(tracing::info_span!(
+            "mcp.call_tool",
+            service_id = %service_id,
+            endpoint = %endpoint,
+            tool_name = %tool_name,
+            agent_did_bound = agent_did.is_some(),
+            argument_count = argument_count as i64,
+            mcp_result_is_error = tracing::field::Empty,
+        ))
+        .await
     }
 
     pub async fn remove(&self, service_id: &str) {
@@ -360,11 +442,17 @@ impl McpPool {
         agent_did: Option<&str>,
     ) -> Result<()> {
         let agent_did_header = agent_did.map(ToOwned::to_owned);
+        // rmcp's streamable HTTP worker keeps custom headers in its transport
+        // config, so trace context is part of the connection context.
+        let trace_context_headers = (self.trace_context_headers_fn)();
         // Fast path — read lock
         {
             let guard = self.inner.read().await;
             if let Some(conn) = guard.get(service_id) {
-                if conn.endpoint == endpoint && conn.agent_did_header == agent_did_header {
+                if conn.endpoint == endpoint
+                    && conn.agent_did_header == agent_did_header
+                    && conn.trace_context_headers == trace_context_headers
+                {
                     return Ok(());
                 }
             }
@@ -373,13 +461,22 @@ impl McpPool {
         // Slow path — write lock, re-check
         let mut guard = self.inner.write().await;
         if let Some(conn) = guard.get(service_id) {
-            if conn.endpoint == endpoint && conn.agent_did_header == agent_did_header {
+            let endpoint_changed = conn.endpoint != endpoint;
+            let agent_did_changed = conn.agent_did_header != agent_did_header;
+            let trace_context_changed = conn.trace_context_headers != trace_context_headers;
+            if conn.endpoint == endpoint
+                && conn.agent_did_header == agent_did_header
+                && conn.trace_context_headers == trace_context_headers
+            {
                 return Ok(());
             }
             tracing::info!(
                 service_id,
-                old = %conn.endpoint,
-                new = %endpoint,
+                old_endpoint = %conn.endpoint,
+                new_endpoint = %endpoint,
+                endpoint_changed,
+                agent_did_changed,
+                trace_context_changed,
                 "MCP connection context changed, reconnecting"
             );
         }
@@ -389,6 +486,7 @@ impl McpPool {
             service_id.to_string(),
             endpoint.to_string(),
             agent_did_header,
+            trace_context_headers,
         )
         .await?;
         guard.insert(service_id.to_string(), connection);
@@ -399,6 +497,14 @@ impl McpPool {
 impl Default for McpPool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn argument_count(arguments: &serde_json::Value) -> usize {
+    match arguments {
+        serde_json::Value::Object(map) => map.len(),
+        serde_json::Value::Null => 0,
+        _ => 1,
     }
 }
 
