@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rig::agent::{HookAction, MultiTurnStreamItem, PromptHook};
+use rig::agent::{HookAction, MultiTurnStreamItem};
 use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::one_or_many::OneOrMany;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingCompletionResponse};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
 use crate::ensure_schemas;
@@ -16,38 +15,6 @@ use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in stream processor tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in stream processor tests".to_string(),
-        ))
-    }
-}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -77,9 +44,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Inspect the repo"),
+        hook.on_completion_call(&user_text_message("Inspect the repo"),
             &[]
         )
         .await,
@@ -362,9 +327,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("discover available tools"),
+        hook.on_completion_call(&user_text_message("discover available tools"),
             &[]
         )
         .await,
@@ -435,9 +398,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "discover_tools",
+        hook.on_tool_call("discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -450,9 +411,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap());
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "discover_tools",
+        hook.on_tool_result("discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -530,7 +489,7 @@ async fn post_tool_resumed_resets_response_tail() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("test prompt"), &[])
+        hook.on_completion_call(&user_text_message("test prompt"), &[])
             .await,
         HookAction::Continue
     ));

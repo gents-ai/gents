@@ -29,7 +29,7 @@ use std::time::Duration;
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
-use rig::agent::{HookAction, MultiTurnStreamItem, PromptHook, StreamingError, ToolCallHookAction};
+use rig::agent::{HookAction, MultiTurnStreamItem, StreamingError, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, Message, Usage};
 use rig::message::ToolChoice;
@@ -110,12 +110,7 @@ where
                 let history_snapshot: Vec<Message> =
                     history.iter().chain(prior.iter()).cloned().collect();
                 if let HookAction::Terminate { reason } =
-                    <DefraSessionHook as PromptHook<M>>::on_completion_call(
-                        hook,
-                        &current_prompt,
-                        &history_snapshot,
-                    )
-                    .await
+                    hook.on_completion_call(&current_prompt, &history_snapshot).await
                 {
                     Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
                 }
@@ -188,8 +183,7 @@ where
                 // hook (non-persisting calls) the tool simply executes.
                 let call_action = match hook.as_ref() {
                     Some(hook) => {
-                        <DefraSessionHook as PromptHook<M>>::on_tool_call(
-                            hook,
+                        hook.on_tool_call(
                             &tool_name,
                             tool_call.call_id.clone(),
                             &internal_call_id,
@@ -225,9 +219,8 @@ where
                         // on_tool_result persists/spills the FULL result and
                         // drives the lifecycle to its terminal state.
                         if let Some(hook) = hook.as_ref() {
-                            let result_action =
-                                <DefraSessionHook as PromptHook<M>>::on_tool_result(
-                                    hook,
+                            let result_action = hook
+                                .on_tool_result(
                                     &tool_name,
                                     tool_call.call_id.clone(),
                                     &internal_call_id,

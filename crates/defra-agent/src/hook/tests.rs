@@ -1,16 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
+use rig::agent::{HookAction, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
-};
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
 use serde_json::json;
 
 use super::*;
@@ -18,38 +14,6 @@ use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
 };
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in hook tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in hook tests".to_string(),
-        ))
-    }
-}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -339,38 +303,6 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
     }
 }
 
-async fn create_streaming_response(
-    node: &defra_node::EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-) {
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{request_id}",
-                request_id: "{request_id}",
-                agent_did: "did:defra-agent:general",
-                behavior_id: "general",
-                session_id: "{session_id}",
-                content: "",
-                reasoning: "",
-                status: "streaming",
-                error_message: "",
-                token_count: 0,
-                progress_seq: 0,
-                created_at: "2026-04-21T00:00:00Z",
-                completed_at: ""
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create response failed: {:?}",
-        resp.errors
-    );
-}
-
 async fn create_interruptible_request(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
@@ -509,7 +441,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     );
     let user_prompt = user_text_message("Run a tool");
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        hook.on_completion_call(&user_prompt, &[]).await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -521,7 +453,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook, "read", None, "internal-deadline", "{}").await,
+        hook.on_tool_call("read", None, "internal-deadline", "{}").await,
         ToolCallHookAction::Continue
     ));
 
@@ -562,7 +494,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("Run"), &[]).await,
+        hook.on_completion_call(&user_text_message("Run"), &[]).await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -572,12 +504,10 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook, "never", None, "internal-timeout", "{}").await,
+        hook.on_tool_call("never", None, "internal-timeout", "{}").await,
         ToolCallHookAction::Continue
     ));
-    let action = PromptHook::<TestModel>::on_tool_result(
-        &hook,
-        "never",
+    let action = hook.on_tool_result("never",
         None,
         "internal-timeout",
         "{}",
@@ -624,9 +554,7 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Run an oversized tool"),
+        hook.on_completion_call(&user_text_message("Run an oversized tool"),
             &[],
         )
         .await,
@@ -646,9 +574,7 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     // on_tool_result the FULL output; on_tool_result spills the full text and
     // persists a bounded model observation carrying a spill pointer.
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "oversized",
+        hook.on_tool_call("oversized",
             None,
             "internal-oversized",
             tool_args,
@@ -657,9 +583,7 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "oversized",
+        hook.on_tool_result("oversized",
             None,
             "internal-oversized",
             tool_args,
@@ -734,11 +658,11 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook_a, &user_text_message("A"), &[]).await,
+        hook_a.on_completion_call(&user_text_message("A"), &[]).await,
         HookAction::Continue
     ));
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook_b, &user_text_message("B"), &[]).await,
+        hook_b.on_completion_call(&user_text_message("B"), &[]).await,
         HookAction::Continue
     ));
     let session_a = hook_a.session_id().await.expect("session a");
@@ -754,11 +678,11 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     hook_b.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook_a, "slow", None, "internal-a", "{}").await,
+        hook_a.on_tool_call("slow", None, "internal-a", "{}").await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook_b, "slow", None, "internal-b", "{}").await,
+        hook_b.on_tool_call("slow", None, "internal-b", "{}").await,
         ToolCallHookAction::Continue
     ));
 
@@ -927,7 +851,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("fail"), &[]).await,
+        hook.on_completion_call(&user_text_message("fail"), &[]).await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -937,7 +861,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         .await;
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook, "slow", None, "internal-fail", "{}").await,
+        hook.on_tool_call("slow", None, "internal-fail", "{}").await,
         ToolCallHookAction::Continue
     ));
     assert_eq!(
@@ -984,15 +908,13 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     );
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        hook.on_completion_call(&user_prompt, &[]).await,
         HookAction::Continue
     ));
 
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "read",
+        hook.on_tool_call("read",
             Some("call-1".to_string()),
             "internal-1",
             tool_args,
@@ -1002,9 +924,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     ));
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "read",
+        hook.on_tool_result("read",
             Some("call-1".to_string()),
             "internal-1",
             tool_args,
@@ -1164,9 +1084,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Read notes.txt"),
+        hook.on_completion_call(&user_text_message("Read notes.txt"),
             &[]
         )
         .await,
@@ -1175,9 +1093,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
 
     let tool_args = r#"{"path":"notes.txt","start_line":2,"end_line":3}"#;
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "read_file",
+        hook.on_tool_call("read_file",
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
@@ -1191,9 +1107,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         "\ncontent:\nL2: beta\nL3: gamma"
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "read_file",
+        hook.on_tool_result("read_file",
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
@@ -1289,9 +1203,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Inspect /tmp/main.rs"),
+        hook.on_completion_call(&user_text_message("Inspect /tmp/main.rs"),
             &[]
         )
         .await,
@@ -1304,9 +1216,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let tool_result_text = "fn main() {}\n";
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "read",
+        hook.on_tool_call("read",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -1332,9 +1242,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     .unwrap();
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "read",
+        hook.on_tool_result("read",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -1454,9 +1362,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Run two tools"),
+        hook.on_completion_call(&user_text_message("Run two tools"),
             &[]
         )
         .await,
@@ -1518,12 +1424,12 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     );
     let user_prompt = user_text_message("Inspect mini-1");
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        hook.on_completion_call(&user_prompt, &[]).await,
         HookAction::Continue
     ));
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook, "first", None, "internal-1", "{}").await,
+        hook.on_tool_call("first", None, "internal-1", "{}").await,
         ToolCallHookAction::Continue
     ));
     hook.persist_message(&Message::Assistant {
@@ -1543,13 +1449,11 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     .unwrap();
 
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(&hook, "second", None, "internal-2", "{}").await,
+        hook.on_tool_call("second", None, "internal-2", "{}").await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
-            "second",
+        hook.on_tool_result("second",
             Some("call-2".to_string()),
             "internal-2",
             "{}",
@@ -1657,84 +1561,3 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-#[tokio::test]
-async fn completion_response_marks_agent_response_as_materialized() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-materialized-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
-
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:defra-agent:general",
-        FailurePolicy::default(),
-    );
-    let user_prompt = user_text_message("Explain the runtime model");
-    assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
-        HookAction::Continue
-    ));
-
-    let session_id = hook.session_id().await.expect("session id");
-    hook.set_active_request_id(Some("req-materialized".to_string()))
-        .await;
-    create_streaming_response(&node, "req-materialized", &session_id).await;
-
-    let response = CompletionResponse {
-        choice: OneOrMany::one(AssistantContent::Text(Text {
-            text: "Here is the answer.".to_string(),
-        })),
-        usage: Usage::new(),
-        raw_response: (),
-        message_id: None,
-    };
-
-    assert!(matches!(
-        PromptHook::<TestModel>::on_completion_response(&hook, &user_prompt, &response).await,
-        HookAction::Continue
-    ));
-
-    let resp = node
-        .execute(
-            r#"{
-                AgentResponse(filter: { request_id: { _eq: "req-materialized" } }, limit: 1) {
-                    materialized_message_sequence
-                    materialized_at
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query response failed: {:?}",
-        resp.errors
-    );
-
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("response row");
-
-    assert_eq!(
-        row.get("materialized_message_sequence")
-            .and_then(|value| value.as_u64()),
-        Some(2)
-    );
-    assert!(row
-        .get("materialized_at")
-        .and_then(|value| value.as_str())
-        .is_some());
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}

@@ -1,7 +1,17 @@
 use super::*;
 
-impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
-    async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
+/// Persistence/lifecycle side-effects for the owned completion loop (#400).
+///
+/// These were rig `PromptHook` callbacks; the owned loop (`agent::loop_stream`)
+/// now calls them directly as inherent methods, so the trait and its generic
+/// `M` are gone. They keep returning rig's `HookAction` / `ToolCallHookAction`
+/// (kept per decision D3).
+impl DefraSessionHook {
+    pub(crate) async fn on_completion_call(
+        &self,
+        prompt: &Message,
+        _history: &[Message],
+    ) -> HookAction {
         let result: anyhow::Result<()> = async {
             let mut state = self.state.lock().await;
 
@@ -28,32 +38,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         }
     }
 
-    async fn on_completion_response(
-        &self,
-        _prompt: &Message,
-        response: &CompletionResponse<M::Response>,
-    ) -> HookAction {
-        let result: anyhow::Result<()> = async {
-            let message = Message::Assistant {
-                id: response.message_id.clone(),
-                content: response.choice.clone(),
-            };
-            let sequence = self.persist_message(&message).await?;
-            self.mark_current_response_materialized(sequence).await?;
-            Ok(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                self.record_success();
-                HookAction::Continue
-            }
-            Err(e) => self.on_persistence_error("persist assistant response", &e),
-        }
-    }
-
-    async fn on_tool_call(
+    pub(crate) async fn on_tool_call(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
@@ -303,7 +288,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         }
     }
 
-    async fn on_tool_result(
+    pub(crate) async fn on_tool_result(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
