@@ -394,6 +394,9 @@ impl DefraStreamWriter {
             has_error_message = error_message.is_some(),
             request_finalize_mode = %request_mode.as_str(),
             token_count = tracing::field::Empty,
+            final_content_len = tracing::field::Empty,
+            update_matched_response = tracing::field::Empty,
+            finalize_outcome = tracing::field::Empty,
         );
 
         async {
@@ -416,6 +419,7 @@ impl DefraStreamWriter {
             let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
                 Ok(resp) => resp,
                 Err(error) => {
+                    tracing::Span::current().record("finalize_outcome", "mutation_error");
                     if let Some(snapshot) = snapshot.as_ref() {
                         tracing::error!(
                             doc_id = %doc_id,
@@ -438,16 +442,23 @@ impl DefraStreamWriter {
                 }
             };
 
-            let persisted = if resp
+            let update_matched_response = resp
                 .data
                 .as_ref()
                 .and_then(|data| data.get("update_AgentResponse"))
-                .is_some_and(response_has_documents)
-            {
+                .is_some_and(response_has_documents);
+            tracing::Span::current().record("update_matched_response", update_matched_response);
+
+            let persisted = if update_matched_response {
+                tracing::Span::current().record("finalize_outcome", "updated");
                 load_response_state(&self.node, doc_id).await?
             } else {
                 match load_response_state(&self.node, doc_id).await? {
                     Some(existing) if existing.status == status.as_str() => {
+                        tracing::Span::current().record(
+                            "finalize_outcome",
+                            "idempotent_terminal",
+                        );
                         tracing::warn!(
                             doc_id = %doc_id,
                             status = %status.as_str(),
@@ -456,6 +467,7 @@ impl DefraStreamWriter {
                         Some(existing)
                     }
                     Some(existing) => {
+                        tracing::Span::current().record("finalize_outcome", "terminal_conflict");
                         anyhow::bail!(
                             "cannot finalize AgentResponse {} as {} because it is already {}",
                             doc_id,
@@ -463,11 +475,14 @@ impl DefraStreamWriter {
                             existing.status
                         );
                     }
-                    None => anyhow::bail!(
-                        "cannot finalize AgentResponse {} as {} because the response document is missing",
-                        doc_id,
-                        status.as_str()
-                    ),
+                    None => {
+                        tracing::Span::current().record("finalize_outcome", "missing_response");
+                        anyhow::bail!(
+                            "cannot finalize AgentResponse {} as {} because the response document is missing",
+                            doc_id,
+                            status.as_str()
+                        );
+                    }
                 }
             };
 
@@ -485,6 +500,7 @@ impl DefraStreamWriter {
                 .unwrap_or_default();
 
             tracing::Span::current().record("token_count", token_count as i64);
+            tracing::Span::current().record("final_content_len", content.len() as i64);
             tracing::info!(
                 doc_id = %doc_id,
                 status = %status.as_str(),
