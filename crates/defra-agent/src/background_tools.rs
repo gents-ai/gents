@@ -916,6 +916,7 @@ pub(crate) async fn handle_read_tool_output(
         status,
         output: slice.output,
         next_offset: slice.next_offset,
+        first_available_offset: slice.first_available_offset,
         total_bytes: slice.total_bytes,
         has_more: slice.has_more,
         exited,
@@ -943,6 +944,11 @@ fn combine_output_streams(stdout: &str, stderr: &str) -> String {
 struct CombinedOutputSlice {
     output: String,
     next_offset: u64,
+    /// Earliest byte offset still readable. 0 for terminal/persisted output
+    /// (nothing is ever evicted); for a running tool whose live ring buffer
+    /// has overflowed, this is > 0 and a caller can detect that bytes in
+    /// `[requested offset, first_available_offset)` were dropped.
+    first_available_offset: u64,
     total_bytes: u64,
     has_more: bool,
 }
@@ -1012,6 +1018,7 @@ fn read_retained_output_slice(
     CombinedOutputSlice {
         output,
         next_offset,
+        first_available_offset: first_offset,
         total_bytes,
         has_more: next_offset < total_bytes,
     }
@@ -2254,5 +2261,31 @@ mod tests {
             ]),
             vec!["alpha".to_string(), "beta".to_string()]
         );
+    }
+
+    #[test]
+    fn combined_slice_reports_zero_first_available_offset() {
+        // Terminal/persisted output is never evicted, so the earliest readable
+        // byte is always 0.
+        let slice = read_combined_output_slice("hello world", 0, 1024);
+        assert_eq!(slice.first_available_offset, 0);
+        assert_eq!(slice.output, "hello world");
+        assert_eq!(slice.total_bytes, 11);
+        assert!(!slice.has_more);
+    }
+
+    #[test]
+    fn retained_slice_surfaces_dropped_prefix() {
+        // Simulate a live ring buffer that produced 1000 bytes but retains only
+        // the last 4 (tail): first_offset = 996, total_bytes_seen = 1000.
+        let slice = read_retained_output_slice("tail", 996, 1000, 0, 1024);
+        // A read from offset 0 is clamped forward to the earliest retained
+        // byte; first_available_offset (996) exceeding the requested offset (0)
+        // is how a caller detects bytes [0, 996) were produced then evicted.
+        assert_eq!(slice.first_available_offset, 996);
+        assert_eq!(slice.output, "tail");
+        assert_eq!(slice.next_offset, 1000);
+        assert_eq!(slice.total_bytes, 1000);
+        assert!(!slice.has_more);
     }
 }

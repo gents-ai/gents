@@ -4,8 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::STDERR_BOUNDARY;
-
-const LIVE_STREAM_CAPACITY_BYTES: usize = 256 * 1024;
+use crate::truncation::LIVE_STREAM_CAPACITY_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LiveOutputStream {
@@ -123,6 +122,15 @@ struct RingBuffer {
 }
 
 impl RingBuffer {
+    /// Append `bytes`, evicting from the *front* so the buffer always retains
+    /// the most recent `LIVE_STREAM_CAPACITY_BYTES`.
+    ///
+    /// This always keeps the tail, for every tool, and is a deliberate
+    /// divergence from `crate::truncation::tool_result_truncation_mode` (which
+    /// keeps the head for non-bash *finished* results). A live view of a
+    /// running tool always wants the most recent output regardless of tool, so
+    /// tail-retention is correct here; `total_bytes_seen`/`first_offset` let a
+    /// reader detect that an earlier prefix was evicted.
     fn append(&mut self, bytes: &[u8]) {
         self.total_bytes_seen = self.total_bytes_seen.saturating_add(bytes.len() as u64);
         if bytes.len() >= LIVE_STREAM_CAPACITY_BYTES {
