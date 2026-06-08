@@ -554,6 +554,13 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
         Value::Number(value) => Ok(value.to_string()),
         Value::String(value) => Ok(graphql_string_literal(value)),
         Value::Array(values) => {
+            // Empty lists must serialize as `null`, never `[]`. A bare `[]`
+            // literal is typed by DefraDB as JsonArray and corrupts
+            // NillableStringArray columns (create stores JsonArray, later
+            // updates fail re-validation). Matches `string_list_field`.
+            if values.is_empty() {
+                return Ok("null".to_string());
+            }
             let rendered = values
                 .iter()
                 .map(graphql_input_literal)
@@ -972,6 +979,23 @@ mod tests {
         assert!(rendered.contains("enabled: true"));
         assert!(rendered.contains(r#"name: "alpha""#));
         assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+
+    #[test]
+    fn graphql_input_literal_emits_null_for_empty_array_not_bracket_literal() {
+        assert_eq!(
+            graphql_input_literal(&serde_json::json!([])).expect("render literal"),
+            "null",
+        );
+        let value = serde_json::json!({
+            "skill_id": "s",
+            "tool_refs": [],
+            "skill_refs": [],
+        });
+        let rendered = graphql_input_literal(&value).expect("render literal");
+        assert!(rendered.contains("tool_refs: null"), "rendered: {rendered}");
+        assert!(rendered.contains("skill_refs: null"), "rendered: {rendered}");
+        assert!(!rendered.contains("[]"), "rendered: {rendered}");
     }
 }
 
