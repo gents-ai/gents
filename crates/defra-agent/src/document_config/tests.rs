@@ -113,6 +113,76 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     );
 }
 
+#[test]
+fn write_tools_round_trip() {
+    let json = serde_json::json!({
+        "selection_id": "sel-1",
+        "agent_did": "did:defra-agent:test",
+        "write_tools": [{
+            "tool_name": "request_action",
+            "collection": "ActionRequest",
+            "description": "Emit one ActionRequest describing a remediable drift.",
+            "fields": [
+                { "name": "drift_sig", "required": true },
+                { "name": "summary", "required": true },
+                { "name": "target_paths", "required": false }
+            ]
+        }]
+    });
+    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
+    let decls = loaded.write_tools.clone().unwrap();
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].tool_name, "request_action");
+    assert_eq!(decls[0].collection, "ActionRequest");
+    assert_eq!(decls[0].fields.len(), 3);
+    assert!(decls[0].fields[0].required);
+    assert!(!decls[0].fields[2].required);
+}
+
+#[tokio::test]
+async fn tool_selection_document_round_trips_write_tools() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = ToolSelectionDocument {
+        selection_id: "steward-write-tools".to_string(),
+        agent_did: "did:key:z-test-write".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: "Emit one ActionRequest describing a remediable drift.".to_string(),
+            fields: vec![
+                WriteToolField {
+                    name: "drift_sig".to_string(),
+                    required: true,
+                },
+                WriteToolField {
+                    name: "summary".to_string(),
+                    required: true,
+                },
+                WriteToolField {
+                    name: "target_paths".to_string(),
+                    required: false,
+                },
+            ],
+        }]),
+        ..Default::default()
+    };
+    upsert_tool_selection(&node, &doc)
+        .await
+        .expect("upsert should persist the write_tools field");
+
+    let loaded = load_tool_selection(&node, "steward-write-tools")
+        .await
+        .expect("load should succeed")
+        .expect("selection should exist");
+    assert_eq!(
+        loaded.write_tools,
+        doc.write_tools,
+        "write_tools must round-trip through the GraphQL document representation"
+    );
+}
+
 #[tokio::test]
 async fn agent_behavior_description_and_summary_round_trip() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();

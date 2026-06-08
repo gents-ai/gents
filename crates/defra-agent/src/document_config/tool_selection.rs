@@ -7,6 +7,95 @@ use super::serde_helpers;
 use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
 
+/// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
+/// and whether the agent must provide it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WriteToolField {
+    pub name: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A declarative, schema-bounded document-write tool. Each declaration becomes
+/// one runtime `BoundedWriteTool` that writes exactly one validated document to
+/// one collection. Stored in the `ToolSelection.write_tools` `[String]` column
+/// as the JSON serialization of one declaration per entry — mirroring the
+/// `subagent_targets` `[String]` precedent so there is no Lean/schema change
+/// beyond adding the column.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WriteToolDecl {
+    pub tool_name: String,
+    pub collection: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub fields: Vec<WriteToolField>,
+}
+
+/// Deserialize the `write_tools` field from either representation:
+/// - a JSON array of [`WriteToolDecl`] objects (manifest / `config apply` input),
+/// - a JSON array of strings, each the JSON serialization of one
+///   [`WriteToolDecl`] (how DefraDB returns the `[String]` column),
+/// - `null` / missing / empty string (→ `None`).
+///
+/// This mirrors how `subagent_targets` survives the GraphQL `[String]` round-trip
+/// while keeping the manifest-facing shape a structured list of objects.
+fn deserialize_optional_write_tools<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<WriteToolDecl>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    use serde_json::Value;
+
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(Some(Vec::new())),
+        Value::String(s) => {
+            // A single JSON-string entry (defensive; the column is a list).
+            let decl: WriteToolDecl = serde_json::from_str(&s).map_err(D::Error::custom)?;
+            Ok(Some(vec![decl]))
+        }
+        Value::Array(items) => {
+            let mut decls = Vec::with_capacity(items.len());
+            for item in items {
+                let decl = match item {
+                    // DefraDB `[String]` column: each entry is a JSON string.
+                    Value::String(s) => {
+                        serde_json::from_str::<WriteToolDecl>(&s).map_err(D::Error::custom)?
+                    }
+                    // Manifest input: each entry is a JSON object.
+                    other => serde_json::from_value::<WriteToolDecl>(other)
+                        .map_err(D::Error::custom)?,
+                };
+                decls.push(decl);
+            }
+            Ok(Some(decls))
+        }
+        other => Err(D::Error::custom(format!(
+            "write_tools must be a list of WriteToolDecl objects or JSON strings, got {other}"
+        ))),
+    }
+}
+
+/// Encode the `write_tools` field for a GraphQL document mutation: each
+/// [`WriteToolDecl`] is serialized to a JSON string so the value fits the
+/// `[String]` column, then emitted via the shared string-list encoder (which
+/// renders an empty list as `null`, never `[]`). Mirrors the `subagent_targets`
+/// encode path.
+fn graphql_write_tools_field(decls: Option<&[WriteToolDecl]>) -> Option<String> {
+    let entries: Vec<String> = decls?
+        .iter()
+        .map(|decl| serde_json::to_string(decl).expect("WriteToolDecl serializes to JSON"))
+        .collect();
+    graphql_fields::graphql_string_list_field("write_tools", Some(&entries))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ToolSelectionDocument {
     #[serde(default)]
@@ -65,6 +154,8 @@ pub struct ToolSelectionDocument {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub defra_query_collections: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_write_tools")]
+    pub write_tools: Option<Vec<WriteToolDecl>>,
 }
 
 impl ToolSelectionDocument {
@@ -163,6 +254,7 @@ pub(crate) async fn load_tool_selection_record(
                 enable_session_history_tool
                 enable_defra_query
                 defra_query_collections
+                write_tools
             }}
         }}"#
     );
@@ -216,6 +308,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 enable_session_history_tool
                 enable_defra_query
                 defra_query_collections
+                write_tools
             }}
         }}"#
     );
@@ -269,6 +362,7 @@ pub(crate) async fn list_tool_selection_records(
                 enable_session_history_tool
                 enable_defra_query
                 defra_query_collections
+                write_tools
             }}
         }}"#
     );
@@ -316,6 +410,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 enable_session_history_tool
                 enable_defra_query
                 defra_query_collections
+                write_tools
             }
         }"#;
 
@@ -423,6 +518,7 @@ pub async fn upsert_tool_selection(
             "defra_query_collections",
             selection.defra_query_collections.as_deref(),
         ),
+        graphql_write_tools_field(selection.write_tools.as_deref()),
     ]
     .into_iter()
     .flatten()
@@ -514,6 +610,7 @@ pub async fn upsert_tool_selection(
             "defra_query_collections",
             selection.defra_query_collections.as_deref(),
         ),
+        graphql_write_tools_field(selection.write_tools.as_deref()),
     ]
     .into_iter()
     .flatten()
