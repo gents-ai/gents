@@ -20,9 +20,7 @@ use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -48,38 +46,6 @@ struct SpawnFixture {
     parent_deadline: chrono::DateTime<chrono::Utc>,
     agent_did: String,
     _source: SubagentSourceGuard,
-}
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in R4 subagent tool tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in R4 subagent tool tests".to_string(),
-        ))
-    }
 }
 
 #[derive(Debug, Deserialize)]
