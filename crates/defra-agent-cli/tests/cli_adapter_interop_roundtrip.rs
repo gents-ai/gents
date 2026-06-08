@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
 use defra_agent::{
-    ensure_runtime_schemas, import_external_adapter_capture_to_timeline_rows,
-    AdapterProjectionKind, ExternalAdapterCapture, RunTimelineRows, TimelineConversationRow,
-    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
-    TimelineToolCallRow,
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
+    adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
+    import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
+    AdapterProjectionEnvelope, AdapterProjectionKind, ExternalAdapterCapture,
+    ProjectionRedactionMode, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
+    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use serde_json::Value;
 
@@ -88,6 +90,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
         }
 
         let projection_arg = projection_cli_arg(import.projection);
+        let redaction_arg = redaction_cli_arg(&capture);
         let actor_did = import
             .actor_did
             .as_deref()
@@ -99,10 +102,12 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
             &import.rows.request.request_id,
             projection_arg,
             "json",
+            redaction_arg,
             actor_did,
         )?;
         let projection = serde_json::from_str::<Value>(&json_output)
             .with_context(|| format!("parsing JSON projection for {}", path.display()))?;
+        validate_cli_exports(&projection, "", "", &path, false)?;
         assert_projection_matches_import(&projection, &capture, &import.rows)
             .with_context(|| format!("validating imported projection for {}", path.display()))?;
 
@@ -112,6 +117,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
             &import.rows.request.request_id,
             projection_arg,
             "jsonl",
+            redaction_arg,
             actor_did,
         )?;
         anyhow::ensure!(
@@ -125,6 +131,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
             &import.rows.request.request_id,
             projection_arg,
             "eval-jsonl",
+            redaction_arg,
             actor_did,
         )?;
         anyhow::ensure!(
@@ -132,6 +139,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
             "{} produced empty eval JSONL export",
             path.display()
         );
+        validate_cli_exports(&projection, &jsonl_output, &eval_jsonl_output, &path, true)?;
 
         if let Some(export_root) = export_root.as_ref() {
             let stem = path
@@ -185,7 +193,9 @@ fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>> {
 
 fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if path.is_file() {
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json")
+            && !is_defra_export_file(path)
+        {
             files.push(path.to_path_buf());
         }
         return Ok(());
@@ -197,9 +207,18 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
     );
     for entry in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
         let entry = entry?;
+        if entry.file_name() == "defra-exports" {
+            continue;
+        }
         collect_json_files_into(&entry.path(), files)?;
     }
     Ok(())
+}
+
+fn is_defra_export_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".defra."))
 }
 
 async fn persist_run_timeline_rows(node: &EmbeddedNode, rows: &RunTimelineRows) -> Result<()> {
@@ -345,6 +364,7 @@ async fn create_message(node: &EmbeddedNode, row: &TimelineMessageRow) -> Result
                 create_AgentMessage(input: {{
                     message_key: "{}:{}",
                     session_id: "{}",
+                    {}
                     sequence: {},
                     role: "{}",
                     content: "{}",
@@ -354,6 +374,7 @@ async fn create_message(node: &EmbeddedNode, row: &TimelineMessageRow) -> Result
             esc(&row.session_id),
             row.sequence,
             esc(&row.session_id),
+            string_field("request_id", row.request_id.as_deref()),
             row.sequence,
             esc(&row.role),
             esc(&row.content),
@@ -455,6 +476,7 @@ fn trace_project(
     request_id: &str,
     projection: &str,
     format: &str,
+    redaction: &str,
     actor_did: &str,
 ) -> Result<String> {
     run_cli_text(
@@ -471,11 +493,91 @@ fn trace_project(
             "--format",
             format,
             "--redaction",
-            "full",
+            redaction,
             "--actor-did",
             actor_did,
         ],
     )
+}
+
+fn validate_cli_exports(
+    projection: &Value,
+    jsonl_output: &str,
+    eval_jsonl_output: &str,
+    path: &Path,
+    validate_records: bool,
+) -> Result<()> {
+    let envelope = serde_json::from_value::<AdapterProjectionEnvelope>(projection.clone())
+        .with_context(|| format!("deserializing JSON projection for {}", path.display()))?;
+    validate_adapter_projection_contract(&envelope)
+        .with_context(|| format!("validating JSON projection contract for {}", path.display()))?;
+    let kind = envelope.output.kind();
+    assert_json_schema_valid(
+        &adapter_projection_json_schema(kind),
+        projection,
+        &format!("{} JSON projection", path.display()),
+    )?;
+
+    if !validate_records {
+        return Ok(());
+    }
+
+    let jsonl_schema = adapter_projection_jsonl_record_schema(kind);
+    let jsonl_records = parse_jsonl(jsonl_output, path, "JSONL")?;
+    anyhow::ensure!(
+        !jsonl_records.is_empty(),
+        "{} produced no JSONL records",
+        path.display()
+    );
+    for record in &jsonl_records {
+        assert_json_schema_valid(
+            &jsonl_schema,
+            record,
+            &format!("{} JSONL record", path.display()),
+        )?;
+    }
+
+    let eval_schema = adapter_projection_eval_jsonl_record_schema(kind);
+    let eval_records = parse_jsonl(eval_jsonl_output, path, "eval JSONL")?;
+    anyhow::ensure!(
+        !eval_records.is_empty(),
+        "{} produced no eval JSONL records",
+        path.display()
+    );
+    for record in &eval_records {
+        assert_json_schema_valid(
+            &eval_schema,
+            record,
+            &format!("{} eval JSONL record", path.display()),
+        )?;
+    }
+    Ok(())
+}
+
+fn parse_jsonl(output: &str, path: &Path, label: &str) -> Result<Vec<Value>> {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .with_context(|| format!("parsing {label} line for {}", path.display()))
+        })
+        .collect()
+}
+
+fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
+    let validator =
+        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
+    let errors = validator
+        .iter_errors(instance)
+        .map(|error| format!("{}: {error}", error.instance_path()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        errors.is_empty(),
+        "{label} failed JSON Schema validation:\n{}",
+        errors.join("\n")
+    );
+    Ok(())
 }
 
 fn assert_projection_matches_import(
@@ -574,6 +676,19 @@ fn projection_cli_arg(projection: AdapterProjectionKind) -> &'static str {
         AdapterProjectionKind::OpenAiCodexRunTrace => "openai-codex",
         AdapterProjectionKind::LangGraphStateHistory => "langgraph",
         AdapterProjectionKind::MultiAgentTask => "multi-agent",
+    }
+}
+
+fn redaction_cli_arg(capture: &ExternalAdapterCapture) -> &'static str {
+    match capture
+        .envelope
+        .as_ref()
+        .map(|envelope| envelope.redaction_mode)
+        .unwrap_or(ProjectionRedactionMode::Full)
+    {
+        ProjectionRedactionMode::Full => "full",
+        ProjectionRedactionMode::TrainingSafe => "training-safe",
+        ProjectionRedactionMode::Public => "public",
     }
 }
 

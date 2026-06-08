@@ -440,8 +440,8 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
             "scenario_id": "autogen.round_robin_group_chat",
             "request_id": REQUEST_ID,
             "session_id": CONTEXT_ID,
-            "agent_did": AGENTS[0]["agent_did"],
-            "behavior_id": AGENTS[0]["behavior_id"],
+            "agent_did": "did:defra-agent:autogen-team",
+            "behavior_id": "autogen.round_robin_team",
             "actor_did": "did:defra-agent:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [
@@ -472,7 +472,7 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
             "tool_events": [
                 {
                     "id": "autogen:event:review:reviewer-approval",
-                    "request_id": REQUEST_ID,
+                    "request_id": CHILD_REQUEST_ID,
                     "tool_name": "review",
                     "status": "completed",
                 }
@@ -512,8 +512,8 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
             "scenario_id": "autogen.swarm",
             "request_id": SWARM_REQUEST_ID,
             "session_id": SWARM_CONTEXT_ID,
-            "agent_did": SWARM_AGENTS[0]["agent_did"],
-            "behavior_id": SWARM_AGENTS[0]["behavior_id"],
+            "agent_did": "did:defra-agent:autogen-swarm-team",
+            "behavior_id": "autogen.swarm_team",
             "actor_did": "did:defra-agent:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [

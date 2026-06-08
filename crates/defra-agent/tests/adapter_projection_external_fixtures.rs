@@ -130,7 +130,9 @@ fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>> {
 
 fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if path.is_file() {
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json")
+            && !is_defra_export_file(path)
+        {
             files.push(path.to_path_buf());
         }
         return Ok(());
@@ -142,7 +144,16 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
     );
     for entry in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
         let entry = entry?;
+        if entry.file_name() == "defra-exports" {
+            continue;
+        }
         collect_json_files_into(&entry.path(), files)?;
     }
     Ok(())
+}
+
+fn is_defra_export_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".defra."))
 }

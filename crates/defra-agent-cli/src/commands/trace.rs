@@ -1247,6 +1247,7 @@ async fn load_timeline_messages_for_session(
             ) {{
                 _docID
                 session_id
+                request_id
                 sequence
                 role
                 content
@@ -1255,7 +1256,29 @@ async fn load_timeline_messages_for_session(
         }}"#,
         escape_graphql_string(session_id)
     );
-    load_rows(access, "AgentMessage", &query).await
+    match load_rows(access, "AgentMessage", &query).await {
+        Ok(rows) => Ok(rows),
+        Err(error) if error.to_string().contains("request_id") => {
+            let fallback_query = format!(
+                r#"{{
+                    AgentMessage(
+                        filter: {{ session_id: {{ _eq: "{}" }} }},
+                        order: {{ sequence: ASC }}
+                    ) {{
+                        _docID
+                        session_id
+                        sequence
+                        role
+                        content
+                        timestamp
+                    }}
+                }}"#,
+                escape_graphql_string(session_id)
+            );
+            load_rows(access, "AgentMessage", &fallback_query).await
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn load_timeline_tool_calls_for_session(
@@ -2400,6 +2423,7 @@ mod tests {
                 TimelineMessageRow {
                     doc_id: Some("doc-message-allowed".to_string()),
                     session_id: "session-acp".to_string(),
+                    request_id: Some("req-root".to_string()),
                     sequence: 1,
                     role: "user".to_string(),
                     content: "allowed".to_string(),
@@ -2408,6 +2432,7 @@ mod tests {
                 TimelineMessageRow {
                     doc_id: Some("doc-message-denied".to_string()),
                     session_id: "session-acp".to_string(),
+                    request_id: Some("req-child".to_string()),
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: "denied".to_string(),

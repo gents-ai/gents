@@ -80,6 +80,8 @@ pub struct TimelineMessageRow {
     pub doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     #[serde(default)]
     pub sequence: i64,
     #[serde(default)]
@@ -383,8 +385,12 @@ pub fn build_run_timeline(rows: RunTimelineRows) -> RunTimeline {
     }
 
     for message in &rows.messages {
-        let request_id = infer_request_id_for_message(message, &rows.responses, &rows.requests)
-            .map(ToOwned::to_owned);
+        let request_id = nonempty(message.request_id.as_deref())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                infer_request_id_for_message(message, &rows.responses, &rows.requests)
+                    .map(ToOwned::to_owned)
+            });
         if should_include_event(
             request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -716,6 +722,7 @@ mod tests {
             messages: vec![TimelineMessageRow {
                 doc_id: None,
                 session_id: "session-1".to_string(),
+                request_id: Some("req-1".to_string()),
                 sequence: 2,
                 role: "assistant".to_string(),
                 content: "calling tool".to_string(),

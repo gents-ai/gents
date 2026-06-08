@@ -41,6 +41,17 @@ do
   fi
 done
 
+expected_fixtures=(
+  "langgraph_state_history.capture.json"
+  "langgraph_state_history.provider.capture.json"
+  "langgraph_state_history.subgraph.capture.json"
+  "multi_agent_task.autogen.capture.json"
+  "multi_agent_task.autogen_swarm.capture.json"
+  "multi_agent_task.crewai_hierarchical.capture.json"
+  "multi_agent_task.crewai_sequential.capture.json"
+  "multi_agent_task.microsoft_agent_framework_group_chat.capture.json"
+)
+
 run_generator \
   "langgraph" \
   "defra-agent-langgraph-fixture" \
@@ -62,15 +73,21 @@ run_generator \
   "defra-agent-msaf-fixture" \
   "docs/superpowers/fixtures/adapter-projections/generators/microsoft-agent-framework"
 
-fixture_count="$(find "${out_dir}" -type f -name '*.json' | wc -l | tr -d '[:space:]')"
-if [[ "${fixture_count}" -lt 8 ]]; then
-  echo "expected at least 8 generated adapter fixtures, found ${fixture_count}" >&2
-  find "${out_dir}" -type f -name '*.json' -print | sort >&2
+fixture_count="$(find "${out_dir}" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d '[:space:]')"
+if [[ "${fixture_count}" -ne "${#expected_fixtures[@]}" ]]; then
+  echo "expected exactly ${#expected_fixtures[@]} generated adapter fixtures, found ${fixture_count}" >&2
+  find "${out_dir}" -maxdepth 1 -type f -name '*.json' -print | sort >&2
   exit 1
 fi
+for fixture in "${expected_fixtures[@]}"; do
+  if [[ ! -f "${out_dir}/${fixture}" ]]; then
+    echo "missing expected adapter fixture ${fixture}" >&2
+    exit 1
+  fi
+done
 
 echo "generated ${fixture_count} adapter fixture files in ${out_dir}"
-find "${out_dir}" -type f -name '*.json' -print | sort
+find "${out_dir}" -maxdepth 1 -type f -name '*.json' -print | sort
 
 if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
   echo "validating generated fixtures with Rust external adapter harness"
@@ -90,6 +107,13 @@ if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
       DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS="${export_dir}" \
       cargo test -p defra-agent-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
   )
+  export_count="$(find "${export_dir}" -type f \( -name '*.defra.json' -o -name '*.defra.jsonl' -o -name '*.defra.eval-jsonl' \) | wc -l | tr -d '[:space:]')"
+  expected_export_count="$((${#expected_fixtures[@]} * 3))"
+  if [[ "${export_count}" -ne "${expected_export_count}" ]]; then
+    echo "expected exactly ${expected_export_count} Defra export files, found ${export_count}" >&2
+    find "${export_dir}" -type f -print | sort >&2
+    exit 1
+  fi
 
   echo "verifying AutoGen Defra exports inside the AutoGen fixture image"
   docker run --rm \

@@ -1650,19 +1650,27 @@ fn build_multi_agent_task(
     context: &ProjectionContext,
 ) -> MultiAgentTaskProjection {
     let mut participants = Vec::new();
-    push_metadata_participants(
+    let has_metadata_participants = push_metadata_participants(
         &mut participants,
         timeline.request.metadata.as_deref(),
         context,
     );
-    push_participant(
-        &mut participants,
-        timeline.agent_did.clone(),
-        timeline.behavior_id.clone(),
-        adapter_projection_metadata_string(timeline.request.metadata.as_deref(), "role")
-            .as_deref()
-            .unwrap_or("owner"),
-    );
+    if !has_metadata_participants
+        || participant_identity_present(
+            &participants,
+            timeline.agent_did.as_deref(),
+            timeline.behavior_id.as_deref(),
+        )
+    {
+        push_participant(
+            &mut participants,
+            timeline.agent_did.clone(),
+            timeline.behavior_id.clone(),
+            adapter_projection_metadata_string(timeline.request.metadata.as_deref(), "role")
+                .as_deref()
+                .unwrap_or("owner"),
+        );
+    }
     let mut messages = Vec::new();
     let mut delegations = Vec::new();
     let mut tool_events = Vec::new();
@@ -1670,18 +1678,26 @@ fn build_multi_agent_task(
     for event in &timeline.events {
         match event {
             RunTimelineEvent::Request(request) => {
-                push_participant(
-                    &mut participants,
-                    request.agent_did.clone(),
-                    request.behavior_id.clone(),
-                    adapter_projection_metadata_string(request.metadata.as_deref(), "role")
-                        .as_deref()
-                        .unwrap_or(if request.request_id == timeline.request_id {
-                            "owner"
-                        } else {
-                            "delegate"
-                        }),
-                );
+                if !has_metadata_participants
+                    || participant_identity_present(
+                        &participants,
+                        request.agent_did.as_deref(),
+                        request.behavior_id.as_deref(),
+                    )
+                {
+                    push_participant(
+                        &mut participants,
+                        request.agent_did.clone(),
+                        request.behavior_id.clone(),
+                        adapter_projection_metadata_string(request.metadata.as_deref(), "role")
+                            .as_deref()
+                            .unwrap_or(if request.request_id == timeline.request_id {
+                                "owner"
+                            } else {
+                                "delegate"
+                            }),
+                    );
+                }
                 if let Some(parent_request_id) = request.parent_request_id.as_deref() {
                     delegations.push(MultiAgentDelegation {
                         parent_request_id: parent_request_id.to_string(),
@@ -1794,12 +1810,12 @@ fn push_metadata_participants(
     participants: &mut Vec<MultiAgentParticipant>,
     metadata: Option<&str>,
     context: &ProjectionContext,
-) {
+) -> bool {
     let Some(value) = adapter_projection_metadata_value(metadata, "participants") else {
-        return;
+        return false;
     };
     let Some(raw_participants) = value.as_array() else {
-        return;
+        return false;
     };
     for participant in raw_participants {
         let role = participant
@@ -1817,6 +1833,7 @@ fn push_metadata_participants(
             .map(ToOwned::to_owned);
         push_participant(participants, agent_did, behavior_id, role);
     }
+    !raw_participants.is_empty()
 }
 
 fn adapter_projection_metadata_string(metadata: Option<&str>, key: &str) -> Option<String> {
@@ -1878,6 +1895,17 @@ fn push_participant(
         behavior_id,
         role: role.to_string(),
     });
+}
+
+fn participant_identity_present(
+    participants: &[MultiAgentParticipant],
+    agent_did: Option<&str>,
+    behavior_id: Option<&str>,
+) -> bool {
+    participants.iter().any(|participant| {
+        participant.agent_did.as_deref() == agent_did
+            && participant.behavior_id.as_deref() == behavior_id
+    })
 }
 
 fn redact_option(value: Option<&str>, context: &ProjectionContext) -> Option<String> {
@@ -2021,6 +2049,7 @@ mod tests {
             messages: vec![TimelineMessageRow {
                 doc_id: None,
                 session_id: "session-1".to_string(),
+                request_id: Some("req-1".to_string()),
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "sensitive assistant text".to_string(),

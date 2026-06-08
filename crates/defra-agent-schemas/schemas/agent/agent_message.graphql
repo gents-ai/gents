@@ -1,6 +1,7 @@
 type AgentMessage @branchable {
     message_key: String @index(unique: true)
     session_id: String @index
+    request_id: String @index
     sequence: Int @index
     role: String
     content: String

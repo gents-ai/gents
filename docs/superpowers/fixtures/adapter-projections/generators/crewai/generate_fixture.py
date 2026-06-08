@@ -620,8 +620,8 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
         "scenario_id": "crewai.sequential_crew",
         "request_id": REQUEST_ID,
         "session_id": CONTEXT_ID,
-        "agent_did": AGENTS[0]["agent_did"],
-        "behavior_id": AGENTS[0]["behavior_id"],
+        "agent_did": "did:defra-agent:crewai-crew",
+        "behavior_id": "crewai.sequential_crew",
         "actor_did": "did:defra-agent:crewai-fixture-reader",
         "status": crew_status(result),
         "participants": [

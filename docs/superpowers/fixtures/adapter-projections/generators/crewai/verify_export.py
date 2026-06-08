@@ -34,6 +34,54 @@ def task_output_text(task: dict[str, Any]) -> str | None:
     return value_to_text(output)
 
 
+def participant_key(value: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        value.get("role"),
+        value.get("agent_did"),
+        value.get("behavior_id"),
+    )
+
+
+def message_key(value: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        value.get("role"),
+        value.get("request_id"),
+        value.get("content"),
+    )
+
+
+def delegation_key(value: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        value.get("parent_request_id"),
+        value.get("child_request_id"),
+        value.get("parent_tool_call_id"),
+        value.get("agent_did"),
+        value.get("behavior_id"),
+        value.get("status"),
+    )
+
+
+def tool_event_key(value: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        value.get("request_id"),
+        value.get("tool_name"),
+        value.get("status"),
+        value.get("child_request_id"),
+    )
+
+
+def assert_equal_multiset(
+    label: str,
+    expected: list[tuple[Any, ...]],
+    actual: list[tuple[Any, ...]],
+) -> None:
+    expected_sorted = sorted(expected, key=repr)
+    actual_sorted = sorted(actual, key=repr)
+    assert actual_sorted == expected_sorted, (
+        f"{label} mismatch\nexpected={expected_sorted!r}\nactual={actual_sorted!r}"
+    )
+
+
 def verify_capture_export(capture_path: Path, export_dir: Path) -> bool:
     capture = load_json(capture_path)
     mapping = capture.get("mapping")
@@ -47,47 +95,54 @@ def verify_capture_export(capture_path: Path, export_dir: Path) -> bool:
 
     assert export["projection_id"] == "multi_agent_task", export
     assert export["source_request_id"] == mapping["request_id"], export
+    assert export["redaction_mode"] == capture["envelope"]["redaction_mode"], export
+    for key in ("source_session_id", "source_agent_did", "source_behavior_id"):
+        assert export.get(key) == capture["envelope"].get(key), (
+            f"{key} mismatch: expected {capture['envelope'].get(key)!r}, "
+            f"got {export.get(key)!r}"
+        )
     projection = export["output"]["projection"]
+    expected = capture["envelope"]["output"]["projection"]
 
-    participants = projection["participants"]
-    for participant in mapping["participants"]:
-        assert any(
-            actual.get("role") == participant["role"]
-            and actual.get("agent_did") == participant.get("agent_did")
-            and actual.get("behavior_id") == participant.get("behavior_id")
-            for actual in participants
-        ), f"missing participant {participant} in {participants}"
-
-    projected_text = "\n".join(
-        message.get("content", "") for message in projection["messages"]
+    assert_equal_multiset(
+        "participants",
+        [participant_key(item) for item in expected["participants"]],
+        [participant_key(item) for item in projection["participants"]],
     )
+    assert [message_key(item) for item in projection["messages"]] == [
+        message_key(item) for item in expected["messages"]
+    ], projection["messages"]
+    projected_text = "\n".join(message["content"] for message in projection["messages"])
     for task in capture["native"]["tasks"]:
         output = task_output_text(task)
         if output:
             assert output in projected_text, f"missing CrewAI task output {output!r}"
-    for response in capture["native"].get("manager_responses", []):
-        assert str(response) in projected_text, (
-            f"missing CrewAI manager response {response!r}"
-        )
 
-    delegations = projection["delegations"]
-    for delegation in mapping["delegations"]:
-        assert any(
-            actual.get("parent_request_id") == delegation["parent_request_id"]
-            and actual.get("child_request_id") == delegation["child_request_id"]
-            for actual in delegations
-        ), f"missing delegation {delegation} in {delegations}"
-
-    tool_events = projection["tool_events"]
-    for event in mapping["tool_events"]:
-        assert any(
-            actual.get("id") == event["id"]
-            and actual.get("tool_name") == event["tool_name"]
-            for actual in tool_events
-        ), f"missing tool event {event} in {tool_events}"
+    assert_equal_multiset(
+        "delegations",
+        [delegation_key(item) for item in expected["delegations"]],
+        [delegation_key(item) for item in projection["delegations"]],
+    )
+    assert_equal_multiset(
+        "tool_events",
+        [tool_event_key(item) for item in expected["tool_events"]],
+        [tool_event_key(item) for item in projection["tool_events"]],
+    )
 
     assert jsonl, f"{stem} produced empty adapter JSONL"
     assert eval_jsonl, f"{stem} produced empty eval JSONL"
+    expected_record_count = sum(
+        len(expected[key])
+        for key in ("participants", "messages", "delegations", "tool_events")
+    )
+    assert len(jsonl) == expected_record_count, (
+        f"{stem} JSONL record count mismatch: "
+        f"expected {expected_record_count}, got {len(jsonl)}"
+    )
+    assert len(eval_jsonl) == expected_record_count, (
+        f"{stem} eval JSONL record count mismatch: "
+        f"expected {expected_record_count}, got {len(eval_jsonl)}"
+    )
     assert any(
         record.get("record_kind") == "multi_agent_delegation" for record in jsonl
     ), f"{stem} JSONL missing delegation record"
@@ -110,6 +165,8 @@ def main() -> None:
             print(f"verified {capture_path.name}")
     if verified == 0:
         raise SystemExit("no mapped CrewAI captures were verified")
+    if verified != 2:
+        raise SystemExit(f"expected 2 mapped CrewAI captures, verified {verified}")
     print(f"verified {verified} CrewAI Defra export roundtrip captures")
 
 

@@ -429,6 +429,19 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def redact_training_safe_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return "[training_safe_redacted]" if value.strip() else ""
+    if isinstance(value, dict):
+        return {
+            str(key): redact_training_safe_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_training_safe_value(item) for item in value]
+    return value
+
+
 def message_text(message: Any) -> str:
     content = getattr(message, "content", "")
     if isinstance(content, str):
@@ -496,10 +509,6 @@ def build_subgraph_projection(capture: dict[str, Any]) -> dict[str, Any]:
     latest_values = dict(latest_snapshot["values"])
     latest_values["history_checkpoint_count"] = len(history)
     latest_values["langgraph_package_version"] = langgraph_version()
-    latest_values["subgraph_node"] = "review_subgraph"
-    latest_values["subgraph_child_request_id"] = latest_values.get(
-        "child_request_id", SUBGRAPH_CHILD_REQUEST_ID
-    )
 
     checkpoint_id = (
         latest_snapshot["config"].get("configurable", {}).get("checkpoint_id")
@@ -544,8 +553,8 @@ def build_provider_projection(capture: dict[str, Any]) -> dict[str, Any]:
     latest_values = dict(latest_snapshot["values"])
     latest_values["history_checkpoint_count"] = len(history)
     latest_values["langgraph_package_version"] = langgraph_version()
-    latest_values["langchain_core_package_version"] = package_version("langchain-core")
-    latest_values["langchain_openai_package_version"] = package_version("langchain-openai")
+    latest_values["provider"] = provider_metadata(capture)
+    projected_values = redact_training_safe_value(latest_values)
 
     checkpoint_id = (
         latest_snapshot["config"].get("configurable", {}).get("checkpoint_id")
@@ -572,7 +581,7 @@ def build_provider_projection(capture: dict[str, Any]) -> dict[str, Any]:
                 "thread_id": PROVIDER_THREAD_ID,
                 "checkpoint_id": checkpoint_id,
                 "root_request_id": PROVIDER_REQUEST_ID,
-                "values": latest_values,
+                "values": projected_values,
                 "nodes": build_provider_projection_nodes(latest_values),
                 "edges": [
                     {"from": source, "to": target, "kind": kind}
@@ -618,6 +627,12 @@ def build_subgraph_projection_nodes(latest_values: dict[str, Any]) -> list[dict[
             "status": "completed",
         },
         {
+            "id": "langgraph:subgraph:review:start",
+            "kind": "subgraph_start",
+            "request_id": child_request_id,
+            "status": "completed",
+        },
+        {
             "id": "langgraph:subgraph:review:draft_review",
             "kind": "subgraph_node",
             "request_id": child_request_id,
@@ -628,6 +643,12 @@ def build_subgraph_projection_nodes(latest_values: dict[str, Any]) -> list[dict[
             "kind": "subgraph_node",
             "request_id": child_request_id,
             "status": "completed",
+        },
+        {
+            "id": "langgraph:subgraph:review:end",
+            "kind": "subgraph_end",
+            "request_id": child_request_id,
+            "status": status,
         },
         {
             "id": "langgraph:node:parent_finalize",
@@ -765,6 +786,24 @@ def package_version(package: str) -> str:
     return importlib.metadata.version(package)
 
 
+def provider_metadata(capture: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": capture["result"].get("provider_mode"),
+        "model": capture["result"].get("provider_model"),
+        "base_url": capture["result"].get("provider_base_url"),
+        "live_env": {
+            "DEFRA_LANGGRAPH_PROVIDER_MODE": os.environ.get(
+                "DEFRA_LANGGRAPH_PROVIDER_MODE", "fake"
+            ),
+            "DEFRA_LANGGRAPH_OPENAI_MODEL_SET": bool(
+                os.environ.get("DEFRA_LANGGRAPH_OPENAI_MODEL")
+            ),
+            "OPENAI_BASE_URL_SET": bool(os.environ.get("OPENAI_BASE_URL")),
+            "OPENAI_API_KEY_SET": bool(os.environ.get("OPENAI_API_KEY")),
+        },
+    }
+
+
 def write_fixture_file(
     out_dir: Path,
     filename: str,
@@ -889,19 +928,7 @@ def write_provider_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
             ],
         },
         "provider": {
-            "mode": capture["result"].get("provider_mode"),
-            "model": capture["result"].get("provider_model"),
-            "base_url": capture["result"].get("provider_base_url"),
-            "live_env": {
-                "DEFRA_LANGGRAPH_PROVIDER_MODE": os.environ.get(
-                    "DEFRA_LANGGRAPH_PROVIDER_MODE", "fake"
-                ),
-                "DEFRA_LANGGRAPH_OPENAI_MODEL_SET": bool(
-                    os.environ.get("DEFRA_LANGGRAPH_OPENAI_MODEL")
-                ),
-                "OPENAI_BASE_URL_SET": bool(os.environ.get("OPENAI_BASE_URL")),
-                "OPENAI_API_KEY_SET": bool(os.environ.get("OPENAI_API_KEY")),
-            },
+            **provider_metadata(capture),
         },
         "history_order": "most_recent_first",
         "history": capture["history"],
@@ -918,14 +945,25 @@ def write_provider_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
             "langchain_openai.ChatOpenAI",
         ],
         native,
-        build_import_mapping(
-            "langgraph.provider_backed",
-            PROVIDER_REQUEST_ID,
-            PROVIDER_THREAD_ID,
-            "did:defra-agent:langgraph-provider-fixture",
-            "langgraph-provider-backed-flow",
-            capture,
-        ),
+        {
+            **build_import_mapping(
+                "langgraph.provider_backed",
+                PROVIDER_REQUEST_ID,
+                PROVIDER_THREAD_ID,
+                "did:defra-agent:langgraph-provider-fixture",
+                "langgraph-provider-backed-flow",
+                capture,
+            ),
+            "tool_events": [
+                {
+                    "id": PROVIDER_TOOL_CALL_ID,
+                    "request_id": PROVIDER_REQUEST_ID,
+                    "tool_name": "lookup_projection_requirements",
+                    "status": "completed",
+                    "child_request_id": PROVIDER_TOOL_REQUEST_ID,
+                }
+            ],
+        },
         build_provider_projection(capture),
     )
 
