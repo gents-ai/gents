@@ -11,8 +11,6 @@ use rig::completion::{
 };
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::json;
 
 use super::*;
@@ -50,40 +48,6 @@ impl CompletionModel for TestModel {
         Err(CompletionError::ProviderError(
             "streaming is unused in hook tests".to_string(),
         ))
-    }
-}
-
-struct OversizedHookTool {
-    output: String,
-}
-
-impl OversizedHookTool {
-    fn new(output: String) -> Self {
-        Self { output }
-    }
-}
-
-impl ToolDyn for OversizedHookTool {
-    fn name(&self) -> String {
-        "oversized".to_string()
-    }
-
-    fn definition<'a>(
-        &'a self,
-        _prompt: String,
-    ) -> WasmBoxedFuture<'a, rig::completion::ToolDefinition> {
-        Box::pin(async {
-            rig::completion::ToolDefinition {
-                name: "oversized".to_string(),
-                description: "test tool".to_string(),
-                parameters: json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        let output = self.output.clone();
-        Box::pin(async move { Ok(output) })
     }
 }
 
@@ -641,7 +605,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
 }
 
 #[tokio::test]
-async fn hook_spills_recorded_full_tool_output_after_bounded_runtime_result() {
+async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -677,50 +641,33 @@ async fn hook_spills_recorded_full_tool_output_after_bounded_runtime_result() {
         .collect::<Vec<_>>()
         .join("\n");
     let tool_args = "{}";
-    let tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(OversizedHookTool::new(
-        full_output.clone(),
-    )));
 
-    let bounded_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        async {
-            assert!(matches!(
-                PromptHook::<TestModel>::on_tool_call(
-                    &hook,
-                    "oversized",
-                    None,
-                    "internal-oversized",
-                    tool_args,
-                )
-                .await,
-                ToolCallHookAction::Continue
-            ));
-
-            let bounded_result = tool
-                .call(tool_args.to_string())
-                .await
-                .expect("oversized tool should complete");
-            assert!(bounded_result.contains("[Showing lines 1-2000 of 2101"));
-            assert!(!bounded_result.contains("line-2100"));
-            assert!(!bounded_result.contains("[Full output: DefraDB doc"));
-
-            assert!(matches!(
-                PromptHook::<TestModel>::on_tool_result(
-                    &hook,
-                    "oversized",
-                    None,
-                    "internal-oversized",
-                    tool_args,
-                    &bounded_result,
-                )
-                .await,
-                HookAction::Continue
-            ));
-            bounded_result
-        },
-    )
-    .await;
+    // The owned loop bounds the model-facing result itself and hands
+    // on_tool_result the FULL output; on_tool_result spills the full text and
+    // persists a bounded model observation carrying a spill pointer.
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "oversized",
+            None,
+            "internal-oversized",
+            tool_args,
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_result(
+            &hook,
+            "oversized",
+            None,
+            "internal-oversized",
+            tool_args,
+            &full_output,
+        )
+        .await,
+        HookAction::Continue
+    ));
 
     let tool_call = fetch_tool_call_row(&node, &session_id, "internal-oversized").await;
     let persisted_result = tool_call
@@ -731,8 +678,8 @@ async fn hook_spills_recorded_full_tool_output_after_bounded_runtime_result() {
     assert!(persisted_result.contains("[Full output: DefraDB doc"));
     assert!(!persisted_result.contains("line-2100"));
     assert_ne!(
-        persisted_result, bounded_result,
-        "hook persistence should append the spill pointer after seeing the full result"
+        persisted_result, full_output,
+        "persisted result should be the bounded observation with a spill pointer, not the full output"
     );
 
     let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;

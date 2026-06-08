@@ -267,12 +267,6 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 None,
                 tool_call_id.as_deref(),
             );
-            crate::tool_call_lifecycle::runtime::register_pending_tool_result(
-                tool_name,
-                args,
-                internal_call_id,
-            )
-            .await;
 
             let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
                 self.node.clone(),
@@ -372,13 +366,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             let truncator =
                 DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id);
-            let recorded =
-                crate::tool_call_lifecycle::runtime::take_recorded_tool_result(internal_call_id)
-                    .await;
-            let result_for_persistence = recorded
-                .as_ref()
-                .map(|record| record.full_result.as_str())
-                .unwrap_or(result);
+            // The owned loop (#400) passes the full tool output here directly, so
+            // the persisted copy spills/truncates the complete result. (The old
+            // rig path needed a recorder shim to recover the full output; gone.)
+            let result_for_persistence = result;
             let truncated = truncator
                 .truncate(
                     tool_name,

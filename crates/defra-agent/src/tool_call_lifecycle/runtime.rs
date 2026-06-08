@@ -6,20 +6,15 @@
 //! deadline/cancellation outcomes become explicit tool results that the hook
 //! can map to `timedOut` / `cancelled` terminal states.
 
-use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-
-use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 const MARKER_PREFIX: &str = "__defra_agent_tool_lifecycle__:";
 const TIMEOUT_MARKER: &str = "__defra_agent_tool_lifecycle__:timedOut";
@@ -36,7 +31,6 @@ struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
-    tool_results: ToolResultRecorder,
 }
 
 #[derive(Clone)]
@@ -44,71 +38,6 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RecordedToolResult {
-    pub(crate) full_result: String,
-    pub(crate) bounded_result: String,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct ToolCallKey {
-    tool_name: String,
-    args: String,
-}
-
-#[derive(Debug, Default)]
-struct ToolResultRecorderInner {
-    pending: HashMap<ToolCallKey, VecDeque<String>>,
-    recorded: HashMap<String, RecordedToolResult>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct ToolResultRecorder {
-    inner: Arc<Mutex<ToolResultRecorderInner>>,
-}
-
-impl ToolResultRecorder {
-    async fn register(&self, tool_name: &str, args: &str, internal_call_id: &str) {
-        let mut inner = self.inner.lock().await;
-        inner
-            .pending
-            .entry(ToolCallKey {
-                tool_name: tool_name.to_string(),
-                args: args.to_string(),
-            })
-            .or_default()
-            .push_back(internal_call_id.to_string());
-    }
-
-    async fn claim(&self, tool_name: &str, args: &str) -> Option<String> {
-        let key = ToolCallKey {
-            tool_name: tool_name.to_string(),
-            args: args.to_string(),
-        };
-        let mut inner = self.inner.lock().await;
-        let pending = inner.pending.get_mut(&key)?;
-        let internal_call_id = pending.pop_front();
-        if pending.is_empty() {
-            inner.pending.remove(&key);
-        }
-        internal_call_id
-    }
-
-    async fn record(&self, internal_call_id: String, full_result: String, bounded_result: String) {
-        self.inner.lock().await.recorded.insert(
-            internal_call_id,
-            RecordedToolResult {
-                full_result,
-                bounded_result,
-            },
-        );
-    }
-
-    async fn take(&self, internal_call_id: &str) -> Option<RecordedToolResult> {
-        self.inner.lock().await.recorded.remove(internal_call_id)
-    }
 }
 
 tokio::task_local! {
@@ -149,7 +78,6 @@ where
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
-                tool_results: ToolResultRecorder::default(),
             },
             future,
         )
@@ -169,28 +97,6 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
         })
-}
-
-pub(crate) async fn register_pending_tool_result(
-    tool_name: &str,
-    args: &str,
-    internal_call_id: &str,
-) {
-    if let Some(recorder) = TOOL_RUNTIME_SCOPE
-        .try_with(|scope| scope.tool_results.clone())
-        .ok()
-    {
-        recorder.register(tool_name, args, internal_call_id).await;
-    }
-}
-
-pub(crate) async fn take_recorded_tool_result(
-    internal_call_id: &str,
-) -> Option<RecordedToolResult> {
-    let recorder = TOOL_RUNTIME_SCOPE
-        .try_with(|scope| scope.tool_results.clone())
-        .ok()?;
-    recorder.take(internal_call_id).await
 }
 
 pub(crate) fn classify_managed_tool_result(result: &str) -> Option<ManagedToolTerminal> {
@@ -232,12 +138,9 @@ impl ToolDyn for RuntimeManagedTool {
 
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let tool_name = self.inner.name();
-            let call_args = args.clone();
             let Some(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone).ok() else {
                 return self.inner.call(args).await;
             };
-            let result_slot = scope.tool_results.claim(&tool_name, &call_args).await;
 
             if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 return Ok(timeout_result(scope.deadline_at));
@@ -250,74 +153,17 @@ impl ToolDyn for RuntimeManagedTool {
                 }
             });
 
+            // Apply the request's deadline/cancellation envelope. Result bounding
+            // is owned by the completion loop for foreground tools (#400); this
+            // wrapper now only guards background tool execution.
             tokio::select! {
                 biased;
-                _ = scope.cancellation_token.cancelled() => {
-                    Ok(cancelled_result())
-                }
-                _ = &mut deadline => {
-                    Ok(timeout_result(scope.deadline_at))
-                }
-                result = self.inner.call(args) => {
-                    let Some(internal_call_id) = result_slot else {
-                        return result;
-                    };
-                    match result {
-                        Ok(output) => Ok(bound_output_for_registered_call(
-                            &scope,
-                            internal_call_id,
-                            &tool_name,
-                            output,
-                        )
-                        .await),
-                        Err(error) => {
-                            let output = error.to_string();
-                            tracing::warn!(
-                                tool_name = %tool_name,
-                                tool_call_id = %internal_call_id,
-                                error = %output,
-                                "tool execution returned an error; returning bounded error text to rig"
-                            );
-                            Ok(bound_output_for_registered_call(
-                                &scope,
-                                internal_call_id,
-                                &tool_name,
-                                output,
-                            )
-                            .await)
-                        }
-                    }
-                }
+                _ = scope.cancellation_token.cancelled() => Ok(cancelled_result()),
+                _ = &mut deadline => Ok(timeout_result(scope.deadline_at)),
+                result = self.inner.call(args) => result,
             }
         })
     }
-}
-
-async fn bound_output_for_registered_call(
-    scope: &ToolRuntimeScope,
-    internal_call_id: String,
-    tool_name: &str,
-    output: String,
-) -> String {
-    let limits = TruncationLimits::default();
-    let (bounded, trigger, truncated) =
-        truncate_text(&output, tool_result_truncation_mode(tool_name), &limits);
-    if truncated {
-        tracing::warn!(
-            tool_name = %tool_name,
-            tool_call_id = %internal_call_id,
-            truncated_by = ?trigger,
-            original_bytes = output.len(),
-            max_lines = limits.max_lines,
-            max_bytes = limits.max_bytes,
-            "bounded tool result before returning it to rig"
-        );
-        scope
-            .tool_results
-            .record(internal_call_id, output, bounded.clone())
-            .await;
-    }
-    bounded
 }
 
 fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
@@ -375,37 +221,6 @@ mod tests {
 
         fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("ok".to_string()) })
-        }
-    }
-
-    struct LargeTool {
-        output: String,
-    }
-
-    impl LargeTool {
-        fn new(output: String) -> Self {
-            Self { output }
-        }
-    }
-
-    impl ToolDyn for LargeTool {
-        fn name(&self) -> String {
-            "large".to_string()
-        }
-
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "large".to_string(),
-                    description: "test tool".to_string(),
-                    parameters: serde_json::json!({"type":"object"}),
-                }
-            })
-        }
-
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-            let output = self.output.clone();
-            Box::pin(async move { Ok(output) })
         }
     }
 
@@ -474,31 +289,4 @@ mod tests {
         assert_eq!(classify_managed_tool_result(&result), None);
     }
 
-    #[tokio::test]
-    async fn wrapped_tool_bounds_registered_result_and_records_full_output() {
-        let full_output = (0..2101)
-            .map(|index| format!("line-{index}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let tool = wrap_tool(Box::new(LargeTool::new(full_output.clone())));
-
-        scope_request_tool_execution(None, CancellationToken::new(), async {
-            register_pending_tool_result("large", "{}", "internal-large").await;
-
-            let result = tool
-                .call("{}".to_string())
-                .await
-                .expect("large tool should complete");
-
-            assert!(result.contains("[Showing lines 1-2000 of 2101"));
-            assert!(!result.contains("line-2100"));
-
-            let recorded = take_recorded_tool_result("internal-large")
-                .await
-                .expect("full output should be retained for persistence");
-            assert_eq!(recorded.full_result, full_output);
-            assert_eq!(recorded.bounded_result, result);
-        })
-        .await;
-    }
 }
