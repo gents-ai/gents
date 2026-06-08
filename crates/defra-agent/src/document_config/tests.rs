@@ -199,6 +199,26 @@ fn validate_accepts_well_formed_write_tools() {
     );
 }
 
+#[test]
+fn write_tools_deserialize_trims_whitespace() {
+    // Padded tool_name / collection / field name would otherwise survive to
+    // verbatim GraphQL interpolation and corrupt the mutation.
+    let json = serde_json::json!({
+        "selection_id": "sel-1",
+        "agent_did": "did:defra-agent:test",
+        "write_tools": [{
+            "tool_name": "  request_action  ",
+            "collection": " ActionRequest ",
+            "fields": [{ "name": "  summary  ", "required": true }]
+        }]
+    });
+    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
+    let decl = &loaded.write_tools.as_ref().unwrap()[0];
+    assert_eq!(decl.tool_name, "request_action");
+    assert_eq!(decl.collection, "ActionRequest");
+    assert_eq!(decl.fields[0].name, "summary");
+}
+
 #[tokio::test]
 async fn tool_selection_document_round_trips_defra_query_fields() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();

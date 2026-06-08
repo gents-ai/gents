@@ -9,11 +9,34 @@ use crate::graphql::escape_graphql_string;
 
 /// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
 /// and whether the agent must provide it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// `name` is trimmed at deserialization so the stored value, the runtime
+/// [`crate::defra_write::BoundedWriteTool`], and `config validate` all agree on
+/// the same canonical identifier (the field name is interpolated verbatim as a
+/// GraphQL input key, so stray whitespace would otherwise corrupt the mutation).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WriteToolField {
     pub name: String,
-    #[serde(default)]
     pub required: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolField {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            name: String,
+            #[serde(default)]
+            required: bool,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(WriteToolField {
+            name: raw.name.trim().to_string(),
+            required: raw.required,
+        })
+    }
 }
 
 /// A declarative, schema-bounded document-write tool. Each declaration becomes
@@ -22,14 +45,40 @@ pub struct WriteToolField {
 /// as the JSON serialization of one declaration per entry — mirroring the
 /// `subagent_targets` `[String]` precedent so there is no Lean/schema change
 /// beyond adding the column.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// `tool_name` and `collection` are trimmed at deserialization (see
+/// [`WriteToolField`] for the rationale); `description` is free text and is
+/// preserved verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WriteToolDecl {
     pub tool_name: String,
     pub collection: String,
-    #[serde(default)]
     pub description: String,
-    #[serde(default)]
     pub fields: Vec<WriteToolField>,
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolDecl {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            tool_name: String,
+            collection: String,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            fields: Vec<WriteToolField>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(WriteToolDecl {
+            tool_name: raw.tool_name.trim().to_string(),
+            collection: raw.collection.trim().to_string(),
+            description: raw.description,
+            fields: raw.fields,
+        })
+    }
 }
 
 impl WriteToolDecl {
