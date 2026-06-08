@@ -88,6 +88,31 @@ The test validates each fixture against:
 - generated adapter JSONL records and their schema;
 - generated eval/sample JSONL records and their schema.
 
+## Native Capture Roundtrip
+
+Wrapped captures may also include a `mapping` block that describes how native
+framework evidence maps into Defra runtime documents. The ignored CLI
+roundtrip harness imports those mapped native captures into embedded DefraDB,
+runs the real `defra-agent trace project` binary, writes JSON/JSONL/eval-JSONL
+exports, and lets framework-side verifiers consume those Defra exports:
+
+```sh
+DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES=/path/to/generated/fixtures \
+DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS=/path/to/generated/fixtures/defra-exports \
+  cargo test -p defra-agent-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
+```
+
+The Docker interop script runs this roundtrip stage after the envelope contract
+validation when Rust validation is enabled. AutoGen AgentChat captures currently
+exercise the full path: real AutoGen execution, native capture import into
+Defra runtime rows, embedded DefraDB persistence, real binary export, and an
+AutoGen-container verifier that checks the Defra export against the native
+messages, participants, handoffs, JSONL records, and eval samples.
+
+LangGraph, CrewAI, and Microsoft Agent Framework captures still use the
+envelope-only contract path until their native import mappings and
+framework-side export verifiers are added.
+
 Docker, Python, and framework-specific generators should stay outside the
 normal suite and write fixtures into the directory passed through
 `DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES`.
@@ -97,9 +122,11 @@ container write one JSON fixture per captured scenario. Then run the Rust
 harness against that output directory. This keeps framework installation and
 network access out of the default test suite while still proving that captures
 from real external runtimes can be represented by the shared Defra Agent
-projection contract. These generators are not native Defra import adapters:
-they execute the framework, collect native evidence, map it into a wrapped
-Defra projection envelope, and then validate that envelope.
+projection contract. Generators without a `mapping` block are not native Defra
+import adapters: they execute the framework, collect native evidence, map it
+into a wrapped Defra projection envelope, and then validate that envelope.
+Generators with a `mapping` block can additionally feed the native-capture
+roundtrip harness.
 
 To run every Dockerized generator and validate the combined output with the
 Rust harness:
@@ -140,5 +167,6 @@ adding Docker or Python dependencies to default PR CI.
   custom `BaseChatClient` instances and writes a wrapped `multi_agent_task`
   fixture into the mounted output directory.
 
-The wrapped fixture is the test artifact. It is intentionally produced by the
-generator, not by Defra Agent reading native framework storage directly.
+The wrapped fixture remains the external-runtime artifact. For mapped captures,
+Defra Agent derives runtime rows from the native evidence plus mapping metadata
+and then exports adapter views through the normal binary path.

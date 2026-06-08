@@ -388,6 +388,7 @@ def write_fixture_file(
     filename: str,
     source_api: list[str],
     native: dict[str, Any],
+    mapping: dict[str, Any],
     envelope: dict[str, Any],
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +402,7 @@ def write_fixture_file(
             "api": source_api,
         },
         "native": native,
+        "mapping": mapping,
         "envelope": envelope,
     }
     path = out_dir / filename
@@ -433,6 +435,49 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
             "stop_reason": result.stop_reason,
             "messages": native_messages,
         },
+        {
+            "projection": "multi_agent_task",
+            "scenario_id": "autogen.round_robin_group_chat",
+            "request_id": REQUEST_ID,
+            "session_id": CONTEXT_ID,
+            "agent_did": AGENTS[0]["agent_did"],
+            "behavior_id": AGENTS[0]["behavior_id"],
+            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "status": task_status(result.stop_reason),
+            "participants": [
+                {
+                    "native_name": definition["name"],
+                    "role": definition["role"],
+                    "agent_did": definition["agent_did"],
+                    "behavior_id": definition["behavior_id"],
+                    "request_id": (
+                        CHILD_REQUEST_ID
+                        if definition["name"] == "researcher"
+                        else REQUEST_ID
+                    ),
+                }
+                for definition in AGENTS
+            ],
+            "delegations": [
+                {
+                    "parent_request_id": REQUEST_ID,
+                    "child_request_id": CHILD_REQUEST_ID,
+                    "parent_tool_call_id": "autogen:handoff:planner-to-researcher",
+                    "tool_name": "handoff",
+                    "agent_did": "did:defra-agent:autogen-researcher",
+                    "behavior_id": "autogen.researcher",
+                    "status": "completed",
+                }
+            ],
+            "tool_events": [
+                {
+                    "id": "autogen:event:review:reviewer-approval",
+                    "request_id": REQUEST_ID,
+                    "tool_name": "review",
+                    "status": "completed",
+                }
+            ],
+        },
         build_projection(result),
     )
 
@@ -461,6 +506,60 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
             "task": SWARM_TASK_TEXT,
             "stop_reason": result.stop_reason,
             "messages": native_messages,
+        },
+        {
+            "projection": "multi_agent_task",
+            "scenario_id": "autogen.swarm",
+            "request_id": SWARM_REQUEST_ID,
+            "session_id": SWARM_CONTEXT_ID,
+            "agent_did": SWARM_AGENTS[0]["agent_did"],
+            "behavior_id": SWARM_AGENTS[0]["behavior_id"],
+            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "status": task_status(result.stop_reason),
+            "participants": [
+                {
+                    "native_name": definition["name"],
+                    "role": definition["role"],
+                    "agent_did": definition["agent_did"],
+                    "behavior_id": definition["behavior_id"],
+                    "request_id": (
+                        SWARM_RESEARCH_REQUEST_ID
+                        if definition["name"] == "researcher"
+                        else SWARM_REVIEW_REQUEST_ID
+                        if definition["name"] == "reviewer"
+                        else SWARM_REQUEST_ID
+                    ),
+                }
+                for definition in SWARM_AGENTS
+            ],
+            "delegations": [
+                {
+                    "parent_request_id": SWARM_REQUEST_ID,
+                    "child_request_id": SWARM_RESEARCH_REQUEST_ID,
+                    "parent_tool_call_id": "autogen:swarm:handoff:planner-to-researcher",
+                    "tool_name": "handoff",
+                    "agent_did": "did:defra-agent:autogen-swarm-researcher",
+                    "behavior_id": "autogen.swarm.researcher",
+                    "status": "completed",
+                },
+                {
+                    "parent_request_id": SWARM_RESEARCH_REQUEST_ID,
+                    "child_request_id": SWARM_REVIEW_REQUEST_ID,
+                    "parent_tool_call_id": "autogen:swarm:handoff:researcher-to-reviewer",
+                    "tool_name": "handoff",
+                    "agent_did": "did:defra-agent:autogen-swarm-reviewer",
+                    "behavior_id": "autogen.swarm.reviewer",
+                    "status": "completed",
+                },
+            ],
+            "tool_events": [
+                {
+                    "id": "autogen:swarm:event:review:reviewer-approval",
+                    "request_id": SWARM_REVIEW_REQUEST_ID,
+                    "tool_name": "review",
+                    "status": "completed",
+                }
+            ],
         },
         build_swarm_projection(result),
     )

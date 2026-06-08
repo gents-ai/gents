@@ -1644,11 +1644,18 @@ fn build_multi_agent_task(
     context: &ProjectionContext,
 ) -> MultiAgentTaskProjection {
     let mut participants = Vec::new();
+    push_metadata_participants(
+        &mut participants,
+        timeline.request.metadata.as_deref(),
+        context,
+    );
     push_participant(
         &mut participants,
         timeline.agent_did.clone(),
         timeline.behavior_id.clone(),
-        "owner",
+        adapter_projection_metadata_string(timeline.request.metadata.as_deref(), "role")
+            .as_deref()
+            .unwrap_or("owner"),
     );
     let mut messages = Vec::new();
     let mut delegations = Vec::new();
@@ -1661,11 +1668,13 @@ fn build_multi_agent_task(
                     &mut participants,
                     request.agent_did.clone(),
                     request.behavior_id.clone(),
-                    if request.request_id == timeline.request_id {
-                        "owner"
-                    } else {
-                        "delegate"
-                    },
+                    adapter_projection_metadata_string(request.metadata.as_deref(), "role")
+                        .as_deref()
+                        .unwrap_or(if request.request_id == timeline.request_id {
+                            "owner"
+                        } else {
+                            "delegate"
+                        }),
                 );
                 if let Some(parent_request_id) = request.parent_request_id.as_deref() {
                     delegations.push(MultiAgentDelegation {
@@ -1715,6 +1724,54 @@ fn build_multi_agent_task(
         delegations,
         tool_events,
     }
+}
+
+fn push_metadata_participants(
+    participants: &mut Vec<MultiAgentParticipant>,
+    metadata: Option<&str>,
+    context: &ProjectionContext,
+) {
+    let Some(value) = adapter_projection_metadata_value(metadata, "participants") else {
+        return;
+    };
+    let Some(raw_participants) = value.as_array() else {
+        return;
+    };
+    for participant in raw_participants {
+        let role = participant
+            .get("role")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("participant");
+        let agent_did = participant
+            .get("agent_did")
+            .and_then(Value::as_str)
+            .map(|value| redact_str(value, context));
+        let behavior_id = participant
+            .get("behavior_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        push_participant(participants, agent_did, behavior_id, role);
+    }
+}
+
+fn adapter_projection_metadata_string(metadata: Option<&str>, key: &str) -> Option<String> {
+    adapter_projection_metadata_value(metadata, key).and_then(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn adapter_projection_metadata_value(metadata: Option<&str>, key: &str) -> Option<Value> {
+    let metadata = metadata?.trim();
+    if metadata.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(metadata).ok()?;
+    value.get("adapter_projection")?.get(key).cloned()
 }
 
 fn timeline_request_input(

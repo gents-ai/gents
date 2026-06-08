@@ -635,9 +635,14 @@ Started after the adapter-driven reframing:
   directory, then invokes the ignored Rust external adapter harness against the
   combined captures. This makes the LangGraph, AutoGen, CrewAI, and Microsoft
   Agent Framework contract-compatibility proof repeatable as one binary/Docker
-  command. The generators execute real framework code and then map captured
-  evidence into Defra projection envelopes; they are not native Defra import
-  adapters.
+  command. The generators execute real framework code and map captured evidence
+  into Defra projection envelopes; mapped captures can additionally drive the
+  native Defra import roundtrip.
+- The external interop path now has a native-capture roundtrip harness for
+  mapped captures. The harness imports native framework evidence into Defra
+  runtime rows, persists those rows into embedded DefraDB, runs the real
+  `defra-agent trace project` binary, and writes JSON, JSONL, and eval JSONL
+  exports for framework-side verification.
 - A Docker-backed LangGraph fixture generator runs a real LangGraph
   `StateGraph`, captures `get_state_history`, and emits a wrapped
   `langgraph_state_history` adapter fixture for the external harness.
@@ -657,6 +662,12 @@ Started after the adapter-driven reframing:
   `HandoffMessage` routing from planner to researcher to reviewer, mapping the
   resulting delegation chain and child request boundaries into the same
   multi-agent adapter contract.
+- AutoGen captures now include explicit Defra import mappings for participants,
+  request/session ids, handoff delegations, and tool events. The Docker suite
+  roundtrips those native captures through embedded DefraDB and the real
+  `defra-agent` binary, then runs an AutoGen-container verifier against the
+  Defra exports to check native messages, participants, handoffs, JSONL
+  records, and eval samples.
 - A Docker-backed CrewAI fixture generator runs a real sequential `Crew` with
   deterministic custom `BaseLLM` agents, captures native `Agent`, `Task`,
   `Crew`, `Process.sequential`, and `Crew.kickoff` evidence, and emits a
@@ -717,6 +728,11 @@ Started after the adapter-driven reframing:
 
 Still pending for the adapter-driven slice:
 
+- Native-capture import mappings and framework-side Defra export verifiers for
+  LangGraph, CrewAI, and Microsoft Agent Framework. Their Docker generators
+  still prove envelope/schema compatibility, but not full native
+  framework -> Defra runtime rows -> real binary export -> framework verifier
+  roundtrip semantics.
 - Broader native ACP lifecycle coverage beyond projection binding
   validate/apply/export/lifecycle metadata, explicit `--acp-policy-id` GraphQL
   paths, and in-memory DefraDB ACP policy/resource lifecycle coverage,

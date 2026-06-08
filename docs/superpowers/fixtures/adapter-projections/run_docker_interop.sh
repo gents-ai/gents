@@ -79,4 +79,23 @@ if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
     DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES="${out_dir}" \
       cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
   )
+
+  export_dir="${out_dir}/defra-exports"
+  rm -rf "${export_dir}"
+  mkdir -p "${export_dir}"
+  echo "round-tripping mapped native captures through embedded DefraDB and the defra-agent binary"
+  (
+    cd "${repo_root}"
+    DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES="${out_dir}" \
+      DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS="${export_dir}" \
+      cargo test -p defra-agent-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
+  )
+
+  echo "verifying AutoGen Defra exports inside the AutoGen fixture image"
+  docker run --rm \
+    --entrypoint python \
+    -v "${out_dir}:/out" \
+    -v "${export_dir}:/exports" \
+    defra-agent-autogen-fixture \
+    /fixture/verify_export.py --fixtures /out --exports /exports
 fi

@@ -21,6 +21,7 @@ pub mod desired_fields;
 pub mod document_config;
 pub mod error;
 pub mod event_delivery_contract;
+pub mod external_adapter_capture;
 pub mod graphql;
 pub mod health_checker;
 pub mod hook;
@@ -92,6 +93,10 @@ pub use document_config::{
     upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument,
+};
+pub use external_adapter_capture::{
+    import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
+    ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,

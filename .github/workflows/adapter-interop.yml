@@ -130,7 +130,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: adapter-interop-fixtures
-          path: ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/*.json
+          path: |
+            ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/*.json
+            ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/defra-exports/*
           if-no-files-found: ignore
 
       - name: Cleanup git auth
