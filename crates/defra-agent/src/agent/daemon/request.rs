@@ -55,6 +55,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         request_id = %request.request_id,
                         session_id = %request.session_id,
                         behavior_id = %behavior_name,
+                        history_message_count = tracing::field::Empty,
                     ))
                     .await?;
                 let (stripped_history, file_activity) =
@@ -72,12 +73,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let compaction_entries =
                     session::load_compaction_entries(&self.node, &request.session_id)
                         .instrument(tracing::info_span!(
-                            "request.load_compaction_entries",
-                            request_id = %request.request_id,
-                            session_id = %request.session_id,
-                            behavior_id = %behavior_name,
-                        ))
-                        .await?;
+                        "request.load_compaction_entries",
+                        request_id = %request.request_id,
+                        session_id = %request.session_id,
+                        behavior_id = %behavior_name,
+                        compaction_entry_count = tracing::field::Empty,
+                        compacted_message_count = tracing::field::Empty,
+                    ))
+                    .await?;
                 let mut history = drop_compacted_prefix(
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
