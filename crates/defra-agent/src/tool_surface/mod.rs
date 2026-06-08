@@ -17,7 +17,8 @@ use anyhow::Result;
 use rig::tool::ToolDyn;
 
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
-use crate::document_config::SubagentTarget;
+use crate::defra_write::BoundedWriteTool;
+use crate::document_config::{SubagentTarget, WriteToolDecl};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_context_budget_tool,
@@ -41,6 +42,7 @@ pub struct ToolSurface {
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
+    pub(super) write_tools: Vec<WriteToolDecl>,
 }
 
 impl ToolSurface {
@@ -117,6 +119,14 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        for decl in &self.write_tools {
+            // Mirror the well-formedness gate in `build_tools`: a decl with an
+            // empty tool_name or collection is skipped (and never registered),
+            // so it must not be advertised here either.
+            if !decl.tool_name.trim().is_empty() && !decl.collection.trim().is_empty() {
+                names.push(decl.tool_name.clone());
+            }
+        }
         build::dedupe_strings(names)
     }
 
@@ -161,6 +171,18 @@ impl ToolSurface {
                 CollectionScope::restricted(self.defra_query_collections.clone()),
             ));
         }
+        for decl in &self.write_tools {
+            let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
+            if !tool.is_well_formed() {
+                tracing::warn!(
+                    tool_name = %decl.tool_name,
+                    collection = %decl.collection,
+                    "skipping malformed write_tools entry",
+                );
+                continue;
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
         Ok(tools)
     }
 }
@@ -188,6 +210,7 @@ impl std::fmt::Debug for ToolSurface {
             )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
+            .field("write_tools", &self.write_tools)
             .finish()
     }
 }

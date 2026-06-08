@@ -482,6 +482,68 @@ async fn defra_query_tool_gated_by_selection() {
     assert!(!disabled.tool_names().contains(&"defra_query".to_string()));
 }
 
+#[tokio::test]
+async fn write_tools_register_under_declared_names() {
+    use crate::document_config::{WriteToolDecl, WriteToolField};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![
+                WriteToolDecl {
+                    tool_name: "request_action".to_string(),
+                    collection: "ActionRequest".to_string(),
+                    description: "Request an action".to_string(),
+                    fields: vec![WriteToolField {
+                        name: "summary".to_string(),
+                        required: true,
+                    }],
+                },
+                // Malformed: empty collection — must be skipped, not advertised.
+                WriteToolDecl {
+                    tool_name: "broken_tool".to_string(),
+                    collection: "  ".to_string(),
+                    description: String::new(),
+                    fields: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(
+        names.contains(&"request_action".to_string()),
+        "declared write tool should be advertised under its tool_name; got {names:?}"
+    );
+    assert!(
+        !names.contains(&"broken_tool".to_string()),
+        "malformed write tool (empty collection) must be skipped; got {names:?}"
+    );
+
+    // The built dynamic tools must carry the per-decl name too.
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = surface.build_tools(&runtime).unwrap();
+    assert!(
+        built.iter().any(|tool| tool.name() == "request_action"),
+        "registered dynamic tool should advertise decl.tool_name"
+    );
+    assert!(
+        !built.iter().any(|tool| tool.name() == "broken_tool"),
+        "malformed decl must not produce a registered tool"
+    );
+}
+
 #[test]
 fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_memory);

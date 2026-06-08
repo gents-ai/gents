@@ -14,6 +14,7 @@ use super::selection::{
     BackgroundToolConfig, CustomToolFactory, SubagentToolConfig, ToolSelection,
 };
 use super::ToolSurface;
+use crate::document_config::WriteToolDecl;
 
 #[derive(Clone)]
 pub struct BehaviorToolConfig {
@@ -27,6 +28,7 @@ pub struct BehaviorToolConfig {
     enable_session_history_tool: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
+    write_tools: Vec<WriteToolDecl>,
 }
 
 impl BehaviorToolConfig {
@@ -42,6 +44,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         }
     }
 
@@ -80,7 +83,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool,
             enable_defra_query,
             defra_query_collections,
-            write_tools: _,
+            write_tools,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
@@ -124,6 +127,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool,
             enable_defra_query,
             defra_query_collections: dedupe_strings(defra_query_collections),
+            write_tools,
         })
     }
 
@@ -183,6 +187,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool: self.enable_session_history_tool,
             enable_defra_query: self.enable_defra_query,
             defra_query_collections: self.defra_query_collections.clone(),
+            write_tools: self.write_tools.clone(),
         })
     }
 
@@ -240,6 +245,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
+            .field("write_tools", &self.write_tools)
             .finish()
     }
 }
