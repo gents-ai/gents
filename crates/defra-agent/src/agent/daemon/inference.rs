@@ -225,7 +225,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             }
                             stream = std::future::ready(Box::pin(crate::agent::loop_stream::run_loop_stream(
                                 model,
-                                hook,
+                                Some(hook),
                                 loop_prompt,
                                 loop_history,
                                 loop_tools,

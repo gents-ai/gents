@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rig::agent::Agent;
 use rig::completion::message::Message;
-use rig::completion::{CompletionModel, Prompt};
+use rig::completion::CompletionModel;
 
 mod history;
 mod summary;
@@ -134,11 +134,28 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
-        let raw_summary = self
-            .agent
-            .prompt(compaction_prompt())
-            .with_history(&prepared_history)
-            .await?;
+        // Summarize via the owned loop (#400) instead of rig's `Agent::prompt`.
+        // This is a non-persisting, tool-free single completion: no hook (no
+        // session/persistence), empty tool surface, `max_turns: 0`.
+        let model = (*self.agent.model).clone();
+        let loop_config = crate::agent::loop_stream::LoopConfig {
+            preamble: self.agent.preamble.clone(),
+            temperature: self.agent.temperature,
+            max_tokens: self.agent.max_tokens,
+            additional_params: self.agent.additional_params.clone(),
+            tool_choice: None,
+            max_turns: 0,
+        };
+        let raw_summary = crate::agent::loop_stream::run_loop_to_text(
+            model,
+            None,
+            rig::completion::Message::user(compaction_prompt()),
+            prepared_history.clone(),
+            std::sync::Arc::new(Vec::new()),
+            loop_config,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
         let parsed_summary = parse_summary_response(&raw_summary)?;
 
         let mut files_read = old_activity.files_read;

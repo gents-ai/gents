@@ -69,7 +69,7 @@ pub(crate) struct LoopConfig {
 /// deadline/cancellation envelope and result bounding itself.
 pub(crate) fn run_loop_stream<M>(
     model: M,
-    hook: DefraSessionHook,
+    hook: Option<DefraSessionHook>,
     prompt: Message,
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
@@ -105,17 +105,20 @@ where
             // Mirror rig's per-turn `on_completion_call` (prompt_request/streaming.rs
             // fires it inside the turn loop): on turn 1 this creates the session and
             // persists the user prompt; the hook's own state dedupes later turns.
-            let history_snapshot: Vec<Message> =
-                history.iter().chain(prior.iter()).cloned().collect();
-            if let HookAction::Terminate { reason } =
-                <DefraSessionHook as PromptHook<M>>::on_completion_call(
-                    &hook,
-                    &current_prompt,
-                    &history_snapshot,
-                )
-                .await
-            {
-                Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+            // A `None` hook is a non-persisting call (compaction/title summaries).
+            if let Some(hook) = hook.as_ref() {
+                let history_snapshot: Vec<Message> =
+                    history.iter().chain(prior.iter()).cloned().collect();
+                if let HookAction::Terminate { reason } =
+                    <DefraSessionHook as PromptHook<M>>::on_completion_call(
+                        hook,
+                        &current_prompt,
+                        &history_snapshot,
+                    )
+                    .await
+                {
+                    Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+                }
             }
 
             let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
@@ -181,15 +184,21 @@ where
                 let tool_args = value_to_json_string(&tool_call.function.arguments);
 
                 // on_tool_call: register the lifecycle / persist the call. May
-                // veto (Skip) or abort the whole request (Terminate).
-                let call_action = <DefraSessionHook as PromptHook<M>>::on_tool_call(
-                    &hook,
-                    &tool_name,
-                    tool_call.call_id.clone(),
-                    &internal_call_id,
-                    &tool_args,
-                )
-                .await;
+                // veto (Skip) or abort the whole request (Terminate). With no
+                // hook (non-persisting calls) the tool simply executes.
+                let call_action = match hook.as_ref() {
+                    Some(hook) => {
+                        <DefraSessionHook as PromptHook<M>>::on_tool_call(
+                            hook,
+                            &tool_name,
+                            tool_call.call_id.clone(),
+                            &internal_call_id,
+                            &tool_args,
+                        )
+                        .await
+                    }
+                    None => ToolCallHookAction::Continue,
+                };
 
                 let bounded_result = match call_action {
                     ToolCallHookAction::Terminate { reason } => {
@@ -215,17 +224,22 @@ where
 
                         // on_tool_result persists/spills the FULL result and
                         // drives the lifecycle to its terminal state.
-                        let result_action = <DefraSessionHook as PromptHook<M>>::on_tool_result(
-                            &hook,
-                            &tool_name,
-                            tool_call.call_id.clone(),
-                            &internal_call_id,
-                            &tool_args,
-                            &full_result,
-                        )
-                        .await;
-                        if let HookAction::Terminate { reason } = result_action {
-                            Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+                        if let Some(hook) = hook.as_ref() {
+                            let result_action =
+                                <DefraSessionHook as PromptHook<M>>::on_tool_result(
+                                    hook,
+                                    &tool_name,
+                                    tool_call.call_id.clone(),
+                                    &internal_call_id,
+                                    &tool_args,
+                                    &full_result,
+                                )
+                                .await;
+                            if let HookAction::Terminate { reason } = result_action {
+                                Err(StreamingError::Completion(CompletionError::ResponseError(
+                                    reason,
+                                )))?;
+                            }
                         }
                         bounded
                     }
@@ -258,6 +272,33 @@ where
             }
         }
     }
+}
+
+/// Drive the owned loop to completion and return the final assistant text,
+/// for the non-streaming call sites (`oneshot`, `compaction`, title generation)
+/// that previously used rig's `Agent::prompt`. Tool side-effects still run via
+/// the hook when present; intermediate stream items are discarded.
+pub(crate) async fn run_loop_to_text<M>(
+    model: M,
+    hook: Option<DefraSessionHook>,
+    prompt: Message,
+    history: Vec<Message>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    config: LoopConfig,
+) -> Result<String, StreamingError>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: 'static,
+{
+    let stream = run_loop_stream(model, hook, prompt, history, tools, config);
+    futures::pin_mut!(stream);
+    let mut final_text = String::new();
+    while let Some(item) = stream.next().await {
+        if let MultiTurnStreamItem::FinalResponse(final_response) = item? {
+            final_text = final_response.response().to_string();
+        }
+    }
+    Ok(final_text)
 }
 
 /// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):

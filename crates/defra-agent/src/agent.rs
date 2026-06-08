@@ -30,7 +30,7 @@ use crate::trigger_engine::manual_source::ManualTriggerHandle;
 mod builder;
 mod daemon;
 mod document_view;
-mod loop_stream;
+pub(crate) mod loop_stream;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;

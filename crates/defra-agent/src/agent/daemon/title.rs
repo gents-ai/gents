@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use rig::completion::Prompt;
 
 use super::BehaviorDaemon;
 use crate::admission::{self, AdmissionCallContext, CallKind};
@@ -98,10 +97,27 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
     for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
         let prompt = prompt.clone();
         let title_agent = title_agent.clone();
+        // Owned loop (#400): a non-persisting, tool-free single completion.
+        let model = (*title_agent.model).clone();
+        let loop_config = crate::agent::loop_stream::LoopConfig {
+            preamble: title_agent.preamble.clone(),
+            temperature: title_agent.temperature,
+            max_tokens: title_agent.max_tokens,
+            additional_params: title_agent.additional_params.clone(),
+            tool_choice: None,
+            max_turns: title_agent.default_max_turns.unwrap_or(0),
+        };
         match admission::scope_call(CallKind::OneOff, attempt, async move {
             tokio::time::timeout(
                 Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),
-                title_agent.prompt(prompt),
+                crate::agent::loop_stream::run_loop_to_text(
+                    model,
+                    None,
+                    rig::completion::Message::user(prompt),
+                    Vec::new(),
+                    std::sync::Arc::new(Vec::new()),
+                    loop_config,
+                ),
             )
             .await
             .map_err(|_| {
@@ -110,8 +126,7 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
                     TITLE_GENERATION_TIMEOUT_SECS
                 )
             })?
-            .map(|response| response.to_string())
-            .map_err(anyhow::Error::from)
+            .map_err(|error| anyhow::anyhow!("conversation title inference failed: {error}"))
         })
         .await
         {

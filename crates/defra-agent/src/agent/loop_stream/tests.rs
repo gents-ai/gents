@@ -203,9 +203,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
         RawStreamingChoice::FinalResponse(()),
     ]);
 
-    let stream = run_loop_stream(
-        model,
-        hook,
+    let stream = run_loop_stream(model, Some(hook),
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -257,7 +255,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         output: "ECHOED".to_string(),
     })];
 
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut tool_results = Vec::new();
@@ -317,7 +315,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     // max_turns = 0 permits one completion; the tool call forces a second,
     // which is blocked and surfaces a max-turns error.
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(vec![echo_tool()]), config(0));
+    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(vec![echo_tool()]), config(0));
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -347,7 +345,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         output: marker,
     })];
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -386,7 +384,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut bounded_len = None;

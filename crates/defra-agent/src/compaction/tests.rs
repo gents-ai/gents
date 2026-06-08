@@ -8,7 +8,7 @@ use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
 };
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
+use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
 use crate::ensure_schemas;
@@ -102,11 +102,18 @@ impl CompletionModel for MockSummaryModel {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in compaction tests".to_string(),
-        ))
+        // Compaction now summarizes via the owned loop (#400), which uses
+        // `stream`; replay the scripted summary as a single text chunk.
+        *self.last_request.lock().unwrap() = Some(request);
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
+            Ok(RawStreamingChoice::Message(self.response.clone())),
+            Ok(RawStreamingChoice::FinalResponse(())),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
     }
 }
 
