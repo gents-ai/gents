@@ -207,6 +207,39 @@ impl ToolSelectionDocument {
                 }
             }
         }
+        if let Some(decls) = &self.write_tools {
+            let mut seen_tool_names = std::collections::HashSet::new();
+            for (i, decl) in decls.iter().enumerate() {
+                // A decl must name a non-empty tool AND target collection.
+                // `is_well_formed()` is the single source of truth for that gate;
+                // mirror it here so malformed decls fail validation loudly
+                // instead of being silently dropped at registration.
+                if !decl.is_well_formed() {
+                    return Err(anyhow::anyhow!(
+                        "write_tools[{i}] is malformed (tool_name and collection must both be \
+                         non-empty): tool_name={:?}, collection={:?}",
+                        decl.tool_name,
+                        decl.collection
+                    ));
+                }
+                for (j, field) in decl.fields.iter().enumerate() {
+                    if field.name.trim().is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "write_tools[{i}] (tool {:?}) has a field[{j}] with an empty name; \
+                             every WriteToolField must have a non-empty name",
+                            decl.tool_name
+                        ));
+                    }
+                }
+                if !seen_tool_names.insert(decl.tool_name.trim()) {
+                    return Err(anyhow::anyhow!(
+                        "write_tools has a duplicate tool_name {:?}; each declared write tool \
+                         must have a unique tool_name",
+                        decl.tool_name.trim()
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }

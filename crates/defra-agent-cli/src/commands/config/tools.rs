@@ -58,6 +58,10 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         enable_session_history_tool: args.enable_session_history_tool,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections: Some(args.defra_query_collections.clone()),
+        // `write_tools` is apply-managed (declared in `config apply` manifests);
+        // the imperative command exposes no flag, so leave it `None` to preserve
+        // any apply-managed decls on update (same rationale as subagent_targets).
+        write_tools: None,
     };
     let doc_id = write_tool_selection_document(&access, &selection).await?;
     let output = json!({

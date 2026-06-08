@@ -78,6 +78,127 @@ fn validate_rejects_empty_string_in_backgroundable_tool_names() {
     );
 }
 
+#[test]
+fn validate_rejects_write_tool_with_empty_tool_name() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "   ".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err(), "empty tool_name must be rejected");
+    assert!(
+        format!("{}", result.unwrap_err()).contains("write_tools"),
+        "error message must mention write_tools"
+    );
+}
+
+#[test]
+fn validate_rejects_write_tool_with_empty_collection() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "  ".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err(), "empty collection must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("write_tools") && err.contains("request_action"),
+        "error must name write_tools and the offending tool: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_write_tool_field_with_empty_name() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: "  ".to_string(),
+                required: true,
+            }],
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err(), "empty field name must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("write_tools") && err.contains("request_action"),
+        "error must name write_tools and the offending tool: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_write_tool_names() {
+    let decl = |collection: &str| WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: collection.to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+    };
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![decl("ActionRequest"), decl("OtherCollection")]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err(), "duplicate tool_name must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("write_tools") && err.contains("request_action"),
+        "error must name write_tools and the duplicated tool: {err}"
+    );
+}
+
+#[test]
+fn validate_accepts_well_formed_write_tools() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![
+            WriteToolDecl {
+                tool_name: "request_action".to_string(),
+                collection: "ActionRequest".to_string(),
+                description: "Request an action".to_string(),
+                fields: vec![WriteToolField {
+                    name: "title".to_string(),
+                    required: true,
+                }],
+            },
+            WriteToolDecl {
+                tool_name: "log_note".to_string(),
+                collection: "Note".to_string(),
+                description: String::new(),
+                fields: Vec::new(),
+            },
+        ]),
+        ..Default::default()
+    };
+    assert!(
+        doc.validate().is_ok(),
+        "well-formed, uniquely-named write_tools must validate"
+    );
+}
+
 #[tokio::test]
 async fn tool_selection_document_round_trips_defra_query_fields() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();

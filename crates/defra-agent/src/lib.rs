@@ -82,7 +82,7 @@ pub use document_config::{
     load_inference_profile, load_tool_selection, subagent_target_entry, upsert_agent_behavior,
     upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    ToolSelectionDocument,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
