@@ -104,7 +104,7 @@ impl BoundedWriteTool {
     /// registration can use this to reject a malformed `write_tools` entry
     /// before it ever reaches the live toolset.
     pub fn is_well_formed(&self) -> bool {
-        !self.decl.tool_name.trim().is_empty() && !self.decl.collection.trim().is_empty()
+        self.decl.is_well_formed()
     }
 
     /// Reject a structurally invalid declaration so we never emit a mutation

@@ -120,10 +120,9 @@ impl ToolSurface {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
         for decl in &self.write_tools {
-            // Mirror the well-formedness gate in `build_tools`: a decl with an
-            // empty tool_name or collection is skipped (and never registered),
-            // so it must not be advertised here either.
-            if !decl.tool_name.trim().is_empty() && !decl.collection.trim().is_empty() {
+            // Use the single source-of-truth gate on the declaration itself;
+            // see `WriteToolDecl::is_well_formed`.
+            if decl.is_well_formed() {
                 names.push(decl.tool_name.clone());
             }
         }

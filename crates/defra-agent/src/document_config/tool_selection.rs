@@ -32,6 +32,14 @@ pub struct WriteToolDecl {
     pub fields: Vec<WriteToolField>,
 }
 
+impl WriteToolDecl {
+    /// A decl is well-formed iff it names a non-empty tool and target collection.
+    /// Single source of truth for the registration/advertisement gate.
+    pub fn is_well_formed(&self) -> bool {
+        !self.tool_name.trim().is_empty() && !self.collection.trim().is_empty()
+    }
+}
+
 /// Deserialize the `write_tools` field from either representation:
 /// - a JSON array of [`WriteToolDecl`] objects (manifest / `config apply` input),
 /// - a JSON array of strings, each the JSON serialization of one
