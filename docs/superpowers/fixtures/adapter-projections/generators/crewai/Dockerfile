@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY generate_fixture.py .
+COPY verify_export.py .
 
 ENV CREWAI_DISABLE_TELEMETRY=true
 ENV OTEL_SDK_DISABLED=true

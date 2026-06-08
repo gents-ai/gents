@@ -103,15 +103,12 @@ DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS=/path/to/generated/fixtures/defra-exports \
 ```
 
 The Docker interop script runs this roundtrip stage after the envelope contract
-validation when Rust validation is enabled. AutoGen AgentChat captures currently
-exercise the full path: real AutoGen execution, native capture import into
-Defra runtime rows, embedded DefraDB persistence, real binary export, and an
-AutoGen-container verifier that checks the Defra export against the native
-messages, participants, handoffs, JSONL records, and eval samples.
-
-LangGraph, CrewAI, and Microsoft Agent Framework captures still use the
-envelope-only contract path until their native import mappings and
-framework-side export verifiers are added.
+validation when Rust validation is enabled. The current LangGraph, AutoGen
+AgentChat, CrewAI, and Microsoft Agent Framework captures exercise the full
+path: real framework execution, native capture import into Defra runtime rows,
+embedded DefraDB persistence, real binary export, and framework-container
+verifiers that check the Defra export against native state/messages,
+participants, delegations, tool events, JSONL records, and eval samples.
 
 Docker, Python, and framework-specific generators should stay outside the
 normal suite and write fixtures into the directory passed through

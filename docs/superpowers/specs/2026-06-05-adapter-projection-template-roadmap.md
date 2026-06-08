@@ -654,6 +654,14 @@ Started after the adapter-driven reframing:
   `ToolMessage` state, maps the model/tool boundary as a child task, and can
   run either deterministically with `FakeListChatModel` or against a live
   OpenAI-compatible endpoint when credentials are supplied.
+- LangGraph linear, compiled-subgraph, and provider-backed captures now include
+  explicit Defra import mappings for request/session ids and graph ownership.
+  The native state-history importer persists Defra runtime rows with
+  document-native state/history hints, then `defra-agent trace project` exports
+  LangGraph adapter views through the normal binary path. A LangGraph-container
+  verifier checks checkpoint ids, thread ids, state values/messages, graph
+  edges, nodes, tasks, JSONL records, and eval samples against the native
+  captures.
 - A Docker-backed AutoGen AgentChat fixture generator runs a real
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
@@ -678,12 +686,26 @@ Started after the adapter-driven reframing:
   and review work to child agents. The fixture records native manager/worker
   LLM calls, repeated manager-to-worker child request boundaries, and context
   flow from research into review through the same external harness.
+- CrewAI sequential and hierarchical captures now include explicit Defra import
+  mappings for participants, request/session ids, context/delegation
+  boundaries, and tool events. The Docker suite roundtrips those native
+  captures through embedded DefraDB and the real `defra-agent` binary, then
+  runs a CrewAI-container verifier against the Defra exports to check native
+  task outputs, manager responses, participants, delegations, JSONL records,
+  and eval samples.
 - A Docker-backed Microsoft Agent Framework fixture generator runs a real
   `GroupChatBuilder` workflow with deterministic custom `BaseChatClient`
   agents, captures native workflow and group-chat request/response events, and
   emits a wrapped `multi_agent_task` adapter fixture for centralized
   orchestrator-selected turns, shared conversation flow, and child request
   boundaries.
+- The Microsoft Agent Framework fixture now includes explicit Defra import
+  mappings for orchestrator/participant roles, request/session ids,
+  group-chat delegations, response events, and termination. The Docker suite
+  roundtrips the native capture through embedded DefraDB and the real
+  `defra-agent` binary, then runs an MSAF-container verifier against the Defra
+  exports to check native task text, agent outputs, final output,
+  participants, delegations, JSONL records, and eval samples.
 - `trace project --acp-policy-id POLICY --graphql ENDPOINT --actor-did DID`
   enforces DefraDB Document ACP read decisions before projection. The loader
   asks `/acp/document/decide` for each runtime row `_docID`, denies the root
@@ -728,11 +750,6 @@ Started after the adapter-driven reframing:
 
 Still pending for the adapter-driven slice:
 
-- Native-capture import mappings and framework-side Defra export verifiers for
-  LangGraph, CrewAI, and Microsoft Agent Framework. Their Docker generators
-  still prove envelope/schema compatibility, but not full native
-  framework -> Defra runtime rows -> real binary export -> framework verifier
-  roundtrip semantics.
 - Broader native ACP lifecycle coverage beyond projection binding
   validate/apply/export/lifecycle metadata, explicit `--acp-policy-id` GraphQL
   paths, and in-memory DefraDB ACP policy/resource lifecycle coverage,

@@ -1625,7 +1625,7 @@ fn build_langgraph_state_history(
         );
     }
 
-    LangGraphStateHistoryProjection {
+    let mut projection = LangGraphStateHistoryProjection {
         thread_id: timeline.session_id.clone(),
         checkpoint_id: format!(
             "defra:{}:{}",
@@ -1636,7 +1636,13 @@ fn build_langgraph_state_history(
         nodes,
         edges,
         tasks,
-    }
+    };
+    apply_langgraph_metadata_hint(
+        &mut projection,
+        timeline.request.metadata.as_deref(),
+        context,
+    );
+    projection
 }
 
 fn build_multi_agent_task(
@@ -1723,6 +1729,64 @@ fn build_multi_agent_task(
         messages,
         delegations,
         tool_events,
+    }
+}
+
+fn apply_langgraph_metadata_hint(
+    projection: &mut LangGraphStateHistoryProjection,
+    metadata: Option<&str>,
+    context: &ProjectionContext,
+) {
+    let Some(hint) = adapter_projection_metadata_value(metadata, "langgraph_state_history") else {
+        return;
+    };
+    if let Some(thread_id) = hint
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        projection.thread_id = Some(thread_id.to_string());
+    }
+    if let Some(checkpoint_id) = hint
+        .get("checkpoint_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        projection.checkpoint_id = checkpoint_id.to_string();
+    }
+    if let Some(root_request_id) = hint
+        .get("root_request_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        projection.root_request_id = root_request_id.to_string();
+    }
+    if let Some(values) = hint.get("values").and_then(Value::as_object) {
+        projection.values = values
+            .iter()
+            .map(|(key, value)| (key.clone(), redact_json_value(value.clone(), context)))
+            .collect();
+    }
+    if let Some(nodes) = hint
+        .get("nodes")
+        .cloned()
+        .and_then(|nodes| serde_json::from_value::<Vec<LangGraphNode>>(nodes).ok())
+    {
+        projection.nodes = nodes;
+    }
+    if let Some(edges) = hint
+        .get("edges")
+        .cloned()
+        .and_then(|edges| serde_json::from_value::<Vec<LangGraphEdge>>(edges).ok())
+    {
+        projection.edges = edges;
+    }
+    if let Some(tasks) = hint
+        .get("tasks")
+        .cloned()
+        .and_then(|tasks| serde_json::from_value::<Vec<LangGraphTask>>(tasks).ok())
+    {
+        projection.tasks = tasks;
     }
 }
 
@@ -1825,6 +1889,25 @@ fn redact_str(value: &str, context: &ProjectionContext) -> String {
         ProjectionRedactionMode::Full => value.to_string(),
         ProjectionRedactionMode::TrainingSafe => redact_training_safe(value),
         ProjectionRedactionMode::Public => "[redacted]".to_string(),
+    }
+}
+
+fn redact_json_value(value: Value, context: &ProjectionContext) -> Value {
+    match value {
+        Value::String(value) => Value::String(redact_str(&value, context)),
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact_json_value(value, context))
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, redact_json_value(value, context)))
+                .collect(),
+        ),
+        value => value,
     }
 }
 

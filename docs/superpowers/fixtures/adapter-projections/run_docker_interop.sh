@@ -98,4 +98,28 @@ if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
     -v "${export_dir}:/exports" \
     defra-agent-autogen-fixture \
     /fixture/verify_export.py --fixtures /out --exports /exports
+
+  echo "verifying LangGraph Defra exports inside the LangGraph fixture image"
+  docker run --rm \
+    --entrypoint python \
+    -v "${out_dir}:/out" \
+    -v "${export_dir}:/exports" \
+    defra-agent-langgraph-fixture \
+    /fixture/verify_export.py --fixtures /out --exports /exports
+
+  echo "verifying CrewAI Defra exports inside the CrewAI fixture image"
+  docker run --rm \
+    --entrypoint python \
+    -v "${out_dir}:/out" \
+    -v "${export_dir}:/exports" \
+    defra-agent-crewai-fixture \
+    /fixture/verify_export.py --fixtures /out --exports /exports
+
+  echo "verifying Microsoft Agent Framework Defra exports inside the fixture image"
+  docker run --rm \
+    --entrypoint python \
+    -v "${out_dir}:/out" \
+    -v "${export_dir}:/exports" \
+    defra-agent-msaf-fixture \
+    /fixture/verify_export.py --fixtures /out --exports /exports
 fi

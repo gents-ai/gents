@@ -614,6 +614,127 @@ def crewai_version() -> str:
     return importlib.metadata.version("crewai")
 
 
+def sequential_mapping(result: Any) -> dict[str, Any]:
+    return {
+        "projection": "multi_agent_task",
+        "scenario_id": "crewai.sequential_crew",
+        "request_id": REQUEST_ID,
+        "session_id": CONTEXT_ID,
+        "agent_did": AGENTS[0]["agent_did"],
+        "behavior_id": AGENTS[0]["behavior_id"],
+        "actor_did": "did:defra-agent:crewai-fixture-reader",
+        "status": crew_status(result),
+        "participants": [
+            {
+                "native_name": definition["title"],
+                "role": definition["role"],
+                "agent_did": definition["agent_did"],
+                "behavior_id": definition["behavior_id"],
+                "request_id": request_id_for_agent(definition["name"]),
+            }
+            for definition in AGENTS
+        ],
+        "delegations": [
+            {
+                "parent_request_id": REQUEST_ID,
+                "child_request_id": RESEARCH_REQUEST_ID,
+                "parent_tool_call_id": "crewai:context:planner-to-researcher",
+                "tool_name": "task_context",
+                "agent_did": "did:defra-agent:crewai-researcher",
+                "behavior_id": "crewai.researcher",
+                "status": "completed",
+            },
+            {
+                "parent_request_id": RESEARCH_REQUEST_ID,
+                "child_request_id": REVIEW_REQUEST_ID,
+                "parent_tool_call_id": "crewai:context:researcher-to-reviewer",
+                "tool_name": "task_context",
+                "agent_did": "did:defra-agent:crewai-reviewer",
+                "behavior_id": "crewai.reviewer",
+                "status": "completed",
+            },
+        ],
+        "tool_events": [
+            {
+                "id": "crewai:event:review:approval",
+                "request_id": REVIEW_REQUEST_ID,
+                "tool_name": "review",
+                "status": "completed",
+            }
+        ],
+    }
+
+
+def hierarchical_mapping(result: Any) -> dict[str, Any]:
+    return {
+        "projection": "multi_agent_task",
+        "scenario_id": "crewai.hierarchical_crew",
+        "request_id": HIERARCHICAL_REQUEST_ID,
+        "session_id": HIERARCHICAL_CONTEXT_ID,
+        "agent_did": HIERARCHICAL_MANAGER["agent_did"],
+        "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+        "actor_did": "did:defra-agent:crewai-fixture-reader",
+        "status": crew_status(result),
+        "participants": [
+            {
+                "native_name": HIERARCHICAL_MANAGER["title"],
+                "role": HIERARCHICAL_MANAGER["role"],
+                "agent_did": HIERARCHICAL_MANAGER["agent_did"],
+                "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+                "request_id": HIERARCHICAL_REQUEST_ID,
+            },
+            *[
+                {
+                    "native_name": definition["title"],
+                    "role": definition["role"],
+                    "agent_did": definition["agent_did"],
+                    "behavior_id": definition["behavior_id"],
+                    "request_id": definition["request_id"],
+                }
+                for definition in HIERARCHICAL_AGENTS
+            ],
+        ],
+        "delegations": [
+            {
+                "parent_request_id": HIERARCHICAL_REQUEST_ID,
+                "child_request_id": HIERARCHICAL_RESEARCH_REQUEST_ID,
+                "parent_tool_call_id": (
+                    "crewai:hierarchical:delegate:manager-to-researcher"
+                ),
+                "tool_name": "delegate_work_to_coworker",
+                "agent_did": HIERARCHICAL_AGENTS[0]["agent_did"],
+                "behavior_id": HIERARCHICAL_AGENTS[0]["behavior_id"],
+                "status": "completed",
+            },
+            {
+                "parent_request_id": HIERARCHICAL_REQUEST_ID,
+                "child_request_id": HIERARCHICAL_REVIEW_REQUEST_ID,
+                "parent_tool_call_id": (
+                    "crewai:hierarchical:delegate:manager-to-reviewer"
+                ),
+                "tool_name": "delegate_work_to_coworker",
+                "agent_did": HIERARCHICAL_AGENTS[1]["agent_did"],
+                "behavior_id": HIERARCHICAL_AGENTS[1]["behavior_id"],
+                "status": "completed",
+            },
+        ],
+        "tool_events": [
+            {
+                "id": "crewai:hierarchical:event:research-response",
+                "request_id": HIERARCHICAL_RESEARCH_REQUEST_ID,
+                "tool_name": "delegated_task_response",
+                "status": "completed",
+            },
+            {
+                "id": "crewai:hierarchical:event:review-response",
+                "request_id": HIERARCHICAL_REVIEW_REQUEST_ID,
+                "tool_name": "delegated_task_response",
+                "status": "completed",
+            },
+        ],
+    }
+
+
 def write_fixture(
     out_dir: Path,
     result: Any,
@@ -658,6 +779,7 @@ def write_fixture(
             ],
             "llm_calls": {name: llm.calls for name, llm in llms.items()},
         },
+        "mapping": sequential_mapping(result),
         "envelope": build_projection(result, tasks),
     }
     path = out_dir / "multi_agent_task.crewai_sequential.capture.json"
@@ -719,6 +841,7 @@ def write_hierarchical_fixture(
             ],
             "llm_calls": {name: llm.calls for name, llm in llms.items()},
         },
+        "mapping": hierarchical_mapping(result),
         "envelope": build_hierarchical_projection(result, tasks, llms),
     }
     path = out_dir / "multi_agent_task.crewai_hierarchical.capture.json"

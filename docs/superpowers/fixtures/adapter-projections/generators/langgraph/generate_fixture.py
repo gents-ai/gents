@@ -770,6 +770,7 @@ def write_fixture_file(
     filename: str,
     source_api: list[str],
     native: dict[str, Any],
+    mapping: dict[str, Any],
     envelope: dict[str, Any],
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -784,10 +785,32 @@ def write_fixture_file(
             "api": source_api,
         },
         "native": native,
+        "mapping": mapping,
         "envelope": envelope,
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def build_import_mapping(
+    scenario_id: str,
+    request_id: str,
+    thread_id: str,
+    agent_did: str,
+    behavior_id: str,
+    capture: dict[str, Any],
+) -> dict[str, Any]:
+    status = str(capture["result"].get("status", "completed"))
+    return {
+        "projection": "langgraph_state_history",
+        "scenario_id": scenario_id,
+        "request_id": request_id,
+        "session_id": thread_id,
+        "agent_did": agent_did,
+        "behavior_id": behavior_id,
+        "actor_did": "did:defra-agent:langgraph-fixture-reader",
+        "status": status,
+    }
 
 
 def write_linear_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
@@ -808,6 +831,14 @@ def write_linear_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
         "langgraph_state_history.capture.json",
         ["StateGraph", "InMemorySaver", "get_state_history"],
         native,
+        build_import_mapping(
+            "langgraph.linear_state_history",
+            REQUEST_ID,
+            THREAD_ID,
+            "did:defra-agent:langgraph-fixture",
+            "langgraph-research-flow",
+            capture,
+        ),
         build_projection(capture),
     )
 
@@ -835,6 +866,14 @@ def write_subgraph_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
         "langgraph_state_history.subgraph.capture.json",
         ["StateGraph", "CompiledStateGraph node", "InMemorySaver", "get_state_history"],
         native,
+        build_import_mapping(
+            "langgraph.compiled_subgraph",
+            SUBGRAPH_REQUEST_ID,
+            SUBGRAPH_THREAD_ID,
+            "did:defra-agent:langgraph-subgraph-fixture",
+            "langgraph-review-subgraph-flow",
+            capture,
+        ),
         build_subgraph_projection(capture),
     )
 
@@ -879,6 +918,14 @@ def write_provider_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
             "langchain_openai.ChatOpenAI",
         ],
         native,
+        build_import_mapping(
+            "langgraph.provider_backed",
+            PROVIDER_REQUEST_ID,
+            PROVIDER_THREAD_ID,
+            "did:defra-agent:langgraph-provider-fixture",
+            "langgraph-provider-backed-flow",
+            capture,
+        ),
         build_provider_projection(capture),
     )
 

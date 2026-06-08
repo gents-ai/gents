@@ -347,6 +347,79 @@ def package_version(package: str) -> str:
     return importlib.metadata.version(package)
 
 
+def build_mapping(clients: dict[str, ScriptedChatClient]) -> dict[str, Any]:
+    outputs = agent_outputs(clients)
+    return {
+        "projection": "multi_agent_task",
+        "scenario_id": "microsoft_agent_framework.group_chat",
+        "request_id": REQUEST_ID,
+        "session_id": CONTEXT_ID,
+        "agent_did": ORCHESTRATOR["agent_did"],
+        "behavior_id": ORCHESTRATOR["behavior_id"],
+        "actor_did": "did:defra-agent:microsoft-agent-framework-fixture-reader",
+        "status": "completed" if outputs else "stopped",
+        "participants": [
+            {
+                "native_name": ORCHESTRATOR["name"],
+                "role": ORCHESTRATOR["role"],
+                "agent_did": ORCHESTRATOR["agent_did"],
+                "behavior_id": ORCHESTRATOR["behavior_id"],
+                "request_id": REQUEST_ID,
+            },
+            *[
+                {
+                    "native_name": definition["name"],
+                    "role": definition["role"],
+                    "agent_did": definition["agent_did"],
+                    "behavior_id": definition["behavior_id"],
+                    "request_id": definition["request_id"],
+                }
+                for definition in AGENTS
+            ],
+        ],
+        "delegations": [
+            {
+                "parent_request_id": REQUEST_ID,
+                "child_request_id": RESEARCH_REQUEST_ID,
+                "parent_tool_call_id": "msaf:group-chat:round:0:Researcher",
+                "tool_name": "group_chat_request",
+                "agent_did": AGENTS[0]["agent_did"],
+                "behavior_id": AGENTS[0]["behavior_id"],
+                "status": "completed",
+            },
+            {
+                "parent_request_id": REQUEST_ID,
+                "child_request_id": WRITER_REQUEST_ID,
+                "parent_tool_call_id": "msaf:group-chat:round:1:Writer",
+                "tool_name": "group_chat_request",
+                "agent_did": AGENTS[1]["agent_did"],
+                "behavior_id": AGENTS[1]["behavior_id"],
+                "status": "completed",
+            },
+        ],
+        "tool_events": [
+            {
+                "id": "msaf:event:round:1:response:Researcher",
+                "request_id": RESEARCH_REQUEST_ID,
+                "tool_name": "group_chat_response",
+                "status": "completed",
+            },
+            {
+                "id": "msaf:event:round:2:response:Writer",
+                "request_id": WRITER_REQUEST_ID,
+                "tool_name": "group_chat_response",
+                "status": "completed",
+            },
+            {
+                "id": "msaf:event:termination",
+                "request_id": REQUEST_ID,
+                "tool_name": "group_chat_termination",
+                "status": "completed",
+            },
+        ],
+    }
+
+
 def write_fixture(
     out_dir: Path,
     events: list[dict[str, Any]],
@@ -392,6 +465,7 @@ def write_fixture(
             "agent_calls": {name: client.calls for name, client in clients.items()},
             "agent_outputs": {name: client.outputs for name, client in clients.items()},
         },
+        "mapping": build_mapping(clients),
         "envelope": build_projection(events, clients),
     }
     path = out_dir / "multi_agent_task.microsoft_agent_framework_group_chat.capture.json"
