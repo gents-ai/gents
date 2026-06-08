@@ -66,6 +66,8 @@ export type ToolSelectionSaveRequest = {
   subagentSteeringEnabled?: boolean | null;
   subagentBackgroundEnabled?: boolean | null;
   crossDeploymentSpawnTimeoutSeconds?: number | null;
+  enableMemory?: boolean | null;
+  enableSessionHistoryTool?: boolean | null;
 };
 
 export type ToolServiceSaveRequest = {

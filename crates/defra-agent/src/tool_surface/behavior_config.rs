@@ -24,6 +24,7 @@ pub struct BehaviorToolConfig {
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
+    enable_session_history_tool: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
 }
@@ -38,6 +39,7 @@ impl BehaviorToolConfig {
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
             enable_memory: false,
+            enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
         }
@@ -75,6 +77,7 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids,
             backgroundable_tool_names,
             enable_memory,
+            enable_session_history_tool,
             enable_defra_query,
             defra_query_collections,
         } = selection;
@@ -117,6 +120,7 @@ impl BehaviorToolConfig {
             },
             custom_tools,
             enable_memory,
+            enable_session_history_tool,
             enable_defra_query,
             defra_query_collections: dedupe_strings(defra_query_collections),
         })
@@ -175,6 +179,7 @@ impl BehaviorToolConfig {
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
             enable_memory: self.enable_memory,
+            enable_session_history_tool: self.enable_session_history_tool,
             enable_defra_query: self.enable_defra_query,
             defra_query_collections: self.defra_query_collections.clone(),
         })
@@ -228,6 +233,10 @@ impl std::fmt::Debug for BehaviorToolConfig {
                     .collect::<Vec<_>>(),
             )
             .field("enable_memory", &self.enable_memory)
+            .field(
+                "enable_session_history_tool",
+                &self.enable_session_history_tool,
+            )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .finish()

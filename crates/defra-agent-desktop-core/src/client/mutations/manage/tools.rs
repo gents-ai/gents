@@ -115,6 +115,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "enable_memory",
             row.enable_memory,
         )),
+        Some(graphql_optional_bool_field(
+            "enable_session_history_tool",
+            row.enable_session_history_tool,
+        )),
     ];
     let update_fields = [
         Some(format!(
@@ -198,6 +202,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_bool_field(
             "enable_memory",
             row.enable_memory,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_session_history_tool",
+            row.enable_session_history_tool,
         )),
     ];
 

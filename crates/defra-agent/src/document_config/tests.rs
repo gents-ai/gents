@@ -86,6 +86,7 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     let doc = ToolSelectionDocument {
         selection_id: "amy-general-tools".to_string(),
         agent_did: "did:key:z-test".to_string(),
+        enable_session_history_tool: Some(true),
         enable_defra_query: Some(false),
         defra_query_collections: Some(vec![
             "AgentRequest".to_string(),
@@ -101,6 +102,7 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
         .await
         .expect("load should succeed")
         .expect("selection should exist");
+    assert_eq!(loaded.enable_session_history_tool, Some(true));
     assert_eq!(loaded.enable_defra_query, Some(false));
     assert_eq!(
         loaded.defra_query_collections,

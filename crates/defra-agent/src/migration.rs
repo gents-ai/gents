@@ -82,6 +82,11 @@ const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
@@ -475,6 +480,25 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v5 = %v5.version_id,
                 "ToolSelection patched with R5 cross-deployment timeout"
             );
+            active_version = v5;
+        }
+
+        if collection_has_field(&active_version, "enable_session_history_tool") {
+            tracing::debug!("ToolSelection already has session history flag; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v6 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH)
+                .await
+                .context("patch_collection ToolSelection session history tool flag")?;
+            node.set_active_collection_version(&v6.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection session history flag")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v6 = %v6.version_id,
+                "ToolSelection patched with session history tool flag"
+            );
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -753,6 +777,7 @@ mod patch_kind_tests {
             ADD_AGENT_TOOL_CALL_R5_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
+            ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
