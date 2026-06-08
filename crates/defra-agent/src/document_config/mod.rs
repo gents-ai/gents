@@ -32,14 +32,14 @@ pub(crate) use inference_profile::{
 };
 
 pub use tool_selection::default_tool_selection_id_for_behavior;
+pub use tool_selection::{
+    is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField,
+};
 #[allow(unused_imports)]
 pub(crate) use tool_selection::{
     list_all_tool_selection_records, list_tool_selection_records, load_tool_selection_by_doc_id,
     load_tool_selection_record,
-};
-pub use tool_selection::{
-    load_tool_selection, upsert_tool_selection, ToolSelectionDocument, WriteToolDecl,
-    WriteToolField,
 };
 
 pub use subagent_target::{subagent_target_entry, SubagentTarget};

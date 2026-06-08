@@ -2,8 +2,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
-    CommandNetworkMode, SubagentTarget, VariableRef, WriteToolDecl,
+    is_reserved_builtin_tool_name, parse_template_for_validation,
+    schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
+    SubagentTarget, VariableRef, WriteToolDecl,
 };
 
 use super::DesiredStateManifest;
@@ -814,11 +815,30 @@ fn validate_write_tools(selection_id: &str, entries: &[String], errors: &mut Vec
                 decl.tool_name
             ));
         }
+        // A declared write tool may not reuse a built-in tool name: doing so
+        // silently shadows the built-in at registration. Mirrors the runtime
+        // check in `ToolSelectionDocument::validate()`.
+        if is_reserved_builtin_tool_name(&decl.tool_name) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 built-in tool; declared write tools must use a name not already provided by the \
+                 native, meta, subagent, or built-in (defra_query, context_budget, sessions, \
+                 memory) tool surface",
+                decl.tool_name.trim()
+            ));
+        }
+        let mut seen_field_names: HashSet<String> = HashSet::new();
         for field in &decl.fields {
             if field.name.trim().is_empty() {
                 errors.push(format!(
                     "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
                     decl.tool_name
+                ));
+            } else if !seen_field_names.insert(field.name.trim().to_string()) {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a duplicate field name {:?}",
+                    decl.tool_name,
+                    field.name.trim()
                 ));
             }
         }

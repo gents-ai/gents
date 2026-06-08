@@ -4,8 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
+use crate::meta_tools::META_TOOL_NAMES;
+use crate::toolset::{
+    CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
+    READ_SUBAGENT_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+    SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME,
+};
 
 /// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
 /// and whether the agent must provide it.
@@ -87,6 +96,61 @@ impl WriteToolDecl {
     pub fn is_well_formed(&self) -> bool {
         !self.tool_name.trim().is_empty() && !self.collection.trim().is_empty()
     }
+}
+
+/// True when `name` is already claimed by the built-in tool surface: the native
+/// file/shell tools, the meta tools, the subagent/process control tools, or the
+/// built-in singletons (`defra_query`, `context_budget`, `sessions`, `memory`).
+///
+/// A `write_tools` declaration whose `tool_name` collides with one of these
+/// would be appended to the runtime tool vector under a name an existing
+/// built-in already advertises: [`crate::tool_surface::ToolSurface::tool_names`]
+/// dedupes the advertised list (so the model sees a single name) while
+/// `build_tools` registers two `ToolDyn` impls and `BackgroundToolRegistry`
+/// keys them by name with last-write-wins — silently shadowing the built-in.
+/// The apply/ingest validators reject the collision instead.
+pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
+    let name = name.trim();
+
+    // Native tools have no shared name constants; these literals must stay in
+    // sync with `crate::toolset::NativeTool::tool_name`. The
+    // `reserved_names_cover_native_and_meta_tools` test guards against drift.
+    const NATIVE_TOOL_NAMES: &[&str] = &[
+        "list_files",
+        "read_file",
+        "glob",
+        "grep",
+        "write_file",
+        "edit_file",
+        "bash",
+        "bash_unrestricted",
+    ];
+    const SUBAGENT_TOOL_NAMES: &[&str] = &[
+        SPAWN_SUBAGENT_TOOL_NAME,
+        WAIT_SUBAGENT_TOOL_NAME,
+        LIST_SUBAGENTS_TOOL_NAME,
+        READ_SUBAGENT_TOOL_NAME,
+        STEER_SUBAGENT_TOOL_NAME,
+        CANCEL_SUBAGENT_TOOL_NAME,
+        SPAWN_PROCESS_TOOL_NAME,
+        WAIT_PROCESS_TOOL_NAME,
+        LIST_PROCESSES_TOOL_NAME,
+        READ_PROCESS_TOOL_NAME,
+        CANCEL_PROCESS_TOOL_NAME,
+    ];
+    // `memory` is reserved unconditionally: the `agent-memory` feature gates the
+    // tool's availability, not the legitimacy of the name as a write-tool id.
+    const SINGLETON_TOOL_NAMES: &[&str] = &[
+        DEFRA_QUERY_TOOL_NAME,
+        CONTEXT_BUDGET_TOOL_NAME,
+        SESSION_HISTORY_TOOL_NAME,
+        "memory",
+    ];
+
+    NATIVE_TOOL_NAMES.contains(&name)
+        || META_TOOL_NAMES.contains(&name)
+        || SUBAGENT_TOOL_NAMES.contains(&name)
+        || SINGLETON_TOOL_NAMES.contains(&name)
 }
 
 /// Deserialize the `write_tools` field from either representation:
@@ -272,12 +336,33 @@ impl ToolSelectionDocument {
                         decl.collection
                     ));
                 }
+                // A declared write tool may not reuse a built-in tool name:
+                // doing so silently shadows the built-in (see
+                // `is_reserved_builtin_tool_name`).
+                if is_reserved_builtin_tool_name(&decl.tool_name) {
+                    return Err(anyhow::anyhow!(
+                        "write_tools[{i}] tool_name {:?} collides with a built-in tool; declared \
+                         write tools must use a name not already provided by the native, meta, \
+                         subagent, or built-in (defra_query, context_budget, sessions, memory) \
+                         tool surface",
+                        decl.tool_name.trim()
+                    ));
+                }
+                let mut seen_field_names = std::collections::HashSet::new();
                 for (j, field) in decl.fields.iter().enumerate() {
                     if field.name.trim().is_empty() {
                         return Err(anyhow::anyhow!(
                             "write_tools[{i}] (tool {:?}) has a field[{j}] with an empty name; \
                              every WriteToolField must have a non-empty name",
                             decl.tool_name
+                        ));
+                    }
+                    if !seen_field_names.insert(field.name.trim()) {
+                        return Err(anyhow::anyhow!(
+                            "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each \
+                             WriteToolField in a declaration must have a unique name",
+                            decl.tool_name,
+                            field.name.trim()
                         ));
                     }
                 }

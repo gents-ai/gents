@@ -200,6 +200,133 @@ fn validate_accepts_well_formed_write_tools() {
 }
 
 #[test]
+fn validate_rejects_write_tool_name_colliding_with_builtin() {
+    // `read_file` is a native tool; reusing it as a write-tool name would
+    // silently shadow the native impl at registration.
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "read_file".to_string(),
+            collection: "AuditLog".to_string(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: "path".to_string(),
+                required: true,
+            }],
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(
+        result.is_err(),
+        "collision with a native tool must be rejected"
+    );
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("read_file") && err.contains("built-in"),
+        "error must name the colliding tool and the reason: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_write_tool_name_colliding_with_defra_query() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "defra_query".to_string(),
+            collection: "AuditLog".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+        }]),
+        ..Default::default()
+    };
+    assert!(
+        doc.validate().is_err(),
+        "collision with the built-in defra_query tool must be rejected"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_field_names_within_decl() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: String::new(),
+            fields: vec![
+                WriteToolField {
+                    name: "summary".to_string(),
+                    required: true,
+                },
+                WriteToolField {
+                    name: "summary".to_string(),
+                    required: false,
+                },
+            ],
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err(), "duplicate field names must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("request_action") && err.contains("summary"),
+        "error must name the tool and the duplicated field: {err}"
+    );
+}
+
+#[test]
+fn reserved_names_cover_native_and_meta_tools() {
+    use crate::toolset::NativeTool;
+
+    // Every native tool name must be reserved (guards the hardcoded native
+    // literal list in `is_reserved_builtin_tool_name` against drift).
+    let native = [
+        NativeTool::ListFiles { max_entries: 1 },
+        NativeTool::ReadFile { max_chars: 1 },
+        NativeTool::Glob { max_matches: 1 },
+        NativeTool::Grep { max_matches: 1 },
+        NativeTool::WriteFile {
+            root: std::path::PathBuf::from("/tmp"),
+        },
+        NativeTool::EditFile {
+            root: std::path::PathBuf::from("/tmp"),
+        },
+    ];
+    for tool in &native {
+        assert!(
+            is_reserved_builtin_tool_name(&tool.tool_name()),
+            "native tool {:?} must be reserved",
+            tool.tool_name()
+        );
+    }
+    assert!(is_reserved_builtin_tool_name("bash"));
+    assert!(is_reserved_builtin_tool_name("bash_unrestricted"));
+
+    for meta in crate::meta_tools::META_TOOL_NAMES {
+        assert!(
+            is_reserved_builtin_tool_name(meta),
+            "meta tool {meta:?} must be reserved"
+        );
+    }
+
+    // A name that is not a built-in stays available for write tools.
+    assert!(!is_reserved_builtin_tool_name("request_action"));
+}
+
+#[cfg(feature = "agent-memory")]
+#[test]
+fn memory_tool_name_is_reserved() {
+    assert!(is_reserved_builtin_tool_name(
+        crate::toolset::MEMORY_TOOL_NAME
+    ));
+}
+
+#[test]
 fn write_tools_deserialize_trims_whitespace() {
     // Padded tool_name / collection / field name would otherwise survive to
     // verbatim GraphQL interpolation and corrupt the mutation.

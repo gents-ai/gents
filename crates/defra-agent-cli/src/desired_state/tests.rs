@@ -1323,6 +1323,64 @@ fn validate_accepts_well_formed_write_tools() {
 }
 
 #[test]
+fn validate_rejects_write_tool_name_colliding_with_builtin() {
+    use defra_agent::{WriteToolDecl, WriteToolField};
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
+        tool_name: "read_file".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "path".to_string(),
+            required: true,
+        }],
+    })];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| msg.contains("write_tools")
+            && msg.contains("read_file")
+            && msg.contains("built-in")),
+        "expected built-in collision rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_write_tool_field_name() {
+    use defra_agent::{WriteToolDecl, WriteToolField};
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: vec![
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: false,
+            },
+        ],
+    })];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| msg.contains("write_tools")
+            && msg.contains("request_action")
+            && msg.contains("duplicate field name")),
+        "expected duplicate field-name rejection, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_empty_task_id() {
     let mut manifest = manifest_with_default_behavior();
     let mut task = sample_task("");
