@@ -249,6 +249,34 @@ fn validate_rejects_write_tool_name_colliding_with_defra_query() {
 }
 
 #[test]
+fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
+    // A cli_tool_names entry is advertised as its own tool in the same
+    // selection, so a write tool reusing that name is a dispatch collision.
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        cli_tool_names: Some(vec!["rg".to_string()]),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "rg".to_string(),
+            collection: "AuditLog".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+        }]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(
+        result.is_err(),
+        "collision with a cli_tool_names entry must be rejected"
+    );
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("rg") && err.contains("cli_tool_names"),
+        "error must name the colliding tool and the category: {err}"
+    );
+}
+
+#[test]
 fn validate_rejects_duplicate_field_names_within_decl() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),

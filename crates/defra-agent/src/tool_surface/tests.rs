@@ -544,6 +544,52 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
+#[tokio::test]
+async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
+    use crate::document_config::{WriteToolDecl, WriteToolField};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    // `context_budget` is always registered by build_tools. A write tool that
+    // reuses that name (here bypassing apply-time validation by constructing the
+    // surface directly) must be dropped by the runtime guard, not registered as
+    // a second ToolDyn under the same name.
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![WriteToolDecl {
+                tool_name: "context_budget".to_string(),
+                collection: "ActionRequest".to_string(),
+                description: String::new(),
+                fields: vec![WriteToolField {
+                    name: "summary".to_string(),
+                    required: false,
+                }],
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = surface.build_tools(&runtime).unwrap();
+    let count = built
+        .iter()
+        .filter(|tool| tool.name() == "context_budget")
+        .count();
+    assert_eq!(
+        count, 1,
+        "a write tool colliding with a built-in must not register a second impl under that name"
+    );
+}
+
 #[test]
 fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_memory);

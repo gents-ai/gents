@@ -152,7 +152,12 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.subagent_targets,
             errors,
         );
-        validate_write_tools(&selection.selection_id, &selection.write_tools, errors);
+        validate_write_tools(
+            &selection.selection_id,
+            &selection.write_tools,
+            &selection.cli_tool_names,
+            errors,
+        );
         if selection.subagent_spawn_enabled {
             if selection.subagent_targets.is_empty() {
                 errors.push(format!(
@@ -792,7 +797,17 @@ fn validate_subagent_targets(
 ///   * have a non-empty `tool_name` and `collection`,
 ///   * have a non-empty `name` on every field,
 ///   * and have a `tool_name` that is unique within the selection.
-fn validate_write_tools(selection_id: &str, entries: &[String], errors: &mut Vec<String>) {
+fn validate_write_tools(
+    selection_id: &str,
+    entries: &[String],
+    cli_tool_names: &[String],
+    errors: &mut Vec<String>,
+) {
+    // Sibling cli_tool_names are advertised as individually-named tools in the
+    // same selection; a write tool reusing one is the same dispatch collision
+    // as reusing a built-in name. Mirrors the runtime check in
+    // `ToolSelectionDocument::validate()`.
+    let cli_tool_names: HashSet<&str> = cli_tool_names.iter().map(|name| name.trim()).collect();
     let mut seen_tool_names: HashSet<String> = HashSet::new();
     for entry in entries {
         let decl: WriteToolDecl = match serde_json::from_str(entry) {
@@ -824,6 +839,13 @@ fn validate_write_tools(selection_id: &str, entries: &[String], errors: &mut Vec
                  built-in tool; declared write tools must use a name not already provided by the \
                  native, meta, subagent, or built-in (defra_query, context_budget, sessions, \
                  memory) tool surface",
+                decl.tool_name.trim()
+            ));
+        }
+        if cli_tool_names.contains(decl.tool_name.trim()) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 cli_tool_names entry in the same tool selection; each tool must have a unique name",
                 decl.tool_name.trim()
             ));
         }

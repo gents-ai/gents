@@ -322,6 +322,20 @@ impl ToolSelectionDocument {
             }
         }
         if let Some(decls) = &self.write_tools {
+            // Sibling cli_tool_names are advertised as individually-named tools
+            // in the same selection, so a write tool reusing one of those names
+            // is the same dispatch collision as reusing a built-in name. (Other
+            // categories: built-ins are covered by `is_reserved_builtin_tool_name`;
+            // subagent targets are arguments to `spawn_subagent`, not tool names;
+            // MCP/custom tools are runtime-discovered and guarded in
+            // `ToolSurface::build_tools`.)
+            let cli_tool_names: std::collections::HashSet<&str> = self
+                .cli_tool_names
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|name| name.trim())
+                .collect();
             let mut seen_tool_names = std::collections::HashSet::new();
             for (i, decl) in decls.iter().enumerate() {
                 // A decl must name a non-empty tool AND target collection.
@@ -345,6 +359,13 @@ impl ToolSelectionDocument {
                          write tools must use a name not already provided by the native, meta, \
                          subagent, or built-in (defra_query, context_budget, sessions, memory) \
                          tool surface",
+                        decl.tool_name.trim()
+                    ));
+                }
+                if cli_tool_names.contains(decl.tool_name.trim()) {
+                    return Err(anyhow::anyhow!(
+                        "write_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in \
+                         the same tool selection; each tool must have a unique name",
                         decl.tool_name.trim()
                     ));
                 }

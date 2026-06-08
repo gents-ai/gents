@@ -1349,6 +1349,30 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 }
 
 #[test]
+fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
+    use defra_agent::WriteToolDecl;
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.cli_tool_names = vec!["rg".to_string()];
+    sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
+        tool_name: "rg".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+    })];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|msg| msg.contains("write_tools")
+            && msg.contains("rg")
+            && msg.contains("cli_tool_names")),
+        "expected cli_tool_names collision rejection, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_duplicate_write_tool_field_name() {
     use defra_agent::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
