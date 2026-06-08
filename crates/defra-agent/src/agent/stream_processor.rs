@@ -192,7 +192,7 @@ impl<'a> StreamProcessor<'a> {
 }
 
 #[derive(Default)]
-struct AssistantTurnAccumulator {
+pub(crate) struct AssistantTurnAccumulator {
     text: String,
     reasoning: Vec<AssistantReasoning>,
     pending_reasoning_delta_text: String,
@@ -201,23 +201,27 @@ struct AssistantTurnAccumulator {
 }
 
 impl AssistantTurnAccumulator {
-    fn push_text(&mut self, text: &str) {
+    pub(crate) fn push_text(&mut self, text: &str) {
         self.text.push_str(text);
     }
 
-    fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
+    pub(crate) fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
         merge_reasoning_blocks(&mut self.reasoning, &reasoning);
     }
 
-    fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
+    pub(crate) fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
         self.pending_reasoning_delta_text.push_str(reasoning);
         if self.pending_reasoning_delta_id.is_none() {
             self.pending_reasoning_delta_id = id;
         }
     }
 
-    fn push_tool_call(&mut self, tool_call: AssistantToolCall) {
+    pub(crate) fn push_tool_call(&mut self, tool_call: AssistantToolCall) {
         self.tool_calls.push(tool_call);
+    }
+
+    pub(crate) fn take_message(&mut self) -> Option<CompletionMessage> {
+        self.build_message()
     }
 
     fn reconcile_text(&mut self, final_text: &str) {
@@ -231,7 +235,7 @@ impl AssistantTurnAccumulator {
         }
     }
 
-    fn take_message(&mut self) -> Option<CompletionMessage> {
+    fn build_message(&mut self) -> Option<CompletionMessage> {
         if self.reasoning.is_empty() && !self.pending_reasoning_delta_text.is_empty() {
             let mut assembled =
                 AssistantReasoning::new(&std::mem::take(&mut self.pending_reasoning_delta_text));
