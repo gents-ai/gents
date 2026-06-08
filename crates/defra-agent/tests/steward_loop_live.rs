@@ -88,7 +88,10 @@ const D4F_BACKEND_ID: &str = "backend-d4f-live";
 ///
 /// Returns `(agent_did, default_behavior_id)` for the caller to drive work
 /// against. Reusable by the emit (2a-2) and triage (2a-3) qualifications.
-pub async fn bind_d4f_backend(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> (String, String) {
+pub async fn bind_d4f_backend(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+) -> (String, String) {
     let agent_did = identity.did().to_string();
     let bootstrap = ensure_agent_principal(node, &agent_did)
         .await
@@ -106,8 +109,7 @@ pub async fn bind_d4f_backend(node: &EmbeddedNode, identity: &dyn AgentIdentity)
         .expect("default behavior document exists after bootstrap");
     behavior.backend_id = Some(D4F_BACKEND_ID.to_string());
     behavior.model_name = Some(D4F_MODEL.to_string());
-    behavior.inference_profile_id =
-        Some(default_inference_profile_id_for_behavior(&behavior_id));
+    behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
     behavior.enabled = true;
     upsert_agent_behavior(node, &behavior)
         .await
