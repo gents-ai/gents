@@ -87,6 +87,11 @@ const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
@@ -499,6 +504,27 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v6 = %v6.version_id,
                 "ToolSelection patched with session history tool flag"
             );
+            active_version = v6;
+        }
+
+        if collection_has_field(&active_version, "subagent_default_await_mode") {
+            tracing::debug!(
+                "ToolSelection already has subagent default await mode; skipping patch"
+            );
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v7 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH)
+                .await
+                .context("patch_collection ToolSelection subagent default await mode")?;
+            node.set_active_collection_version(&v7.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection default await mode")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v7 = %v7.version_id,
+                "ToolSelection patched with subagent default await mode"
+            );
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -778,6 +804,7 @@ mod patch_kind_tests {
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
+            ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,

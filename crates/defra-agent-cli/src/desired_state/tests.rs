@@ -266,6 +266,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         subagent_spawn_enabled: false,
         subagent_steering_enabled: false,
         subagent_background_enabled: false,
+        subagent_default_await_mode: None,
         subagent_allow_cross_deployment: false,
         cross_deployment_spawn_timeout_seconds: None,
     }
@@ -379,6 +380,7 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
     selection.subagent_spawn_enabled = true;
     selection.subagent_steering_enabled = true;
     selection.subagent_background_enabled = true;
+    selection.subagent_default_await_mode = Some("background".to_string());
     selection.subagent_allow_cross_deployment = true;
     selection.cross_deployment_spawn_timeout_seconds = Some(90);
     manifest.tool_selections.push(selection);
@@ -395,6 +397,10 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
     assert_eq!(
         exported_selection["subagent_background_enabled"],
         json!(true)
+    );
+    assert_eq!(
+        exported_selection["subagent_default_await_mode"],
+        json!("background")
     );
     assert_eq!(
         exported_selection["subagent_allow_cross_deployment"],
@@ -415,6 +421,12 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
     assert!(round_tripped_selection.subagent_spawn_enabled);
     assert!(round_tripped_selection.subagent_steering_enabled);
     assert!(round_tripped_selection.subagent_background_enabled);
+    assert_eq!(
+        round_tripped_selection
+            .subagent_default_await_mode
+            .as_deref(),
+        Some("background")
+    );
     assert!(round_tripped_selection.subagent_allow_cross_deployment);
     assert_eq!(
         round_tripped_selection.cross_deployment_spawn_timeout_seconds,

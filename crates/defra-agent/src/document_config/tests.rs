@@ -114,6 +114,32 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
 }
 
 #[tokio::test]
+async fn tool_selection_document_round_trips_subagent_default_await_mode() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = ToolSelectionDocument {
+        selection_id: "amy-background-tools".to_string(),
+        agent_did: "did:key:z-test-background".to_string(),
+        subagent_background_enabled: Some(true),
+        subagent_default_await_mode: Some("background".to_string()),
+        ..Default::default()
+    };
+    upsert_tool_selection(&node, &doc)
+        .await
+        .expect("upsert should persist the subagent default await mode");
+
+    let loaded = load_tool_selection(&node, "amy-background-tools")
+        .await
+        .expect("load should succeed")
+        .expect("selection should exist");
+    assert_eq!(
+        loaded.subagent_default_await_mode.as_deref(),
+        Some("background")
+    );
+}
+
+#[tokio::test]
 async fn agent_behavior_description_and_summary_round_trip() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -185,6 +211,23 @@ fn validate_accepts_well_formed_subagent_targets() {
     assert!(
         doc.validate().is_ok(),
         "well-formed JSON SubagentTarget entries must be accepted"
+    );
+}
+
+#[test]
+fn validate_rejects_background_default_when_background_disabled() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        subagent_background_enabled: Some(false),
+        subagent_default_await_mode: Some("background".to_string()),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err());
+    assert!(
+        format!("{}", result.unwrap_err()).contains("subagent_default_await_mode"),
+        "error message must mention subagent_default_await_mode"
     );
 }
 

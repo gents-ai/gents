@@ -156,6 +156,8 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) subagent_background_enabled: bool,
     #[serde(default)]
+    pub(crate) subagent_default_await_mode: Option<String>,
+    #[serde(default)]
     pub(crate) subagent_allow_cross_deployment: bool,
     #[serde(default)]
     pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,

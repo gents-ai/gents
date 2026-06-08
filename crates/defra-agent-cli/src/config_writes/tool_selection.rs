@@ -58,7 +58,7 @@ mod tests {
     use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
     use defra_agent::{ensure_runtime_schemas, load_tool_selection};
 
-    /// Round-trip test: write a `ToolSelectionDocument` with all five subagent
+    /// Round-trip test: write a `ToolSelectionDocument` with subagent
     /// enablement fields set, then read it back and assert every field persisted.
     ///
     /// This test will FAIL before the fix because `tool_selection_fields()` does
@@ -89,6 +89,7 @@ mod tests {
             subagent_targets: Some(vec![target.clone()]),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
+            subagent_default_await_mode: Some("background".to_string()),
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
             ..Default::default()
@@ -125,6 +126,11 @@ mod tests {
             loaded.subagent_background_enabled,
             Some(true),
             "subagent_background_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must persist"
         );
         assert_eq!(
             loaded.subagent_allow_cross_deployment,
@@ -174,6 +180,7 @@ mod tests {
             subagent_spawn_enabled: Some(true),
             subagent_targets: Some(vec![target.clone()]),
             subagent_background_enabled: Some(true),
+            subagent_default_await_mode: Some("background".to_string()),
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
             ..Default::default()
@@ -190,6 +197,7 @@ mod tests {
             subagent_spawn_enabled: None,
             subagent_steering_enabled: None,
             subagent_background_enabled: None,
+            subagent_default_await_mode: None,
             subagent_allow_cross_deployment: None,
             cross_deployment_spawn_timeout_seconds: None,
             ..Default::default()
@@ -225,6 +233,11 @@ mod tests {
             loaded.subagent_background_enabled,
             Some(true),
             "subagent_background_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must NOT be clobbered by a None update"
         );
         assert_eq!(
             loaded.subagent_allow_cross_deployment,
@@ -392,6 +405,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             optional_bool_field(
                 "subagent_background_enabled",
                 selection.subagent_background_enabled,
+            ),
+            optional_string_field(
+                "subagent_default_await_mode",
+                selection.subagent_default_await_mode.as_deref(),
             ),
             optional_bool_field(
                 "subagent_allow_cross_deployment",

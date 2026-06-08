@@ -23,6 +23,7 @@ use crate::lean_vocab_test::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
     lean_command_sandbox_cases, lean_native_filesystem_boundary_cases, LeanCommandPolicyCase,
 };
+use crate::tool_call_lifecycle::AwaitMode;
 
 #[test]
 fn toolset_presets_have_expected_counts() {
@@ -109,6 +110,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: false,
         steering_enabled: false,
         background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&disabled).is_empty());
@@ -118,6 +120,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     assert!(subagent_tool_names(&no_targets).is_empty());
@@ -127,6 +130,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     let names = subagent_tool_names(&enabled);
@@ -147,6 +151,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: false,
         background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     assert_eq!(
@@ -164,6 +169,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     assert_eq!(
@@ -223,6 +229,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: false,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
@@ -256,6 +263,7 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
         spawn_enabled: true,
         steering_enabled: true,
         background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
         allow_cross_deployment: false,
     };
     let tools = build_subagent_tools(config);
@@ -264,6 +272,25 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
     assert_eq!(
         spawn_def.parameters["properties"]["await_mode"]["enum"],
         serde_json::json!(["foreground", "background"])
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_definition_uses_configured_default_await_mode() {
+    let config = SubagentToolConfig {
+        targets: subagent_targets("research"),
+        spawn_enabled: true,
+        steering_enabled: true,
+        background_enabled: true,
+        default_await_mode: AwaitMode::Background,
+        allow_cross_deployment: false,
+    };
+    let tools = build_subagent_tools(config);
+    let spawn_def = tools[0].definition(String::new()).await;
+
+    assert_eq!(
+        spawn_def.parameters["properties"]["await_mode"]["default"],
+        serde_json::json!("background")
     );
 }
 

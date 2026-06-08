@@ -183,6 +183,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
             "subagent_spawn_enabled",
             "subagent_steering_enabled",
             "subagent_background_enabled",
+            "subagent_default_await_mode",
             "subagent_allow_cross_deployment",
             "cross_deployment_spawn_timeout_seconds",
         ],

@@ -55,6 +55,7 @@ pub struct ToolSelectionDocument {
     pub subagent_spawn_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
+    pub subagent_default_await_mode: Option<String>,
     pub subagent_allow_cross_deployment: Option<bool>,
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_memory: Option<bool>,
@@ -108,6 +109,27 @@ impl ToolSelectionDocument {
                 }
             }
         }
+        if let Some(mode) = self
+            .subagent_default_await_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            match mode {
+                "foreground" => {}
+                "background" if self.subagent_background_enabled.unwrap_or(false) => {}
+                "background" => {
+                    return Err(anyhow::anyhow!(
+                        "subagent_default_await_mode cannot be background unless subagent_background_enabled is true"
+                    ));
+                }
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "subagent_default_await_mode must be foreground or background, got {other:?}"
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -157,6 +179,7 @@ pub(crate) async fn load_tool_selection_record(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
@@ -210,6 +233,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
@@ -263,6 +287,7 @@ pub(crate) async fn list_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
@@ -310,6 +335,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
@@ -403,6 +429,10 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
+        graphql_fields::graphql_string_field(
+            "subagent_default_await_mode",
+            selection.subagent_default_await_mode.as_deref(),
+        ),
         graphql_fields::graphql_optional_bool_field(
             "subagent_allow_cross_deployment",
             selection.subagent_allow_cross_deployment,
@@ -493,6 +523,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
+        ),
+        graphql_fields::graphql_string_field(
+            "subagent_default_await_mode",
+            selection.subagent_default_await_mode.as_deref(),
         ),
         graphql_fields::graphql_optional_bool_field(
             "subagent_allow_cross_deployment",

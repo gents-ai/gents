@@ -128,6 +128,7 @@ impl BehaviorToolConfig {
                 spawn_enabled: subagent_tools.spawn_enabled,
                 steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
+                default_await_mode: subagent_tools.default_await_mode,
                 allow_cross_deployment: subagent_tools.allow_cross_deployment,
             },
             background_tools: BackgroundToolConfig {

@@ -46,7 +46,7 @@ pub(crate) struct SpawnSubagentArgs {
     pub name: String,
     pub prompt: String,
     #[serde(default)]
-    pub await_mode: AwaitModeArg,
+    pub await_mode: Option<AwaitModeArg>,
     #[serde(default)]
     pub deadline: Option<DateTime<Utc>>,
 }
@@ -124,6 +124,7 @@ pub(crate) struct ParentSubagentContext {
     pub allowed_targets: Vec<SubagentTarget>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
+    pub subagent_default_await_mode: AwaitMode,
     /// When false (default), cross-deployment (remote-DID) subagent spawns are
     /// rejected at runtime. Cross-deployment is deferred pending ACP.
     pub subagent_allow_cross_deployment: bool,
@@ -254,6 +255,7 @@ struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
     subagent_spawn_enabled: Option<bool>,
     subagent_background_enabled: Option<bool>,
+    subagent_default_await_mode: Option<String>,
     #[serde(default)]
     subagent_allow_cross_deployment: Option<bool>,
     cross_deployment_spawn_timeout_seconds: Option<i64>,
@@ -1393,6 +1395,7 @@ pub(crate) async fn load_parent_subagent_context(
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
         subagent_background_enabled: selection.background_enabled,
+        subagent_default_await_mode: selection.default_await_mode,
         subagent_allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
@@ -1509,6 +1512,7 @@ struct SubagentToolSelection {
     allowed_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
+    default_await_mode: AwaitMode,
     allow_cross_deployment: bool,
     cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
@@ -1573,6 +1577,7 @@ async fn load_subagent_tool_selection(
                 allowed_targets: Vec::new(),
                 spawn_enabled: false,
                 background_enabled: false,
+                default_await_mode: AwaitMode::Foreground,
                 allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
             });
@@ -1589,6 +1594,7 @@ async fn load_subagent_tool_selection(
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
             }}
@@ -1608,15 +1614,27 @@ async fn load_subagent_tool_selection(
             allowed_targets: Vec::new(),
             spawn_enabled: false,
             background_enabled: false,
+            default_await_mode: AwaitMode::Foreground,
             allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
         });
     };
 
+    let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
+    let default_await_mode = selection
+        .subagent_default_await_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(AwaitMode::from_persisted)
+        .filter(|mode| background_enabled || *mode != AwaitMode::Background)
+        .unwrap_or(AwaitMode::Foreground);
+
     Ok(SubagentToolSelection {
         allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
-        background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        background_enabled,
+        default_await_mode,
         allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
