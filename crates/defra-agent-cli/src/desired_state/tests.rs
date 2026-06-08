@@ -1229,9 +1229,9 @@ fn validate_rejects_write_tool_with_empty_collection() {
 
     let errors = validation_errors(&manifest);
     assert!(
-        errors
-            .iter()
-            .any(|msg| msg.contains("write_tools") && msg.contains("agent-tools") && msg.contains("collection")),
+        errors.iter().any(|msg| msg.contains("write_tools")
+            && msg.contains("agent-tools")
+            && msg.contains("collection")),
         "expected empty-collection write_tools rejection, got {errors:?}"
     );
 }
@@ -1255,9 +1255,9 @@ fn validate_rejects_write_tool_with_empty_field_name() {
 
     let errors = validation_errors(&manifest);
     assert!(
-        errors
-            .iter()
-            .any(|msg| msg.contains("write_tools") && msg.contains("agent-tools") && msg.contains("empty name")),
+        errors.iter().any(|msg| msg.contains("write_tools")
+            && msg.contains("agent-tools")
+            && msg.contains("empty name")),
         "expected empty-field-name write_tools rejection, got {errors:?}"
     );
 }

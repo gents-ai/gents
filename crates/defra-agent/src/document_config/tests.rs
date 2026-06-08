@@ -298,8 +298,7 @@ async fn tool_selection_document_round_trips_write_tools() {
         .expect("load should succeed")
         .expect("selection should exist");
     assert_eq!(
-        loaded.write_tools,
-        doc.write_tools,
+        loaded.write_tools, doc.write_tools,
         "write_tools must round-trip through the GraphQL document representation"
     );
 }

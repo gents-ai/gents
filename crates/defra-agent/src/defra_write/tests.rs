@@ -126,7 +126,9 @@ async fn rejects_write_with_empty_collection_decl() {
         fields: vec![],
     };
     let tool = BoundedWriteTool::new(node, bad);
-    assert!(Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
-        .await
-        .is_err());
+    assert!(
+        Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
+            .await
+            .is_err()
+    );
 }

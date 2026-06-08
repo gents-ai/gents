@@ -338,7 +338,14 @@ async fn boot_agent_with_action_trigger(
         PROMPT_TEMPLATE,
     )
     .await;
-    create_event_trigger(db.node.as_ref(), trigger_id, task_id, "ActionRequest", "created").await;
+    create_event_trigger(
+        db.node.as_ref(),
+        trigger_id,
+        task_id,
+        "ActionRequest",
+        "created",
+    )
+    .await;
 
     // Wait for the control watcher to reconcile the new trigger into the active
     // snapshot and subscribe the EventSource to ActionRequest.
@@ -487,8 +494,14 @@ async fn declared_write_tool_call_fires_event_trigger() {
         1,
         "write tool must have written exactly one ActionRequest doc: {rows:?}"
     );
-    assert_eq!(rows[0].get("drift_sig").and_then(Value::as_str), Some(DRIFT_SIG));
-    assert_eq!(rows[0].get("summary").and_then(Value::as_str), Some(SUMMARY));
+    assert_eq!(
+        rows[0].get("drift_sig").and_then(Value::as_str),
+        Some(DRIFT_SIG)
+    );
+    assert_eq!(
+        rows[0].get("summary").and_then(Value::as_str),
+        Some(SUMMARY)
+    );
     assert_eq!(
         rows[0].get("target_paths").and_then(Value::as_str),
         Some(TARGET_PATHS)

@@ -78,8 +78,9 @@ where
                         serde_json::from_str::<WriteToolDecl>(&s).map_err(D::Error::custom)?
                     }
                     // Manifest input: each entry is a JSON object.
-                    other => serde_json::from_value::<WriteToolDecl>(other)
-                        .map_err(D::Error::custom)?,
+                    other => {
+                        serde_json::from_value::<WriteToolDecl>(other).map_err(D::Error::custom)?
+                    }
                 };
                 decls.push(decl);
             }

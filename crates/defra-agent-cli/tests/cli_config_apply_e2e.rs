@@ -1527,7 +1527,11 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         .get("write_tools")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("write_tools did not query back as a list: {row}"))?;
-    assert_eq!(stored.len(), 1, "expected one stored write_tools entry: {row}");
+    assert_eq!(
+        stored.len(),
+        1,
+        "expected one stored write_tools entry: {row}"
+    );
     let decl: Value = serde_json::from_str(
         stored[0]
             .as_str()
