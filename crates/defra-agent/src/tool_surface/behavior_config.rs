@@ -165,13 +165,18 @@ impl BehaviorToolConfig {
         node: &EmbeddedNode,
         subagent_tools: SubagentToolConfig,
     ) -> Result<ToolSurface> {
-        let include_meta_tools = if self.enable_meta_tools {
-            has_registered_mcp_services(node).await?
-        } else {
-            false
-        };
+        let mcp_services_online = has_registered_mcp_services(node).await?;
+        Ok(self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools))
+    }
 
-        Ok(ToolSurface {
+    pub(crate) fn resolve_with_subagent_tools_for_mcp_presence(
+        &self,
+        mcp_services_online: bool,
+        subagent_tools: SubagentToolConfig,
+    ) -> ToolSurface {
+        let include_meta_tools = self.enable_meta_tools && mcp_services_online;
+
+        ToolSurface {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
@@ -182,7 +187,7 @@ impl BehaviorToolConfig {
             enable_session_history_tool: self.enable_session_history_tool,
             enable_defra_query: self.enable_defra_query,
             defra_query_collections: self.defra_query_collections.clone(),
-        })
+        }
     }
 
     /// Resolve the tool surface, dropping local-DID subagent targets whose
