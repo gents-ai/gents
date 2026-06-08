@@ -14,7 +14,7 @@ use crate::{
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
     REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
     SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
-    SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
+    SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -98,6 +98,11 @@ pub(crate) enum Command {
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
+    #[command(about = "Explain resolved behavior tool surfaces", after_help = TOOLS_AFTER_HELP)]
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
+    },
     #[command(about = "Inspect and write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
     Config {
         #[command(subcommand)]
@@ -821,6 +826,27 @@ pub(crate) enum SkillCommand {
     Enable(SkillRefArgs),
     #[command(name = "disable", about = "Disable a Skill document")]
     Disable(SkillRefArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ToolsCommand {
+    #[command(
+        name = "explain",
+        about = "Explain final model-callable tools per behavior"
+    )]
+    Explain(ToolExplainArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ToolExplainArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Only explain one behavior_id")]
+    pub(crate) behavior_id: Option<String>,
 }
 
 #[derive(clap::Args)]

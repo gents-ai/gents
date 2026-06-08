@@ -246,6 +246,15 @@ Examples:
   defra-agent diagnose
   defra-agent diagnose --home /path/to/home
   defra-agent diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
+const TOOLS_AFTER_HELP: &str = "\
+Examples:
+  defra-agent tools explain
+  defra-agent tools explain --behavior-id BEHAVIOR_ID
+  defra-agent tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
+
+The explain output separates model-callable tools from operator HTTP/MCP surfaces
+and includes warnings for confusing defaults such as empty allowlists that mean
+all, or built-in read tools that are always included today.";
 const CONFIG_EXPORT_AFTER_HELP: &str = "\
 Exports the desired configuration documents for one agent principal as a
 manifest root directory (per-document subdirectories, optional prompt sidecars).
@@ -352,6 +361,7 @@ async fn main() -> Result<()> {
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
+        Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => commands::request::dispatch(command).await,
         Command::Response { command } => commands::response::dispatch(command).await,

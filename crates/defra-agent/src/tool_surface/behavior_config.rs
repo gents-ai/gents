@@ -60,6 +60,21 @@ impl BehaviorToolConfig {
         )
     }
 
+    pub fn from_tool_selection_document(
+        behavior_name: &str,
+        selection: &crate::document_config::ToolSelectionDocument,
+        ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        Self::from_selection_with_subagent_tools(
+            behavior_name,
+            ToolSelection::from_document(selection)?,
+            ceiling,
+            SubagentToolConfig::from_document(selection),
+            custom_tools,
+        )
+    }
+
     pub(crate) fn from_selection_with_subagent_tools(
         behavior_name: &str,
         selection: ToolSelection,
@@ -132,6 +147,14 @@ impl BehaviorToolConfig {
 
     pub fn meta_tools_requested(&self) -> bool {
         self.enable_meta_tools
+    }
+
+    pub(crate) fn memory_requested(&self) -> bool {
+        self.enable_memory
+    }
+
+    pub(crate) fn defra_query_requested(&self) -> bool {
+        self.enable_defra_query
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
@@ -212,6 +235,24 @@ impl BehaviorToolConfig {
             }
         });
         self.resolve_with_subagent_tools(node, subagent_tools).await
+    }
+
+    pub(crate) fn resolve_with_available_subagent_targets_for_mcp_presence(
+        &self,
+        mcp_services_online: bool,
+        own_agent_did: &str,
+        active_behavior_ids: &HashSet<String>,
+    ) -> ToolSurface {
+        let mut subagent_tools = self.subagent_tools.clone();
+        let allow_cross_deployment = subagent_tools.allow_cross_deployment;
+        subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                allow_cross_deployment
+            }
+        });
+        self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools)
     }
 }
 
