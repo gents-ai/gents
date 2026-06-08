@@ -13,31 +13,6 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
-pub(crate) fn build_agent<C>(
-    client: &C,
-    behavior: &AgentBehavior,
-    preamble: &str,
-    tools: Vec<Box<dyn ToolDyn>>,
-) -> Agent<C::CompletionModel>
-where
-    C: CompletionClient,
-{
-    let builder = configure_agent_builder(
-        client
-            .agent(&behavior.model_name)
-            .preamble(preamble)
-            .default_max_turns(behavior.max_turns),
-        behavior,
-        tools.len(),
-    );
-
-    if tools.is_empty() {
-        builder.build()
-    } else {
-        builder.tools(tools).build()
-    }
-}
-
 pub(crate) fn build_admitted_agent<C>(
     client: C,
     admission: AdmissionRegistry,
