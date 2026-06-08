@@ -17,7 +17,7 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::{ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -683,9 +683,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         "await_mode": "background"
     })
     .to_string();
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
+    let action = hook.on_tool_call("spawn_subagent",
         Some("model-call-order".to_string()),
         "spawn-bg-order",
         &args,

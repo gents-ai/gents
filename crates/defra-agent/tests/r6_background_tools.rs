@@ -5,7 +5,7 @@ mod support;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::{ToolCallHookAction};
 use rig::completion::ToolDefinition;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::StreamingCompletionResponse;
@@ -301,9 +301,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     .await;
 
     let receipt = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-bg-1",
             r#"{"tool_name":"test_tool","args":{"x":1}}"#,
@@ -314,9 +312,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     let waited = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "wait_process",
+        hook.on_tool_call("wait_process",
             None,
             "meta-wait-1",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -369,9 +365,7 @@ async fn background_tool_rejects_not_allowlisted_target() {
     .await;
 
     let error = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-bg-denied",
             r#"{"tool_name":"other_tool","args":{}}"#,
@@ -392,9 +386,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
 
     for index in 0..8 {
         let receipt = skip_reason_json(
-            PromptHook::<TestModel>::on_tool_call(
-                &hook,
-                "spawn_process",
+            hook.on_tool_call("spawn_process",
                 None,
                 &format!("meta-bg-budget-{index}"),
                 r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -405,9 +397,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
     }
 
     let denied = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-bg-budget-denied",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -432,9 +422,7 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
     .await;
 
     let receipt = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-bg-wait-deadline",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -447,9 +435,7 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
         .await;
 
     let waited = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "wait_process",
+        hook.on_tool_call("wait_process",
             None,
             "meta-wait-deadline",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -476,9 +462,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     .await;
 
     let receipt = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-bg-slow",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -488,9 +472,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     let cancelled = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "cancel_process",
+        hook.on_tool_call("cancel_process",
             None,
             "meta-cancel-slow",
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -522,9 +504,7 @@ async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn()
         setup_hook("r6-background-cancel-missing", registry(Vec::new(), &[])).await;
 
     let cancelled = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "cancel_process",
+        hook.on_tool_call("cancel_process",
             None,
             "meta-cancel-missing",
             r#"{"tool_call_id":"missing-background-handle"}"#,
@@ -546,9 +526,7 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
         setup_hook("r6-background-wait-missing", registry(Vec::new(), &[])).await;
 
     let waited = skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "wait_process",
+        hook.on_tool_call("wait_process",
             None,
             "meta-wait-missing",
             r#"{"tool_call_id":"missing-background-handle"}"#,

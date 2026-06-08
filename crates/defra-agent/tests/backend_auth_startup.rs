@@ -78,14 +78,19 @@ impl MockModelEndpoint {
                                 .get("authorization")
                                 .is_some_and(|value| value == &format!("Bearer {expected}"))
                         });
-                        let (status, body) = if request.method == "GET"
+                        let (status, content_type, body) = if request.method == "GET"
                             && (request.path == "/v1/models" || request.path == "/models")
                         {
                             if authorized {
-                                ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                                (
+                                    "200 OK",
+                                    "application/json",
+                                    format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#),
+                                )
                             } else {
                                 (
                                     "401 Unauthorized",
+                                    "application/json",
                                     r#"{"error":"unauthorized"}"#.to_string(),
                                 )
                             }
@@ -93,10 +98,15 @@ impl MockModelEndpoint {
                             && (request.path == "/v1/key" || request.path == "/key")
                         {
                             if authorized {
-                                ("200 OK", r#"{"data":{"label":"test-key"}}"#.to_string())
+                                (
+                                    "200 OK",
+                                    "application/json",
+                                    r#"{"data":{"label":"test-key"}}"#.to_string(),
+                                )
                             } else {
                                 (
                                     "401 Unauthorized",
+                                    "application/json",
                                     r#"{"error":"unauthorized"}"#.to_string(),
                                 )
                             }
@@ -105,43 +115,34 @@ impl MockModelEndpoint {
                                 || request.path == "/chat/completions")
                         {
                             if authorized {
+                                // The owned loop (#400) streams; reply with an
+                                // OpenAI-style SSE chunk stream, not a JSON body.
+                                let delta = format!(
+                                    r#"{{"id":"chatcmpl-test","provider":"Mock","object":"chat.completion.chunk","model":"{model_name}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"mock response"}},"finish_reason":null}}]}}"#
+                                );
+                                let finish = format!(
+                                    r#"{{"id":"chatcmpl-test","object":"chat.completion.chunk","model":"{model_name}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}}}"#
+                                );
                                 (
                                     "200 OK",
-                                    format!(
-                                        r#"{{
-                                            "id":"chatcmpl-test",
-                                            "provider":"Mock",
-                                            "object":"chat.completion",
-                                            "created":1710000000,
-                                            "model":"{model_name}",
-                                            "choices":[{{
-                                                "index":0,
-                                                "finish_reason":"stop",
-                                                "message":{{
-                                                    "role":"assistant",
-                                                    "content":"mock response",
-                                                    "refusal":null,
-                                                    "reasoning":null
-                                                }}
-                                            }}],
-                                            "usage":{{
-                                                "prompt_tokens":10,
-                                                "completion_tokens":2,
-                                                "total_tokens":12
-                                            }}
-                                        }}"#
-                                    ),
+                                    "text/event-stream",
+                                    format!("data: {delta}\n\ndata: {finish}\n\ndata: [DONE]\n\n"),
                                 )
                             } else {
                                 (
                                     "401 Unauthorized",
+                                    "application/json",
                                     r#"{"error":"unauthorized"}"#.to_string(),
                                 )
                             }
                         } else {
-                            ("404 Not Found", r#"{"error":"not found"}"#.to_string())
+                            (
+                                "404 Not Found",
+                                "application/json",
+                                r#"{"error":"not found"}"#.to_string(),
+                            )
                         };
-                        let _ = write_http_response(&mut stream, status, "application/json", &body);
+                        let _ = write_http_response(&mut stream, status, content_type, &body);
                         let _ = stream.shutdown(Shutdown::Both);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

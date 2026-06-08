@@ -8,7 +8,7 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::{ToolCallHookAction};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
@@ -400,9 +400,7 @@ async fn spawn_from_parent_hook(
     })
     .to_string();
 
-    let action = PromptHook::<R5DispatchTestModel>::on_tool_call(
-        hook,
-        &case.action,
+    let action = hook.on_tool_call(&case.action,
         Some(format!("model-{}", case.parent_tool_call_id)),
         &case.parent_tool_call_id,
         &args,

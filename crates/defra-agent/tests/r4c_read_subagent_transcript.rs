@@ -8,7 +8,7 @@ use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::{ToolCallHookAction};
 use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::one_or_many::OneOrMany;
@@ -211,9 +211,7 @@ async fn spawn_background_child(
         "await_mode": "background"
     })
     .to_string();
-    let action = PromptHook::<TestModel>::on_tool_call(
-        hook,
-        "spawn_subagent",
+    let action = hook.on_tool_call("spawn_subagent",
         Some(format!("model-{internal_call_id}")),
         internal_call_id,
         &args,
@@ -263,9 +261,7 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 }
 
 async fn read_transcript(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
-    let action = PromptHook::<TestModel>::on_tool_call(
-        hook,
-        "read_subagent",
+    let action = hook.on_tool_call("read_subagent",
         Some(format!("model-{internal_call_id}")),
         internal_call_id,
         &args.to_string(),

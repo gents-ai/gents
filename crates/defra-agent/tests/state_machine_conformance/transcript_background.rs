@@ -726,9 +726,7 @@ async fn persist_completed_tool_sequence(
     .await;
 
     assert!(matches!(
-        PromptHook::<TranscriptConformanceModel>::on_completion_call(
-            &hook,
-            &transcript_user_message("run transcript conformance tool"),
+        hook.on_completion_call(&transcript_user_message("run transcript conformance tool"),
             &[],
         )
         .await,
@@ -741,9 +739,7 @@ async fn persist_completed_tool_sequence(
     let tool_args = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 
     assert!(matches!(
-        PromptHook::<TranscriptConformanceModel>::on_tool_call(
-            &hook,
-            "read",
+        hook.on_tool_call("read",
             Some(model_call_id.clone()),
             &internal_call_id,
             tool_args,
@@ -763,9 +759,7 @@ async fn persist_completed_tool_sequence(
     );
 
     assert!(matches!(
-        PromptHook::<TranscriptConformanceModel>::on_tool_result(
-            &hook,
-            "read",
+        hook.on_tool_result("read",
             Some(model_call_id.clone()),
             &internal_call_id,
             tool_args,
@@ -962,9 +956,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     for index in 0..max_backgrounded {
         let internal_call_id = format!("meta-theorem-bg-{index}");
         let receipt = skip_reason_json(
-            PromptHook::<TranscriptConformanceModel>::on_tool_call(
-                &hook,
-                "spawn_process",
+            hook.on_tool_call("spawn_process",
                 None,
                 &internal_call_id,
                 r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -997,9 +989,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     }
 
     let denied = skip_reason_json(
-        PromptHook::<TranscriptConformanceModel>::on_tool_call(
-            &hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             None,
             "meta-theorem-bg-overflow",
             r#"{"tool_name":"slow_tool","args":{}}"#,
@@ -1069,9 +1059,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     })
     .to_string();
 
-    let action = PromptHook::<TranscriptConformanceModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
+    let action = hook.on_tool_call("spawn_subagent",
         Some("model-call-theorem-cascade".to_string()),
         "internal-theorem-cascade",
         &args,
@@ -1577,9 +1565,7 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
     let drain = lean_transcript_case("explicit_drain_terminalizes_ownership");
     let (db, hook, session_id) = transcript_hook_fixture("transcript-explicit-drain").await;
     assert!(matches!(
-        PromptHook::<TranscriptConformanceModel>::on_tool_call(
-            &hook,
-            "read",
+        hook.on_tool_call("read",
             Some("result-drain".to_string()),
             "internal-drain",
             r#"{"file_path":"/tmp/transcript-contract.txt"}"#,
@@ -1629,9 +1615,7 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
     let abandon = lean_transcript_case("drop_abandon_not_strong_drain");
     let (db, hook, session_id) = transcript_hook_fixture("transcript-drop-abandon").await;
     assert!(matches!(
-        PromptHook::<TranscriptConformanceModel>::on_tool_call(
-            &hook,
-            "read",
+        hook.on_tool_call("read",
             Some("result-abandon".to_string()),
             "internal-abandon",
             r#"{"file_path":"/tmp/transcript-contract.txt"}"#,

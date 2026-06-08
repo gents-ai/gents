@@ -15,7 +15,7 @@ use defra_agent::{
     write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
     DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,
 };
-use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
+use rig::agent::{HookAction, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,

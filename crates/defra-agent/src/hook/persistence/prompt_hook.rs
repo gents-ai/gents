@@ -7,7 +7,7 @@ use super::*;
 /// `M` are gone. They keep returning rig's `HookAction` / `ToolCallHookAction`
 /// (kept per decision D3).
 impl DefraSessionHook {
-    pub(crate) async fn on_completion_call(
+    pub async fn on_completion_call(
         &self,
         prompt: &Message,
         _history: &[Message],
@@ -38,7 +38,7 @@ impl DefraSessionHook {
         }
     }
 
-    pub(crate) async fn on_tool_call(
+    pub async fn on_tool_call(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
@@ -288,7 +288,7 @@ impl DefraSessionHook {
         }
     }
 
-    pub(crate) async fn on_tool_result(
+    pub async fn on_tool_result(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,

@@ -6,7 +6,7 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::{ToolCallHookAction};
 use rig::completion::ToolDefinition;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::StreamingCompletionResponse;
@@ -174,9 +174,7 @@ async fn background_tool(
     tool_name: &str,
 ) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
-            "spawn_process",
+        hook.on_tool_call("spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({"tool_name": tool_name, "args": {}}).to_string(),
@@ -187,9 +185,7 @@ async fn background_tool(
 
 async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
-            "wait_process",
+        hook.on_tool_call("wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -200,9 +196,7 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
 
 async fn read_tool_output(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
-            "read_process",
+        hook.on_tool_call("read_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &args.to_string(),

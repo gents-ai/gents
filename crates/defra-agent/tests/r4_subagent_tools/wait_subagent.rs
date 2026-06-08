@@ -20,9 +20,7 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     })
     .to_string();
 
-    let spawn_action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
+    let spawn_action = hook.on_tool_call("spawn_subagent",
         Some("model-call-wait-spawn".to_string()),
         "internal-wait-spawn",
         &spawn_args,
@@ -42,9 +40,7 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "wait_subagent",
+        hook_for_wait.on_tool_call("wait_subagent",
             Some("model-call-wait".to_string()),
             "internal-wait-tool",
             &wait_args,
@@ -153,9 +149,7 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         })
         .to_string();
 
-        let spawn_action = PromptHook::<TestModel>::on_tool_call(
-            &hook,
-            "spawn_subagent",
+        let spawn_action = hook.on_tool_call("spawn_subagent",
             Some(format!("model-call-wait-terminal-spawn-{child_state}")),
             &internal_call_id,
             &spawn_args,
@@ -187,9 +181,7 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         let hook_for_wait = hook.clone();
         let wait_args = json!({ "child_request_id": child_request_id }).to_string();
         let wait_handle = tokio::spawn(async move {
-            PromptHook::<TestModel>::on_tool_call(
-                &hook_for_wait,
-                "wait_subagent",
+            hook_for_wait.on_tool_call("wait_subagent",
                 Some(format!("model-call-wait-terminal-{child_state}")),
                 "internal-wait-terminal",
                 &wait_args,
@@ -259,9 +251,7 @@ async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
     let session_id = fixture.session_id.clone();
     let wait_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "wait_subagent",
+    let action = hook.on_tool_call("wait_subagent",
         Some("model-call-wait-denied".to_string()),
         "internal-wait-denied",
         &wait_args,
@@ -300,9 +290,7 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     })
     .to_string();
 
-    let spawn_action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
+    let spawn_action = hook.on_tool_call("spawn_subagent",
         Some("model-call-wait-resume-spawn".to_string()),
         "internal-wait-resume-spawn",
         &spawn_args,
@@ -335,9 +323,7 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     let hook_for_wait = resumed_hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "wait_subagent",
+        hook_for_wait.on_tool_call("wait_subagent",
             Some("model-call-wait-resume".to_string()),
             "internal-wait-resume",
             &wait_args,
@@ -404,9 +390,7 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     })
     .to_string();
 
-    let spawn_action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
+    let spawn_action = hook.on_tool_call("spawn_subagent",
         Some("model-call-wait-bg-spawn".to_string()),
         "internal-wait-bg-spawn",
         &spawn_args,
@@ -423,9 +407,7 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "wait_subagent",
+        hook_for_wait.on_tool_call("wait_subagent",
             Some("model-call-wait-bg".to_string()),
             "internal-wait-bg",
             &wait_args,
