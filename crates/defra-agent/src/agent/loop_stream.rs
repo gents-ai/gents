@@ -23,6 +23,7 @@
 //! threaded into the conversation by construction, the in-loop truncation gap
 //! (#401) is closed natively without the recorder shim.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
@@ -71,7 +72,7 @@ pub(crate) fn run_loop_stream<M>(
     hook: DefraSessionHook,
     prompt: Message,
     history: Vec<Message>,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
 ) -> impl Stream<Item = Result<MultiTurnStreamItem<M::StreamingResponse>, StreamingError>>
 where
@@ -100,7 +101,24 @@ where
                 .cloned()
                 .expect("new_messages always retains at least the initial prompt");
             let prior = &new_messages[..new_messages.len() - 1];
-            let request = build_request(&model, current_prompt, &history, prior, &tools, &config).await?;
+
+            // Mirror rig's per-turn `on_completion_call` (prompt_request/streaming.rs
+            // fires it inside the turn loop): on turn 1 this creates the session and
+            // persists the user prompt; the hook's own state dedupes later turns.
+            let history_snapshot: Vec<Message> =
+                history.iter().chain(prior.iter()).cloned().collect();
+            if let HookAction::Terminate { reason } =
+                <DefraSessionHook as PromptHook<M>>::on_completion_call(
+                    &hook,
+                    &current_prompt,
+                    &history_snapshot,
+                )
+                .await
+            {
+                Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+            }
+
+            let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
 
             let mut stream = model
                 .stream(request)
@@ -188,7 +206,7 @@ where
                         // deadline/cancellation envelope, then bound the
                         // model-facing result natively (#401) before threading.
                         let full_result =
-                            dispatch_tool(&tools, &tool_name, tool_args.clone()).await;
+                            dispatch_tool(tools.as_slice(), &tool_name, tool_args.clone()).await;
                         let (bounded, _, _) = truncate_text(
                             &full_result,
                             tool_result_truncation_mode(&tool_name),

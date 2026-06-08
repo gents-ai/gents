@@ -86,29 +86,35 @@ impl RuntimeContext {
         let prompt_builder =
             LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
         let preamble = prompt_builder.preamble().to_string();
-        let mut built_tools = tool_surface.build_tools(&self.tool_runtime)?;
-        // Progressive-disclosure activation (D2): when the behavior has skills,
-        // expose `load_skill` so the model can pull a skill's full instructions
-        // on demand (the catalog of names+descriptions is in the preamble). The
-        // tool is scoped to this behavior's effective skill set + tool ceiling,
-        // so it never reveals a foreign skill or widens the tool surface.
-        if !behavior.skills.is_empty() {
-            // The D3 ceiling is the behavior's full callable surface (built tool
-            // names PLUS allowed MCP service ids) — see `skill_tool_ceiling`.
-            let ceiling = crate::skills::skill_tool_ceiling(
-                tool_surface.tool_names(),
-                tool_surface.allowed_mcp_service_ids(),
-                tool_surface.includes_meta_tools(),
-            );
-            built_tools.push(Box::new(crate::skills::LoadSkillTool::new(
-                behavior.skills.clone(),
-                ceiling,
-            )));
-        }
-        let tools = built_tools
+        // Build the inference tool surface (host/MCP/meta/subagent/etc plus, when
+        // the behavior has skills, the progressive-disclosure `load_skill` tool —
+        // scoped to this behavior's effective skill set + tool ceiling so it never
+        // reveals a foreign skill or widens the surface).
+        //
+        // It is materialized twice: wrapped in `RuntimeManagedTool` for the legacy
+        // rig `Agent` (still used by compaction), and unwrapped + `Arc`'d for the
+        // owned completion loop (#400), which applies its own deadline/cancellation
+        // envelope and so must not be double-wrapped.
+        let build_surface_tools = || -> Result<Vec<Box<dyn ToolDyn>>> {
+            let mut built = tool_surface.build_tools(&self.tool_runtime)?;
+            if !behavior.skills.is_empty() {
+                let ceiling = crate::skills::skill_tool_ceiling(
+                    tool_surface.tool_names(),
+                    tool_surface.allowed_mcp_service_ids(),
+                    tool_surface.includes_meta_tools(),
+                );
+                built.push(Box::new(crate::skills::LoadSkillTool::new(
+                    behavior.skills.clone(),
+                    ceiling,
+                )));
+            }
+            Ok(built)
+        };
+        let tools = build_surface_tools()?
             .into_iter()
             .map(crate::tool_call_lifecycle::runtime::wrap_tool)
             .collect();
+        let loop_tools = std::sync::Arc::new(build_surface_tools()?);
         let background_tool_registry = BackgroundToolRegistry::from_tools(
             tool_surface
                 .build_tools(&self.tool_runtime)?
@@ -144,6 +150,7 @@ impl RuntimeContext {
                     prompt_builder,
                     preamble,
                     tools,
+                    loop_tools.clone(),
                     background_tool_registry,
                     client,
                 )
@@ -167,6 +174,7 @@ impl RuntimeContext {
                     prompt_builder,
                     preamble,
                     tools,
+                    loop_tools.clone(),
                     background_tool_registry,
                     client,
                 )
@@ -189,6 +197,7 @@ impl RuntimeContext {
                     prompt_builder,
                     preamble,
                     tools,
+                    loop_tools.clone(),
                     background_tool_registry,
                     client,
                 )
@@ -206,6 +215,7 @@ impl RuntimeContext {
         prompt_builder: LayeredPromptBuilder,
         preamble: String,
         tools: Vec<Box<dyn ToolDyn>>,
+        loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         client: C,
     ) -> Result<()>
@@ -224,6 +234,7 @@ impl RuntimeContext {
             self.node.clone(),
             behavior,
             agent,
+            loop_tools,
             prompt_builder,
             self.retry_policy.clone(),
             self.hook_failure_policy,

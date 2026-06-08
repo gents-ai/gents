@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use rig::streaming::StreamingPrompt;
 use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
@@ -177,7 +176,23 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
+                // Owned completion loop (#400): drive our own multi-turn stream
+                // over the model + tool surface instead of rig's `stream_prompt`.
+                // Per-request sampling still flows through the rig `Agent` bundle;
+                // we read the resolved knobs off it into the loop config.
                 let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
+                let model = (*agent.model).clone();
+                let loop_config = crate::agent::loop_stream::LoopConfig {
+                    preamble: agent.preamble.clone(),
+                    temperature: agent.temperature,
+                    max_tokens: agent.max_tokens,
+                    additional_params: agent.additional_params.clone(),
+                    tool_choice: agent.tool_choice.clone(),
+                    max_turns: agent.default_max_turns.unwrap_or(0),
+                };
+                let loop_prompt = rig::completion::Message::user(request.content.clone());
+                let loop_history = history.to_vec();
+                let loop_tools = self.loop_tools.clone();
                 // Keep a per-attempt token for the admission permit and cancel it
                 // explicitly on interrupt before dropping the guarded stream. The
                 // permit's Drop path observes this token to persist the linked
@@ -208,14 +223,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                                 Err(anyhow!("request interrupted during inference"))
                             }
-                            stream = await_with_request_deadline(
-                                request_deadline,
-                                agent
-                                    .stream_prompt(&request.content)
-                                    .with_history(history.to_vec())
-                                    .with_hook(hook),
-                                "starting inference stream",
-                            ) => stream
+                            stream = std::future::ready(Box::pin(crate::agent::loop_stream::run_loop_stream(
+                                model,
+                                hook,
+                                loop_prompt,
+                                loop_history,
+                                loop_tools,
+                                loop_config,
+                            ))) => Ok(stream)
                         }
                     },
                 )

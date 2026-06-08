@@ -29,6 +29,10 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
     agent: Agent<M>,
+    /// Unwrapped tool surface for the owned completion loop (issue #400). Shared
+    /// across requests; the loop applies its own deadline/cancellation envelope,
+    /// so these are NOT wrapped in `RuntimeManagedTool`.
+    loop_tools: Arc<Vec<Box<dyn rig::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
     compactor: DefraCompactor<M>,
@@ -51,6 +55,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<AgentBehavior>,
         agent: Agent<M>,
+        loop_tools: Arc<Vec<Box<dyn rig::tool::ToolDyn>>>,
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
@@ -74,6 +79,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             node,
             behavior,
             agent,
+            loop_tools,
             prompt_builder,
             stream_writer,
             compactor,

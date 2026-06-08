@@ -148,12 +148,9 @@ fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
     ]
 }
 
-/// Drive a hook with the request context on_tool_call/on_tool_result require.
-async fn ready_hook_for(hook: &DefraSessionHook, prompt: &Message) {
-    assert!(matches!(
-        PromptHook::<ScriptedModel>::on_completion_call(hook, prompt, &[]).await,
-        HookAction::Continue
-    ));
+/// Set the request context that on_tool_call/on_tool_result require. The
+/// session itself is created by the generator's per-turn on_completion_call.
+async fn ready_hook_for(hook: &DefraSessionHook) {
     hook.set_active_request_id(Some(uuid::Uuid::new_v4().to_string()))
         .await;
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
@@ -211,7 +208,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
         hook,
         Message::user("hi"),
         Vec::new(),
-        Vec::new(),
+        Arc::new(Vec::new()),
         config(0),
     );
     futures::pin_mut!(stream);
@@ -237,18 +234,8 @@ async fn single_turn_no_tools_yields_text_then_final() {
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (node, hook) = test_hook().await;
-
-    // Establish the request context on_tool_call needs (session + request id).
+    ready_hook_for(&hook).await;
     let prompt = Message::user("use the echo tool");
-    assert!(matches!(
-        PromptHook::<ScriptedModel>::on_completion_call(&hook, &prompt, &[]).await,
-        HookAction::Continue
-    ));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    hook.set_active_request_id(Some(request_id)).await;
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
-        .await;
-    let session_id = hook.session_id().await.expect("session id");
 
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
     let model = ScriptedModel::new_turns(vec![
@@ -270,7 +257,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         output: "ECHOED".to_string(),
     })];
 
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), tools, config(4));
+    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut tool_results = Vec::new();
@@ -297,7 +284,6 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     // *message* persistence is split with StreamProcessor — exercised once the
     // generator is wired into the consumer in step 3 — so it is not asserted
     // here against the standalone generator.)
-    let _ = &session_id;
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
         .await;
@@ -326,12 +312,12 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
 async fn exceeding_max_turns_terminates_with_error() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("loop");
-    ready_hook_for(&hook, &prompt).await;
+    ready_hook_for(&hook).await;
 
     // max_turns = 0 permits one completion; the tool call forces a second,
     // which is blocked and surfaces a max-turns error.
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), vec![echo_tool()], config(0));
+    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(vec![echo_tool()]), config(0));
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -351,7 +337,7 @@ async fn exceeding_max_turns_terminates_with_error() {
 async fn managed_terminal_tool_result_terminates_loop() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("run the slow tool");
-    ready_hook_for(&hook, &prompt).await;
+    ready_hook_for(&hook).await;
 
     // The tool returns a managed timeout marker; on_tool_result classifies it as
     // a terminal timeout and the loop ends with an error rather than continuing.
@@ -361,7 +347,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         output: marker,
     })];
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), tools, config(4));
+    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -381,7 +367,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
 async fn oversized_tool_result_is_bounded_before_threading() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("read the big thing");
-    ready_hook_for(&hook, &prompt).await;
+    ready_hook_for(&hook).await;
 
     // A tool returning far more than the default limits: the model-facing
     // (threaded/yielded) result must be bounded, while on_tool_result still
@@ -400,7 +386,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let stream = run_loop_stream(model, hook, prompt, Vec::new(), tools, config(4));
+    let stream = run_loop_stream(model, hook, prompt, Vec::new(), Arc::new(tools), config(4));
     futures::pin_mut!(stream);
 
     let mut bounded_len = None;
