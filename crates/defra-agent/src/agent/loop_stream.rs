@@ -49,6 +49,7 @@ mod tests;
 
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
+#[derive(Clone)]
 pub(crate) struct LoopConfig {
     pub(crate) preamble: Option<String>,
     pub(crate) temperature: Option<f64>,

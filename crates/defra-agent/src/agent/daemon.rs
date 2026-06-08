@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use rig::agent::Agent;
 use rig::completion::CompletionModel;
 use tokio::sync::{mpsc, Mutex};
 use tracing::Instrument;
@@ -28,7 +27,11 @@ use crate::watcher::AgentRequest;
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
-    agent: Agent<M>,
+    /// Admission-wrapped completion model the owned loop (#400) drives directly.
+    model: Arc<M>,
+    /// System preamble for the behavior; combined with per-request sampling into
+    /// a `LoopConfig` at inference time.
+    preamble: String,
     /// Unwrapped tool surface for the owned completion loop (issue #400). Shared
     /// across requests; the loop applies its own deadline/cancellation envelope,
     /// so these are NOT wrapped in `RuntimeManagedTool`.
@@ -54,7 +57,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<AgentBehavior>,
-        agent: Agent<M>,
+        model: Arc<M>,
+        preamble: String,
         loop_tools: Arc<Vec<Box<dyn rig::tool::ToolDyn>>>,
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
@@ -68,7 +72,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             behavior.agent_did(),
             Duration::from_millis(behavior.stream_batch_ms),
         );
-        let compactor = DefraCompactor::new(agent.clone());
+        // Compaction summarizes via a tool-free, single-completion owned loop.
+        let mut compaction_config =
+            crate::completion_factory::loop_config(behavior.as_ref(), preamble.clone(), 0);
+        compaction_config.max_turns = 0;
+        let compactor = DefraCompactor::new(model.clone(), compaction_config);
         let compaction_options = CompactionOptions {
             threshold: behavior.compaction_threshold,
             strategy: behavior.compaction_strategy.clone(),
@@ -78,7 +86,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         Self {
             node,
             behavior,
-            agent,
+            model,
+            preamble,
             loop_tools,
             prompt_builder,
             stream_writer,

@@ -9,7 +9,6 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
-use crate::completion_factory::agent_with_request_sampling;
 use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
@@ -177,19 +176,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let persistence_hook = hook.clone();
 
                 // Owned completion loop (#400): drive our own multi-turn stream
-                // over the model + tool surface instead of rig's `stream_prompt`.
-                // Per-request sampling still flows through the rig `Agent` bundle;
-                // we read the resolved knobs off it into the loop config.
-                let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
-                let model = (*agent.model).clone();
-                let loop_config = crate::agent::loop_stream::LoopConfig {
-                    preamble: agent.preamble.clone(),
-                    temperature: agent.temperature,
-                    max_tokens: agent.max_tokens,
-                    additional_params: agent.additional_params.clone(),
-                    tool_choice: agent.tool_choice.clone(),
-                    max_turns: agent.default_max_turns.unwrap_or(0),
-                };
+                // over the model + tool surface. Per-request sampling is resolved
+                // into the loop config from the behavior + request.
+                let model = (*self.model).clone();
+                let loop_config = crate::completion_factory::loop_config_for_request(
+                    &self.behavior,
+                    self.preamble.clone(),
+                    request,
+                    self.loop_tools.len(),
+                );
                 let loop_prompt = rig::completion::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();

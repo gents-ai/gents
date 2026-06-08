@@ -26,16 +26,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let node = Arc::clone(&self.node);
         let behavior_did = self.behavior.agent_did().to_string();
         let request = request.clone();
-        let mut title_agent = self.agent.clone();
-        title_agent.tool_choice = None;
-        title_agent.default_max_turns = Some(1);
-        title_agent.max_tokens = Some(24);
-        title_agent.temperature = Some(0.0);
-        title_agent.preamble = Some(title_generation_preamble());
+        let model = Arc::clone(&self.model);
+        // Title generation: a tool-free single completion with fixed sampling.
+        let mut title_config = crate::completion_factory::loop_config(
+            self.behavior.as_ref(),
+            title_generation_preamble(),
+            0,
+        );
+        title_config.temperature = Some(0.0);
+        title_config.max_tokens = Some(24);
+        title_config.max_turns = 1;
 
         tokio::spawn(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
-                maybe_generate_conversation_title(node, &behavior_did, request, title_agent).await
+                maybe_generate_conversation_title(node, &behavior_did, request, model, title_config)
+                    .await
             })
             .await
             {
@@ -52,7 +57,8 @@ async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel +
     node: Arc<EmbeddedNode>,
     behavior_did: &str,
     request: AgentRequest,
-    title_agent: rig::agent::Agent<M>,
+    model: Arc<M>,
+    config: crate::agent::loop_stream::LoopConfig,
 ) -> Result<()> {
     if !session::conversation_needs_generated_title(&node, &request.session_id).await? {
         return Ok(());
@@ -68,7 +74,7 @@ async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel +
     .unwrap_or_default();
 
     let prompt = title_generation_prompt(&request.content, &recent_titles);
-    let title = generate_title_with_fallback(&request, title_agent, prompt).await;
+    let title = generate_title_with_fallback(&request, model, config, prompt).await;
 
     session::update_conversation_title_with_source(
         &node,
@@ -89,24 +95,17 @@ async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel +
 
 async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'static>(
     request: &AgentRequest,
-    title_agent: rig::agent::Agent<M>,
+    model: Arc<M>,
+    config: crate::agent::loop_stream::LoopConfig,
     prompt: String,
 ) -> String {
     let mut last_error = None;
 
     for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
         let prompt = prompt.clone();
-        let title_agent = title_agent.clone();
         // Owned loop (#400): a non-persisting, tool-free single completion.
-        let model = (*title_agent.model).clone();
-        let loop_config = crate::agent::loop_stream::LoopConfig {
-            preamble: title_agent.preamble.clone(),
-            temperature: title_agent.temperature,
-            max_tokens: title_agent.max_tokens,
-            additional_params: title_agent.additional_params.clone(),
-            tool_choice: None,
-            max_turns: title_agent.default_max_turns.unwrap_or(0),
-        };
+        let model = (*model).clone();
+        let loop_config = config.clone();
         match admission::scope_call(CallKind::OneOff, attempt, async move {
             tokio::time::timeout(
                 Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),

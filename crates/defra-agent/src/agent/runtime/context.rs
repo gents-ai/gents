@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch, Mutex, Notify};
 use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::BehaviorDaemon;
 use crate::backend_provider::BackendProviderKind;
-use crate::completion_factory::build_admitted_agent;
+use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
@@ -91,30 +91,21 @@ impl RuntimeContext {
         // scoped to this behavior's effective skill set + tool ceiling so it never
         // reveals a foreign skill or widens the surface).
         //
-        // It is materialized twice: wrapped in `RuntimeManagedTool` for the legacy
-        // rig `Agent` (still used by compaction), and unwrapped + `Arc`'d for the
-        // owned completion loop (#400), which applies its own deadline/cancellation
-        // envelope and so must not be double-wrapped.
-        let build_surface_tools = || -> Result<Vec<Box<dyn ToolDyn>>> {
-            let mut built = tool_surface.build_tools(&self.tool_runtime)?;
-            if !behavior.skills.is_empty() {
-                let ceiling = crate::skills::skill_tool_ceiling(
-                    tool_surface.tool_names(),
-                    tool_surface.allowed_mcp_service_ids(),
-                    tool_surface.includes_meta_tools(),
-                );
-                built.push(Box::new(crate::skills::LoadSkillTool::new(
-                    behavior.skills.clone(),
-                    ceiling,
-                )));
-            }
-            Ok(built)
-        };
-        let tools = build_surface_tools()?
-            .into_iter()
-            .map(crate::tool_call_lifecycle::runtime::wrap_tool)
-            .collect();
-        let loop_tools = std::sync::Arc::new(build_surface_tools()?);
+        // The owned completion loop (#400) applies its own deadline/cancellation
+        // envelope, so these are unwrapped (not `RuntimeManagedTool`).
+        let mut loop_tools = tool_surface.build_tools(&self.tool_runtime)?;
+        if !behavior.skills.is_empty() {
+            let ceiling = crate::skills::skill_tool_ceiling(
+                tool_surface.tool_names(),
+                tool_surface.allowed_mcp_service_ids(),
+                tool_surface.includes_meta_tools(),
+            );
+            loop_tools.push(Box::new(crate::skills::LoadSkillTool::new(
+                behavior.skills.clone(),
+                ceiling,
+            )));
+        }
+        let loop_tools = std::sync::Arc::new(loop_tools);
         let background_tool_registry = BackgroundToolRegistry::from_tools(
             tool_surface
                 .build_tools(&self.tool_runtime)?
@@ -149,7 +140,6 @@ impl RuntimeContext {
                     shutdown,
                     prompt_builder,
                     preamble,
-                    tools,
                     loop_tools.clone(),
                     background_tool_registry,
                     client,
@@ -173,7 +163,6 @@ impl RuntimeContext {
                     shutdown,
                     prompt_builder,
                     preamble,
-                    tools,
                     loop_tools.clone(),
                     background_tool_registry,
                     client,
@@ -196,7 +185,6 @@ impl RuntimeContext {
                     shutdown,
                     prompt_builder,
                     preamble,
-                    tools,
                     loop_tools.clone(),
                     background_tool_registry,
                     client,
@@ -214,7 +202,6 @@ impl RuntimeContext {
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,
         preamble: String,
-        tools: Vec<Box<dyn ToolDyn>>,
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         client: C,
@@ -223,17 +210,16 @@ impl RuntimeContext {
         C: CompletionClient,
         C::CompletionModel: 'static,
     {
-        let agent = build_admitted_agent(
+        let model = Arc::new(build_admitted_model(
             client,
             self.admission_registry.clone(),
             behavior.as_ref(),
-            &preamble,
-            tools,
-        );
+        ));
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
-            agent,
+            model,
+            preamble,
             loop_tools,
             prompt_builder,
             self.retry_policy.clone(),

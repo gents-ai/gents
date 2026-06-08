@@ -1,6 +1,5 @@
 use std::sync::{Arc, Mutex};
 
-use rig::agent::AgentBuilder;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
@@ -216,10 +215,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         })
         .to_string(),
     );
-    let agent = AgentBuilder::new(model)
-        .preamble("You are a helpful coding agent.")
-        .build();
-    let compactor = DefraCompactor::new(agent);
+    let config = crate::agent::loop_stream::LoopConfig {
+        preamble: Some("You are a helpful coding agent.".to_string()),
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        max_turns: 0,
+    };
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 
     let mut sequence = 1;
     for turn in 0..55 {

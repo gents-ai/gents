@@ -1,5 +1,6 @@
+use std::sync::Arc;
+
 use anyhow::Result;
-use rig::agent::Agent;
 use rig::completion::message::Message;
 use rig::completion::CompletionModel;
 
@@ -72,12 +73,13 @@ pub trait Compactor: Send + Sync {
 
 #[derive(Clone)]
 pub struct DefraCompactor<M: CompletionModel> {
-    agent: Agent<M>,
+    model: Arc<M>,
+    config: crate::agent::loop_stream::LoopConfig,
 }
 
 impl<M: CompletionModel> DefraCompactor<M> {
-    pub fn new(agent: Agent<M>) -> Self {
-        Self { agent }
+    pub(crate) fn new(model: Arc<M>, config: crate::agent::loop_stream::LoopConfig) -> Self {
+        Self { model, config }
     }
 }
 
@@ -134,25 +136,15 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
-        // Summarize via the owned loop (#400) instead of rig's `Agent::prompt`.
-        // This is a non-persisting, tool-free single completion: no hook (no
-        // session/persistence), empty tool surface, `max_turns: 0`.
-        let model = (*self.agent.model).clone();
-        let loop_config = crate::agent::loop_stream::LoopConfig {
-            preamble: self.agent.preamble.clone(),
-            temperature: self.agent.temperature,
-            max_tokens: self.agent.max_tokens,
-            additional_params: self.agent.additional_params.clone(),
-            tool_choice: None,
-            max_turns: 0,
-        };
+        // Summarize via the owned loop (#400): a non-persisting, tool-free single
+        // completion (no hook, empty tool surface, `max_turns: 0`).
         let raw_summary = crate::agent::loop_stream::run_loop_to_text(
-            model,
+            (*self.model).clone(),
             None,
             rig::completion::Message::user(compaction_prompt()),
             prepared_history.clone(),
             std::sync::Arc::new(Vec::new()),
-            loop_config,
+            self.config.clone(),
         )
         .await
         .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
