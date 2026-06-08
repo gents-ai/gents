@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use defra_agent::{cli_tool, BackendProviderKind, BashMode, FileToolMode};
+use defra_agent::{cli_tool, BackendProviderKind};
 
-use crate::cli::args::{BackendPresetArg, ToolCeilingArg};
+use crate::cli::args::{BackendPresetArg, ToolCeilingArg, ToolPackageArg};
 use crate::shared::ResolvedBackendConfig;
 use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 
@@ -117,36 +117,19 @@ pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<defra_agent::CliToolConf
     ))
 }
 
-pub(crate) fn normalize_file_tools_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
-    let value = if enabled {
-        explicit
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("ReadOnly")
-    } else {
-        "Off"
-    };
-    FileToolMode::parse(value)?;
-    Ok(value.to_string())
-}
-
-pub(crate) fn normalize_bash_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
-    let value = if enabled {
-        explicit
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("ReadOnly")
-    } else {
-        "Off"
-    };
-    BashMode::parse(value)?;
-    Ok(value.to_string())
-}
-
 pub(crate) fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
     match value {
         ToolCeilingArg::MetaOnly => "meta-only",
         ToolCeilingArg::Readonly => "readonly",
         ToolCeilingArg::Readwrite => "readwrite",
+    }
+}
+
+pub(crate) fn format_tool_package(value: ToolPackageArg) -> &'static str {
+    match value {
+        ToolPackageArg::Minimal => "minimal",
+        ToolPackageArg::Introspection => "introspection",
+        ToolPackageArg::Readonly => "readonly",
+        ToolPackageArg::Write => "write",
     }
 }

@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::desired_state;
 
 use crate::cli::args::BackendPresetArg;
-use crate::cli::args::ToolCeilingArg;
+use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
@@ -39,8 +39,12 @@ pub(crate) struct InitSummary {
     pub(crate) default_behavior_id: String,
     pub(crate) tool_selection_id: String,
     pub(crate) inference_profile_id: String,
+    pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
+    pub(crate) enable_memory: bool,
+    pub(crate) enable_defra_query: bool,
+    pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_principal: bool,
     pub(crate) created_default_behavior: bool,
 }
@@ -60,6 +64,8 @@ pub(crate) struct StoredInitConfig {
     pub(crate) keychain_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) secure_enclave_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_package: Option<ToolPackageArg>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
 }

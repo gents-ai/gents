@@ -18,13 +18,7 @@ use crate::mcp_pool::McpPool;
 use crate::migration;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
-use crate::tool_surface::{
-    BashMode, BehaviorToolConfig, FileToolMode, SubagentToolConfig, ToolCeiling, ToolSelection,
-};
-use crate::toolset::{
-    default_read_only_command_policy, parse_argv_prefixes, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode,
-};
+use crate::tool_surface::{BehaviorToolConfig, SubagentToolConfig, ToolCeiling, ToolSelection};
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
 mod builder;
@@ -346,154 +340,11 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
 pub(crate) fn tool_selection_from_document(
     selection: &crate::document_config::ToolSelectionDocument,
 ) -> anyhow::Result<ToolSelection> {
-    let bash = if selection.enable_bash.unwrap_or(false) {
-        BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
-    } else {
-        BashMode::Off
-    };
-    Ok(ToolSelection {
-        file_tools: if selection.enable_file_tools.unwrap_or(false) {
-            FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
-        } else {
-            FileToolMode::Off
-        },
-        file_tool_root: normalize_optional_string(selection.file_tool_root.as_deref())
-            .map(std::path::PathBuf::from),
-        bash,
-        command_policy: command_policy_from_document(selection, bash)?,
-        cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
-        enable_meta_tools: selection.enable_meta_tools.unwrap_or(true),
-        allowed_mcp_service_ids: selection
-            .allowed_mcp_service_ids
-            .clone()
-            .unwrap_or_default(),
-        backgroundable_tool_names: selection
-            .backgroundable_tool_names
-            .clone()
-            .unwrap_or_default(),
-        // This opt-in is intentionally default-off. The memory tool is also
-        // behind the non-default `agent-memory` Cargo feature.
-        enable_memory: selection.enable_memory.unwrap_or(false),
-        // Keep the narrower session-history convenience tool opt-in. The
-        // broader `defra_query` tool remains the default self-inspection path.
-        enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
-        // The `defra_query` read tool defaults on with all collections; an
-        // operator can disable it or restrict its collection scope per behavior
-        // via the ToolSelection document. (A built-in guard always blocks
-        // sensitive fields regardless of this scope.)
-        enable_defra_query: selection.enable_defra_query.unwrap_or(true),
-        defra_query_collections: selection
-            .defra_query_collections
-            .clone()
-            .unwrap_or_default(),
-    })
+    ToolSelection::from_document(selection)
 }
 
 pub(crate) fn subagent_tool_config_from_document(
     selection: &crate::document_config::ToolSelectionDocument,
 ) -> SubagentToolConfig {
-    let targets = selection
-        .subagent_targets
-        .iter()
-        .flatten()
-        .filter_map(
-            |entry| match crate::document_config::SubagentTarget::parse(entry) {
-                Ok(target) => Some(target),
-                Err(error) => {
-                    tracing::warn!(
-                        selection_id = %selection.selection_id,
-                        entry = %entry,
-                        %error,
-                        "skipping malformed subagent_targets entry"
-                    );
-                    None
-                }
-            },
-        )
-        .collect();
-    SubagentToolConfig {
-        targets,
-        spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
-        steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
-        background_enabled: selection.subagent_background_enabled.unwrap_or(false),
-        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
-    }
-}
-
-fn command_policy_from_document(
-    selection: &crate::document_config::ToolSelectionDocument,
-    bash: BashMode,
-) -> anyhow::Result<Option<CommandExecutionPolicy>> {
-    let has_policy = selection
-        .command_execution_policy
-        .as_deref()
-        .and_then(|value| normalize_optional_string(Some(value)))
-        .is_some()
-        || selection
-            .command_network_mode
-            .as_deref()
-            .and_then(|value| normalize_optional_string(Some(value)))
-            .is_some()
-        || selection
-            .command_allowed_argv_prefixes
-            .as_ref()
-            .is_some_and(|prefixes| !prefixes.is_empty())
-        || selection
-            .command_forbidden_argv_prefixes
-            .as_ref()
-            .is_some_and(|prefixes| !prefixes.is_empty());
-    if !has_policy {
-        return if matches!(bash, BashMode::Unrestricted) {
-            Ok(Some(
-                CommandExecutionPolicy::write_capable()
-                    .with_mode(CommandExecutionMode::Unrestricted),
-            ))
-        } else {
-            Ok(None)
-        };
-    }
-
-    let requested_mode = selection
-        .command_execution_policy
-        .as_deref()
-        .and_then(|value| normalize_optional_string(Some(value)))
-        .map(CommandExecutionMode::parse)
-        .transpose()?;
-    let mode = match bash {
-        BashMode::Off => CommandExecutionMode::ReadOnly,
-        BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
-        BashMode::Unrestricted => requested_mode.unwrap_or(CommandExecutionMode::Unrestricted),
-    };
-
-    let allowed = parse_argv_prefixes(
-        selection
-            .command_allowed_argv_prefixes
-            .as_deref()
-            .unwrap_or(&[]),
-    )?;
-    let forbidden = parse_argv_prefixes(
-        selection
-            .command_forbidden_argv_prefixes
-            .as_deref()
-            .unwrap_or(&[]),
-    )?;
-    let network_mode = selection
-        .command_network_mode
-        .as_deref()
-        .and_then(|value| normalize_optional_string(Some(value)))
-        .map(CommandNetworkMode::parse)
-        .transpose()?
-        .unwrap_or(CommandNetworkMode::Inherit);
-
-    let base = if matches!(mode, CommandExecutionMode::ReadOnly) {
-        default_read_only_command_policy()
-    } else {
-        CommandExecutionPolicy::write_capable()
-    };
-    Ok(Some(
-        base.with_mode(mode)
-            .with_allowed_argv_prefixes(allowed)
-            .with_forbidden_argv_prefixes(forbidden)
-            .with_network_mode(network_mode),
-    ))
+    SubagentToolConfig::from_document(selection)
 }
