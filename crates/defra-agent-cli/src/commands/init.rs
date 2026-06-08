@@ -585,6 +585,7 @@ fn tool_selection_for_package(
         enable_session_history_tool: Some(false),
         enable_defra_query: Some(enable_defra_query),
         defra_query_collections: Some(defra_query_collections),
+        write_tools: None,
     }
 }
 

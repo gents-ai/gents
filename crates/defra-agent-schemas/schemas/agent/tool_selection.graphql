@@ -27,4 +27,5 @@ type ToolSelection {
     enable_session_history_tool: Boolean
     enable_defra_query: Boolean
     defra_query_collections: [String]
+    write_tools: [String]
 }

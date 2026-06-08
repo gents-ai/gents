@@ -154,6 +154,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "subagent_background_enabled",
                         "subagent_allow_cross_deployment",
                         "cross_deployment_spawn_timeout_seconds",
+                        "write_tools",
                     ],
                 )
             })

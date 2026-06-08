@@ -27,6 +27,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -85,6 +86,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -117,6 +119,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readonly_at(operator_root),
         Vec::new(),
@@ -149,6 +152,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -179,6 +183,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -207,6 +212,7 @@ fn selection_without_root_inherits_operator_root() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -248,6 +254,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -286,6 +293,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -327,6 +335,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -356,6 +365,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -385,6 +395,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -422,6 +433,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_session_history_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -468,6 +480,114 @@ async fn defra_query_tool_gated_by_selection() {
     .await
     .unwrap();
     assert!(!disabled.tool_names().contains(&"defra_query".to_string()));
+}
+
+#[tokio::test]
+async fn write_tools_register_under_declared_names() {
+    use crate::document_config::{WriteToolDecl, WriteToolField};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![
+                WriteToolDecl {
+                    tool_name: "request_action".to_string(),
+                    collection: "ActionRequest".to_string(),
+                    description: "Request an action".to_string(),
+                    fields: vec![WriteToolField {
+                        name: "summary".to_string(),
+                        required: true,
+                    }],
+                },
+                // Malformed: empty collection — must be skipped, not advertised.
+                WriteToolDecl {
+                    tool_name: "broken_tool".to_string(),
+                    collection: "  ".to_string(),
+                    description: String::new(),
+                    fields: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(
+        names.contains(&"request_action".to_string()),
+        "declared write tool should be advertised under its tool_name; got {names:?}"
+    );
+    assert!(
+        !names.contains(&"broken_tool".to_string()),
+        "malformed write tool (empty collection) must be skipped; got {names:?}"
+    );
+
+    // The built dynamic tools must carry the per-decl name too.
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = surface.build_tools(&runtime).unwrap();
+    assert!(
+        built.iter().any(|tool| tool.name() == "request_action"),
+        "registered dynamic tool should advertise decl.tool_name"
+    );
+    assert!(
+        !built.iter().any(|tool| tool.name() == "broken_tool"),
+        "malformed decl must not produce a registered tool"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
+    use crate::document_config::{WriteToolDecl, WriteToolField};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    // `context_budget` is always registered by build_tools. A write tool that
+    // reuses that name (here bypassing apply-time validation by constructing the
+    // surface directly) must be dropped by the runtime guard, not registered as
+    // a second ToolDyn under the same name.
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![WriteToolDecl {
+                tool_name: "context_budget".to_string(),
+                collection: "ActionRequest".to_string(),
+                description: String::new(),
+                fields: vec![WriteToolField {
+                    name: "summary".to_string(),
+                    required: false,
+                }],
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = surface.build_tools(&runtime).unwrap();
+    let count = built
+        .iter()
+        .filter(|tool| tool.name() == "context_budget")
+        .count();
+    assert_eq!(
+        count, 1,
+        "a write tool colliding with a built-in must not register a second impl under that name"
+    );
 }
 
 #[test]
@@ -554,6 +674,7 @@ fn init_like_tool_selection_document(
         enable_session_history_tool: Some(false),
         enable_defra_query: Some(enable_defra_query),
         defra_query_collections: Some(Vec::new()),
+        write_tools: None,
     }
 }
 
@@ -837,6 +958,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
             "AgentRequest".to_string(),
             " AgentResponse ".to_string(),
         ]),
+        write_tools: None,
     };
     let ceiling = ToolCeiling::readonly_at(temp_root("defra-agent-complex-package-root"));
     let config = BehaviorToolConfig::from_tool_selection_document(
