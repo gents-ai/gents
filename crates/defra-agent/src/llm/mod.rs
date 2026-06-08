@@ -11,6 +11,7 @@
 //! `docs/design/native-llm-types-shed-rig.md`.
 
 pub mod rig_compat;
+pub mod tool;
 
 /// Whether/how the model must call a tool before answering. Mirrors rig's
 /// `ToolChoice`.

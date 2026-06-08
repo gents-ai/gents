@@ -252,7 +252,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
 #[tokio::test]
 async fn resolve_composes_principal_scoped_skill_into_prompt() {
     use crate::prompt::LayeredPromptBuilder;
-    use rig::tool::Tool;
+    use crate::llm::tool::Tool;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

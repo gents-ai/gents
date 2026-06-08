@@ -41,7 +41,7 @@
 //! override both methods. want the default? write an empty
 //! `impl CancellableTool for YourTool {}`."
 
-use rig::tool::Tool;
+use crate::llm::tool::Tool;
 use tokio_util::sync::CancellationToken;
 
 /// Opt-in trait for tools that can observe a cancellation token.

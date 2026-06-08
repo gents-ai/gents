@@ -2,9 +2,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::{ToolDyn, ToolError};
+use crate::llm::tool::BoxFuture;
 use tokio::process::Command;
 
 use super::args::CliToolArgs;
@@ -27,7 +27,7 @@ impl ToolDyn for CliTool {
         self.config.name.clone()
     }
 
-    fn definition(&self, _prompt: String) -> WasmBoxedFuture<'_, ToolDefinition> {
+    fn definition(&self, _prompt: String) -> BoxFuture<'_, ToolDefinition> {
         let config = self.config.clone();
         Box::pin(async move {
             ToolDefinition {
@@ -46,7 +46,7 @@ impl ToolDyn for CliTool {
         })
     }
 
-    fn call(&self, args: String) -> WasmBoxedFuture<'_, Result<String, ToolError>> {
+    fn call(&self, args: String) -> BoxFuture<'_, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;

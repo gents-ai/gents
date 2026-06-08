@@ -7,8 +7,8 @@ use defra_native_fs_runner::protocol::{
     GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
     NativeFsRunnerRequest,
 };
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::Tool;
 use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};

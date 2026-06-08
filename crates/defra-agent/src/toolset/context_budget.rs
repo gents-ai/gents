@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
-use rig::completion::ToolDefinition;
-use rig::tool::{Tool, ToolDyn};
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::{Tool, ToolDyn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -292,7 +292,7 @@ fn build_snapshot(
 mod tests {
     use std::sync::Arc;
 
-    use rig::tool::Tool;
+    use crate::llm::tool::Tool;
 
     use super::*;
 

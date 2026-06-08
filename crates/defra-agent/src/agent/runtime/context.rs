@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use rig::client::CompletionClient;
-use rig::tool::ToolDyn;
+use crate::llm::tool::ToolDyn;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 use crate::admission::AdmissionRegistry;

@@ -5,14 +5,12 @@ use futures::{stream, StreamExt};
 use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message,
-    ToolDefinition,
 };
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
     StreamingCompletionResponse,
 };
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
+use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use tokio::sync::Mutex;
 
 use super::*;
@@ -129,7 +127,7 @@ impl ToolDyn for EchoTool {
         self.name.clone()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.clone(),
@@ -139,7 +137,7 @@ impl ToolDyn for EchoTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }
@@ -156,7 +154,7 @@ impl ToolDyn for FixedTool {
         self.name.clone()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.clone(),
@@ -166,7 +164,7 @@ impl ToolDyn for FixedTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }

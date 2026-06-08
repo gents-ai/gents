@@ -37,7 +37,7 @@ use rig::completion::{
 use crate::llm::ToolChoice;
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
-use rig::tool::ToolDyn;
+use crate::llm::tool::ToolDyn;
 
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
@@ -536,10 +536,13 @@ async fn build_request<M: CompletionModel>(
     // The current prompt's rag text (with rig's history fallback) is handed to
     // each tool's `definition` so prompt-aware (dynamic) tools can tailor their
     // schema. Built-in tools ignore it; this preserves parity for custom tools.
+    // Definitions are native; converted to rig's at the provider boundary
+    // (Layer A) for the outgoing request.
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {
-        tool_defs.push(tool.definition(rag_text.clone()).await);
+        let native = tool.definition(rag_text.clone()).await;
+        tool_defs.push(crate::llm::rig_compat::to_rig_tool_definition(&native));
     }
 
     let chat_history: Vec<Message> = config

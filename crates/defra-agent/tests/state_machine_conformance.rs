@@ -20,10 +20,10 @@ use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::completion::ToolDefinition;
+use defra_agent::llm::tool::ToolDefinition;
 use rig::one_or_many::OneOrMany;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
+use defra_agent::llm::tool::{ToolDyn, ToolError};
+use defra_agent::llm::tool::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 

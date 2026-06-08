@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
-use rig::tool::ToolDyn;
+use crate::llm::tool::ToolDyn;
 
 use super::{
     assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,

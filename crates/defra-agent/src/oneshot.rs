@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
 use rig::completion::{CompletionModel, Message};
-use rig::tool::ToolDyn;
+use crate::llm::tool::ToolDyn;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::loop_config;

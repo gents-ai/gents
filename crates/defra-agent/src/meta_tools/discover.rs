@@ -1,6 +1,6 @@
 use anyhow::anyhow;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::Tool;
 use serde::Deserialize;
 
 use crate::mcp_pool::resolve_mcp_url;
