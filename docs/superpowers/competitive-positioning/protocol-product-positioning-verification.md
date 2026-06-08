@@ -1,9 +1,11 @@
 # Protocol/product positioning verification
 
 Date: 2026-06-05
-Subject: `docs/superpowers/specs/2026-06-05-protocol-product-positioning-map.md`
+Subject: `docs/superpowers/competitive-positioning/protocol-product-positioning-map.md`
 Result: verified with wording corrections applied
 Tracking issue: https://github.com/sourcenetwork/defra-agent/issues/407
+Moved: 2026-06-08 into `docs/superpowers/competitive-positioning/` with the
+rest of the competitive positioning material.
 
 ## Scope
 

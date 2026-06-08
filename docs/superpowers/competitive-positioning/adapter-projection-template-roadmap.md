@@ -5,8 +5,8 @@ Status: implementation roadmap
 Tracking issue: https://github.com/sourcenetwork/defra-agent/issues/407
 Related:
 
-- `docs/superpowers/specs/2026-06-05-protocol-product-positioning-map.md`
-- `docs/superpowers/audits/2026-06-05-protocol-product-positioning-verification.md`
+- `docs/superpowers/competitive-positioning/protocol-product-positioning-map.md`
+- `docs/superpowers/competitive-positioning/protocol-product-positioning-verification.md`
 
 ## Goal
 
@@ -47,6 +47,20 @@ This avoids creating protocol-specific business logic. The runtime remains
 Defra-native; adapters translate edge shapes into the same `AgentRequest`,
 `AgentMessage`, `AgentToolCall`, `AgentResponse`, session, task, and behavior
 documents.
+
+Current priority correction:
+
+- Treat A2A Agent Cards and ACP manifests as behavior/catalog projections over
+  existing Defra documents.
+- Map external Agent Communication Protocol access and run semantics back to
+  Defra documents and DefraDB ACP.
+- Use existing signed Defra documents/capabilities for ANP-style discovery
+  publication instead of creating a new signing substrate.
+- Keep dedicated human approval/review records lower priority than automated
+  inter-agent workflows.
+- Prioritize pattern templates that map LangGraph, CrewAI, AutoGen, OpenAI
+  Agents SDK, and Microsoft Agent Framework workflows onto Defra-native
+  documents.
 
 ## Projection framework acceptance criteria
 
@@ -216,6 +230,9 @@ Definition of done:
 - Sensitive fields such as internal URLs, private skill text, or restricted
   tools can be hidden by DefraDB ACP.
 - Catalog output can feed A2A Agent Cards and ACP manifests.
+- The projection is implemented as a thin DefraDB ACP-filtered read over
+  existing principal, behavior, task, skill, tool-selection, schedule, trigger,
+  and service documents.
 
 ### 3. Tool provenance projection
 
@@ -238,7 +255,8 @@ Definition of done:
 
 ### 4. Shared-memory provenance projection
 
-For agent-written shared documents, expose:
+For agent-written shared documents, expose the provenance already implicit in
+Defra's DID-linked writes:
 
 - writer DID
 - behavior id
@@ -252,14 +270,16 @@ Definition of done:
 - New or existing agent-written documents can be traced back to runtime origin.
 - A reviewer can distinguish user-written, operator-written, and agent-written
   documents.
-- Poisoning/review status is represented as document metadata or a related
-  review document.
+- Request/tool-call origin can be exported for automated consumers when
+  available.
+- Poisoning/review status remains optional until a concrete automated workflow
+  needs it.
 
 ## Phase 2: first protocol adapters
 
 ### 1. A2A Agent Card projection
 
-Generate A2A Agent Cards from:
+Generate A2A Agent Cards from existing behavior/catalog documents:
 
 - `AgentPrincipal`
 - `AgentBehavior`
@@ -274,6 +294,8 @@ Definition of done:
 - Private/internal card view for authorized operators.
 - Supported interfaces/endpoints are generated from deployment configuration.
 - A2A Agent Card JWS support is available where signed cards are needed.
+- Card generation does not create a second agent model; `AgentBehavior` remains
+  the source of the agent behavior/capability contract.
 
 ### 2. A2A task lifecycle adapter
 
@@ -297,7 +319,8 @@ Definition of done:
 ### 3. Shared ACP/A2A run mapper
 
 Build one internal mapper for task/run/session concepts, then expose
-protocol-specific HTTP/JSON edge shapes.
+protocol-specific HTTP/JSON edge shapes. External ACP must resolve to Defra
+documents and DefraDB ACP rather than carrying a parallel permission model.
 
 Definition of done:
 
@@ -324,12 +347,14 @@ Definition of done:
 
 ### 2. ANP/DID discovery adapter
 
-Publish DID-bound agent description/capability metadata from Defra documents.
+Publish DID-bound agent description/capability metadata from existing signed
+Defra documents and capabilities.
 
 Definition of done:
 
 - Agent DID verification is defined.
-- Capability documents can be signed or otherwise verified.
+- Existing signed Defra capability documents can be published in the ANP-shaped
+  discovery envelope.
 - Public/private publication rules are enforced through DefraDB ACP.
 - Metadata publication is minimized by default.
 - The adapter does not invent a second authorization model.
@@ -372,12 +397,14 @@ Definition of done:
 - The MCP server can be used by external frameworks without bypassing DefraDB
   ACP.
 
-## Phase 5: missing document shapes
+## Phase 5: lower-priority document shapes
 
 ### 1. Approval/review records
 
 Current Defra-native state has interrupt/cancel/policy-denial fields, but
 OpenAI/Microsoft/A2A-style approval flows need a first-class review surface.
+This is lower priority than automated inter-agent workflows unless a concrete
+customer use case requires durable human approval state.
 
 Proposed document shape:
 
@@ -402,6 +429,8 @@ Definition of done:
 ### 2. Shared-memory review/trust records
 
 Agent-written shared documents need review and poisoning controls.
+This is lower priority than surfacing existing DID-linked write provenance for
+automated use cases.
 
 Definition of done:
 
@@ -498,10 +527,13 @@ Definition of done:
 - each node execution is an `AgentRequest`;
 - edge decisions are recorded in the timeline.
 
-### 8. Human approval
+### 8. Human approval, lower priority
 
 Interrupt before risky tool calls, persist approval request, then resume or
 deny.
+
+This template should follow automated orchestration templates unless a concrete
+customer workflow requires durable human approval state sooner.
 
 Definition of done:
 
@@ -547,10 +579,13 @@ Definition of done:
 4. Multi-agent task/delegation projection.
 5. Extract the common projection framework only from the behavior shared by
    items 1-4.
-6. A2A Agent Card projection.
-7. A2A task lifecycle adapter.
-8. Approval/review record shape.
-9. Handoff specialist and manager-as-tools templates.
+6. Pattern templates for the framework shapes customers already recognize:
+   LangGraph durable graph, CrewAI Flow/Crew, AutoGen team/handoff, OpenAI
+   handoffs/manager-as-tools, and Microsoft sequential/concurrent/handoff/group
+   chat.
+7. A2A Agent Card projection over existing Defra behaviors/tasks/catalogs.
+8. A2A task lifecycle adapter.
+9. Shared external ACP/A2A run mapper that resolves access through DefraDB ACP.
 
 This slice gives customers the clearest proof of the Defra thesis:
 
@@ -561,6 +596,8 @@ This slice gives customers the clearest proof of the Defra thesis:
 - redaction and provenance are part of projection behavior, not downstream
   cleanup scripts;
 - delegation and lineage are visible;
+- familiar framework patterns can be represented as Defra documents without
+  importing those frameworks as the core runtime;
 - agents can later be discovered and invoked through standard protocols;
 - familiar orchestration patterns exist without replacing Defra's document
   substrate.

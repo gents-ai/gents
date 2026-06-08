@@ -5,7 +5,9 @@ Status: strategy note
 Tracking issue: https://github.com/sourcenetwork/defra-agent/issues/407
 Verified: 2026-06-05 against local Defra Agent code/schemas and current
 upstream protocol/framework docs or repositories. See
-`docs/superpowers/audits/2026-06-05-protocol-product-positioning-verification.md`.
+`docs/superpowers/competitive-positioning/protocol-product-positioning-verification.md`.
+Updated: 2026-06-08 to clarify which capabilities are already Defra-native
+documents/projections rather than new core product areas.
 
 ## Goal
 
@@ -59,7 +61,8 @@ Defra Agent gives teams a shared operational substrate for agents:
 
 Short version:
 
-> Defra Agent turns agent coordination into a permissioned document graph.
+> Defra Agent turns agent coordination into a permissioned, peer-replicated
+> document graph.
 > Frameworks and protocols become ways to interact with that graph.
 
 ## Positioning principle
@@ -118,9 +121,9 @@ Local anchors:
 | Ecosystem item | Job customers recognize | Defra-native mapping | Recommendation |
 | --- | --- | --- | --- |
 | MCP | AI application or agent host access to external tools, resources, prompts, and contextual services through MCP servers. MCP official docs define host/client/server roles and a JSON-RPC data layer. | `ToolServiceRegistry`, `ToolSelection.allowed_mcp_service_ids`, MCP pool/health, `AgentToolCall.selected_service_id`, `send_agent_did`. | Keep MCP as the external context/tool boundary. Defra should add stronger policy, identity, health, provenance, and trace guarantees around MCP calls rather than inventing a new context protocol. |
-| A2A | Agent-to-agent discovery and task delegation. A2A Agent Cards describe identity, supported interfaces/endpoints, capabilities, security requirements, and skills; `contextId` groups related interactions and `taskId` identifies task work. | `AgentPrincipal` + `AgentBehavior` + `Task` become Agent Card source data. `session_id` maps to `contextId`. For new A2A tasks, generated Defra `request_id` is exposed as `taskId`; incoming `taskId` should resume or refine an existing request/task. `AgentRequest.lifecycle_state` maps to task state. `AgentResponse`/messages/tool calls become artifacts/events. | Build an A2A projection. It should be a protocol adapter over Defra docs, not a second runtime. Start with Agent Card generation and `SendMessage -> AgentRequest`. |
-| Agent Communication Protocol | REST-based interoperability for agents, applications, and humans, with sync/async/streaming runs, manifests, discovery, sessions, Await, cancellation, and run lifecycle states. ACP docs now state ACP is merging into A2A under the Linux Foundation and active ACP development is winding down. | External ACP `Run` maps to `AgentRequest`. `session_id` maps to ACP session. Agent manifest maps from principal/behavior/task metadata. Await/cancel states map to interrupt and lifecycle fields. | Treat external ACP as another adapter/projection. Because ACP is merging into A2A, avoid building duplicate business logic; share the same request/session mapper. |
-| ANP | Draft DID-based agent-network protocol stack covering DID identity, secure messaging/E2EE, agent description, discovery, and meta-protocol negotiation. | `AgentPrincipal.agent_did` is already the identity anchor. DefraDB ACP and document permissions are the local authorization substrate. P2P/document sync is the natural distributed state layer. | Position ANP as a remote trust/discovery layer on top of Defra Agent. The main gap is signed or verified capability documents, DID verification, remote trust policy, and permissioned/minimized publication of agent metadata. |
+| A2A | Agent-to-agent discovery and task delegation. A2A Agent Cards describe identity, supported interfaces/endpoints, capabilities, security requirements, and skills; `contextId` groups related interactions and `taskId` identifies task work. | `AgentPrincipal` + `AgentBehavior` + `Task` become Agent Card source data. In the simple case, an Agent Card is a projection of one or more Defra agent behaviors and their allowed tasks/capabilities. `session_id` maps to `contextId`. For new A2A tasks, generated Defra `request_id` is exposed as `taskId`; incoming `taskId` should resume or refine an existing request/task. `AgentRequest.lifecycle_state` maps to task state. `AgentResponse`/messages/tool calls become artifacts/events. | Build an A2A projection and task adapter. The card is mostly catalog/behavior projection; the task lifecycle adapter maps protocol work to Defra `AgentRequest` rows. |
+| Agent Communication Protocol | REST-based interoperability for agents, applications, and humans, with sync/async/streaming runs, manifests, discovery, sessions, Await, cancellation, and run lifecycle states. ACP docs now state ACP is merging into A2A under the Linux Foundation and active ACP development is winding down. | External ACP `Run` maps to `AgentRequest`. `session_id` maps to ACP session. Agent manifest maps from principal/behavior/task metadata. Await/cancel states map to interrupt and lifecycle fields. External ACP auth/resource semantics should resolve to a Defra actor and DefraDB ACP document decisions. | Treat external ACP as another adapter/projection. Because ACP is merging into A2A, avoid building duplicate business logic; share the same request/session mapper and use DefraDB ACP as the permission decider. |
+| ANP | Draft DID-based agent-network protocol stack covering DID identity, secure messaging/E2EE, agent description, discovery, and meta-protocol negotiation. | `AgentPrincipal.agent_did` is already the identity anchor. Defra already has signed documents/capabilities as the natural source for DID-bound metadata. DefraDB ACP and document permissions are the local authorization substrate. P2P/document sync is the natural distributed state layer. | Position ANP as a remote trust/discovery layer on top of Defra Agent. The gap is not inventing signed capabilities; it is publishing Defra's existing signed docs/capabilities through an ANP-shaped discovery/trust envelope with minimized, ACL-filtered metadata. |
 | LangGraph | Durable graph runtime for long-running, stateful workflows: checkpoints, human-in-the-loop, memory, replay/fork, fault tolerance, and LangSmith observability. | Defra Agent already stores durable request/tool/session state as documents and has Lean-backed lifecycle contracts. A graph runner could be integrated with Defra docs as checkpoint/run storage, but that is a Defra integration design rather than a LangGraph claim. | Do not copy LangGraph's Python graph DSL into core. Offer Defra as a durable backend or execution substrate for graph-like workflows. |
 | CrewAI | Flows provide structured, event-driven workflow control with state; Crews provide collaborative, role-oriented agent teams with sequential or hierarchical process control. | `Task`, `Schedule`, and `EventTrigger` cover Defra's Flow-like entry points at the capability level. `AgentBehavior`, `ToolSelection`, `skill_refs`, delegation, and subagent lineage cover the Crew/team shape at the capability level. | Provide templates and import/export guidance. Customers can model CrewAI-style patterns in Defra docs without giving up Defra-native ACL and lineage. |
 | OpenAI Agents SDK | Code-first SDK for agent loops where application code owns tools, handoffs, guardrails/human review, state/continuation, MCP wiring, and tracing. | `AgentBehavior` is the specialist contract. `ToolSelection` is the tool/guardrail policy. Subagent fields and child requests model handoffs. Trace export plus `AgentToolCall` rows record execution. | Treat the SDK as an agent runner that can be hosted behind a Defra behavior or bridged into Defra traces. Keep Defra's durable state and ACL as the system of record. |
@@ -134,16 +137,38 @@ tools.
 | Capability | Present Defra shape | Gap / recommendation |
 | --- | --- | --- |
 | Tool integration | MCP client/pool, tool-service registry, meta tools, tool call persistence, MCP allowlists, health checks. | Keep tightening service identity, per-agent allowlists, health policy, and trace attribution. |
-| Agent discovery | Principals, behaviors, tasks, tool selections, service registry. | Generate A2A Agent Cards and ACP manifests from Defra docs. Use A2A Agent Card JWS where needed; treat ACP manifest signing as a Defra extension unless ACP/A2A migration guidance standardizes it. |
+| Agent discovery | Principals, behaviors, tasks, tool selections, service registry. | Generate A2A Agent Cards and ACP manifests from Defra docs. This is mostly an ACL-filtered behavior/task/catalog projection, not a new core primitive. Use A2A Agent Card JWS where needed; treat ACP manifest signing as a Defra extension unless ACP/A2A migration guidance standardizes it. |
 | Agent-to-agent work | Requests have agent/behavior/session IDs, parent request/tool call causality, subagent depth, child request linkage. | Add protocol adapters for A2A/ACP send/run semantics. Make state mapping explicit and tested. |
-| Distributed identity | `agent_did` is central; runtime routes behavior work through principal identity. | Define the ANP projection: DID verification, signed or verified capability documents, remote trust policy, and permissioned/minimized publication of metadata. |
-| Access control | DefraDB ACP is the permission decider; docs are the permission boundary. | Make this a first-class customer proof point. Avoid adapter-local permission systems except as protocol auth shims. |
+| Distributed identity | `agent_did` is central; runtime routes behavior work through principal identity; signed documents/capabilities already exist as the local capability source. | Define the ANP projection: DID verification, remote trust policy, and permissioned/minimized publication of existing signed Defra capability metadata. |
+| Access control | DefraDB ACP is the permission decider; docs are the permission boundary. | Make this a first-class customer proof point. Agent catalogs, cards, manifests, and protocol outputs should be ACL-filtered projections. Avoid adapter-local permission systems except as protocol auth shims. |
 | Durable execution | Requests, tool calls, messages, responses, schedules, and triggers are documents. | Expose clear resume/replay/export APIs so LangGraph-style and ACP/A2A-style clients can understand the lifecycle. |
-| Shared memory / blackboard | DefraDB collections and branchable docs provide shared state. | Add provenance and poisoning controls for agent-written shared documents: who wrote it, under which behavior, from which request/tool call. |
-| Human-in-the-loop | Interrupt/cancel fields, policy denial fields, lifecycle state, desktop/CLI operator surfaces. | Map ACP Await/A2A `input-required`/approval concepts onto Defra-native interrupt/cancel/policy-denial flows, and add explicit approval records if needed. |
+| Shared memory / blackboard | DefraDB collections and branchable docs provide shared state; agent writes are tied to their DID. | Treat provenance as an export/query surface over existing identity-linked writes. Add request/tool-call origin and poisoning/review controls only where automated shared-memory workflows need them. |
+| Human-in-the-loop | Interrupt/cancel fields, policy denial fields, lifecycle state, desktop/CLI operator surfaces. | Lower priority than automated workflows. Map ACP Await/A2A `input-required` concepts onto existing flows where needed, but do not prioritize dedicated approval records until a concrete automated use case needs them. |
 | Observability | Tool calls and request lifecycle are persisted; trace export exists. | Add exporters for protocol views: A2A task events and ACP run events. Treat OpenTelemetry or LangSmith compatibility as future integration work if customers need it. |
 | Declarative deployment | Desired-state manifests, validate/diff/apply, prune routed through proven reconcile model. | Position this strongly against code-first frameworks: customers can review and apply agent fleets like infrastructure. |
 | Formal contracts | Lean models and Rust conformance tests cover state machine behavior. | Keep using proofs for lifecycle/ACL/reconcile invariants so those guarantees are part of the runtime contract, not only adapter tests. |
+
+## Corrected priority read
+
+Several ecosystem capabilities should stay small because Defra already has the
+hard substrate:
+
+- A2A Agent Cards are not a new agent model. They are mostly projections of
+  `AgentBehavior`, `Task`, `ToolSelection`, and capability/catalog documents.
+- External Agent Communication Protocol should map to Defra documents and
+  DefraDB ACP. Do not create an external-ACP-specific permission layer.
+- ANP-style discovery should use existing signed documents and signed
+  capabilities. The work is an ANP-shaped publication/trust envelope, not a new
+  signing system.
+- ACL-filtered catalogs should be straightforward DefraDB ACP projections.
+- Shared-memory provenance already starts from agent DID-linked writes. The
+  useful work is surfacing request/tool-call origin for automated workflows,
+  not inventing a separate provenance substrate.
+- Dedicated human approval/review records are lower priority than automated
+  inter-agent use cases.
+- Pattern templates are the important next customer-facing bridge: map
+  LangGraph, CrewAI, AutoGen, OpenAI Agents SDK, and Microsoft Agent Framework
+  patterns into Defra-native documents and prove them with E2E tests.
 
 ## Customer talk tracks
 
@@ -177,7 +202,8 @@ permissions, the document-native model is the product advantage.
 
 1. A2A Agent Card projection.
    Source fields: `AgentPrincipal`, `AgentBehavior`, `Task`, `ToolSelection`,
-   and `ToolServiceRegistry`. Include a public-card/private-card split so
+   and `ToolServiceRegistry`. Treat this as a behavior/catalog projection, not
+   a separate agent definition. Include a public-card/private-card split so
    sensitive skills and internal URLs can be hidden by DefraDB ACP.
 
 2. A2A task lifecycle adapter.
@@ -193,8 +219,9 @@ permissions, the document-native model is the product advantage.
    edge.
 
 4. ANP/DID discovery design.
-   Define signed or verified capability documents, DID verification, remote
-   trust policy, and permissioned/minimized publication of agent metadata. This
+   Publish existing signed Defra documents and capabilities through a
+   DID-bound discovery/trust envelope. Define DID verification, remote trust
+   policy, and permissioned/minimized publication of agent metadata. This
    should lean on `AgentPrincipal.agent_did` and DefraDB ACP instead of
    inventing a new authorization model.
 
@@ -210,8 +237,7 @@ permissions, the document-native model is the product advantage.
    ecosystem: LangGraph-style durable graphs; CrewAI-style Flows/Crews;
    OpenAI-style handoffs and manager-as-tools; Microsoft-style sequential,
    concurrent, handoff, group-chat, and Magentic workflows; plus Defra-specific
-   scheduled flows, event-triggered flows, human approval, and
-   cross-deployment subagents.
+   scheduled flows, event-triggered flows, and cross-deployment subagents.
 
 ## What not to do
 
