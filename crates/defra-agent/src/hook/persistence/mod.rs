@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rig::agent::{HookAction, ToolCallHookAction};
+use crate::llm::{HookAction, ToolCallHookAction};
 use rig::completion::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use rig::one_or_many::OneOrMany;
 use serde::Deserialize;

@@ -15,7 +15,7 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
     ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,

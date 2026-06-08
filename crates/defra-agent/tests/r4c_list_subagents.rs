@@ -9,7 +9,7 @@ use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use serde_json::{json, Value};
 
 use support::fixtures::spawn_subagent_source;

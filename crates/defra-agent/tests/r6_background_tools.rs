@@ -5,7 +5,7 @@ mod support;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;

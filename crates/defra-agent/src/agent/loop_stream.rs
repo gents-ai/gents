@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use rig::agent::{HookAction, MultiTurnStreamItem, StreamingError, ToolCallHookAction};
+use rig::agent::{MultiTurnStreamItem, StreamingError};
+use crate::llm::{HookAction, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{
     CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,

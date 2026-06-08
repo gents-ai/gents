@@ -8,7 +8,7 @@ use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
 use rig::one_or_many::OneOrMany;
 use serde_json::{json, Value};

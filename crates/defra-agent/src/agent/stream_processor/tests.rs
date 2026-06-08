@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rig::agent::{HookAction, MultiTurnStreamItem};
+use rig::agent::MultiTurnStreamItem;
+use crate::llm::HookAction;
 use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
@@ -402,7 +403,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             tool_args,
         )
         .await,
-        rig::agent::ToolCallHookAction::Continue
+        crate::llm::ToolCallHookAction::Continue
     ));
     assert!(processor
         .persist_partial_turn("persist streamed assistant tool call")

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use rig::agent::{HookAction, ToolCallHookAction};
+use crate::llm::{HookAction, ToolCallHookAction};
 use rig::tool::ToolDyn;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;

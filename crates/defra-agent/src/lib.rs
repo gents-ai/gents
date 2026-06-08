@@ -30,6 +30,7 @@ pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod lifecycle;
+pub mod llm;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;

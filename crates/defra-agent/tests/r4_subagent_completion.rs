@@ -17,7 +17,7 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,

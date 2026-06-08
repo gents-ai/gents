@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use rig::agent::{HookAction, ToolCallHookAction};
+use crate::llm::{HookAction, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,

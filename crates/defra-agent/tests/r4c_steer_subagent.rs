@@ -11,7 +11,7 @@ use defra_agent::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
     AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 

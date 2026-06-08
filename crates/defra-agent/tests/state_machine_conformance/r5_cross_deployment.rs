@@ -8,7 +8,7 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
+use defra_agent::llm::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
