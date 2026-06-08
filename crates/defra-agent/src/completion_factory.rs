@@ -101,6 +101,29 @@ where
     builder
 }
 
+/// Build a [`LoopConfig`](crate::agent::loop_stream::LoopConfig) for the owned
+/// completion loop from a behavior, mirroring [`configure_agent_builder`]'s
+/// resolution (tool choice when tools are present, sampling, provider params).
+/// Used by call sites that drive the owned loop directly rather than via a rig
+/// `Agent` (e.g. one-shot execution).
+pub(crate) fn loop_config(
+    behavior: &AgentBehavior,
+    preamble: String,
+    tool_count: usize,
+) -> crate::agent::loop_stream::LoopConfig {
+    crate::agent::loop_stream::LoopConfig {
+        preamble: Some(preamble),
+        temperature: behavior.sampling.temperature,
+        max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
+        additional_params: merge_optional_params(
+            provider_additional_params(behavior.backend_provider_kind),
+            behavior.sampling.additional_params(),
+        ),
+        tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
+        max_turns: behavior.max_turns,
+    }
+}
+
 pub(crate) fn agent_with_request_sampling<M>(
     agent: &Agent<M>,
     behavior: &AgentBehavior,
