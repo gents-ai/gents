@@ -5,9 +5,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use super::context::{ToolContext, ToolError};
+use crate::background_tools::{LiveOutputStream, LiveToolOutputWriter};
+use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
@@ -165,20 +168,29 @@ pub(crate) async fn run_command(
         .kill_on_drop(true);
 
     let started = Instant::now();
-    let output = tokio::time::timeout(timeout, command.output()).await;
+    let mut child = command.spawn()?;
+    let live_output = current_tool_runtime_context().and_then(|runtime| runtime.live_output);
+    let stdout_task = tokio::spawn(read_command_stream(
+        child.stdout.take(),
+        LiveOutputStream::Stdout,
+        live_output.clone(),
+    ));
+    let stderr_task = tokio::spawn(read_command_stream(
+        child.stderr.take(),
+        LiveOutputStream::Stderr,
+        live_output,
+    ));
+    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
     let duration_ms = elapsed_ms(started);
-    let (exit_code, timed_out, stdout_raw, stderr_raw) = match output {
-        Ok(output) => {
-            let output = output?;
-            (
-                output.status.code(),
-                false,
-                String::from_utf8_lossy(&output.stdout).into_owned(),
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            )
+    let (exit_code, timed_out) = match wait_result {
+        Ok(status) => (status?.code(), false),
+        Err(_) => {
+            let _ = child.kill().await;
+            (None, true)
         }
-        Err(_) => (None, true, String::new(), String::new()),
     };
+    let stdout_raw = String::from_utf8_lossy(&join_command_stream(stdout_task).await).into_owned();
+    let stderr_raw = String::from_utf8_lossy(&join_command_stream(stderr_task).await).into_owned();
 
     let stdout = truncate_stream(&stdout_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
     let stderr = truncate_stream(&stderr_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
@@ -212,6 +224,37 @@ pub(crate) async fn run_command(
     };
 
     render_command_output(&output, raw_json).map_err(Into::into)
+}
+
+async fn read_command_stream<R>(
+    reader: Option<R>,
+    stream: LiveOutputStream,
+    live_output: Option<LiveToolOutputWriter>,
+) -> Vec<u8>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let Some(mut reader) = reader else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let read = match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        if let Some(writer) = &live_output {
+            writer.append(stream, &buf[..read]).await;
+        }
+        bytes.extend_from_slice(&buf[..read]);
+    }
+    bytes
+}
+
+async fn join_command_stream(task: tokio::task::JoinHandle<Vec<u8>>) -> Vec<u8> {
+    task.await.unwrap_or_default()
 }
 
 #[cfg(test)]

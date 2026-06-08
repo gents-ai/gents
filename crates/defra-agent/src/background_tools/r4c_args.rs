@@ -232,6 +232,12 @@ pub(crate) struct ReadToolOutputResponse {
     /// Resume cursor = `offset` + bytes returned in `output`. Pass as `offset`
     /// on the next read to continue with no gap and no overlap.
     pub(crate) next_offset: u64,
+    /// Earliest byte offset still available to read. 0 for finished tools
+    /// (their full output is persisted, nothing is ever dropped). For a
+    /// running tool the live buffer retains only the most recent output, so
+    /// this can be > 0; if it exceeds your requested `offset`, the bytes in
+    /// between were produced but evicted before you read them.
+    pub(crate) first_available_offset: u64,
     /// Total bytes captured so far across the combined stdout/stderr buffer.
     pub(crate) total_bytes: u64,
     /// True when `next_offset < total_bytes` (more output remains to be paged).

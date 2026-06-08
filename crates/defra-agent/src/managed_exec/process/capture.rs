@@ -2,13 +2,19 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use crate::background_tools::{LiveOutputStream, LiveToolOutputWriter};
+
 #[derive(Debug)]
 pub(super) struct OutputCapture {
     pub(super) bytes: Vec<u8>,
     pub(super) truncated: bool,
 }
 
-pub(super) async fn read_optional_capped<R>(reader: Option<R>, max_bytes: usize) -> OutputCapture
+pub(super) async fn read_optional_capped<R>(
+    reader: Option<R>,
+    max_bytes: usize,
+    live_output: Option<(LiveToolOutputWriter, LiveOutputStream)>,
+) -> OutputCapture
 where
     R: AsyncRead + Unpin,
 {
@@ -18,10 +24,14 @@ where
             truncated: false,
         };
     };
-    read_capped(reader, max_bytes).await
+    read_capped(reader, max_bytes, live_output).await
 }
 
-async fn read_capped<R>(mut reader: R, max_bytes: usize) -> OutputCapture
+async fn read_capped<R>(
+    mut reader: R,
+    max_bytes: usize,
+    live_output: Option<(LiveToolOutputWriter, LiveOutputStream)>,
+) -> OutputCapture
 where
     R: AsyncRead + Unpin,
 {
@@ -34,6 +44,9 @@ where
             Ok(read) => read,
             Err(_) => break,
         };
+        if let Some((writer, stream)) = &live_output {
+            writer.append(*stream, &buf[..read]).await;
+        }
         let remaining = max_bytes.saturating_sub(bytes.len());
         if remaining == 0 {
             truncated = true;

@@ -14,7 +14,9 @@ pub(crate) use inference_backend::{
 };
 pub(crate) use schedule::write_schedule_document;
 pub(crate) use task::write_task_document;
-pub(crate) use tool_selection::write_tool_selection_document;
+pub(crate) use tool_selection::{
+    write_tool_selection_document, write_tool_selection_document_with_clear_fields,
+};
 pub(crate) use txn::ConfigApplyTxn;
 
 use anyhow::Result;

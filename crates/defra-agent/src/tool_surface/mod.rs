@@ -1,10 +1,12 @@
 mod behavior_config;
 mod build;
+mod explain;
 mod modes;
 mod runtime_context;
 mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
+pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub use runtime_context::ToolRuntimeContext;
 pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};

@@ -35,8 +35,12 @@ impl NativeFsRunner {
         let runtime = current_tool_runtime_context();
         let deadline_at = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
         let cancellation_token = runtime
-            .map(|runtime| runtime.cancellation_token)
+            .as_ref()
+            .map(|runtime| runtime.cancellation_token.clone())
             .unwrap_or_else(CancellationToken::new);
+        let live_output = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.live_output.clone());
         let base = self.effective_base();
         let runner = resolve_runner_command(&self.root, &base)?;
         let stdin = serde_json::to_vec(&request)
@@ -50,6 +54,7 @@ impl NativeFsRunner {
             max_output_bytes: MAX_NATIVE_RUNNER_OUTPUT_BYTES,
             stdin,
             tool_name: Some(tool_name.to_string()),
+            live_output,
         })
         .await
         {
