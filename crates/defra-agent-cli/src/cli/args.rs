@@ -1009,43 +1009,83 @@ pub(crate) struct ToolSelectionUpsertArgs {
     #[arg(long)]
     pub(crate) display_name: Option<String>,
     #[arg(long, default_value_t = false)]
-    pub(crate) enable_file_tools: bool,
+    pub(crate) clear_display_name: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable file tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_file_tools: Option<bool>,
     #[arg(long)]
     pub(crate) file_tools_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_file_tools_mode: bool,
     #[arg(
         long,
         help = "Optional per-behavior file-tool root; relative paths resolve from the daemon cwd and must stay within any node-level tool root"
     )]
     pub(crate) file_tool_root: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
-    pub(crate) enable_bash: bool,
+    pub(crate) clear_file_tool_root: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable bash tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_bash: Option<bool>,
     #[arg(long)]
     pub(crate) bash_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_bash_mode: bool,
     #[arg(
         long,
         help = "Command policy for bash: read_only, workspace_write, managed_write, or unrestricted"
     )]
     pub(crate) command_execution_policy: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_execution_policy: bool,
     #[arg(
         long,
         help = "Network policy hint for bash commands: inherit, disabled, or enabled"
     )]
     pub(crate) command_network_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_network_mode: bool,
     #[arg(long = "command-allowed-argv-prefix")]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_allowed_argv_prefixes: bool,
     #[arg(long = "command-forbidden-argv-prefix")]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_forbidden_argv_prefixes: bool,
     #[arg(long = "cli-tool-name")]
     pub(crate) cli_tool_names: Vec<String>,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enable_meta_tools: bool,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_cli_tool_names: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable meta MCP tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_meta_tools: Option<bool>,
     #[arg(long = "allowed-mcp-service-id")]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_allowed_mcp_service_ids: bool,
     #[arg(
         long = "backgroundable-tool-name",
         help = "Host tool that may be spawned as a background process via spawn_process, e.g. bash_unrestricted"
     )]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_backgroundable_tool_names: bool,
     #[arg(
         long,
         help = "Enable or disable the feature-gated memory tool: --enable-memory true|false. Omit to leave the existing document setting unchanged (default is disabled)"
@@ -1066,6 +1106,46 @@ pub(crate) struct ToolSelectionUpsertArgs {
         help = "Restrict defra_query to these collections (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_defra_query_collections: bool,
+    #[arg(
+        long = "subagent-target",
+        help = "SubagentTarget JSON entry allowed for spawn_subagent (repeatable); omit to preserve existing targets"
+    )]
+    pub(crate) subagent_targets: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Clear existing subagent_targets when no --subagent-target values are provided"
+    )]
+    pub(crate) clear_subagent_targets: bool,
+    #[arg(
+        long,
+        help = "Enable or disable spawn_subagent: --subagent-spawn-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_spawn_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable subagent steering tools: --subagent-steering-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_steering_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable background subagent steering: --subagent-background-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_background_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable remote-DID subagent targets: --subagent-allow-cross-deployment true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_allow_cross_deployment: Option<bool>,
+    #[arg(
+        long,
+        help = "Cross-deployment spawn timeout in seconds. Omit to preserve existing setting"
+    )]
+    pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_cross_deployment_spawn_timeout_seconds: bool,
 }
 
 #[derive(Subcommand)]
@@ -1891,5 +1971,84 @@ mod tests {
             parse_tools_set(&["--enable-session-history-tool", "true"]).enable_session_history_tool,
             Some(true)
         );
+    }
+
+    #[test]
+    fn init_tool_audit_flags_parse() {
+        let args = parse_init(&[
+            "--enable-memory",
+            "--disable-defra-query",
+            "--tool-package",
+            "write",
+        ]);
+        assert!(args.enable_memory);
+        assert!(args.disable_defra_query);
+        assert_eq!(args.tool_package, Some(ToolPackageArg::Write));
+
+        let scoped = parse_init(&[
+            "--defra-query-collection",
+            "AgentRequest",
+            "--defra-query-collection",
+            "AgentResponse",
+        ]);
+        assert_eq!(
+            scoped.defra_query_collections,
+            vec!["AgentRequest".to_string(), "AgentResponse".to_string()]
+        );
+    }
+
+    #[test]
+    fn subagent_tool_flags_preserve_when_omitted_and_parse_when_present() {
+        let omitted = parse_tools_set(&[]);
+        assert_eq!(omitted.enable_file_tools, None);
+        assert_eq!(omitted.enable_bash, None);
+        assert_eq!(omitted.enable_meta_tools, None);
+        assert!(omitted.subagent_targets.is_empty());
+        assert!(!omitted.clear_subagent_targets);
+        assert_eq!(omitted.subagent_spawn_enabled, None);
+        assert_eq!(omitted.subagent_steering_enabled, None);
+        assert_eq!(omitted.subagent_background_enabled, None);
+        assert_eq!(omitted.subagent_allow_cross_deployment, None);
+        assert_eq!(omitted.cross_deployment_spawn_timeout_seconds, None);
+
+        let configured = parse_tools_set(&[
+            "--subagent-target",
+            r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker","description":"worker"}"#,
+            "--subagent-spawn-enabled",
+            "true",
+            "--subagent-steering-enabled",
+            "true",
+            "--subagent-background-enabled",
+            "false",
+            "--subagent-allow-cross-deployment",
+            "true",
+            "--cross-deployment-spawn-timeout-seconds",
+            "90",
+        ]);
+        assert_eq!(configured.subagent_targets.len(), 1);
+        assert_eq!(configured.subagent_spawn_enabled, Some(true));
+        assert_eq!(configured.subagent_steering_enabled, Some(true));
+        assert_eq!(configured.subagent_background_enabled, Some(false));
+        assert_eq!(configured.subagent_allow_cross_deployment, Some(true));
+        assert_eq!(configured.cross_deployment_spawn_timeout_seconds, Some(90));
+    }
+
+    #[test]
+    fn legacy_tool_bool_flags_are_patch_optional() {
+        let bare = parse_tools_set(&["--enable-file-tools", "--enable-bash"]);
+        assert_eq!(bare.enable_file_tools, Some(true));
+        assert_eq!(bare.enable_bash, Some(true));
+
+        let explicit = parse_tools_set(&[
+            "--enable-file-tools",
+            "false",
+            "--enable-bash",
+            "false",
+            "--enable-meta-tools",
+            "false",
+        ]);
+        assert_eq!(explicit.enable_file_tools, Some(false));
+        assert_eq!(explicit.enable_bash, Some(false));
+        assert_eq!(explicit.enable_meta_tools, Some(false));
     }
 }

@@ -216,7 +216,9 @@ Examples:
   defra-agent config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools";
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-memory true
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --subagent-spawn-enabled true --subagent-target '<json>'";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
