@@ -33,7 +33,8 @@ use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserCont
 use rig::completion::{
     CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,
 };
-use rig::message::ToolChoice;
+
+use crate::llm::ToolChoice;
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use rig::tool::ToolDyn;
@@ -559,7 +560,7 @@ async fn build_request<M: CompletionModel>(
         .tools(tool_defs);
 
     if let Some(tool_choice) = &config.tool_choice {
-        builder = builder.tool_choice(tool_choice.clone());
+        builder = builder.tool_choice(crate::llm::rig_compat::to_rig_tool_choice(tool_choice));
     }
 
     Ok(builder.build())

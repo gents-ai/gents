@@ -10,6 +10,23 @@
 //! be simplified once rig is gone. See
 //! `docs/design/native-llm-types-shed-rig.md`.
 
+pub mod rig_compat;
+
+/// Whether/how the model must call a tool before answering. Mirrors rig's
+/// `ToolChoice`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ToolChoice {
+    /// The model decides whether to call a tool.
+    #[default]
+    Auto,
+    /// The model must not call a tool.
+    None,
+    /// The model must call some tool.
+    Required,
+    /// The model must call one of the named tools.
+    Specific { function_names: Vec<String> },
+}
+
 /// Outcome of a hook callback for a completion/tool-result event: continue the
 /// loop, or terminate it early with a reason. Mirrors rig's `HookAction`.
 #[derive(Debug, Clone, PartialEq, Eq)]
