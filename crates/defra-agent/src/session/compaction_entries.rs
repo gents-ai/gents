@@ -44,7 +44,17 @@ pub async fn load_compaction_entries(
         None => Vec::new(),
     };
 
-    rows.into_iter().map(CompactionEntry::try_from).collect()
+    let entries = rows
+        .into_iter()
+        .map(CompactionEntry::try_from)
+        .collect::<Result<Vec<_>>>()?;
+    let compacted_message_count = entries
+        .iter()
+        .map(|entry| entry.messages_compacted as i64)
+        .sum::<i64>();
+    tracing::Span::current().record("compaction_entry_count", entries.len() as i64);
+    tracing::Span::current().record("compacted_message_count", compacted_message_count);
+    Ok(entries)
 }
 
 #[allow(clippy::too_many_arguments)]

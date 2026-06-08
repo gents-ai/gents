@@ -42,6 +42,7 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
         ));
     }
 
+    tracing::Span::current().record("history_message_count", history.len() as i64);
     tracing::debug!(session_id = %session_id, count = history.len(), "loaded history");
     Ok(history)
 }
