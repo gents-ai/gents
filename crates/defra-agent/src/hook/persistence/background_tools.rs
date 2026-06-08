@@ -122,18 +122,21 @@ impl DefraSessionHook {
 
         let node = self.node.clone();
         let executions = self.background_executions.clone();
+        let live_outputs = self.background_live_outputs.clone();
         let execution_call_id = background_tool_call_id.clone();
         let execution_session_id = session_id.clone();
         let execution_request_id = request_id.clone();
         let execution_tool_name = target_tool_name.clone();
+        let live_output_writer = live_outputs.writer_for(background_tool_call_id.clone());
         let workspace_cwd = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .and_then(|runtime| runtime.workspace_cwd);
         tokio::spawn(async move {
             let result =
-                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace(
+                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_and_live_output(
                     Some(deadline_at),
                     cancellation_token.clone(),
                     workspace_cwd,
+                    Some(live_output_writer),
                     async {
                         let tool = target_tool.lock().await;
                         tool.call(target_args).await
@@ -254,6 +257,7 @@ impl DefraSessionHook {
             }
 
             executions.remove(&execution_call_id).await;
+            live_outputs.remove(&execution_call_id).await;
         });
 
         Ok(self.skip_tool_result(
@@ -353,8 +357,14 @@ impl DefraSessionHook {
                 ));
             }
         };
-        let response =
-            handle_list_background_tools(&self.node, &request_id, &self.agent_did, parsed).await?;
+        let response = handle_list_background_tools(
+            &self.node,
+            &request_id,
+            &self.agent_did,
+            &self.background_live_outputs,
+            parsed,
+        )
+        .await?;
         let result = serde_json::to_value(response).map_err(|error| {
             anyhow::anyhow!("serialize list_background_tools response: {error}")
         })?;
@@ -400,7 +410,14 @@ impl DefraSessionHook {
             ));
         }
 
-        match handle_read_tool_output(&self.node, &request_id, parsed).await? {
+        match handle_read_tool_output(
+            &self.node,
+            &request_id,
+            &self.background_live_outputs,
+            parsed,
+        )
+        .await?
+        {
             ReadToolOutputOutcome::Found(response) => {
                 let result = serde_json::to_value(response).map_err(|error| {
                     anyhow::anyhow!("serialize read_tool_output response: {error}")

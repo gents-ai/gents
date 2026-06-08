@@ -142,13 +142,22 @@ async fn background_tool(
     internal_call_id: &str,
     tool_name: &str,
 ) -> Value {
+    background_tool_with_args(hook, internal_call_id, tool_name, json!({})).await
+}
+
+async fn background_tool_with_args(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_name: &str,
+    args: Value,
+) -> Value {
     skip_reason_json(
         PromptHook::<TestModel>::on_tool_call(
             hook,
             "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
-            &json!({"tool_name": tool_name, "args": {}}).to_string(),
+            &json!({"tool_name": tool_name, "args": args}).to_string(),
         )
         .await,
     )
@@ -259,6 +268,57 @@ async fn list_background_tools_returns_running_bg_tools() {
         assert_eq!(entry["stdout_bytes"].as_u64(), Some(0));
         assert_eq!(entry["stderr_bytes"].as_u64(), Some(0));
     }
+}
+
+#[tokio::test]
+async fn list_background_tools_reports_running_live_output_bytes() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let tools = defra_agent::ToolSet::builder()
+        .bash_unrestricted(tempdir.path())
+        .build()
+        .build_native_tools()
+        .expect("native tools should build");
+    let (_db, hook, _session_id, _request_id) = setup_hook(
+        "r4c-list-bg-live-output",
+        registry(tools, &["bash_unrestricted"]),
+    )
+    .await;
+    let handle = background_tool_with_args(
+        &hook,
+        "bg-live-output",
+        "bash_unrestricted",
+        json!({
+            "command": "printf live; sleep 2; printf done",
+            "args": [],
+            "timeout_secs": 5
+        }),
+    )
+    .await;
+    let tool_call_id = handle["tool_call_id"].as_str().unwrap();
+
+    let mut entry = json!({});
+    for attempt in 0..40 {
+        let result =
+            list_background_tools(&hook, &format!("list-live-output-{attempt}"), json!({})).await;
+        let entries = result["entries"].as_array().expect("entries");
+        if let Some(candidate) = entries
+            .iter()
+            .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
+            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() >= 4)
+        {
+            entry = candidate.clone();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
+    assert_eq!(entry["status"].as_str(), Some("running"));
+    assert_eq!(entry["stdout_bytes"].as_u64(), Some(4));
+    assert_eq!(entry["stderr_bytes"].as_u64(), Some(0));
+
+    let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
+    assert_eq!(waited["status"].as_str(), Some("completed"));
 }
 
 #[tokio::test]
