@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use anyhow::Result;
 use defra_agent::{
     parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
-    CommandNetworkMode, SubagentTarget, VariableRef,
+    CommandNetworkMode, SubagentTarget, VariableRef, WriteToolDecl,
 };
 
 use super::DesiredStateManifest;
@@ -151,6 +151,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.subagent_targets,
             errors,
         );
+        validate_write_tools(&selection.selection_id, &selection.write_tools, errors);
         if selection.subagent_spawn_enabled {
             if selection.subagent_targets.is_empty() {
                 errors.push(format!(
@@ -775,6 +776,58 @@ fn validate_subagent_targets(
             errors.push(format!(
                 "cross-deployment subagent delegation is deferred; remote target {} requires subagent_allow_cross_deployment=true (trusted-fleet only).",
                 target.name
+            ));
+        }
+    }
+}
+
+/// Validate `write_tools` entries pre-apply, mirroring the runtime checks in
+/// `ToolSelectionDocument::validate()` so a malformed decl is rejected by
+/// `config validate` instead of failing only when the runtime ingests it.
+///
+/// Entries are stored as JSON-encoded [`WriteToolDecl`] strings (the same
+/// `[String]` storage form as `subagent_targets`). Each entry must:
+///   * parse as a [`WriteToolDecl`],
+///   * have a non-empty `tool_name` and `collection`,
+///   * have a non-empty `name` on every field,
+///   * and have a `tool_name` that is unique within the selection.
+fn validate_write_tools(selection_id: &str, entries: &[String], errors: &mut Vec<String>) {
+    let mut seen_tool_names: HashSet<String> = HashSet::new();
+    for entry in entries {
+        let decl: WriteToolDecl = match serde_json::from_str(entry) {
+            Ok(decl) => decl,
+            Err(error) => {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools entry {entry:?} is not valid WriteToolDecl JSON: {error}"
+                ));
+                continue;
+            }
+        };
+        if decl.tool_name.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools entry {entry:?} must have a non-empty tool_name"
+            ));
+        }
+        if decl.collection.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool {:?} must have a non-empty collection",
+                decl.tool_name
+            ));
+        }
+        for field in &decl.fields {
+            if field.name.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
+                    decl.tool_name
+                ));
+            }
+        }
+        if !decl.tool_name.trim().is_empty()
+            && !seen_tool_names.insert(decl.tool_name.trim().to_string())
+        {
+            errors.push(format!(
+                "tool selection {selection_id} has a duplicate write_tools tool_name {:?}",
+                decl.tool_name.trim()
             ));
         }
     }
