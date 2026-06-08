@@ -133,9 +133,9 @@ async fn load_run_timeline_rows(
     request_id: &str,
 ) -> Result<RunTimelineRows> {
     let request = load_timeline_request_by_id(access, request_id).await?;
-    let session_id = request.session_id.as_deref();
+    let root_session_id = request.session_id.clone();
 
-    let mut requests = match session_id {
+    let mut requests = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_requests_for_session(access, session_id).await?,
         None => Vec::new(),
     };
@@ -144,23 +144,24 @@ async fn load_run_timeline_rows(
         merge_timeline_request(&mut requests, child);
     }
 
-    let messages = match session_id {
-        Some(session_id) => load_timeline_messages_for_session(access, session_id).await?,
-        None => Vec::new(),
-    };
-    let tool_calls = match session_id {
-        Some(session_id) => load_timeline_tool_calls_for_session(access, session_id).await?,
-        None => Vec::new(),
-    };
-    let responses = match session_id {
-        Some(session_id) => load_timeline_responses_for_session(access, session_id).await?,
-        None => load_timeline_responses_for_request(access, &request.request_id).await?,
-    };
-    let session = match session_id {
+    let session_ids = timeline_session_ids(&requests);
+    let mut messages = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut responses = Vec::new();
+    for session_id in &session_ids {
+        messages.extend(load_timeline_messages_for_session(access, session_id).await?);
+        tool_calls.extend(load_timeline_tool_calls_for_session(access, session_id).await?);
+        responses.extend(load_timeline_responses_for_session(access, session_id).await?);
+    }
+    if session_ids.is_empty() || root_session_id.is_none() {
+        responses.extend(load_timeline_responses_for_request(access, &request.request_id).await?);
+    }
+
+    let session = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_session(access, session_id).await?,
         None => None,
     };
-    let conversation = match session_id {
+    let conversation = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_conversation(access, session_id).await?,
         None => None,
     };
@@ -1461,6 +1462,22 @@ fn merge_timeline_request(rows: &mut Vec<TimelineRequestRow>, request: TimelineR
     if !rows.iter().any(|row| row.request_id == request.request_id) {
         rows.push(request);
     }
+}
+
+fn timeline_session_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 async fn load_requests_for_sessions(

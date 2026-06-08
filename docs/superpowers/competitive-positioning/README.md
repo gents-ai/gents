@@ -25,4 +25,3 @@ familiar protocol and framework surfaces over the same Defra-native substrate:
 signed agent documents, DID-keyed identities, durable work documents,
 DefraDB-backed ACL, P2P document replication, runtime lineage, and projection
 exports.
-

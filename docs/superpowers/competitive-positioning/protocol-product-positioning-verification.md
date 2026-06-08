@@ -12,7 +12,7 @@ rest of the competitive positioning material.
 This audit verifies the claims in the protocol/product positioning map against:
 
 - the current Defra Agent working tree;
-- shallow upstream checkouts under `/Users/johnzampolin/go/src/github.com`;
+- shallow upstream checkouts at the repository URLs and heads listed below;
 - current primary documentation for OpenAI, LangGraph, CrewAI, Microsoft Agent
   Framework, MCP, A2A, external Agent Communication Protocol, and ANP.
 
@@ -21,15 +21,15 @@ marked below as product interpretation when they are not direct upstream claims.
 
 ## Upstream checkouts
 
-| Project | Local path | Verified head |
+| Project | Upstream repository | Verified head |
 | --- | --- | --- |
-| MCP | `/Users/johnzampolin/go/src/github.com/modelcontextprotocol/modelcontextprotocol` | `6d441518de8a9d5adbab0b10a76a667a63f90665` |
-| A2A | `/Users/johnzampolin/go/src/github.com/a2aproject/A2A` | `2e0a4e535e738ae12af2a757c7013cf60283fa71` |
-| external ACP | `/Users/johnzampolin/go/src/github.com/i-am-bee/acp` | `e5265ca9fa06c55cd011b1e81ee927f6d80af8f6` |
-| ANP | `/Users/johnzampolin/go/src/github.com/agent-network-protocol/AgentNetworkProtocol` | `a0a7d2f2ee88464a1ecbcb1e3f8f63c730b846c0` |
-| LangGraph | `/Users/johnzampolin/go/src/github.com/langchain-ai/langgraph` | `2b1abc8` |
-| CrewAI | `/Users/johnzampolin/go/src/github.com/crewAIInc/crewAI` | `cab3319` |
-| Microsoft Agent Framework | `/Users/johnzampolin/go/src/github.com/microsoft/agent-framework` | `bf4ad48` |
+| MCP | https://github.com/modelcontextprotocol/modelcontextprotocol | `6d441518de8a9d5adbab0b10a76a667a63f90665` |
+| A2A | https://github.com/a2aproject/A2A | `2e0a4e535e738ae12af2a757c7013cf60283fa71` |
+| external ACP | https://github.com/i-am-bee/acp | `e5265ca9fa06c55cd011b1e81ee927f6d80af8f6` |
+| ANP | https://github.com/agent-network-protocol/AgentNetworkProtocol | `a0a7d2f2ee88464a1ecbcb1e3f8f63c730b846c0` |
+| LangGraph | https://github.com/langchain-ai/langgraph | `2b1abc8` |
+| CrewAI | https://github.com/crewAIInc/crewAI | `cab3319` |
+| Microsoft Agent Framework | https://github.com/microsoft/agent-framework | `bf4ad48` |
 
 OpenAI claims were checked against official OpenAI developer docs only.
 

@@ -7,7 +7,7 @@ Related:
 
 - `docs/superpowers/specs/2026-06-03-true-subagent-enablement-design.md`
 - `docs/superpowers/competitive-positioning/adapter-projection-template-roadmap.md`
-- `/Users/johnzampolin/go/src/github.com/sourcenetwork/defending-code-reference-harness`
+- defending-code reference harness
 
 ## Summary
 

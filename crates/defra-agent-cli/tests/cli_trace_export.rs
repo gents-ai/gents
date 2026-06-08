@@ -567,6 +567,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         for sensitive_text in [
             "Inspect the repo and show README.md",
             "reviewer private child response",
+            "reviewer private child message",
         ] {
             assert!(
                 !serialized_training_safe.contains(sensitive_text),
@@ -576,10 +577,16 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     }
     let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai_full)?;
-    assert!(
-        serde_json::to_string(&openai_full)?.contains("reviewer private child response"),
-        "unscoped full projection should include child-agent response content: {openai_full:#}"
-    );
+    let openai_full_serialized = serde_json::to_string(&openai_full)?;
+    for expected_child_text in [
+        "reviewer private child response",
+        "reviewer private child message",
+    ] {
+        assert!(
+            openai_full_serialized.contains(expected_child_text),
+            "unscoped full projection should include child-agent content {expected_child_text:?}: {openai_full:#}"
+        );
+    }
     let scoped_openai = trace_project_json_with_extra_args(
         tempdir.path(),
         home,
@@ -595,6 +602,10 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     assert!(
         !scoped_openai_serialized.contains("reviewer private child response"),
         "scoped projection leaked child-agent response content: {scoped_openai:#}"
+    );
+    assert!(
+        !scoped_openai_serialized.contains("reviewer private child message"),
+        "scoped projection leaked child-agent message content: {scoped_openai:#}"
     );
     let denied_scope = run_cli_failure_stderr(
         tempdir.path(),
@@ -1013,7 +1024,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 request_id: "req-child",
                 agent_did: "did:defra-agent:reviewer",
                 behavior_id: "reviewer",
-                session_id: "session-1",
+                session_id: "session-child",
                 content: "Review the README finding",
                 metadata: "",
                 status: "completed",
@@ -1024,6 +1035,38 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 retry_count: 0,
                 caused_by_parent_request_id: "req-1",
                 caused_by_parent_tool_call_id: "call-fail"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentSession(input: {
+                session_id: "session-child",
+                agent_name: "Reviewer",
+                behavior_id: "reviewer",
+                started: "2026-05-04T12:00:04Z",
+                status: "active"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentConversation(input: {
+                session_id: "session-child",
+                agent_name: "Reviewer",
+                agent_did: "did:defra-agent:reviewer",
+                behavior_id: "reviewer",
+                title: "Child trace export test",
+                title_source: "test",
+                preview_text: "Review the README finding",
+                status: "active",
+                created_at: "2026-05-04T12:00:04Z",
+                updated_at: "2026-05-04T12:00:07Z",
+                latest_request_id: "req-child"
             }) { _docID }
         }"#,
     )
@@ -1059,17 +1102,32 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 request_id: "req-child",
                 agent_did: "did:defra-agent:reviewer",
                 behavior_id: "reviewer",
-                session_id: "session-1",
+                session_id: "session-child",
                 content: "reviewer private child response",
                 reasoning: "child reasoning",
                 status: "completed",
                 error_message: "",
                 token_count: 8,
                 progress_seq: 1,
-                materialized_message_sequence: 5,
+                materialized_message_sequence: 1,
                 materialized_at: "2026-05-04T12:00:07Z",
                 created_at: "2026-05-04T12:00:04Z",
                 completed_at: "2026-05-04T12:00:07Z"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentMessage(input: {
+                message_key: "session-child:1",
+                session_id: "session-child",
+                request_id: "req-child",
+                sequence: 1,
+                role: "assistant",
+                content: "reviewer private child message",
+                timestamp: "2026-05-04T12:00:06Z"
             }) { _docID }
         }"#,
     )
