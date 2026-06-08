@@ -441,6 +441,15 @@ Definition of done:
 ## Phase 6: pattern templates
 
 Templates should be declarative Defra manifests, not cloned framework APIs.
+For runtime-enforced workflow primitives and local/remote target resolution,
+see `docs/superpowers/specs/2026-06-08-workflow-orchestration-target-resolver-design.md`.
+
+The important implementation point is that these templates should compile down
+to Defra workflow primitives and subagent target names. They should not require
+a static DAG executor to own complete global knowledge of every local and
+remote agent. Runtime resolution should use authorized `subagent_targets`,
+DefraDB ACP, signed identity/capabilities, and the existing local/remote
+subagent bridge.
 
 ### 1. Handoff specialist
 
@@ -494,6 +503,30 @@ Definition of done:
 - aggregation waits for configured terminal states;
 - partial failure behavior is explicit.
 
+### 4a. Runtime fan-out and barrier
+
+Runtime primitive for Claude/LangGraph/Microsoft-style concurrent execution:
+the orchestrator chooses the branches, but the runtime persists expected child
+ids and prevents synthesis before the barrier condition is met.
+
+Definition of done:
+
+- expected child request ids are persisted;
+- local and remote children can participate in the same barrier;
+- synthesis cannot run before required terminals are observed;
+- cancellation cascades to unfinished children.
+
+### 4b. Serial reducer / judge gate
+
+Single-writer reducer for dedupe, canonical selection, group-chat turn
+management, and other shared-state gates.
+
+Definition of done:
+
+- reducer state has one writer/version at a time;
+- concurrent child completions cannot double-admit duplicate state;
+- reducer decisions are visible in the run timeline.
+
 ### 5. Group chat / Magentic-style coordination
 
 Multiple agents share a session with turn policy, manager selection, and
@@ -526,6 +559,20 @@ Definition of done:
 - graph state can be resumed from persisted documents;
 - each node execution is an `AgentRequest`;
 - edge decisions are recorded in the timeline.
+
+### 7a. Defending-code canary workflow
+
+Port the reference harness canary pipeline into Defra-native workflow
+templates: optional recon, parallel find workers, fresh-container grade,
+serial judge/dedupe, report/report-grade, patch, and bounded re-attack.
+
+Definition of done:
+
+- canary target runs through Docker with real binaries;
+- live inference E2E is available behind environment gates;
+- only allowed artifacts cross phase boundaries;
+- workflow run/step/barrier state and run timeline projection prove the
+  orchestration.
 
 ### 8. Human approval, lower priority
 
