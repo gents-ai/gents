@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/openai_codex_run_trace/v1-training-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/multi_agent_task/v1-eval-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -8,7 +8,10 @@
     },
     "adapter_record_kind": {
       "enum": [
-        "openai_codex_trace_item"
+        "multi_agent_participant",
+        "multi_agent_message",
+        "multi_agent_delegation",
+        "multi_agent_tool_event"
       ]
     },
     "child_request_id": {
@@ -55,7 +58,7 @@
       ]
     },
     "projection_id": {
-      "const": "openai_codex_run_trace"
+      "const": "multi_agent_task"
     },
     "projection_version": {
       "const": "v1"
@@ -86,10 +89,10 @@
     },
     "sample_kind": {
       "enum": [
-        "prompt",
+        "participant",
         "message",
-        "tool_call",
-        "response"
+        "delegation",
+        "tool_call"
       ]
     },
     "source_request_id": {
@@ -137,6 +140,6 @@
     "adapter_record_kind",
     "adapter_record_id"
   ],
-  "title": "OpenAI/Codex Run Trace Projection Training/Eval JSONL Record",
+  "title": "Multi-Agent Task Projection Eval JSONL Record",
   "type": "object"
 }

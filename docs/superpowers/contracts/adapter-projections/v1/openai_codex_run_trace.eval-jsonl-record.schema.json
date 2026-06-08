@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/langgraph_state_history/v1-training-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/openai_codex_run_trace/v1-eval-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -8,10 +8,7 @@
     },
     "adapter_record_kind": {
       "enum": [
-        "langgraph_values",
-        "langgraph_node",
-        "langgraph_edge",
-        "langgraph_task"
+        "openai_codex_trace_item"
       ]
     },
     "child_request_id": {
@@ -58,7 +55,7 @@
       ]
     },
     "projection_id": {
-      "const": "langgraph_state_history"
+      "const": "openai_codex_run_trace"
     },
     "projection_version": {
       "const": "v1"
@@ -89,10 +86,10 @@
     },
     "sample_kind": {
       "enum": [
-        "state_snapshot",
-        "state_node",
-        "state_transition",
-        "task"
+        "prompt",
+        "message",
+        "tool_call",
+        "response"
       ]
     },
     "source_request_id": {
@@ -140,6 +137,6 @@
     "adapter_record_kind",
     "adapter_record_id"
   ],
-  "title": "LangGraph State History Projection Training/Eval JSONL Record",
+  "title": "OpenAI/Codex Run Trace Projection Eval JSONL Record",
   "type": "object"
 }

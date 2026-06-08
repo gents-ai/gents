@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/multi_agent_task/v1-training-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/langgraph_state_history/v1-eval-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -8,10 +8,10 @@
     },
     "adapter_record_kind": {
       "enum": [
-        "multi_agent_participant",
-        "multi_agent_message",
-        "multi_agent_delegation",
-        "multi_agent_tool_event"
+        "langgraph_values",
+        "langgraph_node",
+        "langgraph_edge",
+        "langgraph_task"
       ]
     },
     "child_request_id": {
@@ -58,7 +58,7 @@
       ]
     },
     "projection_id": {
-      "const": "multi_agent_task"
+      "const": "langgraph_state_history"
     },
     "projection_version": {
       "const": "v1"
@@ -89,10 +89,10 @@
     },
     "sample_kind": {
       "enum": [
-        "participant",
-        "message",
-        "delegation",
-        "tool_call"
+        "state_snapshot",
+        "state_node",
+        "state_transition",
+        "task"
       ]
     },
     "source_request_id": {
@@ -140,6 +140,6 @@
     "adapter_record_kind",
     "adapter_record_id"
   ],
-  "title": "Multi-Agent Task Projection Training/Eval JSONL Record",
+  "title": "LangGraph State History Projection Eval JSONL Record",
   "type": "object"
 }

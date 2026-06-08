@@ -349,7 +349,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
             "{cli_projection} JSONL schema drifted from checked-in snapshot"
         );
 
-        let training_jsonl_schema_output = run_cli_text(
+        let eval_jsonl_schema_output = run_cli_text(
             tempdir.path(),
             &[
                 "trace",
@@ -357,17 +357,17 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
                 "--projection",
                 cli_projection,
                 "--format",
-                "training-jsonl",
+                "eval-jsonl",
             ],
         )?;
-        let training_jsonl_schema = serde_json::from_str::<Value>(&training_jsonl_schema_output)
-            .context("parsing training JSONL schema")?;
-        let expected_training_jsonl_schema = read_schema_snapshot(&format!(
-            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.training-jsonl-record.schema.json"
+        let eval_jsonl_schema = serde_json::from_str::<Value>(&eval_jsonl_schema_output)
+            .context("parsing eval JSONL schema")?;
+        let expected_eval_jsonl_schema = read_schema_snapshot(&format!(
+            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.eval-jsonl-record.schema.json"
         ))?;
         assert_eq!(
-            training_jsonl_schema, expected_training_jsonl_schema,
-            "{cli_projection} training JSONL schema drifted from checked-in snapshot"
+            eval_jsonl_schema, expected_eval_jsonl_schema,
+            "{cli_projection} eval JSONL schema drifted from checked-in snapshot"
         );
     }
 
@@ -523,34 +523,34 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         !serialized_openai_jsonl.contains("Inspect the repo and show README.md"),
         "public JSONL adapter projection leaked request content: {openai_jsonl:#?}"
     );
-    let openai_training_jsonl =
-        trace_project_training_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
+    let openai_eval_jsonl =
+        trace_project_eval_jsonl_lines(tempdir.path(), home, "openai-codex", "public")?;
     assert_projection_records_match_schema(
         "openai_codex_run_trace",
-        "training-jsonl-record.schema",
-        &openai_training_jsonl,
+        "eval-jsonl-record.schema",
+        &openai_eval_jsonl,
     )?;
     assert!(
-        !openai_training_jsonl.is_empty(),
-        "expected openai-codex training JSONL records"
+        !openai_eval_jsonl.is_empty(),
+        "expected openai-codex eval JSONL records"
     );
-    assert!(openai_training_jsonl.iter().all(|record| {
+    assert!(openai_eval_jsonl.iter().all(|record| {
         record.get("projection_id").and_then(Value::as_str) == Some("openai_codex_run_trace")
             && record.get("source_request_id").and_then(Value::as_str) == Some("req-1")
             && record.get("adapter_record_kind").and_then(Value::as_str)
                 == Some("openai_codex_trace_item")
     }));
     assert!(
-        openai_training_jsonl.iter().any(|record| {
+        openai_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
                 && record.get("tool_name").and_then(Value::as_str) == Some("bash")
         }),
-        "training JSONL should retain tool-call evidence: {openai_training_jsonl:#?}"
+        "eval JSONL should retain tool-call evidence: {openai_eval_jsonl:#?}"
     );
-    let serialized_openai_training_jsonl = serde_json::to_string(&openai_training_jsonl)?;
+    let serialized_openai_eval_jsonl = serde_json::to_string(&openai_eval_jsonl)?;
     assert!(
-        !serialized_openai_training_jsonl.contains("Inspect the repo and show README.md"),
-        "public training JSONL adapter projection leaked request content: {openai_training_jsonl:#?}"
+        !serialized_openai_eval_jsonl.contains("Inspect the repo and show README.md"),
+        "public eval JSONL adapter projection leaked request content: {openai_eval_jsonl:#?}"
     );
     for projection in ["openai-codex", "langgraph", "multi-agent"] {
         let training_safe = trace_project_json(tempdir.path(), home, projection, "training-safe")?;
@@ -651,29 +651,29 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         }),
         "langgraph JSONL projection missing child request edge record: {langgraph_jsonl:#?}"
     );
-    let langgraph_training_jsonl =
-        trace_project_training_jsonl_lines(tempdir.path(), home, "langgraph", "full")?;
+    let langgraph_eval_jsonl =
+        trace_project_eval_jsonl_lines(tempdir.path(), home, "langgraph", "full")?;
     assert_projection_records_match_schema(
         "langgraph_state_history",
-        "training-jsonl-record.schema",
-        &langgraph_training_jsonl,
+        "eval-jsonl-record.schema",
+        &langgraph_eval_jsonl,
     )?;
     assert!(
-        langgraph_training_jsonl.iter().any(|record| {
+        langgraph_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("task")
                 && record.get("tool_name").and_then(Value::as_str) == Some("bash")
         }),
-        "langgraph training JSONL projection missing task sample: {langgraph_training_jsonl:#?}"
+        "langgraph eval JSONL projection missing task sample: {langgraph_eval_jsonl:#?}"
     );
     assert!(
-        langgraph_training_jsonl.iter().any(|record| {
+        langgraph_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("state_transition")
                 && record
                     .pointer("/metadata/kind")
                     .and_then(Value::as_str)
                     == Some("child_request")
         }),
-        "langgraph training JSONL projection missing child transition sample: {langgraph_training_jsonl:#?}"
+        "langgraph eval JSONL projection missing child transition sample: {langgraph_eval_jsonl:#?}"
     );
 
     let multi_agent = trace_project_json(tempdir.path(), home, "multi-agent", "full")?;
@@ -719,20 +719,20 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         }),
         "multi-agent JSONL projection missing delegation record: {multi_agent_jsonl:#?}"
     );
-    let multi_agent_training_jsonl =
-        trace_project_training_jsonl_lines(tempdir.path(), home, "multi-agent", "full")?;
+    let multi_agent_eval_jsonl =
+        trace_project_eval_jsonl_lines(tempdir.path(), home, "multi-agent", "full")?;
     assert_projection_records_match_schema(
         "multi_agent_task",
-        "training-jsonl-record.schema",
-        &multi_agent_training_jsonl,
+        "eval-jsonl-record.schema",
+        &multi_agent_eval_jsonl,
     )?;
     assert!(
-        multi_agent_training_jsonl.iter().any(|record| {
+        multi_agent_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("delegation")
                 && record.get("parent_request_id").and_then(Value::as_str) == Some("req-1")
                 && record.get("child_request_id").and_then(Value::as_str) == Some("req-child")
         }),
-        "multi-agent training JSONL projection missing delegation sample: {multi_agent_training_jsonl:#?}"
+        "multi-agent eval JSONL projection missing delegation sample: {multi_agent_eval_jsonl:#?}"
     );
 
     Ok(())
@@ -902,7 +902,7 @@ fn trace_project_jsonl_lines(
         .collect::<Result<Vec<_>>>()
 }
 
-fn trace_project_training_jsonl_lines(
+fn trace_project_eval_jsonl_lines(
     cwd: &std::path::Path,
     home: &str,
     projection: &str,
@@ -922,7 +922,7 @@ fn trace_project_training_jsonl_lines(
             "--redaction",
             redaction,
             "--format",
-            "training-jsonl",
+            "eval-jsonl",
             "--actor-did",
             "did:defra-agent:test-viewer",
         ],
@@ -930,7 +930,7 @@ fn trace_project_training_jsonl_lines(
     output
         .lines()
         .map(|line| {
-            serde_json::from_str::<Value>(line).context("parsing adapter projection training JSONL")
+            serde_json::from_str::<Value>(line).context("parsing adapter projection eval JSONL")
         })
         .collect::<Result<Vec<_>>>()
 }

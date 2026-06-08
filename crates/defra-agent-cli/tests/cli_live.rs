@@ -588,66 +588,66 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "live openai-codex JSONL missing read_file record: {openai_jsonl:#?}"
     );
 
-    let openai_training_jsonl = trace_project_jsonl_lines(
+    let openai_eval_jsonl = trace_project_jsonl_lines(
         &home_dir,
         &graphql,
         &request_id,
         "openai-codex",
         "training-safe",
-        "training-jsonl",
+        "eval-jsonl",
     )?;
     assert_projection_records(
-        &openai_training_jsonl,
+        &openai_eval_jsonl,
         "openai_codex_run_trace",
         &request_id,
         &session_id,
     );
     assert!(
-        openai_training_jsonl.iter().any(|record| {
+        openai_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
                 && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
         }),
-        "live openai-codex training JSONL missing read_file sample: {openai_training_jsonl:#?}"
+        "live openai-codex eval JSONL missing read_file sample: {openai_eval_jsonl:#?}"
     );
 
-    let langgraph_training_jsonl = trace_project_jsonl_lines(
+    let langgraph_eval_jsonl = trace_project_jsonl_lines(
         &home_dir,
         &graphql,
         &request_id,
         "langgraph",
         "training-safe",
-        "training-jsonl",
+        "eval-jsonl",
     )?;
     assert_projection_records(
-        &langgraph_training_jsonl,
+        &langgraph_eval_jsonl,
         "langgraph_state_history",
         &request_id,
         &session_id,
     );
     assert!(
-        langgraph_training_jsonl.iter().any(|record| {
+        langgraph_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("task")
                 && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
         }),
-        "live LangGraph training JSONL missing read_file task: {langgraph_training_jsonl:#?}"
+        "live LangGraph eval JSONL missing read_file task: {langgraph_eval_jsonl:#?}"
     );
 
-    let multi_agent_training_jsonl = trace_project_jsonl_lines(
+    let multi_agent_eval_jsonl = trace_project_jsonl_lines(
         &home_dir,
         &graphql,
         &request_id,
         "multi-agent",
         "training-safe",
-        "training-jsonl",
+        "eval-jsonl",
     )?;
     assert_projection_records(
-        &multi_agent_training_jsonl,
+        &multi_agent_eval_jsonl,
         "multi_agent_task",
         &request_id,
         &session_id,
     );
     assert!(
-        multi_agent_training_jsonl.iter().any(|record| {
+        multi_agent_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("participant")
                 && record
                     .get("metadata")
@@ -655,14 +655,14 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
                     .and_then(Value::as_str)
                     == Some(agent_did.as_str())
         }),
-        "live multi-agent training JSONL missing owner participant: {multi_agent_training_jsonl:#?}"
+        "live multi-agent eval JSONL missing owner participant: {multi_agent_eval_jsonl:#?}"
     );
     assert!(
-        multi_agent_training_jsonl.iter().any(|record| {
+        multi_agent_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
                 && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
         }),
-        "live multi-agent training JSONL missing read_file tool sample: {multi_agent_training_jsonl:#?}"
+        "live multi-agent eval JSONL missing read_file tool sample: {multi_agent_eval_jsonl:#?}"
     );
 
     Ok(())

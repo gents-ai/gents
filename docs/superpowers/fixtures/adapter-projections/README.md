@@ -86,7 +86,7 @@ The test validates each fixture against:
 - the adapter projection DTO contract;
 - the generated adapter envelope JSON Schema;
 - generated adapter JSONL records and their schema;
-- generated training/eval JSONL records and their schema.
+- generated eval/sample JSONL records and their schema.
 
 Docker, Python, and framework-specific generators should stay outside the
 normal suite and write fixtures into the directory passed through
@@ -95,8 +95,11 @@ normal suite and write fixtures into the directory passed through
 For Dockerized generators, bind-mount a host output directory and have the
 container write one JSON fixture per captured scenario. Then run the Rust
 harness against that output directory. This keeps framework installation and
-network access out of the default test suite while still proving that real
-external outputs satisfy the shared Defra Agent projection contract.
+network access out of the default test suite while still proving that captures
+from real external runtimes can be represented by the shared Defra Agent
+projection contract. These generators are not native Defra import adapters:
+they execute the framework, collect native evidence, map it into a wrapped
+Defra projection envelope, and then validate that envelope.
 
 To run every Dockerized generator and validate the combined output with the
 Rust harness:
@@ -113,8 +116,8 @@ only generate fixtures without invoking the Rust harness.
 
 The `Adapter Interop` GitHub Actions workflow runs the same Docker suite on
 demand with `workflow_dispatch` or by adding the `adapter-interop` label to a
-PR. Use it when the PR needs a remote, artifact-backed proof against real
-LangGraph, AutoGen, CrewAI, and Microsoft Agent Framework runtimes without
+PR. Use it when the PR needs a remote, artifact-backed contract proof using
+real LangGraph, AutoGen, CrewAI, and Microsoft Agent Framework runtimes without
 adding Docker or Python dependencies to default PR CI.
 
 ## Generators
@@ -136,3 +139,6 @@ adding Docker or Python dependencies to default PR CI.
   a real Microsoft Agent Framework group-chat workflow with deterministic
   custom `BaseChatClient` instances and writes a wrapped `multi_agent_task`
   fixture into the mounted output directory.
+
+The wrapped fixture is the test artifact. It is intentionally produced by the
+generator, not by Defra Agent reading native framework storage directly.

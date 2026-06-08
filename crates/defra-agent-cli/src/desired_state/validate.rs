@@ -10,6 +10,21 @@ use super::DesiredStateManifest;
 
 use crate::config_writes::ConfigAccess;
 
+const PROJECTION_ACP_BINDING_PROJECTION_IDS: &[&str] = &[
+    "openai_codex_run_trace",
+    "langgraph_state_history",
+    "multi_agent_task",
+];
+
+const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentResponse",
+    "AgentSession",
+    "AgentConversation",
+];
+
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     let principal_agent_did = manifest.agent_principal.agent_did.trim();
     if principal_agent_did.is_empty() {
@@ -348,6 +363,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
 
+        validate_projection_id(binding, errors);
         validate_projection_policy_lifecycle(binding, errors);
         validate_projection_resource_map_json(binding, errors);
     }
@@ -560,13 +576,37 @@ fn validate_projection_resource_map_json(
         }
     };
     for (collection, resource_name) in resource_map {
-        if collection.trim().is_empty() || resource_name.trim().is_empty() {
+        let collection = collection.trim();
+        let resource_name = resource_name.trim();
+        if collection.is_empty() || resource_name.is_empty() {
             errors.push(format!(
                 "projection ACP binding {} resource_map_json must map non-empty collection names to non-empty ACP resource names",
                 binding.binding_id
             ));
             break;
         }
+        if !PROJECTION_ACP_RUNTIME_COLLECTIONS.contains(&collection) {
+            errors.push(format!(
+                "projection ACP binding {} resource_map_json contains unknown runtime collection {}; expected one of {}",
+                binding.binding_id,
+                collection,
+                PROJECTION_ACP_RUNTIME_COLLECTIONS.join(", ")
+            ));
+        }
+    }
+}
+
+fn validate_projection_id(binding: &super::DesiredProjectionAcpBinding, errors: &mut Vec<String>) {
+    let Some(projection_id) = non_empty(&binding.projection_id) else {
+        return;
+    };
+    if !PROJECTION_ACP_BINDING_PROJECTION_IDS.contains(&projection_id) {
+        errors.push(format!(
+            "projection ACP binding {} has invalid projection_id {}; expected one of {}",
+            binding.binding_id,
+            projection_id,
+            PROJECTION_ACP_BINDING_PROJECTION_IDS.join(", ")
+        ));
     }
 }
 
@@ -598,27 +638,71 @@ fn validate_projection_policy_lifecycle(
         ));
     }
 
-    let Some(status) = non_empty(&binding.publication_status) else {
-        return;
-    };
-    match status {
-        "draft" | "staged" | "published" | "rotating" | "retired" => {}
-        _ => errors.push(format!(
+    match non_empty(&binding.publication_status) {
+        None => {
+            if staged_policy_id.is_some() {
+                errors.push(format!(
+                    "projection ACP binding {} staged_policy_id requires publication_status staged or rotating",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some("draft") => {
+            if binding.enabled {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status draft must not be enabled",
+                    binding.binding_id
+                ));
+            }
+            if staged_policy_id.is_some() {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status draft must not keep staged_policy_id",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some("staged") => {
+            if binding.enabled {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status staged must not be enabled",
+                    binding.binding_id
+                ));
+            }
+            if staged_policy_id.is_none() {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status staged requires staged_policy_id",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some("published") => {
+            if staged_policy_id.is_some() {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status published must not keep staged_policy_id; promote it to policy_id",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some("rotating") => {
+            if staged_policy_id.is_none() {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status rotating requires staged_policy_id",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some("retired") => {
+            if binding.enabled {
+                errors.push(format!(
+                    "projection ACP binding {} publication_status retired must not be enabled",
+                    binding.binding_id
+                ));
+            }
+        }
+        Some(status) => errors.push(format!(
             "projection ACP binding {} has invalid publication_status {}; expected draft, staged, published, rotating, or retired",
             binding.binding_id, status
         )),
-    }
-    if status == "rotating" && staged_policy_id.is_none() {
-        errors.push(format!(
-            "projection ACP binding {} publication_status rotating requires staged_policy_id",
-            binding.binding_id
-        ));
-    }
-    if status == "published" && staged_policy_id.is_some() {
-        errors.push(format!(
-            "projection ACP binding {} publication_status published must not keep staged_policy_id; promote it to policy_id",
-            binding.binding_id
-        ));
     }
 }
 

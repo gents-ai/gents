@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_agent::adapter_projection::{
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, adapter_projection_training_jsonl_record_schema,
-    adapter_projection_training_jsonl_records, build_adapter_projection,
+    adapter_projection_jsonl_records, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
@@ -99,8 +99,8 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
             let records = adapter_projection_jsonl_records(&projection);
             write_jsonl(args.output_file.as_deref(), &records)?;
         }
-        TraceProjectionFormatArg::TrainingJsonl => {
-            let records = adapter_projection_training_jsonl_records(&projection);
+        TraceProjectionFormatArg::EvalJsonl => {
+            let records = adapter_projection_eval_jsonl_records(&projection);
             write_jsonl(args.output_file.as_deref(), &records)?;
         }
     }
@@ -112,9 +112,7 @@ fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
     let schema = match args.format {
         TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
         TraceProjectionFormatArg::Jsonl => adapter_projection_jsonl_record_schema(kind),
-        TraceProjectionFormatArg::TrainingJsonl => {
-            adapter_projection_training_jsonl_record_schema(kind)
-        }
+        TraceProjectionFormatArg::EvalJsonl => adapter_projection_eval_jsonl_record_schema(kind),
     };
     if let Some(path) = args.output_file.as_deref() {
         write_json_output_file(path, &schema)?;
@@ -213,10 +211,25 @@ struct ProjectionAcpBindingRow {
     #[serde(default)]
     policy_id: String,
     #[serde(default)]
+    staged_policy_id: Option<String>,
+    #[serde(default)]
+    previous_policy_id: Option<String>,
+    #[serde(default)]
     resource_map_json: Option<String>,
+    #[serde(default)]
+    publication_status: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
 }
+
+const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentResponse",
+    "AgentSession",
+    "AgentConversation",
+];
 
 async fn projection_acp_read_scope(
     access: &ConfigAccess,
@@ -262,18 +275,32 @@ async fn discover_projection_acp_binding(
     projection_kind: AdapterProjectionKind,
     request: &TimelineRequestRow,
 ) -> Result<Option<ProjectionAcpBindingRow>> {
-    let query = r#"{
-        ProjectionAcpBinding(filter: { enabled: { _eq: true } }) {
-            binding_id
-            agent_did
-            behavior_id
-            projection_id
-            policy_id
-            resource_map_json
-            enabled
-        }
-    }"#;
-    let rows = load_rows::<ProjectionAcpBindingRow>(access, "ProjectionAcpBinding", query).await?;
+    let Some(agent_did) = normalize_projection_binding_field(request.agent_did.as_deref()) else {
+        return Ok(None);
+    };
+    let query = format!(
+        r#"{{
+            ProjectionAcpBinding(
+                filter: {{
+                    enabled: {{ _eq: true }}
+                    agent_did: {{ _eq: "{agent_did}" }}
+                }}
+            ) {{
+                binding_id
+                agent_did
+                behavior_id
+                projection_id
+                policy_id
+                staged_policy_id
+                previous_policy_id
+                resource_map_json
+                publication_status
+                enabled
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let rows = load_rows::<ProjectionAcpBindingRow>(access, "ProjectionAcpBinding", &query).await?;
     select_projection_acp_binding(rows, projection_kind, request)
 }
 
@@ -294,6 +321,7 @@ fn select_projection_acp_binding(
         let Some(scope_mask) = projection_binding_scope_mask(&row, projection_id, request) else {
             continue;
         };
+        validate_projection_binding_operational_state(&row)?;
         match &best {
             None => best = Some((scope_mask, row)),
             Some((best_mask, _)) if projection_binding_scope_dominates(scope_mask, *best_mask) => {
@@ -323,7 +351,11 @@ fn projection_binding_scope_mask(
     projection_id: &str,
     request: &TimelineRequestRow,
 ) -> Option<u8> {
-    let mut scope_mask = 0;
+    let row_agent_did = normalize_projection_binding_field(row.agent_did.as_deref())?;
+    if request.agent_did.as_deref() != Some(row_agent_did) {
+        return None;
+    }
+    let mut scope_mask = PROJECTION_ACP_BINDING_AGENT_SCOPE;
     if let Some(row_projection_id) =
         normalize_projection_binding_field(row.projection_id.as_deref())
     {
@@ -332,12 +364,6 @@ fn projection_binding_scope_mask(
         }
         scope_mask |= PROJECTION_ACP_BINDING_PROJECTION_SCOPE;
     }
-    if let Some(row_agent_did) = normalize_projection_binding_field(row.agent_did.as_deref()) {
-        if request.agent_did.as_deref() != Some(row_agent_did) {
-            return None;
-        }
-        scope_mask |= PROJECTION_ACP_BINDING_AGENT_SCOPE;
-    }
     if let Some(row_behavior_id) = normalize_projection_binding_field(row.behavior_id.as_deref()) {
         if request.behavior_id.as_deref() != Some(row_behavior_id) {
             return None;
@@ -345,6 +371,65 @@ fn projection_binding_scope_mask(
         scope_mask |= PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE;
     }
     Some(scope_mask)
+}
+
+fn validate_projection_binding_operational_state(row: &ProjectionAcpBindingRow) -> Result<()> {
+    let status = normalize_projection_binding_field(row.publication_status.as_deref())
+        .unwrap_or("published");
+    let staged_policy_id = normalize_projection_binding_field(row.staged_policy_id.as_deref());
+    let previous_policy_id = normalize_projection_binding_field(row.previous_policy_id.as_deref());
+    let active_policy_id = row.policy_id.trim();
+    match status {
+        "published" => {
+            if staged_policy_id.is_some() {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} is published but still has staged_policy_id",
+                    projection_binding_label(row)
+                );
+            }
+        }
+        "rotating" => {
+            let Some(staged_policy_id) = staged_policy_id else {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} is rotating but has no staged_policy_id",
+                    projection_binding_label(row)
+                );
+            };
+            if staged_policy_id == active_policy_id {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} staged_policy_id must differ from policy_id",
+                    projection_binding_label(row)
+                );
+            }
+        }
+        "draft" | "staged" | "retired" => {
+            anyhow::bail!(
+                "enabled ProjectionAcpBinding {} has non-operational publication_status {}; disable it or publish it before projection enforcement",
+                projection_binding_label(row),
+                status
+            );
+        }
+        _ => {
+            anyhow::bail!(
+                "enabled ProjectionAcpBinding {} has invalid publication_status {}",
+                projection_binding_label(row),
+                status
+            );
+        }
+    }
+    if previous_policy_id == Some(active_policy_id) {
+        anyhow::bail!(
+            "enabled ProjectionAcpBinding {} previous_policy_id must differ from policy_id",
+            projection_binding_label(row)
+        );
+    }
+    if previous_policy_id == staged_policy_id && previous_policy_id.is_some() {
+        anyhow::bail!(
+            "enabled ProjectionAcpBinding {} previous_policy_id must differ from staged_policy_id",
+            projection_binding_label(row)
+        );
+    }
+    Ok(())
 }
 
 fn projection_binding_scope_dominates(candidate: u8, current: u8) -> bool {
@@ -377,6 +462,12 @@ fn parse_projection_resource_map(
         if collection.is_empty() || resource_name.is_empty() {
             anyhow::bail!(
                 "ProjectionAcpBinding.resource_map_json must map non-empty collection names to non-empty ACP resource names"
+            );
+        }
+        if !PROJECTION_ACP_RUNTIME_COLLECTIONS.contains(&collection) {
+            anyhow::bail!(
+                "ProjectionAcpBinding.resource_map_json contains unknown runtime collection {collection}; expected one of {}",
+                PROJECTION_ACP_RUNTIME_COLLECTIONS.join(", ")
             );
         }
         map.insert(collection.to_string(), resource_name.to_string());
@@ -2042,12 +2133,23 @@ mod tests {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra-agent:amy".to_string()),
+            behavior_id: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
             vec![
-                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
-                projection_binding("projection", None, None, Some("openai_codex_run_trace")),
+                projection_binding(
+                    "behavior",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    None,
+                ),
+                projection_binding(
+                    "projection",
+                    Some("did:defra-agent:amy"),
+                    None,
+                    Some("openai_codex_run_trace"),
+                ),
             ],
             AdapterProjectionKind::OpenAiCodexRunTrace,
             &request,
@@ -2058,6 +2160,52 @@ mod tests {
             error
                 .to_string()
                 .contains("ambiguous ProjectionAcpBinding rows"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_acp_binding_ignores_unscoped_rows() -> Result<()> {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let selected = select_projection_acp_binding(
+            vec![
+                projection_binding("global", None, None, Some("openai_codex_run_trace")),
+                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )?
+        .expect("agent-scoped binding");
+
+        assert_eq!(selected.binding_id, "agent");
+        Ok(())
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_enabled_non_operational_status() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let mut binding = projection_binding("draft", Some("did:defra-agent:amy"), None, None);
+        binding.publication_status = Some("draft".to_string());
+
+        let error = select_projection_acp_binding(
+            vec![binding],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("enabled draft binding should fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("non-operational publication_status draft"),
             "unexpected error: {error:#}"
         );
     }
@@ -2088,6 +2236,19 @@ mod tests {
             error
                 .to_string()
                 .contains("must map non-empty collection names"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_resource_map_rejects_unknown_collection_names() {
+        let error = parse_projection_resource_map(Some(r#"{"AgentMesage":"messages"}"#))
+            .expect_err("unknown collection names should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown runtime collection AgentMesage"),
             "unexpected error: {error:#}"
         );
     }
@@ -2304,7 +2465,10 @@ mod tests {
             behavior_id: behavior_id.map(ToOwned::to_owned),
             projection_id: projection_id.map(ToOwned::to_owned),
             policy_id: "projection-policy".to_string(),
+            staged_policy_id: None,
+            previous_policy_id: None,
             resource_map_json: None,
+            publication_status: None,
             enabled: Some(true),
         }
     }

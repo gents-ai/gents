@@ -23,7 +23,7 @@ projection machinery those adapters actually need.
 
 This roadmap treats the following as required product capabilities:
 
-- projections for run timelines, trace/event export, training/eval extraction,
+- projections for run timelines, trace/event export, eval/sample extraction,
   catalogs, provenance, and shared memory;
 - interoperability adapters for OpenAI/Codex-style traces, LangGraph-style
   state/history, and multi-agent task frameworks such as AutoGen or CrewAI;
@@ -72,7 +72,7 @@ adapters need the same behavior. Required shared pieces:
 Purpose:
 
 - customer-familiar trace/event output;
-- training/eval trajectory extraction;
+- eval/sample trajectory extraction;
 - proof that messages, tool calls, responses, reasoning-ish fields, errors,
   and JSON/JSONL exports can be reconstructed from Defra documents.
 
@@ -613,9 +613,9 @@ Started after the adapter-driven reframing:
 - Core adapter tests compile the generated JSON Schemas with a dev-only
   validator and validate emitted adapter envelopes, emitted JSONL records, and
   checked-in conformance fixture envelopes against those schemas.
-- `trace project --format training-jsonl` emits normalized training/eval
+- `trace project --format eval-jsonl` emits normalized eval/sample
   records derived from each adapter projection, and
-  `trace project-schema --format training-jsonl` exports the matching schema
+  `trace project-schema --format eval-jsonl` exports the matching schema
   snapshots.
 - `trace project` accepts explicit document-scope gates for agent DID,
   behavior id, and session id. Scoped projections deny out-of-scope root
@@ -623,37 +623,39 @@ Started after the adapter-driven reframing:
   delegation topology.
 - Binary E2E coverage validates all three adapter views from embedded
   persisted runtime rows, checks public redaction behavior, and exercises the
-  JSONL, training/eval JSONL, and document-scope export paths. Tests also
+  JSONL, eval/sample JSONL, and document-scope export paths. Tests also
   verify schema export against the checked-in snapshots and validate
   conformance fixtures without booting DefraDB.
 - An ignored/env-gated external fixture harness validates upstream-captured or
   Docker-generated adapter captures through the same DTO contract, envelope
-  schema, adapter JSONL schema, and training/eval JSONL schema path used by the
+  schema, adapter JSONL schema, and eval/sample JSONL schema path used by the
   checked-in fixtures.
 - `docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh` builds
   and runs every Dockerized upstream fixture generator into one output
   directory, then invokes the ignored Rust external adapter harness against the
   combined captures. This makes the LangGraph, AutoGen, CrewAI, and Microsoft
-  Agent Framework interoperability proof repeatable as one binary/Docker
-  command.
+  Agent Framework contract-compatibility proof repeatable as one binary/Docker
+  command. The generators execute real framework code and then map captured
+  evidence into Defra projection envelopes; they are not native Defra import
+  adapters.
 - A Docker-backed LangGraph fixture generator runs a real LangGraph
   `StateGraph`, captures `get_state_history`, and emits a wrapped
   `langgraph_state_history` adapter fixture for the external harness.
 - The LangGraph fixture generator also emits a compiled-subgraph capture that
-  projects parent/subgraph nodes, nested transitions, subgraph tasks, and the
-  child request boundary through the same external harness.
+  maps parent/subgraph nodes, nested transitions, subgraph tasks, and the child
+  request boundary into the same external harness.
 - The LangGraph fixture generator also emits a provider-shaped capture that
   invokes a LangChain chat model, checkpoints `HumanMessage`, `AIMessage`, and
-  `ToolMessage` state, projects the model/tool boundary as a child task, and
-  can run either deterministically with `FakeListChatModel` or against a live
+  `ToolMessage` state, maps the model/tool boundary as a child task, and can
+  run either deterministically with `FakeListChatModel` or against a live
   OpenAI-compatible endpoint when credentials are supplied.
 - A Docker-backed AutoGen AgentChat fixture generator runs a real
   `RoundRobinGroupChat` with deterministic custom agents, captures the native
   `TaskResult`, and emits a wrapped `multi_agent_task` adapter fixture for the
   external harness.
 - The AutoGen fixture generator also emits a real `Swarm` capture with native
-  `HandoffMessage` routing from planner to researcher to reviewer, projecting
-  the resulting delegation chain and child request boundaries through the same
+  `HandoffMessage` routing from planner to researcher to reviewer, mapping the
+  resulting delegation chain and child request boundaries into the same
   multi-agent adapter contract.
 - A Docker-backed CrewAI fixture generator runs a real sequential `Crew` with
   deterministic custom `BaseLLM` agents, captures native `Agent`, `Task`,
@@ -678,8 +680,9 @@ Started after the adapter-driven reframing:
   adapter output.
 - `ProjectionAcpBinding` documents let `trace project` discover a projection
   ACP policy and collection-to-resource-name map when `--acp-policy-id` is not
-  passed. Bindings can be scoped by agent DID, behavior id, and projection id;
-  a matching binding only wins when its scope is a strict superset of other
+  passed. Runtime discovery only considers enabled bindings for the root
+  request's `agent_did`, then optionally narrows by behavior id and projection
+  id. A matching binding only wins when its scope is a strict superset of other
   matches, ambiguous or incomparable matches fail closed, and explicit CLI
   policy ids remain the override path.
 - Agent manifest roots can now own `ProjectionAcpBinding` documents under
@@ -692,9 +695,11 @@ Started after the adapter-driven reframing:
 - `ProjectionAcpBinding` documents now carry policy lifecycle metadata:
   `staged_policy_id`, `previous_policy_id`, `publication_status`, and
   `published_at`. Manifest validation rejects collapsed active/staged/previous
-  policy ids, invalid publication states, and rotating bindings without a
-  staged policy; real-binary apply/export coverage proves those fields survive
-  config publication and re-export.
+  policy ids, invalid publication states, unknown projection ids, unknown
+  resource-map collection names, enabled draft/staged/retired bindings, and
+  rotating bindings without a staged policy. Runtime discovery only accepts
+  published or rotating enabled bindings; real-binary apply/export coverage
+  proves those fields survive config publication and re-export.
 - Projection ACP lifecycle coverage now includes the pinned DefraDB ACP policy
   path at the library boundary: a test builds policy YAML for the runtime
   projection resources, stores it with validation and DPI enforcement, validates
@@ -705,8 +710,8 @@ Started after the adapter-driven reframing:
 - An ignored live-inference binary E2E test runs a real tool-backed request
   against the configured OpenAI-compatible endpoint, then exports the persisted
   run through `trace project` for OpenAI/Codex JSON, OpenAI/Codex JSONL,
-  OpenAI/Codex training JSONL, LangGraph training JSONL, and multi-agent
-  training JSONL. The assertions check persisted tool evidence, projection
+  OpenAI/Codex eval JSONL, LangGraph eval JSONL, and multi-agent
+  eval JSONL. The assertions check persisted tool evidence, projection
   provenance, redaction, and adapter invariants without depending on exact
   model prose.
 

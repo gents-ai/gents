@@ -845,7 +845,7 @@ pub(crate) enum TraceProjectionRedactionArg {
 pub(crate) enum TraceProjectionFormatArg {
     Json,
     Jsonl,
-    TrainingJsonl,
+    EvalJsonl,
 }
 
 #[derive(Subcommand)]

@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use defra_agent::{
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, adapter_projection_training_jsonl_record_schema,
-    adapter_projection_training_jsonl_records, validate_adapter_projection_contract,
+    adapter_projection_jsonl_records, validate_adapter_projection_contract,
     AdapterProjectionEnvelope,
 };
 use serde_json::Value;
@@ -88,22 +88,18 @@ fn validate_external_fixture_file(path: &Path) -> Result<()> {
         )?;
     }
 
-    let training_schema = adapter_projection_training_jsonl_record_schema(kind);
-    let training_records = adapter_projection_training_jsonl_records(&envelope);
+    let eval_schema = adapter_projection_eval_jsonl_record_schema(kind);
+    let eval_records = adapter_projection_eval_jsonl_records(&envelope);
     anyhow::ensure!(
-        !training_records.is_empty(),
-        "{} produced no training JSONL records",
+        !eval_records.is_empty(),
+        "{} produced no eval JSONL records",
         path.display()
     );
-    for record in &training_records {
+    for record in &eval_records {
         assert_json_schema_valid(
-            &training_schema,
+            &eval_schema,
             &serde_json::to_value(record)?,
-            &format!(
-                "{} training JSONL record {}",
-                path.display(),
-                record.record_id
-            ),
+            &format!("{} eval JSONL record {}", path.display(), record.record_id),
         )?;
     }
 

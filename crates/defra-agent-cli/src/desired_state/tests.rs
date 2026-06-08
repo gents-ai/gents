@@ -659,7 +659,7 @@ mod load_manifest_root {
                 "binding_id": "codex-read",
                 "agent_did": "did:key:example",
                 "behavior_id": "default",
-                "projection_id": "codex_thread",
+                "projection_id": "openai_codex_run_trace",
                 "policy_id": "policy-codex-read",
                 "staged_policy_id": "policy-codex-read-next",
                 "previous_policy_id": "policy-codex-read-prev",
@@ -683,7 +683,7 @@ mod load_manifest_root {
         assert_eq!(manifest.projection_acp_bindings.len(), 1);
         assert_eq!(
             manifest.projection_acp_bindings[0].projection_id.as_deref(),
-            Some("codex_thread")
+            Some("openai_codex_run_trace")
         );
         assert_eq!(
             manifest.projection_acp_bindings[0]
@@ -699,6 +699,16 @@ mod load_manifest_root {
         );
 
         let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].projection_id = Some("codex_thread".to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("invalid projection_id")),
+            "expected projection-id validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
         invalid.projection_acp_bindings[0].resource_map_json =
             Some(r#"{"":"AgentRequest"}"#.to_string());
         let errors = super::validation_errors(&invalid);
@@ -707,6 +717,17 @@ mod load_manifest_root {
                 .iter()
                 .any(|error| error.contains("resource_map_json must map non-empty")),
             "expected resource-map validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].resource_map_json =
+            Some(r#"{"AgentMesage":"AgentMessage"}"#.to_string());
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("unknown runtime collection AgentMesage")),
+            "expected resource-map collection validation error, got {errors:?}"
         );
 
         let mut invalid = manifest.clone();
@@ -738,6 +759,17 @@ mod load_manifest_root {
                 .iter()
                 .any(|error| error.contains("invalid publication_status")),
             "expected publication-status validation error, got {errors:?}"
+        );
+
+        let mut invalid = manifest.clone();
+        invalid.projection_acp_bindings[0].publication_status = Some("retired".to_string());
+        invalid.projection_acp_bindings[0].staged_policy_id = None;
+        let errors = super::validation_errors(&invalid);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("publication_status retired must not be enabled")),
+            "expected enabled-retired validation error, got {errors:?}"
         );
 
         let out = tempdir().unwrap();

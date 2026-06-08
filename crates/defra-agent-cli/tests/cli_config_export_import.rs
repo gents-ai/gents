@@ -406,7 +406,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
                 "binding_id": binding_id,
                 "agent_did": agent_did,
                 "behavior_id": behavior_id,
-                "projection_id": "codex_thread",
+                "projection_id": "openai_codex_run_trace",
                 "policy_id": format!("policy-{}", agent_name),
                 "staged_policy_id": format!("policy-{}-next", agent_name),
                 "previous_policy_id": format!("policy-{}-prev", agent_name),
@@ -558,7 +558,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let previous_policy_id = format!("policy-{agent_name}-prev");
     assert_eq!(
         binding_doc.get("projection_id").and_then(Value::as_str),
-        Some("codex_thread")
+        Some("openai_codex_run_trace")
     );
     assert_eq!(
         binding_doc.get("behavior_id").and_then(Value::as_str),
