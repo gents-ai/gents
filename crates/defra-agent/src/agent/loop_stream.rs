@@ -7,11 +7,12 @@
 //! build a request from the running message history, stream one completion,
 //! accumulate assistant content, and — when the turn produced tool calls —
 //! execute them, thread their results back into the history, and loop. When a
-//! turn produces no tool calls, it yields a terminal [`LoopFinalResponse`].
+//! turn produces no tool calls, it yields a terminal `FinalResponse`.
 //!
-//! The yielded [`LoopStreamItem`] mirrors rig's `MultiTurnStreamItem` so the
-//! existing `StreamProcessor` consumer (and the `inference.rs` lifecycle
-//! envelope around it) retarget to it mechanically.
+//! The generator yields rig's own `MultiTurnStreamItem` (kept per decision D3),
+//! so the existing `StreamProcessor` consumer and the `inference.rs` lifecycle
+//! envelope around it consume the owned loop with no changes — only the stream
+//! *source* moves from `Agent::stream_prompt` to `run_loop_stream`.
 //!
 //! Tool side-effects (lifecycle tracking, truncation/spill, persistence) are
 //! NOT reimplemented here: the generator calls the existing
@@ -27,7 +28,7 @@ use std::time::Duration;
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
-use rig::agent::{HookAction, PromptHook, StreamingError, ToolCallHookAction};
+use rig::agent::{HookAction, MultiTurnStreamItem, PromptHook, StreamingError, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, Message, Usage};
 use rig::message::ToolChoice;
@@ -45,40 +46,6 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 #[cfg(test)]
 mod tests;
 
-/// An item produced by the owned loop stream.
-///
-/// Variant-for-variant mirror of rig's `MultiTurnStreamItem<R>` so consumers
-/// that previously matched on the rig type port across by name only.
-#[derive(Debug)]
-pub(crate) enum LoopStreamItem<R> {
-    /// Streamed assistant content for the current turn (text, reasoning, or a
-    /// tool call), forwarded verbatim to the consumer.
-    StreamAssistantItem(StreamedAssistantContent<R>),
-    /// A tool result produced by our own in-loop tool execution, threaded back
-    /// into the conversation for the next turn.
-    StreamUserItem(StreamedUserContent),
-    /// The terminal response: the loop ended on a turn with no tool calls.
-    FinalResponse(LoopFinalResponse),
-}
-
-/// Terminal payload of a completed loop: the concatenated final-turn assistant
-/// text plus the usage aggregated across every turn.
-#[derive(Debug)]
-pub(crate) struct LoopFinalResponse {
-    response: String,
-    usage: Usage,
-}
-
-impl LoopFinalResponse {
-    pub(crate) fn response(&self) -> &str {
-        &self.response
-    }
-
-    pub(crate) fn usage(&self) -> Usage {
-        self.usage
-    }
-}
-
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
 pub(crate) struct LoopConfig {
@@ -93,7 +60,7 @@ pub(crate) struct LoopConfig {
     pub(crate) max_turns: usize,
 }
 
-/// Drive the owned multi-turn loop, producing a stream of [`LoopStreamItem`]s.
+/// Drive the owned multi-turn loop, producing a stream of `MultiTurnStreamItem`s.
 ///
 /// `prompt` is the new user message; `history` is the prior conversation
 /// (without the new prompt). `tools` are dispatched by name when the model
@@ -106,7 +73,7 @@ pub(crate) fn run_loop_stream<M>(
     history: Vec<Message>,
     tools: Vec<Box<dyn ToolDyn>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<LoopStreamItem<M::StreamingResponse>, StreamingError>>
+) -> impl Stream<Item = Result<MultiTurnStreamItem<M::StreamingResponse>, StreamingError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -153,20 +120,20 @@ where
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
-                        yield LoopStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
+                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
                         accumulator.push_reasoning(reasoning.clone());
-                        yield LoopStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
+                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                         accumulator.push_reasoning_delta(id.clone(), &reasoning);
-                        yield LoopStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
+                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
                         accumulator.push_tool_call(tool_call.clone());
                         tool_calls.push((tool_call.clone(), internal_call_id.clone()));
-                        yield LoopStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { tool_call, internal_call_id });
+                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { tool_call, internal_call_id });
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                         // Informational only; the full `ToolCall` is emitted
@@ -181,10 +148,7 @@ where
             }
 
             if tool_calls.is_empty() {
-                yield LoopStreamItem::FinalResponse(LoopFinalResponse {
-                    response: turn_text,
-                    usage: aggregated_usage,
-                });
+                yield MultiTurnStreamItem::final_response(&turn_text, aggregated_usage);
                 break;
             }
 
@@ -269,7 +233,7 @@ where
                     call_id: tool_call.call_id.clone(),
                     content,
                 };
-                yield LoopStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                yield MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                     tool_result,
                     internal_call_id,
                 });

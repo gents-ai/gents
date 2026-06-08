@@ -220,10 +220,10 @@ async fn single_turn_no_tools_yields_text_then_final() {
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            LoopStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)) => {
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)) => {
                 texts.push(text.text);
             }
-            LoopStreamItem::FinalResponse(final_response) => {
+            MultiTurnStreamItem::FinalResponse(final_response) => {
                 final_text = Some(final_response.response().to_string());
             }
             _ => {}
@@ -277,10 +277,10 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            LoopStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) => {
+            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) => {
                 tool_results.push(tool_result_text(&tool_result.content.first()).to_string());
             }
-            LoopStreamItem::FinalResponse(final_response) => {
+            MultiTurnStreamItem::FinalResponse(final_response) => {
                 final_text = Some(final_response.response().to_string());
             }
             _ => {}
@@ -405,7 +405,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 
     let mut bounded_len = None;
     while let Some(item) = stream.next().await {
-        if let LoopStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) =
+        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) =
             item.expect("loop item should be Ok")
         {
             bounded_len = Some(tool_result_text(&tool_result.content.first()).len());
