@@ -1,7 +1,9 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
+use tokio::time::MissedTickBehavior;
 
 use crate::agent::ProcessLifecycleState;
 use crate::graphql::escape_graphql_string;
@@ -58,6 +60,9 @@ struct RuntimeStatusRow {
     default_behavior_id: String,
     runnable_behavior_count: i64,
     unavailable_behavior_count: i64,
+    behavior_executor_capacity: i64,
+    behavior_executor_queue_depth: i64,
+    behavior_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_error: String,
     last_reconcile_completed_at: String,
@@ -76,6 +81,9 @@ impl RuntimeStatusRow {
             default_behavior_id: String::new(),
             runnable_behavior_count: 0,
             unavailable_behavior_count: 0,
+            behavior_executor_capacity: 0,
+            behavior_executor_queue_depth: 0,
+            behavior_executor_status_json: "{}".to_string(),
             last_reconcile_result: String::new(),
             last_reconcile_error: String::new(),
             last_reconcile_completed_at: String::new(),
@@ -174,7 +182,14 @@ impl RuntimeStatusHandle {
         .await;
     }
 
+    pub(crate) async fn publish_executor_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) {
+        let executor_status = executor_status_fields(snapshot);
+        self.update(|row| apply_executor_status(row, &executor_status))
+            .await;
+    }
+
     async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot, result: ReconcileResult) {
+        let executor_status = executor_status_fields(snapshot);
         self.update(|row| {
             let mut changed = false;
             let generation = i64::try_from(snapshot.generation).unwrap_or(i64::MAX);
@@ -204,6 +219,9 @@ impl RuntimeStatusHandle {
             }
             if row.unavailable_behavior_count != unavailable_behavior_count {
                 row.unavailable_behavior_count = unavailable_behavior_count;
+                changed = true;
+            }
+            if apply_executor_status(row, &executor_status) {
                 changed = true;
             }
             if row.last_reconcile_result != result.as_str() {
@@ -262,6 +280,9 @@ async fn upsert_runtime_status(
                     default_behavior_id: "{default_behavior_id}",
                     runnable_behavior_count: {runnable_behavior_count},
                     unavailable_behavior_count: {unavailable_behavior_count},
+                    behavior_executor_capacity: {behavior_executor_capacity},
+                    behavior_executor_queue_depth: {behavior_executor_queue_depth},
+                    behavior_executor_status_json: "{behavior_executor_status_json}",
                     last_reconcile_result: "{last_reconcile_result}",
                     last_reconcile_error: "{last_reconcile_error}",
                     last_reconcile_completed_at: "{last_reconcile_completed_at}",
@@ -275,6 +296,9 @@ async fn upsert_runtime_status(
                     default_behavior_id: "{default_behavior_id}",
                     runnable_behavior_count: {runnable_behavior_count},
                     unavailable_behavior_count: {unavailable_behavior_count},
+                    behavior_executor_capacity: {behavior_executor_capacity},
+                    behavior_executor_queue_depth: {behavior_executor_queue_depth},
+                    behavior_executor_status_json: "{behavior_executor_status_json}",
                     last_reconcile_result: "{last_reconcile_result}",
                     last_reconcile_error: "{last_reconcile_error}",
                     last_reconcile_completed_at: "{last_reconcile_completed_at}",
@@ -290,6 +314,9 @@ async fn upsert_runtime_status(
         default_behavior_id = escape_graphql_string(&row.default_behavior_id),
         runnable_behavior_count = row.runnable_behavior_count,
         unavailable_behavior_count = row.unavailable_behavior_count,
+        behavior_executor_capacity = row.behavior_executor_capacity,
+        behavior_executor_queue_depth = row.behavior_executor_queue_depth,
+        behavior_executor_status_json = escape_graphql_string(&row.behavior_executor_status_json),
         last_reconcile_result = escape_graphql_string(&row.last_reconcile_result),
         last_reconcile_error = escape_graphql_string(&row.last_reconcile_error),
         last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
@@ -300,6 +327,78 @@ async fn upsert_runtime_status(
         anyhow::bail!("upsert AgentRuntime failed: {:?}", response.errors);
     }
     Ok(())
+}
+
+struct ExecutorStatusFields {
+    capacity: i64,
+    queue_depth: i64,
+    status_json: String,
+}
+
+fn executor_status_fields(snapshot: &ActiveRuntimeSnapshot) -> ExecutorStatusFields {
+    let statuses = snapshot.behavior_executor_statuses();
+    let capacity = statuses
+        .values()
+        .map(|status| status.worker_capacity)
+        .sum::<usize>();
+    let queue_depth = statuses
+        .values()
+        .map(|status| status.queue_depth)
+        .sum::<usize>();
+    let status_json = serde_json::to_string(&statuses).unwrap_or_else(|_| "{}".to_string());
+
+    ExecutorStatusFields {
+        capacity: i64::try_from(capacity).unwrap_or(i64::MAX),
+        queue_depth: i64::try_from(queue_depth).unwrap_or(i64::MAX),
+        status_json,
+    }
+}
+
+fn apply_executor_status(row: &mut RuntimeStatusRow, status: &ExecutorStatusFields) -> bool {
+    let mut changed = false;
+    if row.behavior_executor_capacity != status.capacity {
+        row.behavior_executor_capacity = status.capacity;
+        changed = true;
+    }
+    if row.behavior_executor_queue_depth != status.queue_depth {
+        row.behavior_executor_queue_depth = status.queue_depth;
+        changed = true;
+    }
+    if row.behavior_executor_status_json != status.status_json {
+        row.behavior_executor_status_json = status.status_json.clone();
+        changed = true;
+    }
+    changed
+}
+
+pub(crate) async fn run_executor_status_observer(
+    mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    runtime_status: RuntimeStatusHandle,
+    mut shutdown: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+
+        let snapshot = active_snapshot_rx.borrow().clone();
+        runtime_status
+            .publish_executor_snapshot(snapshot.as_ref())
+            .await;
+
+        tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            changed = active_snapshot_rx.changed() => {
+                if changed.is_err() {
+                    return Ok(());
+                }
+            }
+            _ = interval.tick() => {}
+        }
+    }
 }
 
 #[cfg(test)]

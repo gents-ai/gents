@@ -768,6 +768,8 @@ fn active_snapshot(
         unavailable_event_triggers: HashSet::new(),
         active_tasks,
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     })
 }
 

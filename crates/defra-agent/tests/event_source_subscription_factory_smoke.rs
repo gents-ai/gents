@@ -32,6 +32,8 @@ async fn integration_can_construct_event_source_and_mock_delivers_updates() {
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     });
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
 
