@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use defra_agent::{cli_tool, BackendProviderKind, BashMode, FileToolMode};
 
-use crate::cli::args::{BackendPresetArg, ToolCeilingArg};
+use crate::cli::args::{BackendPresetArg, ToolCeilingArg, ToolPackageArg};
 use crate::shared::ResolvedBackendConfig;
 use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 
@@ -148,5 +148,14 @@ pub(crate) fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
         ToolCeilingArg::MetaOnly => "meta-only",
         ToolCeilingArg::Readonly => "readonly",
         ToolCeilingArg::Readwrite => "readwrite",
+    }
+}
+
+pub(crate) fn format_tool_package(value: ToolPackageArg) -> &'static str {
+    match value {
+        ToolPackageArg::Minimal => "minimal",
+        ToolPackageArg::Introspection => "introspection",
+        ToolPackageArg::Readonly => "readonly",
+        ToolPackageArg::Write => "write",
     }
 }

@@ -313,9 +313,32 @@ pub(crate) struct InitArgs {
     pub(crate) write_tools: bool,
     #[arg(
         long,
+        value_enum,
+        help = "Bootstrap a named tool package. Defaults to readonly; --write-tools is a compatibility alias for --tool-package write"
+    )]
+    pub(crate) tool_package: Option<ToolPackageArg>,
+    #[arg(
+        long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Enable the feature-gated per-agent memory tool in the default ToolSelection"
+    )]
+    pub(crate) enable_memory: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable the default read-only defra_query tool in the default ToolSelection"
+    )]
+    pub(crate) disable_defra_query: bool,
+    #[arg(
+        long = "defra-query-collection",
+        help = "Restrict init's default defra_query tool to these collections (repeatable); omit for all collections"
+    )]
+    pub(crate) defra_query_collections: Vec<String>,
 }
 
 impl InitArgs {
@@ -780,6 +803,14 @@ pub(crate) enum ToolCeilingArg {
     MetaOnly,
     Readonly,
     Readwrite,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
+pub(crate) enum ToolPackageArg {
+    Minimal,
+    Introspection,
+    Readonly,
+    Write,
 }
 
 #[derive(Subcommand)]
@@ -1806,6 +1837,16 @@ mod tests {
                     },
             } => args,
             _ => panic!("expected `config tools set`"),
+        }
+    }
+
+    fn parse_init(extra: &[&str]) -> InitArgs {
+        let mut argv = vec!["defra-agent", "init"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("init should parse");
+        match cli.command {
+            Command::Init(args) => args,
+            _ => panic!("expected `init`"),
         }
     }
 

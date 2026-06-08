@@ -85,6 +85,7 @@ Examples:
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --enable-memory --defra-query-collection AgentRequest
   defra-agent init --identity-only
   defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
