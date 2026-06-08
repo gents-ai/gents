@@ -444,7 +444,7 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 mod tests {
     use super::*;
     use crate::client::{DesktopPaths, PrincipalIdentity};
-    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::matchers::{body_bytes, body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn admin_for(server: &MockServer) -> HttpRemoteP2pAdmin {
@@ -462,68 +462,273 @@ mod tests {
         (admin, actor)
     }
 
-    #[tokio::test]
-    async fn signed_admin_attaches_actor_headers_to_get_request() {
-        let server = MockServer::start().await;
-        let (admin, actor) = signed_admin_for(&server).await;
+    async fn mount_signed_request(
+        server: &MockServer,
+        actor: &PrincipalIdentity,
+        method_name: &str,
+        request_path: &str,
+        body: Option<Vec<u8>>,
+        response: ResponseTemplate,
+    ) {
+        let body_for_signature = body.as_deref().unwrap_or_default();
         let expected_signature = hex_encode(
             &actor
                 .sign(&signing_payload(
-                    "GET",
-                    &signed_admin_path("/api/v0", "/p2p/info"),
-                    &[],
+                    method_name,
+                    &signed_admin_path("/api/v0", request_path),
+                    body_for_signature,
                 ))
                 .expect("signature"),
         );
 
-        Mock::given(method("GET"))
-            .and(path("/api/v0/p2p/info"))
+        let mut mock = Mock::given(method(method_name))
+            .and(path(format!("/api/v0{request_path}")))
             .and(header(ACTOR_DID_HEADER, actor.did()))
             .and(header(
                 ACTOR_SIGNATURE_VERSION_HEADER,
                 ACTOR_SIGNATURE_VERSION,
             ))
-            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature))
-            .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<String>::new()))
-            .mount(&server)
-            .await;
+            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature));
+        if let Some(body) = body {
+            mock = mock.and(body_bytes(body));
+        }
+        mock.respond_with(response).mount(server).await;
+    }
 
-        admin.peer_info().await.expect("signed peer_info");
+    fn json_body<T: Serialize>(body: &T) -> Vec<u8> {
+        serde_json::to_vec(body).expect("body")
     }
 
     #[tokio::test]
-    async fn signed_admin_attaches_actor_headers_to_json_request() {
+    async fn signed_admin_attaches_actor_headers_to_every_admin_method() {
         let server = MockServer::start().await;
         let (admin, actor) = signed_admin_for(&server).await;
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/info",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin.peer_info().await.expect("signed peer_info");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/active-peers",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin.active_peers().await.expect("signed active_peers");
+
+        let addresses = vec!["/ip4/1.2.3.4/tcp/9000/p2p/peer1".to_string()];
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/connect",
+            Some(json_body(&addresses)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin.connect(&addresses).await.expect("signed connect");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/replicators",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<serde_json::Value>::new()),
+        )
+        .await;
+        admin
+            .list_replicators()
+            .await
+            .expect("signed list_replicators");
+
         let collections = vec!["c1".to_string()];
-        let body = serde_json::to_vec(&collections).expect("body");
-        let expected_signature = hex_encode(
-            &actor
-                .sign(&signing_payload(
-                    "POST",
-                    &signed_admin_path("/api/v0", "/p2p/collections"),
-                    &body,
-                ))
-                .expect("signature"),
-        );
+        let add_replicator = AddReplicatorBody {
+            collections: &collections,
+            addresses: &addresses,
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/replicators",
+            Some(json_body(&add_replicator)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .add_replicator(&addresses, &collections)
+            .await
+            .expect("signed add_replicator");
 
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/collections"))
-            .and(header(ACTOR_DID_HEADER, actor.did()))
-            .and(header(
-                ACTOR_SIGNATURE_VERSION_HEADER,
-                ACTOR_SIGNATURE_VERSION,
-            ))
-            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature))
-            .and(body_json(serde_json::json!(["c1"])))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
+        let delete_replicator = DeleteReplicatorBody {
+            collections: &collections,
+            id: "peer1",
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "DELETE",
+            "/p2p/replicators",
+            Some(json_body(&delete_replicator)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .delete_replicator("peer1", &collections)
+            .await
+            .expect("signed delete_replicator");
 
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/collections",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin
+            .list_p2p_collections()
+            .await
+            .expect("signed list_p2p_collections");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/collections",
+            Some(json_body(&collections)),
+            ResponseTemplate::new(200),
+        )
+        .await;
         admin
             .add_p2p_collections(&collections)
             .await
-            .expect("signed add");
+            .expect("signed add_p2p_collections");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "DELETE",
+            "/p2p/collections",
+            Some(json_body(&collections)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .delete_p2p_collections(&collections)
+            .await
+            .expect("signed delete_p2p_collections");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/documents",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin
+            .list_p2p_documents()
+            .await
+            .expect("signed list_p2p_documents");
+
+        let doc_ids = vec!["doc1".to_string()];
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/documents",
+            Some(json_body(&doc_ids)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .add_p2p_documents(&doc_ids)
+            .await
+            .expect("signed add_p2p_documents");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "DELETE",
+            "/p2p/documents",
+            Some(json_body(&doc_ids)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .delete_p2p_documents(&doc_ids)
+            .await
+            .expect("signed delete_p2p_documents");
+
+        let sync_documents = SyncDocumentsBody {
+            collection_name: "Foo",
+            doc_ids: &doc_ids,
+            timeout: "5s".to_string(),
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/documents/sync",
+            Some(json_body(&sync_documents)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .sync_documents("Foo", &doc_ids, Some(Duration::from_secs(5)))
+            .await
+            .expect("signed sync_documents");
+
+        let version_ids = vec!["v1".to_string()];
+        let sync_versions = SyncVersionsBody {
+            version_ids: &version_ids,
+            timeout: String::new(),
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/collections/sync-versions",
+            Some(json_body(&sync_versions)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .sync_collection_versions(&version_ids, None)
+            .await
+            .expect("signed sync_collection_versions");
+
+        let sync_branchable = SyncBranchableBody {
+            collection_id: "col1",
+            timeout: String::new(),
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/collections/sync-branchable",
+            Some(json_body(&sync_branchable)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .sync_branchable_collection("col1", None)
+            .await
+            .expect("signed sync_branchable_collection");
     }
 
     #[tokio::test]
