@@ -16,6 +16,13 @@ pub enum TruncationMode {
     Tail,
 }
 
+pub(crate) fn tool_result_truncation_mode(tool_name: &str) -> TruncationMode {
+    match tool_name {
+        "bash" | "shell" | "command" => TruncationMode::Tail,
+        _ => TruncationMode::Head,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TruncationResult {
     pub text: String,
