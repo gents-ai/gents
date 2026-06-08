@@ -514,7 +514,30 @@ pub async fn project_background_subagent_completion(
     child_request_id: &str,
     local_did: &str,
 ) -> Result<BackgroundCompletionOutcome> {
-    let Some(linkage) = load_child_linkage(node.as_ref(), child_request_id).await? else {
+    project_background_subagent_completion_inner(
+        node.as_ref(),
+        Some(node.clone()),
+        child_request_id,
+        local_did,
+    )
+    .await
+}
+
+pub(crate) async fn ensure_background_subagent_completion_side_effects(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    local_did: &str,
+) -> Result<BackgroundCompletionOutcome> {
+    project_background_subagent_completion_inner(node, None, child_request_id, local_did).await
+}
+
+async fn project_background_subagent_completion_inner(
+    node: &EmbeddedNode,
+    lifecycle_node: Option<Arc<EmbeddedNode>>,
+    child_request_id: &str,
+    local_did: &str,
+) -> Result<BackgroundCompletionOutcome> {
+    let Some(linkage) = load_child_linkage(node, child_request_id).await? else {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     };
     let Some(parent_request_id) = non_empty(linkage.caused_by_parent_request_id.as_deref()) else {
@@ -523,11 +546,11 @@ pub async fn project_background_subagent_completion(
     if non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none() {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     }
-    if !request_is_locally_owned(node.as_ref(), parent_request_id, local_did).await? {
+    if !request_is_locally_owned(node, parent_request_id, local_did).await? {
         return Ok(BackgroundCompletionOutcome::NotLocalOwner);
     }
 
-    let Some(terminal_row) = load_child_terminal_row(node.as_ref(), child_request_id).await? else {
+    let Some(terminal_row) = load_child_terminal_row(node, child_request_id).await? else {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     };
     let completed = child_request_completed(&terminal_row);
@@ -540,15 +563,15 @@ pub async fn project_background_subagent_completion(
         Some(terminal)
     };
 
-    let parent_context = load_parent_subagent_context(node.as_ref(), parent_request_id).await?;
-    let edge = load_authorized_child_edge(node.as_ref(), &parent_context, child_request_id).await?;
+    let parent_context = load_parent_subagent_context(node, parent_request_id).await?;
+    let edge = load_authorized_child_edge(node, &parent_context, child_request_id).await?;
     if edge.await_mode != AwaitMode::Background {
         return Ok(BackgroundCompletionOutcome::NotBackground);
     }
 
     let (status, summary, bridge_result, terminal) = if completed {
         let Some(final_response) =
-            load_projected_final_response(node.as_ref(), &parent_context.session_id, &edge).await?
+            load_projected_final_response(node, &parent_context.session_id, &edge).await?
         else {
             return Ok(BackgroundCompletionOutcome::MissingFinalResponse);
         };
@@ -563,8 +586,11 @@ pub async fn project_background_subagent_completion(
 
     let mut transitioned = false;
     if edge.lifecycle_state == "running" {
+        let Some(lifecycle_node) = lifecycle_node else {
+            return Ok(BackgroundCompletionOutcome::NotTerminal);
+        };
         let mut lifecycle = match ToolCallLifecycle::load(
-            node.clone(),
+            lifecycle_node,
             &parent_context.session_id,
             &edge.parent_tool_call_id,
         )
@@ -584,7 +610,7 @@ pub async fn project_background_subagent_completion(
     }
 
     let side_effects = ensure_projection_side_effects(
-        node.as_ref(),
+        node,
         &parent_context.session_id,
         &parent_context.request_id,
         &edge,
