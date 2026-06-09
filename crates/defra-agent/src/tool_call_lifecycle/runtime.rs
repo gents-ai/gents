@@ -192,7 +192,7 @@ impl ToolDyn for RuntimeManagedTool {
     }
 }
 
-fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
+pub(crate) fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
     let deadline_at = deadline_at?;
     let now = Utc::now();
     if now >= deadline_at {

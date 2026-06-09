@@ -24,10 +24,8 @@
 //! (#401) is closed natively without the recorder shim.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_stream::try_stream;
-use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use rig::agent::{HookAction, MultiTurnStreamItem, StreamingError, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
@@ -42,7 +40,7 @@ use rig::tool::ToolDyn;
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, timeout_result,
+    cancelled_result, current_tool_runtime_context, deadline_remaining, timeout_result,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
@@ -474,17 +472,6 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
         serde_json::Value::String(string) => string.clone(),
         other => other.to_string(),
     }
-}
-
-/// Time left until `deadline_at`, or `None` if unbounded. Mirrors the helper in
-/// `tool_call_lifecycle::runtime`.
-fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
-    let deadline_at = deadline_at?;
-    let now = Utc::now();
-    if now >= deadline_at {
-        return Some(Duration::ZERO);
-    }
-    Some((deadline_at - now).to_std().unwrap_or(Duration::ZERO))
 }
 
 /// Dispatch one tool call by name, applying the active request's
