@@ -632,9 +632,11 @@ pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) ->
 }
 
 /// Idempotent migration for AgentBehavior: adds `description` and `summary`
-/// fields (Kind 11, nullable String) introduced on branch issue-377.
-/// Existing DBs upgraded from a prior schema version need these fields patched
-/// in so that GraphQL reads/writes referencing them do not fail.
+/// fields (Kind 11, nullable String) introduced on branch issue-377, plus
+/// `skill_refs` and `skill_excludes` (Kind 21, `[String]`) introduced by the
+/// Skills feature (#340). Existing DBs upgraded from a prior schema version
+/// need these fields patched in so that GraphQL reads/writes referencing them
+/// do not fail.
 pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     let Some(collection) = node
         .get_collection("AgentBehavior")
@@ -655,10 +657,24 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
             r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}"#,
         );
     }
+    // `skill_refs` and `skill_excludes` are selected by the AgentBehavior load
+    // query; an old-schema DB missing either fails reads with
+    // `Cannot query field "..."`. Kind 21 is `[String]`, matching
+    // `subagent_targets`.
+    if !collection_has_field(&collection, "skill_refs") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_refs","Kind":21}}"#,
+        );
+    }
+    if !collection_has_field(&collection, "skill_excludes") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_excludes","Kind":21}}"#,
+        );
+    }
 
     if field_patches.is_empty() {
         tracing::debug!(
-            "AgentBehavior already has description and summary fields; migration no-op"
+            "AgentBehavior already has description, summary, skill_refs, and skill_excludes fields; migration no-op"
         );
         return Ok(());
     }
@@ -667,14 +683,14 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
     let next = node
         .patch_collection("AgentBehavior", &patch)
         .await
-        .context("patch_collection AgentBehavior description+summary")?;
+        .context("patch_collection AgentBehavior description+summary+skill fields")?;
     node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version AgentBehavior description+summary")?;
+        .context("set_active_collection_version AgentBehavior description+summary+skill fields")?;
     tracing::info!(
         version = %next.version_id,
         fields = ?field_patches,
-        "AgentBehavior patched with description and summary fields"
+        "AgentBehavior patched with description, summary, skill_refs, and skill_excludes fields"
     );
     Ok(())
 }

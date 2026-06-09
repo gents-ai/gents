@@ -23,14 +23,14 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     })
     .to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-1".to_string()),
-        "internal-spawn-1",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-1".to_string()),
+            "internal-spawn-1",
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
     assert_eq!(receipt["behavior_id"], CHILD_BEHAVIOR_ID);
@@ -149,14 +149,14 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     })
     .to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-r5-remote-spawn".to_string()),
-        "internal-r5-remote-spawn",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-r5-remote-spawn".to_string()),
+            "internal-r5-remote-spawn",
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
     assert_eq!(receipt["behavior_id"], CHILD_BEHAVIOR_ID);
@@ -212,14 +212,14 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     })
     .to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-xdep-cancel".to_string()),
-        "internal-xdep-cancel",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-xdep-cancel".to_string()),
+            "internal-xdep-cancel",
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     let child_request_id = receipt["child_request_id"]
         .as_str()
@@ -286,14 +286,14 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
     })
     .to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-local-cancel".to_string()),
-        "internal-local-cancel",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-local-cancel".to_string()),
+            "internal-local-cancel",
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     let child_request_id = receipt["child_request_id"]
         .as_str()

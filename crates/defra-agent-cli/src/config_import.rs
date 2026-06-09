@@ -1870,6 +1870,7 @@ mod lean_apply_write_boundary_tests {
             subagent_default_await_mode: None,
             subagent_allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
+            write_tools: Vec::new(),
         }
     }
 

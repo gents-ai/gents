@@ -15,16 +15,13 @@ use defra_agent::{
     write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
     DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,
 };
-use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
+use rig::agent::{HookAction, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, ToolDefinition,
-};
+use rig::completion::ToolDefinition;
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde::Deserialize;
@@ -166,6 +163,12 @@ async fn generated_streaming_response_cases_pin_lifecycle_contract() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract() {
     streaming_compaction::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract()
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
+    streaming_compaction::generated_streaming_response_idle_timeout_case_drives_daemon_contract()
         .await;
 }
 

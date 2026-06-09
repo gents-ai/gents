@@ -164,6 +164,7 @@ impl AdmissionRegistry {
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
             inference_token: None,
+            terminal_failure_reason: None,
         };
         scope_request(context, async { self.acquire_current_call().await }).await
     }
@@ -171,6 +172,7 @@ impl AdmissionRegistry {
     pub(super) async fn acquire_current_call(&self) -> Result<AdmissionPermit, CompletionError> {
         let context = current_context()?;
         let cancel_observer = context.inference_token.clone();
+        let terminal_failure_observer = context.terminal_failure_reason.clone();
         let pending = context.next_call(&self.inner.runtime_instance_id);
         if pending.backend_id.trim().is_empty() {
             return Err(CompletionError::ProviderError(format!(
@@ -191,7 +193,12 @@ impl AdmissionRegistry {
         match controller {
             Some(controller) => {
                 controller
-                    .acquire(self.inner.node.clone(), pending, cancel_observer)
+                    .acquire(
+                        self.inner.node.clone(),
+                        pending,
+                        cancel_observer,
+                        terminal_failure_observer,
+                    )
                     .await
             }
             None => {

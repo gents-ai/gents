@@ -19,7 +19,8 @@ use anyhow::Result;
 use rig::tool::ToolDyn;
 
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
-use crate::document_config::SubagentTarget;
+use crate::defra_write::BoundedWriteTool;
+use crate::document_config::{SubagentTarget, WriteToolDecl};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_context_budget_tool,
@@ -43,6 +44,7 @@ pub struct ToolSurface {
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
+    pub(super) write_tools: Vec<WriteToolDecl>,
 }
 
 impl ToolSurface {
@@ -119,6 +121,13 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        for decl in &self.write_tools {
+            // Use the single source-of-truth gate on the declaration itself;
+            // see `WriteToolDecl::is_well_formed`.
+            if decl.is_well_formed() {
+                names.push(decl.tool_name.clone());
+            }
+        }
         build::dedupe_strings(names)
     }
 
@@ -163,6 +172,33 @@ impl ToolSurface {
                 CollectionScope::restricted(self.defra_query_collections.clone()),
             ));
         }
+        // Apply-time validation rejects write_tools names that collide with the
+        // built-in surface or sibling cli_tool_names, but runtime-discovered
+        // tools (e.g. MCP) and code-injected custom tools are not visible to
+        // that static check. Guard the registration here so a colliding write
+        // tool is dropped (with a warning) rather than registered as a second
+        // `ToolDyn` under a name an earlier tool already advertises — which the
+        // name-keyed dispatch maps would otherwise resolve last-write-wins.
+        let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
+        for decl in &self.write_tools {
+            let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
+            if !tool.is_well_formed() {
+                tracing::warn!(
+                    tool_name = %decl.tool_name,
+                    collection = %decl.collection,
+                    "skipping malformed write_tools entry",
+                );
+                continue;
+            }
+            if !registered_names.insert(tool.name()) {
+                tracing::warn!(
+                    tool_name = %decl.tool_name,
+                    "skipping write_tools entry whose name collides with an already-registered tool",
+                );
+                continue;
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
         Ok(tools)
     }
 }
@@ -190,6 +226,7 @@ impl std::fmt::Debug for ToolSurface {
             )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
+            .field("write_tools", &self.write_tools)
             .finish()
     }
 }

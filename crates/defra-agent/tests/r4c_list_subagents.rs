@@ -9,9 +9,7 @@ use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::StreamingCompletionResponse;
+use rig::agent::ToolCallHookAction;
 use serde_json::{json, Value};
 
 use support::fixtures::spawn_subagent_source;
@@ -20,38 +18,6 @@ use support::test_db;
 const AGENT_DID: &str = "did:defra-agent:r4c-list-subagents";
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in R4c list_subagents tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in R4c list_subagents tests".to_string(),
-        ))
-    }
-}
 
 async fn setup_db(name: &str) -> (support::TestDb, support::fixtures::SubagentSourceGuard) {
     let db = test_db(name).await;
@@ -210,14 +176,14 @@ async fn spawn_background_child(
         "await_mode": "background"
     })
     .to_string();
-    let action = PromptHook::<TestModel>::on_tool_call(
-        hook,
-        "spawn_subagent",
-        Some(format!("model-{internal_call_id}")),
-        internal_call_id,
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &args,
+        )
+        .await;
     let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
     // Spawn convergence (#377): the receipt no longer carries the child session
@@ -263,14 +229,14 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 }
 
 async fn list_subagents(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
-    let action = PromptHook::<TestModel>::on_tool_call(
-        hook,
-        "list_subagents",
-        Some(format!("model-{internal_call_id}")),
-        internal_call_id,
-        &args.to_string(),
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "list_subagents",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &args.to_string(),
+        )
+        .await;
     skip_reason_json(action)
 }
 

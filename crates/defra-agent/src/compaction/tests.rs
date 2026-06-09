@@ -1,6 +1,5 @@
 use std::sync::{Arc, Mutex};
 
-use rig::agent::AgentBuilder;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
@@ -8,7 +7,7 @@ use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
 };
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
+use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
 use crate::ensure_schemas;
@@ -60,6 +59,330 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
     }
 }
 
+fn tool_call_content(id: &str) -> AssistantContent {
+    AssistantContent::ToolCall(ToolCall {
+        id: id.to_string(),
+        call_id: Some(id.to_string()),
+        function: rig::completion::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    })
+}
+
+#[test]
+fn drop_unpaired_tool_calls_removes_calls_without_results() {
+    // #445: assistant turn has text + a paired call (call-A, has a result) + an
+    // unpaired call (call-B, no result). The unpaired call must be dropped before
+    // the provider sees it; text and the paired call (with its result) survive.
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Text(Text {
+                    text: "thinking".to_string(),
+                }),
+                tool_call_content("call-A"),
+                tool_call_content("call-B"),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::history::drop_unpaired_tool_calls(messages);
+
+    assert_eq!(
+        out.len(),
+        2,
+        "assistant turn + its one paired result remain"
+    );
+    let kept_calls: Vec<String> = match &out[0] {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantContent::ToolCall(tool_call) => Some(tool_call.id.clone()),
+                _ => None,
+            })
+            .collect(),
+        other => panic!("expected assistant message, got {other:?}"),
+    };
+    assert_eq!(
+        kept_calls,
+        vec!["call-A".to_string()],
+        "unpaired call-B must be dropped, paired call-A kept"
+    );
+    assert!(
+        matches!(&out[0], Message::Assistant { content, .. }
+            if content.iter().any(|c| matches!(c, AssistantContent::Text(_)))),
+        "text content must be preserved"
+    );
+    assert!(
+        matches!(&out[1], Message::User { .. }),
+        "result must remain"
+    );
+}
+
+#[test]
+fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
+    // An assistant turn that is nothing but an unpaired tool call is dropped
+    // entirely (no dangling call reaches the provider).
+    let messages = vec![
+        text_msg("user", "go"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-X")),
+        },
+    ];
+    let out = super::history::drop_unpaired_tool_calls(messages);
+    assert_eq!(
+        out.len(),
+        1,
+        "the all-unpaired assistant message is dropped"
+    );
+    assert!(matches!(&out[0], Message::User { .. }));
+}
+
+#[test]
+fn normalize_assistant_content_order_moves_text_before_tool_calls() {
+    // Transcripts persisted before the ordering fix can carry assistant text
+    // AFTER tool calls; strict providers reject that on reload. Normalization at
+    // the provider-send boundary must reorder to (text, reasoning, tool calls)
+    // while preserving ids and per-category order.
+    let messages = vec![
+        Message::Assistant {
+            id: Some("msg-1".to_string()),
+            content: OneOrMany::many(vec![
+                AssistantContent::Reasoning(rig::completion::message::Reasoning::new("why")),
+                tool_call_content("call-A"),
+                tool_call_content("call-B"),
+                AssistantContent::Text(Text {
+                    text: "answer".to_string(),
+                }),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::history::normalize_assistant_content_order(messages);
+
+    let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
+        Message::Assistant { id, content } => (
+            id.clone(),
+            content
+                .iter()
+                .map(|item| match item {
+                    AssistantContent::Text(_) => "text",
+                    AssistantContent::Reasoning(_) => "reasoning",
+                    AssistantContent::ToolCall(_) => "tool_call",
+                    _ => "other",
+                })
+                .collect(),
+        ),
+        other => panic!("expected assistant message, got {other:?}"),
+    };
+    assert_eq!(
+        id.as_deref(),
+        Some("msg-1"),
+        "provider message id preserved"
+    );
+    assert_eq!(
+        kinds,
+        vec!["text", "reasoning", "tool_call", "tool_call"],
+        "text must lead, tool calls must trail"
+    );
+    let call_ids: Vec<String> = match &out[0] {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantContent::ToolCall(tool_call) => Some(tool_call.id.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        call_ids,
+        vec!["call-A".to_string(), "call-B".to_string()],
+        "tool-call relative order preserved"
+    );
+    assert!(
+        matches!(&out[1], Message::User { .. }),
+        "non-assistant messages pass through"
+    );
+}
+
+#[test]
+fn normalize_assistant_content_order_is_identity_when_already_ordered() {
+    let messages = vec![
+        text_msg("user", "go"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Text(Text {
+                    text: "answer".to_string(),
+                }),
+                tool_call_content("call-A"),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+    let out = super::history::normalize_assistant_content_order(messages.clone());
+    assert_eq!(out, messages);
+}
+
+#[test]
+fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+        text_msg("user", "next"),
+    ];
+    let out = super::history::drop_unpaired_tool_calls(messages.clone());
+    assert_eq!(
+        out.len(),
+        messages.len(),
+        "fully-paired history must pass through unchanged"
+    );
+}
+
+#[test]
+fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
+    // A compaction split (or compacted-prefix drop) can leave a tool result
+    // whose assistant call was compacted away. Providers reject a tool message
+    // with no preceding assistant tool call, so the orphan must be dropped;
+    // paired results and other user content survive.
+    let messages = vec![
+        tool_result_msg("call-GONE", "orphaned"),
+        text_msg("user", "continue"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::history::drop_orphaned_tool_results(messages);
+
+    assert_eq!(
+        out.len(),
+        3,
+        "the orphaned-result message is dropped entirely; got {out:?}"
+    );
+    assert!(
+        matches!(&out[0], Message::User { content }
+            if content.iter().any(|c| matches!(c, UserContent::Text(_)))),
+        "the plain user message must lead after the orphan is dropped"
+    );
+    assert!(
+        matches!(&out[2], Message::User { content }
+            if content.iter().any(|c| matches!(c, UserContent::ToolResult(r)
+                if r.call_id.as_deref() == Some("call-A")))),
+        "the paired result must survive"
+    );
+}
+
+#[test]
+fn drop_orphaned_tool_results_keeps_mixed_user_content() {
+    // A user message mixing text with an orphaned result keeps the text.
+    let mixed = Message::User {
+        content: OneOrMany::many(vec![
+            UserContent::Text(Text {
+                text: "also this".to_string(),
+            }),
+            UserContent::ToolResult(ToolResult {
+                id: "call-GONE".to_string(),
+                call_id: Some("call-GONE".to_string()),
+                content: OneOrMany::one(ToolResultContent::Text(Text {
+                    text: "orphaned".to_string(),
+                })),
+            }),
+        ])
+        .unwrap(),
+    };
+    let out = super::history::drop_orphaned_tool_results(vec![mixed]);
+    assert_eq!(out.len(), 1);
+    let Message::User { content } = &out[0] else {
+        panic!("expected user message");
+    };
+    assert_eq!(content.len(), 1);
+    assert!(matches!(content.first(), UserContent::Text(_)));
+}
+
+#[test]
+fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
+    // Unpaired call AND orphaned result in one history: both removed, the
+    // paired exchange survives.
+    let messages = vec![
+        tool_result_msg("call-GONE", "orphaned"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-UNPAIRED")),
+        },
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+    let out = super::sanitize_history_for_provider(messages);
+    assert_eq!(
+        out.len(),
+        2,
+        "only the paired exchange survives; got {out:?}"
+    );
+}
+
+#[test]
+fn sanitize_repairs_result_preceding_its_call() {
+    // P1 counterexample for the unpaired-first composition (found while
+    // proof-sketching the PromptAssembly Lean model): a result that PRECEDES
+    // its call (backfill ordering, P2P-merged transcripts). The result must be
+    // dropped as orphaned AND the call must then be dropped as unpaired —
+    // orphan-drop must run first, or the call survives on the strength of a
+    // result that no longer exists and an unpaired call reaches the provider.
+    let messages = vec![
+        tool_result_msg("call-A", "early result"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+    ];
+    let out = super::sanitize_history_for_provider(messages);
+    assert!(
+        out.is_empty(),
+        "result-before-call must sanitize to empty (orphan and unpaired both dropped); got {out:?}"
+    );
+}
+
+#[test]
+fn bounded_summary_truncates_oversized_model_emitted_summaries() {
+    // The compaction summary is model-emitted free text injected into every
+    // later request's system reminder — it must be bounded on its way to the
+    // prompt (covers oversized entries already persisted, too).
+    let oversized = "s".repeat(200 * 1024);
+    let bounded = super::bounded_summary(oversized.clone());
+    assert!(
+        bounded.len() < oversized.len(),
+        "oversized summary must be bounded"
+    );
+    assert!(!bounded.is_empty());
+
+    let small = "concise summary".to_string();
+    assert_eq!(
+        super::bounded_summary(small.clone()),
+        small,
+        "small summaries pass through untouched"
+    );
+}
+
 #[derive(Clone, Default)]
 struct MockSummaryModel {
     response: String,
@@ -102,11 +425,18 @@ impl CompletionModel for MockSummaryModel {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in compaction tests".to_string(),
-        ))
+        // Compaction now summarizes via the owned loop (#400), which uses
+        // `stream`; replay the scripted summary as a single text chunk.
+        *self.last_request.lock().unwrap() = Some(request);
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
+            Ok(RawStreamingChoice::Message(self.response.clone())),
+            Ok(RawStreamingChoice::FinalResponse(())),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
     }
 }
 
@@ -209,10 +539,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         })
         .to_string(),
     );
-    let agent = AgentBuilder::new(model)
-        .preamble("You are a helpful coding agent.")
-        .build();
-    let compactor = DefraCompactor::new(agent);
+    let config = crate::agent::loop_stream::LoopConfig {
+        preamble: Some("You are a helpful coding agent.".to_string()),
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        max_turns: 0,
+    };
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 
     let mut sequence = 1;
     for turn in 0..55 {

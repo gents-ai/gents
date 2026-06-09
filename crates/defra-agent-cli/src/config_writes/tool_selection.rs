@@ -417,6 +417,9 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             selection
                 .cross_deployment_spawn_timeout_seconds
                 .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+            // NOTE: `write_tools` is deliberately NOT encoded here. The
+            // imperative path always sets `write_tools: None` (it is
+            // apply-managed only), so there is nothing to render.
         ]
         .into_iter()
         .flatten(),

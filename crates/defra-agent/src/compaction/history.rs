@@ -56,6 +56,139 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
     (stripped_messages, file_activity)
 }
 
+/// Drop assistant tool-calls that have no matching tool-result message, at the
+/// provider-send boundary (#445).
+///
+/// The durable transcript intentionally permits an assistant tool-call with no
+/// result (a tool that was interrupted/failed/timed-out, or whose result was
+/// never persisted) — `Transcript.PairClosed` only requires *completed* calls to
+/// be paired. But providers (OpenAI/Anthropic) reject a reloaded assistant
+/// `tool_call` that is not followed by its tool result. This narrows the
+/// permissive transcript to the stricter provider format: a call is kept only if
+/// some tool-result message carries the same call key. Dropping an unpaired call
+/// never orphans a result (a result implies its call is paired, so that call is
+/// kept); an assistant message left with no content is dropped entirely.
+///
+/// This runs at the request-build boundary, not inside the conformance-fenced
+/// `strip_tool_results` reducer, so the transcript-reduction model is unchanged.
+pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
+    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for message in &messages {
+        if let Message::User { content } = message {
+            for item in content.iter() {
+                if let UserContent::ToolResult(tool_result) = item {
+                    resolved.insert(tool_result_key(tool_result));
+                }
+            }
+        }
+    }
+
+    let mut kept_messages = Vec::with_capacity(messages.len());
+    for message in messages {
+        match message {
+            Message::Assistant { id, content } => {
+                let kept: Vec<AssistantContent> = content
+                    .into_iter()
+                    .filter(|item| match item {
+                        AssistantContent::ToolCall(tool_call) => {
+                            resolved.contains(&tool_call_key(tool_call))
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                // Keep the message only if content survives filtering; an
+                // assistant turn that was nothing but unpaired tool calls is
+                // dropped so no dangling call reaches the provider.
+                if let Ok(content) = OneOrMany::many(kept) {
+                    kept_messages.push(Message::Assistant { id, content });
+                }
+            }
+            other => kept_messages.push(other),
+        }
+    }
+    kept_messages
+}
+
+/// Drop tool-result user content whose assistant tool-call does not PRECEDE it
+/// in the message list, at the provider-send boundary.
+///
+/// The inverse of [`drop_unpaired_tool_calls`]: a compaction split
+/// (`split_messages_for_summary`) or compacted-prefix drop can place an
+/// assistant tool-call in the compacted-away window while its result message
+/// survives in the recent window. Providers reject a tool-result message with
+/// no preceding assistant tool call, so the orphan is dropped (its information
+/// lives on in the compaction summary and the durable AgentToolCall row). A
+/// user message left with no content is dropped entirely.
+pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
+    let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut kept_messages = Vec::with_capacity(messages.len());
+    for message in messages {
+        match message {
+            Message::Assistant { id, content } => {
+                for item in content.iter() {
+                    if let AssistantContent::ToolCall(tool_call) = item {
+                        seen_calls.insert(tool_call_key(tool_call));
+                    }
+                }
+                kept_messages.push(Message::Assistant { id, content });
+            }
+            Message::User { content } => {
+                let kept: Vec<UserContent> = content
+                    .into_iter()
+                    .filter(|item| match item {
+                        UserContent::ToolResult(tool_result) => {
+                            seen_calls.contains(&tool_result_key(tool_result))
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                if let Ok(content) = OneOrMany::many(kept) {
+                    kept_messages.push(Message::User { content });
+                }
+            }
+            other => kept_messages.push(other),
+        }
+    }
+    kept_messages
+}
+
+/// Normalize assistant content to the canonical provider order — text, then
+/// reasoning (and any other non-call content), then tool calls — at the
+/// provider-send boundary.
+///
+/// `AssistantTurnAccumulator::build_message` writes this order for newly
+/// persisted turns, but transcripts persisted before the ordering fix can carry
+/// text *after* tool calls, which strict providers reject on reload. Like
+/// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
+/// provider format at the request-build boundary; the stored messages and the
+/// conformance-fenced reducers are untouched. Relative order within each
+/// category is preserved.
+pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| match message {
+            Message::Assistant { id, content } => {
+                let mut text = Vec::new();
+                let mut middle = Vec::new();
+                let mut calls = Vec::new();
+                for item in content.into_iter() {
+                    match item {
+                        AssistantContent::Text(_) => text.push(item),
+                        AssistantContent::ToolCall(_) => calls.push(item),
+                        other => middle.push(other),
+                    }
+                }
+                let ordered: Vec<AssistantContent> =
+                    text.into_iter().chain(middle).chain(calls).collect();
+                let content = OneOrMany::many(ordered)
+                    .expect("reordering preserves the message's non-empty content");
+                Message::Assistant { id, content }
+            }
+            other => other,
+        })
+        .collect()
+}
+
 pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
     messages
         .into_iter()
@@ -163,10 +296,7 @@ fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    let call_id = tool_result
-        .call_id
-        .clone()
-        .unwrap_or_else(|| tool_result.id.clone());
+    let call_id = tool_result_key(&tool_result);
     let tool_name = tool_calls
         .get(&call_id)
         .map(|info| info.name.as_str())
@@ -224,6 +354,15 @@ fn tool_call_key(tool_call: &ToolCall) -> String {
         .call_id
         .clone()
         .unwrap_or_else(|| tool_call.id.clone())
+}
+
+/// The pairing key of a tool result — must mirror [`tool_call_key`] so calls
+/// and results match under the same identity.
+fn tool_result_key(tool_result: &ToolResult) -> String {
+    tool_result
+        .call_id
+        .clone()
+        .unwrap_or_else(|| tool_result.id.clone())
 }
 
 #[derive(Debug, Clone)]

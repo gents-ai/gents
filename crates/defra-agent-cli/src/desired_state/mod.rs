@@ -149,6 +149,15 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) defra_query_collections: Vec<String>,
     #[serde(default)]
     pub(crate) subagent_targets: Vec<String>,
+    /// Declarative bounded-write tools. Authored in the manifest as a list of
+    /// `WriteToolDecl` objects, but carried (and stored) in the same `[String]`
+    /// storage form as `subagent_targets`: each entry is the canonical JSON
+    /// serialization of one decl. The custom deserializer accepts BOTH the
+    /// manifest object-list shape and the live `[String]` shape and normalizes
+    /// to storage strings, so a desired manifest and the live row it produced
+    /// compare equal (no spurious apply/diff drift).
+    #[serde(default, deserialize_with = "deserialize_write_tools_storage")]
+    pub(crate) write_tools: Vec<String>,
     #[serde(default)]
     pub(crate) subagent_spawn_enabled: bool,
     #[serde(default)]
@@ -161,6 +170,53 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) subagent_allow_cross_deployment: bool,
     #[serde(default)]
     pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
+}
+
+/// Normalize the `write_tools` field to the `[String]` storage form regardless
+/// of input shape:
+///   * a list of `WriteToolDecl` objects (manifest authoring shape) →
+///     each object re-serialized to canonical JSON,
+///   * a list of strings, each already the JSON of one decl (live `[String]`
+///     row, or an already-normalized manifest) → re-parsed + re-serialized so
+///     both paths produce byte-identical canonical JSON,
+///   * `null` / missing → empty list.
+///
+/// Re-serializing through `WriteToolDecl` (not passing strings through verbatim)
+/// guarantees field ordering and defaults are canonical on both the manifest
+/// and live sides, which is what makes the `DesiredToolSelection` `PartialEq`
+/// diff converge.
+fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use defra_agent::WriteToolDecl;
+    use serde_json::Value;
+
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(items) => items,
+        other => {
+            return Err(D::Error::custom(format!(
+                "write_tools must be a list of WriteToolDecl objects or JSON strings, got {other}"
+            )))
+        }
+    };
+
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let decl: WriteToolDecl = match item {
+            // Live `[String]` row: each entry is the JSON of one decl.
+            Value::String(s) => serde_json::from_str(&s).map_err(D::Error::custom)?,
+            // Manifest authoring shape: each entry is a decl object.
+            other => serde_json::from_value(other).map_err(D::Error::custom)?,
+        };
+        out.push(serde_json::to_string(&decl).map_err(D::Error::custom)?);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

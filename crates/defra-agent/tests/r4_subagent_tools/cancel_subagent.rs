@@ -16,14 +16,14 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     })
     .to_string();
 
-    let spawn_action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-cancel-spawn".to_string()),
-        "internal-cancel-spawn",
-        &spawn_args,
-    )
-    .await;
+    let spawn_action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-cancel-spawn".to_string()),
+            "internal-cancel-spawn",
+            &spawn_args,
+        )
+        .await;
     let spawn_receipt = skip_reason_json(spawn_action);
     let child_request_id = spawn_receipt["child_request_id"]
         .as_str()
@@ -106,14 +106,14 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     .await
     .unwrap();
 
-    let collision_action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "bash",
-        None,
-        "internal-cancel-descendant",
-        "{\"cmd\":\"still running\"}",
-    )
-    .await;
+    let collision_action = hook
+        .on_tool_call(
+            "bash",
+            None,
+            "internal-cancel-descendant",
+            "{\"cmd\":\"still running\"}",
+        )
+        .await;
     assert!(matches!(collision_action, ToolCallHookAction::Continue));
 
     let cancel_args = json!({
@@ -121,14 +121,14 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         "reason": "parent no longer needs this work"
     })
     .to_string();
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "cancel_subagent",
-        Some("model-call-cancel".to_string()),
-        "internal-cancel-tool",
-        &cancel_args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "cancel_subagent",
+            Some("model-call-cancel".to_string()),
+            "internal-cancel-tool",
+            &cancel_args,
+        )
+        .await;
     let result = skip_reason_json(action);
     assert_eq!(result["ok"], true);
     assert_eq!(result["status"], "cancelled");
@@ -204,14 +204,14 @@ async fn cancel_subagent_rejects_unlinked_child_without_lifecycle_row() {
     let session_id = fixture.session_id.clone();
     let cancel_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "cancel_subagent",
-        Some("model-call-cancel-denied".to_string()),
-        "internal-cancel-denied",
-        &cancel_args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "cancel_subagent",
+            Some("model-call-cancel-denied".to_string()),
+            "internal-cancel-denied",
+            &cancel_args,
+        )
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["ok"], false);
     assert_eq!(error["failure_class"], "service_unavailable");

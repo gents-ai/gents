@@ -169,6 +169,10 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         enable_session_history_tool: args.enable_session_history_tool,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections,
+        // `write_tools` is apply-managed (declared in `config apply` manifests);
+        // the imperative command exposes no flag, so leave it `None` to preserve
+        // any apply-managed decls on update (same rationale as subagent_targets).
+        write_tools: None,
     };
     selection.validate()?;
     Ok(ToolSelectionCommandPlan {

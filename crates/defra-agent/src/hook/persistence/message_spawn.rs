@@ -188,6 +188,107 @@ impl DefraSessionHook {
         Ok(())
     }
 
+    /// Reconcile completed-but-unmessaged tool calls for the active request so
+    /// the persisted transcript stays pair-closed on the abort path (#442).
+    ///
+    /// The owned loop runs each tool inline: `on_tool_result` marks the
+    /// `AgentToolCall` row `.completed` (recording its result) before the
+    /// result MESSAGE is yielded, which `StreamProcessor` persists only when it
+    /// observes the streamed `ToolResult`. On a provider stall that streamed
+    /// item never arrives, so a liveness/interrupt abort persists the assistant
+    /// turn (via `persist_partial_turn`) but no result message — leaving a
+    /// `completed` tool call with no paired result, violating
+    /// `Transcript.CompletedToolCallsPaired`. This replays the existing streamed
+    /// result-message persistence for each completed tool call (which loads the
+    /// recorded result from the row and dedupes), restoring pairing. It is the
+    /// `complete_tool_with_result` transition applied late.
+    ///
+    /// Must run after the assistant turn is persisted (so the message-sequence
+    /// gate is satisfied); a no-op otherwise. Idempotent via tool-result dedup.
+    pub(crate) async fn backfill_completed_tool_results(&self) -> anyhow::Result<usize> {
+        let (session_id, request_id) = {
+            let state = self.state.lock().await;
+            if !state.assistant_turn_persisted() {
+                return Ok(0);
+            }
+            match (state.session_id.clone(), state.current_request_id.clone()) {
+                (Some(session_id), Some(request_id)) if !request_id.is_empty() => {
+                    (session_id, request_id)
+                }
+                _ => return Ok(0),
+            }
+        };
+        // `session_id` is required by the streamed-result path below; bind it to
+        // keep the query and that call reading from the same active session.
+        let _ = &session_id;
+
+        let escaped_request_id = crate::graphql::escape_graphql_string(&request_id);
+        let query = format!(
+            r#"{{
+                AgentToolCall(
+                    filter: {{
+                        request_id: {{ _eq: "{escaped_request_id}" }},
+                        lifecycle_state: {{ _eq: "completed" }}
+                    }},
+                    order: {{ message_sequence: ASC }}
+                ) {{ tool_call_id result }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "backfill_completed_tool_results query failed for request_id={}: {:?}",
+                request_id,
+                response.errors
+            );
+        }
+
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut reconciled = 0usize;
+        for row in rows {
+            let internal_call_id = row
+                .get("tool_call_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let result = row
+                .get("result")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if internal_call_id.is_empty() || result.is_empty() {
+                continue;
+            }
+
+            // Resolve the result-message identity the stream path would have used.
+            let (result_id, call_id) = {
+                let state = self.state.lock().await;
+                state.tool_result_message_identity(internal_call_id, None)
+            };
+
+            // Replay the streamed result-message persistence: it loads the
+            // recorded result from the row (so the empty content here is
+            // replaced) and dedupes, so an already-paired call is a no-op.
+            let tool_result = ToolResult {
+                id: result_id,
+                call_id,
+                content: OneOrMany::one(ToolResultContent::Text(Text {
+                    text: String::new(),
+                })),
+            };
+            self.persist_stream_tool_result_message(&tool_result, internal_call_id)
+                .await?;
+            reconciled += 1;
+        }
+
+        Ok(reconciled)
+    }
+
     pub(super) async fn ensure_assistant_turn_sequence(
         &self,
     ) -> anyhow::Result<(String, String, chrono::DateTime<chrono::Utc>, u32)> {

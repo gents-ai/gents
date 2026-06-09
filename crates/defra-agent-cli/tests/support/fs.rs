@@ -524,12 +524,17 @@ pub async fn assert_runtime_init_state(
             .and_then(Value::as_bool),
         Some(true)
     );
+    // An empty MCP allowlist may be stored as `null` rather than `[]`: the
+    // GraphQL writer renders empty string-lists as `null` to avoid corrupting
+    // DefraDB NillableStringArray columns, and the runtime collapses both
+    // `null` and `[]` to an empty `Vec` (`unwrap_or_default`), so they are
+    // semantically identical. Accept null/absent/[] as "empty".
+    let mcp_allowlist = tool_selection.get("allowed_mcp_service_ids");
     assert!(
-        tool_selection
-            .get("allowed_mcp_service_ids")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "expected default tool selection MCP allowlist to be empty: {tool_selection}"
+        mcp_allowlist.map_or(true, |value| {
+            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+        }),
+        "expected default tool selection MCP allowlist to be empty (null or []): {tool_selection}"
     );
 
     Ok(())
