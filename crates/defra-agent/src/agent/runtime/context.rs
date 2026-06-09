@@ -128,12 +128,14 @@ impl RuntimeContext {
                     "building OpenAI-compatible completion client for behavior {} against {}",
                     behavior.behavior_id, behavior.backend_endpoint
                 );
-                let client: rig::providers::openai::CompletionsClient =
-                    rig::providers::openai::CompletionsClient::builder()
-                        .api_key(&api_key)
-                        .base_url(&behavior.backend_endpoint)
-                        .build()
-                        .with_context(|| build_context.clone())?;
+                let client: rig::providers::openai::CompletionsClient<
+                    crate::inference_http::SessionTaggingHttpClient,
+                > = rig::providers::openai::CompletionsClient::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .http_client(crate::inference_http::SessionTaggingHttpClient::default())
+                    .build()
+                    .with_context(|| build_context.clone())?;
                 self.run_behavior_with_client(
                     behavior,
                     request_rx,

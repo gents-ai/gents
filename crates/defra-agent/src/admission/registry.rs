@@ -160,6 +160,7 @@ impl AdmissionRegistry {
             backend_id: backend_id.into(),
             behavior_id: behavior_id.into(),
             agent_did: agent_did.into(),
+            session_id: "session-test".to_string(),
             call_kind,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),

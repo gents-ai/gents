@@ -169,6 +169,9 @@ pub(crate) struct AdmissionCallContext {
     pub(super) backend_id: String,
     pub(super) behavior_id: String,
     pub(super) agent_did: String,
+    /// Stable per-conversation id, emitted as `x-session-id` on inference
+    /// requests for sticky-session load-balancer routing (issue #447).
+    pub(super) session_id: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
@@ -195,6 +198,7 @@ impl AdmissionCallContext {
             backend_id: backend_id.into(),
             behavior_id: behavior_id.into(),
             agent_did: request.agent_did.clone(),
+            session_id: request.session_id.clone(),
             call_kind: CallKind::Inference,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
@@ -295,4 +299,13 @@ pub(super) fn current_context() -> Result<AdmissionCallContext, CompletionError>
     ADMISSION_CALL_CONTEXT
         .try_with(Clone::clone)
         .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
+}
+
+/// The session id of the in-flight inference request, if called within a
+/// request scope. Used to tag outbound inference requests with `x-session-id`
+/// for sticky-session routing (issue #447); returns `None` outside a scope.
+pub(crate) fn current_session_id() -> Option<String> {
+    ADMISSION_CALL_CONTEXT
+        .try_with(|context| context.session_id.clone())
+        .ok()
 }
