@@ -1200,6 +1200,8 @@ pub(crate) struct InferenceProfileUpsertArgs {
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]
+    pub(crate) stream_liveness_timeout_secs: Option<i64>,
+    #[arg(long)]
     pub(crate) deadline_duration_secs: Option<i64>,
 }
 

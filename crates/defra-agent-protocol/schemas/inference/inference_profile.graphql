@@ -6,5 +6,6 @@ type InferenceProfile {
     max_turns: Int
     temperature: Float
     stream_batch_ms: Int
+    stream_liveness_timeout_secs: Int
     deadline_duration_secs: Int
 }

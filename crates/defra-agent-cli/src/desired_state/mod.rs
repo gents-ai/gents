@@ -308,6 +308,7 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) max_turns: Option<i64>,
     pub(crate) temperature: Option<f64>,
     pub(crate) stream_batch_ms: Option<i64>,
+    pub(crate) stream_liveness_timeout_secs: Option<i64>,
     pub(crate) deadline_duration_secs: Option<i64>,
 }
 

@@ -11,6 +11,13 @@ use crate::post_graphql;
 use crate::print_json;
 
 pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
+    if args
+        .stream_liveness_timeout_secs
+        .is_some_and(|value| value <= 0)
+    {
+        anyhow::bail!("stream_liveness_timeout_secs must be positive");
+    }
+
     let add_fields = vec![
         Some(format!(
             r#"profile_id: "{}""#,
@@ -22,6 +29,10 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_i64_field("max_turns", args.max_turns),
         optional_f64_field("temperature", args.temperature),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
+        optional_i64_field(
+            "stream_liveness_timeout_secs",
+            args.stream_liveness_timeout_secs,
+        ),
         optional_i64_field("deadline_duration_secs", args.deadline_duration_secs),
     ]
     .into_iter()
@@ -35,6 +46,10 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_i64_field("max_turns", args.max_turns),
         optional_f64_field("temperature", args.temperature),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
+        optional_i64_field(
+            "stream_liveness_timeout_secs",
+            args.stream_liveness_timeout_secs,
+        ),
         optional_i64_field("deadline_duration_secs", args.deadline_duration_secs),
     ]
     .into_iter()
@@ -68,6 +83,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         "max_turns": args.max_turns,
         "temperature": args.temperature,
         "stream_batch_ms": args.stream_batch_ms,
+        "stream_liveness_timeout_secs": args.stream_liveness_timeout_secs,
         "deadline_duration_secs": args.deadline_duration_secs,
     });
     print_json(&output)?;

@@ -92,6 +92,9 @@ fn build_agent_behavior_for_routing_test(
         compaction_threshold: defra_agent::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: defra_agent::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: defra_agent::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: std::time::Duration::from_secs(
+            defra_agent::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: std::time::Duration::from_secs(
             defra_agent::DEFAULT_DEADLINE_DURATION_SECS,
         ),

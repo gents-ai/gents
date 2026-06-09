@@ -70,7 +70,7 @@ pub use compaction::CompactionStrategy;
 pub use config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;

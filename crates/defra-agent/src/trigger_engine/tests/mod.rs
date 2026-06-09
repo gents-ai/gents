@@ -449,6 +449,9 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: SamplingConfig::default(),
     })

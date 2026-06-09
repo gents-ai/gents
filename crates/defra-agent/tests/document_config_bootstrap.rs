@@ -118,6 +118,7 @@ async fn load_inference_profile_reads_document_fields() {
     assert_eq!(profile.context_window, Some(32768));
     assert_eq!(profile.max_output_tokens, Some(4096));
     assert_eq!(profile.temperature, Some(0.2));
+    assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
     assert_eq!(profile.deadline_duration_secs, Some(120));
 }
 
@@ -137,6 +138,7 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
             max_turns: Some(8),
             temperature: Some(0.2),
             stream_batch_ms: Some(500),
+            stream_liveness_timeout_secs: Some(45),
             deadline_duration_secs: Some(120),
         },
     )
@@ -181,6 +183,7 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
         .expect("load profile")
         .expect("profile exists");
     assert_eq!(profile.context_window, Some(32768));
+    assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
     assert_eq!(profile.deadline_duration_secs, Some(120));
 }
 
@@ -249,6 +252,7 @@ async fn insert_inference_profile(node: &defra_agent::defra_node::EmbeddedNode, 
                 max_turns: 8,
                 temperature: 0.2,
                 stream_batch_ms: 500,
+                stream_liveness_timeout_secs: 45,
                 deadline_duration_secs: 120
             }}) {{ _docID }}
         }}"#

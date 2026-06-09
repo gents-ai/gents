@@ -11,7 +11,6 @@ use tracing::Instrument;
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
 use crate::completion_factory::agent_with_request_sampling;
-use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
 use crate::streaming::{StreamStatus, StreamWriter};
@@ -229,8 +228,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
                     async {
-                        let liveness_timeout =
-                            Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
+                        let liveness_timeout = self.behavior.stream_liveness_timeout;
 
                         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
@@ -319,7 +317,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     }
                                     let timeout_reason = format!(
                                         "stream liveness timeout: no data received for {}s",
-                                        DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                                        liveness_timeout.as_secs()
                                     );
                                     admission::set_terminal_failure_reason(
                                         &terminal_failure_reason,

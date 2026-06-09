@@ -43,6 +43,7 @@ pub struct AgentBehavior {
     pub compaction_threshold: f64,
     pub compaction_strategy: CompactionStrategy,
     pub stream_batch_ms: u64,
+    pub stream_liveness_timeout: Duration,
     pub deadline_duration: Duration,
     pub sampling: SamplingConfig,
     /// Effective skill set for this behavior (decision D5), resolved at
@@ -103,6 +104,7 @@ impl std::fmt::Debug for AgentBehavior {
             .field("compaction_threshold", &self.compaction_threshold)
             .field("compaction_strategy", &self.compaction_strategy)
             .field("stream_batch_ms", &self.stream_batch_ms)
+            .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("deadline_duration", &self.deadline_duration)
             .field("sampling", &self.sampling)
             // Included so the runtime configuration fingerprint (which hashes

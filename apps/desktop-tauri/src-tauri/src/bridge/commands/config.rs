@@ -169,6 +169,12 @@ pub(crate) async fn save_inference_profile_config(
 ) -> Result<()> {
     let profile_id = require_trimmed("profile_id", request.profile_id)?;
     let display_name = require_trimmed("display_name", request.display_name)?;
+    if request
+        .stream_liveness_timeout_secs
+        .is_some_and(|value| value <= 0)
+    {
+        anyhow::bail!("stream_liveness_timeout_secs must be positive");
+    }
 
     let store = core.store().snapshot();
     let mut row = store
@@ -184,6 +190,7 @@ pub(crate) async fn save_inference_profile_config(
             max_turns: None,
             temperature: None,
             stream_batch_ms: None,
+            stream_liveness_timeout_secs: None,
             deadline_duration_secs: None,
         });
     row.display_name = Some(display_name);
@@ -192,6 +199,7 @@ pub(crate) async fn save_inference_profile_config(
     row.max_turns = request.max_turns;
     row.temperature = request.temperature;
     row.stream_batch_ms = request.stream_batch_ms;
+    row.stream_liveness_timeout_secs = request.stream_liveness_timeout_secs;
     row.deadline_duration_secs = request.deadline_duration_secs;
     core.save_inference_profile(&row).await?;
     Ok(())

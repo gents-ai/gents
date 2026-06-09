@@ -103,6 +103,7 @@ export function InferenceProfileConfigEditor({
   const [maxTurns, setMaxTurns] = useState("");
   const [temperature, setTemperature] = useState("");
   const [streamBatchMs, setStreamBatchMs] = useState("");
+  const [streamLivenessSecs, setStreamLivenessSecs] = useState("");
   const [deadlineSecs, setDeadlineSecs] = useState("");
 
   useEffect(() => {
@@ -119,6 +120,11 @@ export function InferenceProfileConfigEditor({
     setStreamBatchMs(
       profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
     );
+    setStreamLivenessSecs(
+      profile?.streamLivenessTimeoutSecs != null
+        ? String(profile.streamLivenessTimeoutSecs)
+        : "",
+    );
     setDeadlineSecs(
       profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
     );
@@ -129,6 +135,7 @@ export function InferenceProfileConfigEditor({
   const maxTurnsValid = isOptionalInt(maxTurns, { min: 1 });
   const temperatureValid = isOptionalFloat(temperature, { min: 0 });
   const streamBatchValid = isOptionalInt(streamBatchMs, { min: 0 });
+  const streamLivenessValid = isOptionalInt(streamLivenessSecs, { min: 1 });
   const deadlineValid = isOptionalInt(deadlineSecs, { min: 1 });
 
   async function submitProfile(event: FormEvent) {
@@ -143,6 +150,7 @@ export function InferenceProfileConfigEditor({
         maxTurns: parseOptionalInt(maxTurns),
         temperature: parseOptionalFloat(temperature),
         streamBatchMs: parseOptionalInt(streamBatchMs),
+        streamLivenessTimeoutSecs: parseOptionalInt(streamLivenessSecs),
         deadlineDurationSecs: parseOptionalInt(deadlineSecs),
       });
       onSaved(nextId);
@@ -234,6 +242,17 @@ export function InferenceProfileConfigEditor({
           />
         </label>
         <label className="field">
+          <span>Stream liveness seconds</span>
+          <input
+            data-testid="profile-stream-liveness-timeout-secs"
+            onChange={(event) => setStreamLivenessSecs(event.currentTarget.value)}
+            type="number"
+            value={streamLivenessSecs}
+          />
+        </label>
+      </div>
+      <div className="grid-3">
+        <label className="field">
           <span>Deadline seconds</span>
           <input
             data-testid="profile-deadline-duration-secs"
@@ -256,6 +275,7 @@ export function InferenceProfileConfigEditor({
             !maxTurnsValid ||
             !temperatureValid ||
             !streamBatchValid ||
+            !streamLivenessValid ||
             !deadlineValid
           }
           type="submit"

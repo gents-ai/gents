@@ -179,6 +179,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "duplicate profile_id in inference-profiles.json: {profile_id}"
             ));
         }
+        if profile
+            .stream_liveness_timeout_secs
+            .is_some_and(|value| value <= 0)
+        {
+            errors.push(format!(
+                "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+            ));
+        }
     }
 
     for service in &manifest.tool_service_registries {

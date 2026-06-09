@@ -88,6 +88,20 @@ fn backend(id: &str) -> DesiredInferenceBackend {
     }
 }
 
+fn profile(id: &str) -> DesiredInferenceProfile {
+    DesiredInferenceProfile {
+        profile_id: id.to_string(),
+        display_name: Some(id.to_string()),
+        context_window: None,
+        max_output_tokens: None,
+        max_turns: None,
+        temperature: None,
+        stream_batch_ms: None,
+        stream_liveness_timeout_secs: None,
+        deadline_duration_secs: None,
+    }
+}
+
 fn deletes_contain(
     deletes: &[defra_agent::apply_model::DocRef],
     collection: defra_agent::Collection,
@@ -976,6 +990,23 @@ fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
     let mut errors = Vec::new();
     validate_manifest(manifest, &mut errors);
     errors
+}
+
+#[test]
+fn validate_rejects_non_positive_stream_liveness_timeout() {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut profile = profile("fast");
+    profile.stream_liveness_timeout_secs = Some(0);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("stream_liveness_timeout_secs must be positive")),
+        "expected stream_liveness_timeout_secs validation error, got {errors:?}"
+    );
 }
 
 // ── subagent_targets structural validation ──────────────────────────────────

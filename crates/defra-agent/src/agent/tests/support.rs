@@ -71,6 +71,7 @@ pub(super) async fn insert_inference_profile(node: &EmbeddedNode, profile_id: &s
                 max_turns: 8,
                 temperature: 0.2,
                 stream_batch_ms: 500,
+                stream_liveness_timeout_secs: 45,
                 deadline_duration_secs: 120
             }}) {{ _docID }}
         }}"#

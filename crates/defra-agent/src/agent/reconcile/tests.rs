@@ -865,6 +865,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: crate::config::SamplingConfig::default(),
     });
@@ -906,6 +909,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: crate::config::SamplingConfig::default(),
     });

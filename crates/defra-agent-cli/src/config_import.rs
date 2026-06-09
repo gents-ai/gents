@@ -1897,6 +1897,7 @@ mod lean_apply_write_boundary_tests {
             max_turns: None,
             temperature: None,
             stream_batch_ms: None,
+            stream_liveness_timeout_secs: None,
             deadline_duration_secs: None,
         }
     }
