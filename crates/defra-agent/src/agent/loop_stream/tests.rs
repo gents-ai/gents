@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use futures::{stream, StreamExt};
-use rig::completion::message::ToolResultContent;
+use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message, ToolDefinition,
 };
@@ -312,9 +312,10 @@ async fn exceeding_max_turns_terminates_with_error() {
     let prompt = Message::user("loop");
     ready_hook_for(&hook).await;
 
-    // max_turns = 0 permits one completion; the tool call forces a second,
-    // which is blocked and surfaces a max-turns error.
-    let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
+    // max_turns = 0 permits one tool round-trip (2 completions, matching rig);
+    // a model that keeps calling tools is blocked on the completion past the cap
+    // and surfaces a max-turns error.
+    let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
     let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(vec![echo_tool()]), config(0));
     futures::pin_mut!(stream);
 
@@ -402,6 +403,89 @@ async fn oversized_tool_result_is_bounded_before_threading() {
         "expected the threaded result to be bounded: bounded={bounded_len} full={full_len}"
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
+}
+
+#[tokio::test]
+async fn run_loop_to_text_persists_assistant_reply() {
+    // Regression: one-shot (run_loop_to_text) must persist the assistant reply,
+    // not just the user prompt.
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("the answer".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+
+    let reply = run_loop_to_text(
+        model,
+        Some(hook.clone()),
+        Message::user("the question"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    )
+    .await
+    .expect("run_loop_to_text should succeed");
+    assert_eq!(reply, "the answer");
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert!(
+        history.iter().any(|message| matches!(message,
+            Message::Assistant { content, .. }
+                if content.iter().any(|c| matches!(c, AssistantContent::Text(text)
+                    if text.text == "the answer")))),
+        "one-shot must persist the assistant reply; history: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_loop_to_text_persists_tool_using_transcript() {
+    // Regression: for tool-using one-shots, both the assistant tool-call turn and
+    // the tool-result message must be persisted (tool-result persistence gates on
+    // the assistant turn being persisted first).
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+    let model = ScriptedModel::new_turns(vec![
+        echo_tool_turn(),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+
+    let reply = run_loop_to_text(
+        model,
+        Some(hook.clone()),
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(4),
+    )
+    .await
+    .expect("run_loop_to_text should succeed");
+    assert_eq!(reply, "done");
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert!(
+        history.iter().any(|message| matches!(message,
+            Message::User { content }
+                if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
+                    if tool_result_text(&result.content.first()) == "ECHOED")))),
+        "tool-using one-shot must persist the tool-result message; history: {history:?}"
+    );
+    assert!(
+        history.iter().any(|message| matches!(message,
+            Message::Assistant { content, .. }
+                if content.iter().any(|c| matches!(c, AssistantContent::Text(text)
+                    if text.text == "done")))),
+        "tool-using one-shot must persist the final assistant reply; history: {history:?}"
+    );
 }
 
 #[test]

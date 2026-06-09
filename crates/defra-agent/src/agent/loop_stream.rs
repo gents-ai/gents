@@ -89,7 +89,11 @@ where
         let mut current_turn: usize = 0;
 
         loop {
-            if current_turn > config.max_turns {
+            // rig semantics: `max_turns` is the number of tool round-trips, so up
+            // to `max_turns + 1` completions are allowed (the extra one produces
+            // the final text answer after the last tool call). Matches rig's
+            // `current_max_turns > self.max_turns + 1` break.
+            if current_turn > config.max_turns + 1 {
                 Err(StreamingError::Completion(CompletionError::ResponseError(format!(
                     "owned loop exceeded max turns ({})",
                     config.max_turns
@@ -268,10 +272,17 @@ where
     }
 }
 
-/// Drive the owned loop to completion and return the final assistant text,
-/// for the non-streaming call sites (`oneshot`, `compaction`, title generation)
-/// that previously used rig's `Agent::prompt`. Tool side-effects still run via
-/// the hook when present; intermediate stream items are discarded.
+/// Drive the owned loop to completion and return the final assistant text, for
+/// the non-streaming call sites (`oneshot`, `compaction`, title generation) that
+/// previously used rig's `Agent::prompt`.
+///
+/// When a hook is present (one-shot), this persists the transcript exactly as the
+/// daemon's `StreamProcessor` does — assistant turns and tool-result messages —
+/// so one-shot sessions store the full reply, not just the prompt. (The daemon
+/// path has its own `StreamProcessor`; this is the equivalent for the collected,
+/// non-streaming path, minus the live-streaming/response-doc bits.) With no hook
+/// (compaction/title) nothing is persisted. Persistence is best-effort: a failure
+/// is logged, not fatal to the run.
 pub(crate) async fn run_loop_to_text<M>(
     model: M,
     hook: Option<DefraSessionHook>,
@@ -284,15 +295,74 @@ where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
 {
-    let stream = run_loop_stream(model, hook, prompt, history, tools, config);
+    let stream = run_loop_stream(model, hook.clone(), prompt, history, tools, config);
     futures::pin_mut!(stream);
+    let mut accumulator = AssistantTurnAccumulator::default();
     let mut final_text = String::new();
+
     while let Some(item) = stream.next().await {
-        if let MultiTurnStreamItem::FinalResponse(final_response) = item? {
-            final_text = final_response.response().to_string();
+        match item? {
+            MultiTurnStreamItem::StreamAssistantItem(content) => match content {
+                StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
+                StreamedAssistantContent::Reasoning(reasoning) => {
+                    accumulator.push_reasoning(reasoning)
+                }
+                StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
+                    accumulator.push_reasoning_delta(id, &reasoning)
+                }
+                StreamedAssistantContent::ToolCall {
+                    tool_call,
+                    internal_call_id,
+                } => {
+                    if let Some(hook) = hook.as_ref() {
+                        hook.register_stream_tool_call_identity(
+                            &internal_call_id,
+                            &tool_call.id,
+                            tool_call.call_id.as_deref(),
+                        )
+                        .await;
+                    }
+                    accumulator.push_tool_call(tool_call);
+                }
+                _ => {}
+            },
+            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                tool_result,
+                internal_call_id,
+            }) => {
+                if let Some(hook) = hook.as_ref() {
+                    if let Some(message) = accumulator.take_message() {
+                        persist_best_effort(hook.persist_message(&message).await, "assistant turn");
+                    }
+                    persist_best_effort(
+                        hook.persist_stream_tool_result_message(&tool_result, &internal_call_id)
+                            .await,
+                        "tool result message",
+                    );
+                }
+            }
+            MultiTurnStreamItem::FinalResponse(final_response) => {
+                accumulator.reconcile_text(final_response.response());
+                if let Some(hook) = hook.as_ref() {
+                    if let Some(message) = accumulator.take_message() {
+                        persist_best_effort(
+                            hook.persist_message(&message).await.map(|_| ()),
+                            "final assistant turn",
+                        );
+                    }
+                }
+                final_text = final_response.response().to_string();
+            }
+            _ => {}
         }
     }
     Ok(final_text)
+}
+
+fn persist_best_effort<T>(result: anyhow::Result<T>, what: &str) {
+    if let Err(error) = result {
+        tracing::warn!(error = %error, "failed to persist one-shot {what}");
+    }
 }
 
 /// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):

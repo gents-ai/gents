@@ -224,7 +224,7 @@ impl AssistantTurnAccumulator {
         self.build_message()
     }
 
-    fn reconcile_text(&mut self, final_text: &str) {
+    pub(crate) fn reconcile_text(&mut self, final_text: &str) {
         if final_text.is_empty() {
             return;
         }
@@ -245,7 +245,16 @@ impl AssistantTurnAccumulator {
             self.push_reasoning(assembled);
         }
 
+        // Order matches rig's streaming loop (text, then reasoning, then tool
+        // calls) so the assistant message we thread back to the provider — and
+        // persist — never places text after tool calls, which strict providers
+        // reject.
         let mut content = Vec::new();
+        if !self.text.is_empty() {
+            content.push(AssistantMessageContent::Text(CompletionText {
+                text: std::mem::take(&mut self.text),
+            }));
+        }
         content.extend(
             self.reasoning
                 .drain(..)
@@ -256,12 +265,6 @@ impl AssistantTurnAccumulator {
                 .drain(..)
                 .map(AssistantMessageContent::ToolCall),
         );
-
-        if !self.text.is_empty() {
-            content.push(AssistantMessageContent::Text(CompletionText {
-                text: std::mem::take(&mut self.text),
-            }));
-        }
 
         self.pending_reasoning_delta_text.clear();
         self.pending_reasoning_delta_id = None;

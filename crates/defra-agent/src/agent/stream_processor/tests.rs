@@ -117,10 +117,11 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         &history[1],
         Message::Assistant { content, .. }
             if content.len() == 2
-                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning)
-                    if reasoning.id.as_deref() == Some("rs_partial"))
-                && matches!(content.iter().nth(1), Some(AssistantContent::Text(Text { text }))
+                // Order is text, then reasoning (rig's threading/persist order).
+                && matches!(content.first_ref(), AssistantContent::Text(Text { text })
                     if text == "I started by checking the repo layout.")
+                && matches!(content.iter().nth(1), Some(AssistantContent::Reasoning(reasoning))
+                    if reasoning.id.as_deref() == Some("rs_partial"))
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);
