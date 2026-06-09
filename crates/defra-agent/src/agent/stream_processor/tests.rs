@@ -468,6 +468,168 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 }
 
 #[tokio::test]
+async fn backfill_pairs_completed_tool_result_after_provider_stall() {
+    // #442 regression. Owned-loop order on a provider stall: the tool runs
+    // inline (on_tool_result marks the AgentToolCall row .completed and records
+    // its result, but persists NO result message because the assistant turn is
+    // not yet persisted), then the provider stalls so the streamed ToolResult
+    // never arrives. The abort path persists the partial assistant turn (with
+    // the tool call) — leaving a completed tool call with no result message,
+    // violating Transcript.CompletedToolCallsPaired. backfill_completed_tool_results
+    // must reconcile it (and be idempotent).
+    let data_path =
+        std::env::temp_dir().join(format!("agent-442-backfill-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = crate::hook::DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("use the echo tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    // The AgentToolCall row records its request_id from the hook's active request,
+    // which is what backfill scopes its query by.
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "use the echo tool".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    let call_id = "call-1";
+    let tool_args = r#"{"x":1}"#;
+    let tool_output = "ECHOED-RESULT";
+
+    // Accumulate the assistant tool call so persist_partial_turn writes the turn.
+    processor.assistant_turn.push_tool_call(ToolCall {
+        id: call_id.to_string(),
+        call_id: Some(call_id.to_string()),
+        function: ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::from_str(tool_args).unwrap(),
+        },
+        signature: None,
+        additional_params: None,
+    });
+    hook.register_stream_tool_call_identity(call_id, call_id, Some(call_id))
+        .await;
+
+    // Tool runs inline: lifecycle started, then completed with its result. No
+    // result message persists yet (assistant turn not persisted).
+    assert!(matches!(
+        hook.on_tool_call("echo", Some(call_id.to_string()), call_id, tool_args)
+            .await,
+        rig::agent::ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result("echo", Some(call_id.to_string()), call_id, tool_args, tool_output)
+            .await,
+        HookAction::Continue
+    ));
+
+    // Abort: persist the partial assistant turn (the tool-call message).
+    assert!(processor
+        .persist_partial_turn("persist errored assistant turn")
+        .await
+        .unwrap());
+
+    // The orphan: the completed tool call has no paired result message yet.
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        0,
+        "result message must be absent before backfill (the #442 orphan)"
+    );
+
+    // Backfill reconciles the completed tool call's result message.
+    let reconciled = hook.backfill_completed_tool_results().await.unwrap();
+    assert_eq!(reconciled, 1, "one completed tool call should be reconciled");
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        1,
+        "backfill must persist exactly one tool-result message (pair closure)"
+    );
+
+    // Idempotent: a second backfill must not duplicate the result message.
+    hook.backfill_completed_tool_results().await.unwrap();
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        1,
+        "backfill must be idempotent (dedup)"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+async fn count_tool_result_messages(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+) -> usize {
+    crate::session::load_history(node, session_id)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::User { content }
+                if matches!(content.first_ref(), UserContent::ToolResult(_)))
+        })
+        .count()
+}
+
+#[tokio::test]
 async fn post_tool_resumed_resets_response_tail() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-stream-processor-tool-reset-{}",

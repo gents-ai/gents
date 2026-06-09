@@ -277,6 +277,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to persist interrupted assistant turn before terminal transition"
                                         );
                                     }
+                                    // #442: a tool that completed inline before the
+                                    // interrupt recorded its result on the AgentToolCall
+                                    // row but may not have persisted its result message;
+                                    // backfill so the transcript stays pair-closed.
+                                    if let Err(error) = persistence_hook
+                                        .backfill_completed_tool_results()
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to backfill completed tool-result messages on interrupt"
+                                        );
+                                    }
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 result = await_with_request_deadline(
@@ -360,6 +375,23 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
+                            // #442: a tool that completed inline before the stream
+                            // stalled recorded its result on the AgentToolCall row but
+                            // may not have persisted its result message (the streamed
+                            // ToolResult never arrived); backfill so the transcript
+                            // stays pair-closed and the next request is not sent a
+                            // dangling assistant tool call.
+                            if let Err(error) = persistence_hook
+                                .backfill_completed_tool_results()
+                                .await
+                            {
+                                tracing::warn!(
+                                    request_id = %request_id,
+                                    session_id = %session_id,
+                                    error = %error,
+                                    "failed to backfill completed tool-result messages after stream error"
+                                );
+                            }
 
                             let error_reason = format!("agent stream failed: {}", error);
                             self.stream_writer
