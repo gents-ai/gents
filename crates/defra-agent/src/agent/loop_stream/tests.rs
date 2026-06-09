@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, StreamExt};
-use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
+use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message,
 };
@@ -809,20 +809,20 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let (_node, hook) = test_hook().await;
     ready_hook_for(&hook).await;
 
-    let unpaired_call = rig::completion::message::ToolCall {
+    let unpaired_call = crate::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
-        function: rig::completion::message::ToolFunction {
+        function: crate::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
         signature: None,
         additional_params: None,
     };
-    let paired_call = rig::completion::message::ToolCall {
+    let paired_call = crate::llm::message::ToolCall {
         id: "call-paired".to_string(),
         call_id: Some("call-paired".to_string()),
-        function: rig::completion::message::ToolFunction {
+        function: crate::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -832,12 +832,12 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let dirty_history = vec![
         // Orphaned result: its call was compacted away.
         Message::User {
-            content: OneOrMany::one(UserContent::tool_result(
+            content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                OneOrMany::one(rig::completion::message::ToolResultContent::text(
+                vec_one(crate::llm::message::ToolResultContent::text(
                     "orphaned",
                 )),
-            )),
+            )],
         },
         // Misordered assistant turn (text AFTER calls) with one unpaired call.
         Message::Assistant {
@@ -845,17 +845,17 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
             content: OneOrMany::many(vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
-                AssistantContent::Text(rig::completion::message::Text {
+                AssistantContent::Text(crate::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
             ])
             .unwrap(),
         },
         Message::User {
-            content: OneOrMany::one(UserContent::tool_result(
+            content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                OneOrMany::one(rig::completion::message::ToolResultContent::text("ok")),
-            )),
+                vec_one(crate::llm::message::ToolResultContent::text("ok")),
+            )],
         },
     ];
 

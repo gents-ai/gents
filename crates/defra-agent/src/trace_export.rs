@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rig::completion::message::{AssistantContent, Message};
+use crate::llm::message::{AssistantContent, Message};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

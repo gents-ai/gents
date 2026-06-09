@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use crate::llm::{HookAction, ToolCallHookAction};
-use rig::completion::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
-use rig::one_or_many::OneOrMany;
+use crate::llm::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;

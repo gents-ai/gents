@@ -1,12 +1,11 @@
 use std::sync::{Arc, Mutex};
 
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
 };
-use rig::one_or_many::OneOrMany;
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
@@ -17,15 +16,15 @@ use crate::session;
 fn text_msg(role: &str, text: &str) -> Message {
     match role {
         "user" => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: text.to_string(),
-            })),
+            })],
         },
         "assistant" => Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: text.to_string(),
-            })),
+            })],
         },
         _ => panic!("unknown role"),
     }
@@ -34,28 +33,28 @@ fn text_msg(role: &str, text: &str) -> Message {
 fn tool_call_msg(name: &str, args: &str) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
-            function: rig::completion::message::ToolFunction {
+            function: crate::llm::message::ToolFunction {
                 name: name.to_string(),
                 arguments: serde_json::from_str(args).unwrap_or_default(),
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     }
 }
 
 fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec_one(ToolResultContent::Text(Text {
                 text: result_text.to_string(),
             })),
-        })),
+        })],
     }
 }
 
@@ -63,7 +62,7 @@ fn tool_call_content(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
         id: id.to_string(),
         call_id: Some(id.to_string()),
-        function: rig::completion::message::ToolFunction {
+        function: crate::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -133,7 +132,7 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
         text_msg("user", "go"),
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-X")),
+            content: vec![tool_call_content("call-X")],
         },
     ];
     let out = super::history::drop_unpaired_tool_calls(messages);
@@ -155,7 +154,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
         Message::Assistant {
             id: Some("msg-1".to_string()),
             content: OneOrMany::many(vec![
-                AssistantContent::Reasoning(rig::completion::message::Reasoning::new("why")),
+                AssistantContent::Reasoning(crate::llm::message::Reasoning::new("why")),
                 tool_call_content("call-A"),
                 tool_call_content("call-B"),
                 AssistantContent::Text(Text {
@@ -240,7 +239,7 @@ fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
     let messages = vec![
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-A")),
+            content: vec![tool_call_content("call-A")],
         },
         tool_result_msg("call-A", "A-result"),
         text_msg("user", "next"),
@@ -264,7 +263,7 @@ fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
         text_msg("user", "continue"),
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-A")),
+            content: vec![tool_call_content("call-A")],
         },
         tool_result_msg("call-A", "A-result"),
     ];
@@ -300,9 +299,9 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
             UserContent::ToolResult(ToolResult {
                 id: "call-GONE".to_string(),
                 call_id: Some("call-GONE".to_string()),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: "orphaned".to_string(),
-                })),
+                })],
             }),
         ])
         .unwrap(),
@@ -324,11 +323,11 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
         tool_result_msg("call-GONE", "orphaned"),
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-UNPAIRED")),
+            content: vec![tool_call_content("call-UNPAIRED")],
         },
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-A")),
+            content: vec![tool_call_content("call-A")],
         },
         tool_result_msg("call-A", "A-result"),
     ];
@@ -352,7 +351,7 @@ fn sanitize_repairs_result_preceding_its_call() {
         tool_result_msg("call-A", "early result"),
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(tool_call_content("call-A")),
+            content: vec![tool_call_content("call-A")],
         },
     ];
     let out = super::sanitize_history_for_provider(messages);
@@ -414,9 +413,9 @@ impl CompletionModel for MockSummaryModel {
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
         *self.last_request.lock().unwrap() = Some(request);
         Ok(CompletionResponse {
-            choice: OneOrMany::one(AssistantContent::Text(Text {
+            choice: vec![AssistantContent::Text(Text {
                 text: self.response.clone(),
-            })),
+            })],
             usage: Usage::new(),
             raw_response: (),
             message_id: None,
@@ -552,9 +551,9 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let mut sequence = 1;
     for turn in 0..55 {
         let user = Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: format!("Request {turn}: {}", "x".repeat(800)),
-            })),
+            })],
         };
         let assistant_tool_call = tool_call_msg("read", r#"{"file_path": "/workspace/main.rs"}"#);
         let tool_result = tool_result_msg("call-1", &"file contents\n".repeat(50));

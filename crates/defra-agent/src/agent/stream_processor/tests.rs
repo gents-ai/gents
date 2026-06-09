@@ -3,11 +3,10 @@ use std::time::Duration;
 
 use crate::llm::HookAction;
 use rig::agent::MultiTurnStreamItem;
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
@@ -19,9 +18,9 @@ use crate::watcher::AgentRequest;
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
@@ -289,9 +288,9 @@ fn tool_result_item_with_call_id(
             tool_result: ToolResult {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: result_json.to_string(),
-                })),
+                })],
             },
             internal_call_id: internal_id.to_string(),
         },

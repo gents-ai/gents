@@ -1,6 +1,5 @@
 use super::*;
-use rig::completion::message::{Text, ToolCall, ToolFunction};
-use rig::one_or_many::OneOrMany;
+use crate::llm::message::{Text, ToolCall, ToolFunction};
 
 #[test]
 fn successful_completed_result_has_no_failure_class() {

@@ -187,7 +187,6 @@ fn render_reasoning_summary(reasoning: &Reasoning) -> String {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
             ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
             ReasoningContent::Redacted { .. } => "[redacted reasoning]",
-            _ => "[opaque reasoning]",
         };
         if !out.is_empty() {
             out.push('\n');

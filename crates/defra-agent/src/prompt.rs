@@ -22,8 +22,7 @@
 //! conversation messages — never by mutating the preamble.
 
 use anyhow::Result;
-use rig::completion::message::{Message, Text, UserContent};
-use rig::one_or_many::OneOrMany;
+use crate::llm::message::{Message, Text, UserContent};
 
 use crate::config::AgentBehavior;
 use crate::tool_surface::ToolSurface;
@@ -216,9 +215,9 @@ impl LayeredPromptBuilder {
     /// Used for behavior-context updates without mutating the preamble.
     pub fn system_reminder(text: &str) -> Message {
         Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: format!("<system-reminder>\n{}\n</system-reminder>", text),
-            })),
+            })],
         }
     }
 }

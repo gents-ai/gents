@@ -1,5 +1,5 @@
 use super::*;
-use rig::completion::message::AssistantContent;
+use crate::llm::message::AssistantContent;
 
 fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_behavior(
@@ -15,18 +15,18 @@ fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilde
 
 fn user_msg(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
 fn assistant_msg(text: &str) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 

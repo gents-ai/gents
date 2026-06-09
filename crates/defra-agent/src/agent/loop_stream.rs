@@ -29,14 +29,12 @@ use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
-use rig::completion::{
-    CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,
-};
+use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
+use crate::llm::rig_compat;
+use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
 
 use crate::llm::tool::ToolDyn;
 use crate::llm::ToolChoice;
-use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::stream_processor::AssistantTurnAccumulator;
@@ -114,12 +112,14 @@ where
                     .last()
                     .cloned()
                     .expect("new_messages always retains at least the initial prompt");
-                let chat_history =
-                    error_chat_history(&history, &new_messages[..new_messages.len() - 1]);
+                let chat_history = rig_compat::to_rig_messages(&error_chat_history(
+                    &history,
+                    &new_messages[..new_messages.len() - 1],
+                ));
                 Err(StreamingError::Prompt(Box::new(PromptError::MaxTurnsError {
                     max_turns: config.max_turns,
                     chat_history: Box::new(chat_history),
-                    prompt: Box::new(prompt),
+                    prompt: Box::new(rig_compat::to_rig_message(&prompt)),
                 })))?;
             }
             current_turn += 1;
@@ -141,7 +141,10 @@ where
                     hook.on_completion_call(&current_prompt, &history_snapshot).await
                 {
                     Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
-                        chat_history: error_chat_history(&history, &new_messages),
+                        chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                            &history,
+                            &new_messages,
+                        )),
                         reason,
                     })))?;
                 }
@@ -173,7 +176,7 @@ where
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(reasoning.clone());
+                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
@@ -181,7 +184,7 @@ where
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
-                        accumulator.push_tool_call(tool_call.clone());
+                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                         // Yield the tool call first (so the consumer registers its
                         // stream-call identity), then execute it immediately — rig
                         // runs each tool the moment its ToolCall arrives. Executing
@@ -223,7 +226,10 @@ where
                             ToolCallHookAction::Terminate { reason } => {
                                 Err(StreamingError::Prompt(Box::new(
                                     PromptError::PromptCancelled {
-                                        chat_history: error_chat_history(&history, &new_messages),
+                                        chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                                            &history,
+                                            &new_messages,
+                                        )),
                                         reason,
                                     },
                                 )))?;
@@ -266,10 +272,10 @@ where
                                     if let HookAction::Terminate { reason } = result_action {
                                         Err(StreamingError::Prompt(Box::new(
                                             PromptError::PromptCancelled {
-                                                chat_history: error_chat_history(
+                                                chat_history: rig_compat::to_rig_messages(&error_chat_history(
                                                     &history,
                                                     &new_messages,
-                                                ),
+                                                )),
                                                 reason,
                                             },
                                         )))?;
@@ -279,7 +285,7 @@ where
                             }
                         };
 
-                        pending_results.push((tool_call, internal_call_id, bounded_result));
+                        pending_results.push((rig_compat::from_rig_tool_call(&tool_call), internal_call_id, bounded_result));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                         // Informational only; the full `ToolCall` is emitted
@@ -326,7 +332,7 @@ where
                     None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
                 };
                 new_messages.push(Message::User {
-                    content: OneOrMany::one(user_content),
+                    content: vec![user_content],
                 });
 
                 let tool_result = ToolResult {
@@ -335,7 +341,7 @@ where
                     content,
                 };
                 yield MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                    tool_result,
+                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
                     internal_call_id,
                 });
             }
@@ -378,7 +384,7 @@ where
             MultiTurnStreamItem::StreamAssistantItem(content) => match content {
                 StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
                 StreamedAssistantContent::Reasoning(reasoning) => {
-                    accumulator.push_reasoning(reasoning)
+                    accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
                 }
                 StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                     accumulator.push_reasoning_delta(id, &reasoning)
@@ -395,7 +401,7 @@ where
                         )
                         .await;
                     }
-                    accumulator.push_tool_call(tool_call);
+                    accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                 }
                 _ => {}
             },
@@ -411,8 +417,11 @@ where
                         )?;
                     }
                     hook.apply_persistence_policy(
-                        hook.persist_stream_tool_result_message(&tool_result, &internal_call_id)
-                            .await,
+                        hook.persist_stream_tool_result_message(
+                            &rig_compat::from_rig_tool_result(&tool_result),
+                            &internal_call_id,
+                        )
+                        .await,
                         "persist one-shot tool result",
                     )?;
                 }
@@ -555,8 +564,8 @@ async fn build_request<M: CompletionModel>(
         .collect();
 
     let mut builder = model
-        .completion_request(prompt)
-        .messages(chat_history)
+        .completion_request(rig_compat::to_rig_message(&prompt))
+        .messages(rig_compat::to_rig_messages(&chat_history))
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
         .additional_params_opt(config.additional_params.clone())

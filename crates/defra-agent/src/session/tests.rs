@@ -1,15 +1,14 @@
 use super::*;
 use crate::ensure_schemas;
 use defra_agent_protocol::transcript::decode_persisted_message;
-use rig::completion::message::{AssistantContent, Text, UserContent};
-use rig::one_or_many::OneOrMany;
+use crate::llm::message::{AssistantContent, Text, UserContent};
 
 #[test]
 fn test_load_history_deserializes_plain_text() {
     let user_msg = Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: "hello".to_string(),
-        })),
+        })],
     };
     let json = serde_json::to_string(&user_msg).unwrap();
     let restored = decode_persisted_message("user", &json);
@@ -20,7 +19,7 @@ fn test_load_history_deserializes_plain_text() {
 fn test_load_history_deserializes_legacy_assistant_content() {
     let legacy_content = OneOrMany::many(vec![
         AssistantContent::Reasoning(
-            rig::completion::message::Reasoning::new("Need to inspect first")
+            crate::llm::message::Reasoning::new("Need to inspect first")
                 .with_id("rs_1".to_string()),
         ),
         AssistantContent::Text(Text {

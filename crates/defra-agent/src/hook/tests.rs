@@ -2,11 +2,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::llm::{HookAction, ToolCallHookAction};
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::one_or_many::OneOrMany;
 use serde_json::json;
 
 use super::*;
@@ -17,9 +16,9 @@ use crate::lean_vocab_test::{
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
@@ -966,9 +965,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         &ToolResult {
             id: "internal-1".to_string(),
             call_id: Some("call-1".to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: "ephemeral stream payload".to_string(),
-            })),
+            })],
         },
         "internal-1",
     )
@@ -977,9 +976,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: "The file looks healthy.".to_string(),
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -1121,7 +1120,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "internal-read".to_string(),
             call_id: Some("call-read".to_string()),
             function: ToolFunction {
@@ -1134,7 +1133,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -1143,9 +1142,9 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         &ToolResult {
             id: "internal-read".to_string(),
             call_id: Some("call-read".to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: "ephemeral stream payload".to_string(),
-            })),
+            })],
         },
         "internal-read",
     )
@@ -1228,7 +1227,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: model_result_id.to_string(),
             call_id: Some(model_result_id.to_string()),
             function: ToolFunction {
@@ -1237,7 +1236,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -1255,13 +1254,13 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     ));
 
     let duplicate_tool_result_message = Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: model_result_id.to_string(),
             call_id: Some(model_result_id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec_one(ToolResultContent::Text(Text {
                 text: tool_result_text.to_string(),
             })),
-        })),
+        })],
     };
     let reused_sequence = hook
         .persist_message(&duplicate_tool_result_message)
@@ -1371,13 +1370,13 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
 
     for result_id in ["result-1", "result-2"] {
         hook.persist_message(&Message::User {
-            content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            content: vec![UserContent::ToolResult(ToolResult {
                 id: result_id.to_string(),
                 call_id: Some(result_id.to_string()),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec_one(ToolResultContent::Text(Text {
                     text: "same payload".to_string(),
                 })),
-            })),
+            })],
         })
         .await
         .unwrap();
@@ -1434,7 +1433,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     ));
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "call-1".to_string(),
             call_id: None,
             function: ToolFunction {
@@ -1443,7 +1442,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -1515,7 +1514,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "call-2".to_string(),
             call_id: None,
             function: ToolFunction {
@@ -1524,7 +1523,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -1532,9 +1531,9 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         &ToolResult {
             id: "call-2".to_string(),
             call_id: None,
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: "stream fallback".to_string(),
-            })),
+            })],
         },
         "internal-2",
     )
