@@ -28,6 +28,9 @@ struct ScriptedModel {
     /// `chat_history` of every request the loop sent, in order — lets a test
     /// assert how the loop threaded prior turns back to the provider.
     seen_histories: Arc<Mutex<Vec<OneOrMany<Message>>>>,
+    /// When set, every turn's stream yields its scripted chunks then hangs
+    /// (never reaches EOF), simulating a provider that stalls mid-turn.
+    stall_after_chunks: bool,
 }
 
 impl ScriptedModel {
@@ -39,7 +42,15 @@ impl ScriptedModel {
         Self {
             turns: Arc::new(Mutex::new(turns.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
+            stall_after_chunks: false,
         }
+    }
+
+    /// A single turn that emits `chunks` then stalls forever instead of ending.
+    fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
+        let mut model = Self::new_turns(vec![chunks]);
+        model.stall_after_chunks = true;
+        model
     }
 
     async fn seen_histories(&self) -> Vec<OneOrMany<Message>> {
@@ -82,9 +93,12 @@ impl CompletionModel for ScriptedModel {
             .unwrap_or_else(|| vec![RawStreamingChoice::FinalResponse(())]);
         let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
             chunks.into_iter().map(Ok).collect();
-        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
-            items,
-        ))))
+        let inner: rig::streaming::StreamingResult<()> = if self.stall_after_chunks {
+            Box::pin(stream::iter(items).chain(stream::pending()))
+        } else {
+            Box::pin(stream::iter(items))
+        };
+        Ok(StreamingCompletionResponse::stream(inner))
     }
 }
 
@@ -138,6 +152,33 @@ impl ToolDyn for FixedTool {
 
     fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
+    }
+}
+
+/// Records the prompt/rag string handed to `definition`, for the rag-text test.
+struct RecordingDefinitionTool {
+    seen_prompt: Arc<Mutex<Option<String>>>,
+}
+
+impl ToolDyn for RecordingDefinitionTool {
+    fn name(&self) -> String {
+        "record".to_string()
+    }
+
+    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        let seen = self.seen_prompt.clone();
+        Box::pin(async move {
+            *seen.lock().await = Some(prompt);
+            ToolDefinition {
+                name: "record".to_string(),
+                description: "record".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { Ok("ok".to_string()) })
     }
 }
 
@@ -315,6 +356,104 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
                     .is_some_and(|result| result.contains("ECHOED"))
         }),
         "expected a completed echo tool call recording the result; rows: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn tool_executes_before_provider_stalls_mid_stream() {
+    // P2 regression: a provider that emits a tool call then stalls before EOF
+    // must still have its tool executed. Rig runs each tool inline as its
+    // ToolCall arrives, so the lifecycle / AgentToolCall row exists before the
+    // stall; the daemon liveness timeout then has something to cancel. The old
+    // design collected tool calls and dispatched only after the stream drained,
+    // so a mid-stream stall left the tool unrun with nothing to mark.
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+    let prompt = Message::user("use the echo tool then stall");
+
+    // One turn: emit a tool call, then hang (no FinalResponse, no EOF).
+    let model = ScriptedModel::new_stalling(vec![RawStreamingChoice::ToolCall(
+        RawStreamingToolCall::new("call-1".to_string(), "echo".to_string(), serde_json::json!({})),
+    )]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: "ECHOED".to_string(),
+    })];
+
+    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
+    futures::pin_mut!(stream);
+
+    // Item 1 is the tool call. Resuming the stream then runs the tool inline and
+    // afterwards blocks forever on the stalled provider — so the second poll
+    // never returns, but the tool executes before that block. Bound it.
+    let first = stream.next().await.expect("should yield the tool call");
+    assert!(
+        matches!(
+            first,
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::ToolCall { .. }
+            ))
+        ),
+        "first item should be the tool call; got {first:?}"
+    );
+    let _ = tokio::time::timeout(tokio::time::Duration::from_secs(3), stream.next()).await;
+
+    // Despite the stall, the tool ran to completion (its row exists, recorded).
+    let resp = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
+        .await;
+    assert!(!resp.has_errors(), "AgentToolCall query failed: {:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        rows.iter().any(|row| {
+            row.get("tool_name").and_then(|value| value.as_str()) == Some("echo")
+                && row
+                    .get("result")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|result| result.contains("ECHOED"))
+        }),
+        "tool must execute inline before the provider stall; rows: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn tool_definition_receives_prompt_rag_text() {
+    // P3/compat: tool definitions must be built with the prompt's rag text (rig
+    // parity), not String::new(), so prompt-aware tools keep the task context.
+    let (_node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+    let seen = Arc::new(Mutex::new(None));
+    let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
+        seen_prompt: seen.clone(),
+    });
+
+    // A single text-only turn; the tool is never called, but its definition is
+    // still requested when the request is built.
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("hi".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        Message::user("teach me rust"),
+        Vec::new(),
+        Arc::new(vec![tool]),
+        config(1),
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    assert_eq!(
+        seen.lock().await.as_deref(),
+        Some("teach me rust"),
+        "tool definition should receive the prompt's rag text, not an empty string"
     );
 }
 
