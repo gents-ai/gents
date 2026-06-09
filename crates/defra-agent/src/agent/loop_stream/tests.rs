@@ -25,6 +25,9 @@ use crate::hook::{DefraSessionHook, FailurePolicy};
 #[derive(Clone)]
 struct ScriptedModel {
     turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<()>>>>>,
+    /// `chat_history` of every request the loop sent, in order — lets a test
+    /// assert how the loop threaded prior turns back to the provider.
+    seen_histories: Arc<Mutex<Vec<OneOrMany<Message>>>>,
 }
 
 impl ScriptedModel {
@@ -35,7 +38,12 @@ impl ScriptedModel {
     fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
         Self {
             turns: Arc::new(Mutex::new(turns.into())),
+            seen_histories: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    async fn seen_histories(&self) -> Vec<OneOrMany<Message>> {
+        self.seen_histories.lock().await.clone()
     }
 }
 
@@ -62,6 +70,10 @@ impl CompletionModel for ScriptedModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        self.seen_histories
+            .lock()
+            .await
+            .push(_request.chat_history.clone());
         let chunks = self
             .turns
             .lock()
@@ -326,9 +338,22 @@ async fn exceeding_max_turns_terminates_with_error() {
 
     let last = items.last().expect("stream should yield at least one item");
     assert!(last.is_err(), "expected a terminal error; got {last:?}");
+    // Permanent `StreamingError::Prompt(MaxTurnsError)` (rig's variant), not a
+    // retryable `Completion(ResponseError)` — turn exhaustion must not retry.
+    let error = last.as_ref().err().unwrap();
     assert!(
-        format!("{:?}", last.as_ref().err().unwrap()).contains("max turns"),
-        "expected a max-turns error; got {last:?}"
+        matches!(
+            error,
+            rig::agent::StreamingError::Prompt(prompt_error)
+                if matches!(**prompt_error, rig::completion::PromptError::MaxTurnsError { .. })
+        ),
+        "expected a max-turns Prompt error; got {last:?}"
+    );
+    // And it must classify as a permanent failure: retrying turn exhaustion would
+    // re-run the loop (and its tools) to no purpose.
+    assert!(
+        !crate::error::classify_completion_error(error).is_retryable(),
+        "max-turns exhaustion must be non-retryable; got {last:?}"
     );
 }
 
@@ -359,6 +384,61 @@ async fn managed_terminal_tool_result_terminates_loop() {
     assert!(
         format!("{:?}", last.as_ref().err().unwrap()).contains("deadline"),
         "expected a deadline/timeout terminate; got {last:?}"
+    );
+}
+
+#[tokio::test]
+async fn threaded_assistant_turn_carries_provider_message_id() {
+    // P2a regression: the in-loop assistant message threaded back to the provider
+    // must carry the provider message id (OpenAI Responses / ChatGPT Codex
+    // follow-up requests reference prior `msg_` ids). Turn 1 emits a MessageId
+    // plus a tool call; the tool result drives turn 2, whose request history must
+    // contain the assistant tool-call message tagged with that id.
+    let (_node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::MessageId("msg_abc123".to_string()),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("go"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        2,
+        "expected two completion turns; got {histories:?}"
+    );
+    let assistant_id = histories[1].iter().find_map(|message| match message {
+        Message::Assistant { id, .. } => Some(id.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        assistant_id,
+        Some(Some("msg_abc123".to_string())),
+        "threaded assistant turn must carry the provider message id; history: {:?}",
+        histories[1]
     );
 }
 

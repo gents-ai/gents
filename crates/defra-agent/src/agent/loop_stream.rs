@@ -31,7 +31,9 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use rig::agent::{HookAction, MultiTurnStreamItem, StreamingError, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, Message, Usage};
+use rig::completion::{
+    CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,
+};
 use rig::message::ToolChoice;
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
@@ -93,11 +95,22 @@ where
             // to `max_turns + 1` completions are allowed (the extra one produces
             // the final text answer after the last tool call). Matches rig's
             // `current_max_turns > self.max_turns + 1` break.
+            //
+            // Emit as `StreamingError::Prompt(MaxTurnsError)` — the same variant
+            // rig uses — so `classify_completion_error` treats turn exhaustion as a
+            // PERMANENT failure. A generic `Completion(ResponseError)` would be
+            // classified transient and retried, re-running tools on each attempt.
             if current_turn > config.max_turns + 1 {
-                Err(StreamingError::Completion(CompletionError::ResponseError(format!(
-                    "owned loop exceeded max turns ({})",
-                    config.max_turns
-                ))))?;
+                let prompt = new_messages
+                    .last()
+                    .cloned()
+                    .expect("new_messages always retains at least the initial prompt");
+                let chat_history = new_messages[..new_messages.len() - 1].to_vec();
+                Err(StreamingError::Prompt(Box::new(PromptError::MaxTurnsError {
+                    max_turns: config.max_turns,
+                    chat_history: Box::new(chat_history),
+                    prompt: Box::new(prompt),
+                })))?;
             }
             current_turn += 1;
 
@@ -117,7 +130,10 @@ where
                 if let HookAction::Terminate { reason } =
                     hook.on_completion_call(&current_prompt, &history_snapshot).await
                 {
-                    Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+                    Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                        chat_history: new_messages.clone(),
+                        reason,
+                    })))?;
                 }
             }
 
@@ -174,8 +190,15 @@ where
             }
 
             // Thread the assistant turn (reasoning + tool calls + text) ahead of
-            // its tool results, matching rig's history ordering.
-            if let Some(assistant_message) = accumulator.take_message() {
+            // its tool results, matching rig's history ordering. Carry the
+            // provider message id (captured into `stream.message_id` from the
+            // stream's `MessageId` event) onto the threaded message — rig threads
+            // this same id, and OpenAI Responses / ChatGPT Codex follow-up
+            // requests reference prior `msg_` ids, so dropping it breaks them.
+            if let Some(mut assistant_message) = accumulator.take_message() {
+                if let Message::Assistant { id, .. } = &mut assistant_message {
+                    *id = stream.message_id.clone();
+                }
                 new_messages.push(assistant_message);
             }
 
@@ -201,7 +224,10 @@ where
 
                 let bounded_result = match call_action {
                     ToolCallHookAction::Terminate { reason } => {
-                        Err(StreamingError::Completion(CompletionError::ResponseError(reason)))?;
+                        Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                            chat_history: new_messages.clone(),
+                            reason,
+                        })))?;
                         unreachable!("Err(..)? above ends the stream");
                     }
                     ToolCallHookAction::Skip { reason } => {
@@ -234,8 +260,11 @@ where
                                 )
                                 .await;
                             if let HookAction::Terminate { reason } = result_action {
-                                Err(StreamingError::Completion(CompletionError::ResponseError(
-                                    reason,
+                                Err(StreamingError::Prompt(Box::new(
+                                    PromptError::PromptCancelled {
+                                        chat_history: new_messages.clone(),
+                                        reason,
+                                    },
                                 )))?;
                             }
                         }
@@ -281,8 +310,10 @@ where
 /// so one-shot sessions store the full reply, not just the prompt. (The daemon
 /// path has its own `StreamProcessor`; this is the equivalent for the collected,
 /// non-streaming path, minus the live-streaming/response-doc bits.) With no hook
-/// (compaction/title) nothing is persisted. Persistence is best-effort: a failure
-/// is logged, not fatal to the run.
+/// (compaction/title) nothing is persisted. Persistence honors the hook's
+/// `FailurePolicy` via `apply_persistence_policy` — exactly as `StreamProcessor`
+/// does — so a fail-closed hook (one-shot's default) terminates the run on a
+/// persistence error rather than silently dropping the transcript.
 pub(crate) async fn run_loop_to_text<M>(
     model: M,
     hook: Option<DefraSessionHook>,
@@ -290,7 +321,7 @@ pub(crate) async fn run_loop_to_text<M>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> Result<String, StreamingError>
+) -> anyhow::Result<String>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -301,7 +332,7 @@ where
     let mut final_text = String::new();
 
     while let Some(item) = stream.next().await {
-        match item? {
+        match item.map_err(|error| anyhow::anyhow!("one-shot loop stream error: {error}"))? {
             MultiTurnStreamItem::StreamAssistantItem(content) => match content {
                 StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
                 StreamedAssistantContent::Reasoning(reasoning) => {
@@ -332,23 +363,26 @@ where
             }) => {
                 if let Some(hook) = hook.as_ref() {
                     if let Some(message) = accumulator.take_message() {
-                        persist_best_effort(hook.persist_message(&message).await, "assistant turn");
+                        hook.apply_persistence_policy(
+                            hook.persist_message(&message).await.map(|_| ()),
+                            "persist one-shot assistant turn",
+                        )?;
                     }
-                    persist_best_effort(
+                    hook.apply_persistence_policy(
                         hook.persist_stream_tool_result_message(&tool_result, &internal_call_id)
                             .await,
-                        "tool result message",
-                    );
+                        "persist one-shot tool result",
+                    )?;
                 }
             }
             MultiTurnStreamItem::FinalResponse(final_response) => {
                 accumulator.reconcile_text(final_response.response());
                 if let Some(hook) = hook.as_ref() {
                     if let Some(message) = accumulator.take_message() {
-                        persist_best_effort(
+                        hook.apply_persistence_policy(
                             hook.persist_message(&message).await.map(|_| ()),
-                            "final assistant turn",
-                        );
+                            "persist one-shot final assistant turn",
+                        )?;
                     }
                 }
                 final_text = final_response.response().to_string();
@@ -357,12 +391,6 @@ where
         }
     }
     Ok(final_text)
-}
-
-fn persist_best_effort<T>(result: anyhow::Result<T>, what: &str) {
-    if let Err(error) = result {
-        tracing::warn!(error = %error, "failed to persist one-shot {what}");
-    }
 }
 
 /// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):
