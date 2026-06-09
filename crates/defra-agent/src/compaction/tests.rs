@@ -341,6 +341,28 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
 }
 
 #[test]
+fn sanitize_repairs_result_preceding_its_call() {
+    // P1 counterexample for the unpaired-first composition (found while
+    // proof-sketching the PromptAssembly Lean model): a result that PRECEDES
+    // its call (backfill ordering, P2P-merged transcripts). The result must be
+    // dropped as orphaned AND the call must then be dropped as unpaired —
+    // orphan-drop must run first, or the call survives on the strength of a
+    // result that no longer exists and an unpaired call reaches the provider.
+    let messages = vec![
+        tool_result_msg("call-A", "early result"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+    ];
+    let out = super::sanitize_history_for_provider(messages);
+    assert!(
+        out.is_empty(),
+        "result-before-call must sanitize to empty (orphan and unpaired both dropped); got {out:?}"
+    );
+}
+
+#[test]
 fn bounded_summary_truncates_oversized_model_emitted_summaries() {
     // The compaction summary is model-emitted free text injected into every
     // later request's system reminder — it must be bounded on its way to the
