@@ -686,6 +686,120 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     }
 }
 
+/// Provider-request invariants: what every completion request the loop emits
+/// must satisfy, independent of the scenario that produced it. Mirrors the
+/// provider-side contract that `sanitize_history_for_provider` enforces for
+/// loaded history — the loop must satisfy it by construction for the messages
+/// it threads itself.
+fn assert_provider_request_invariants(turn: usize, history: &OneOrMany<Message>) {
+    let mut pending_call_keys: Vec<String> = Vec::new();
+    for message in history.iter() {
+        match message {
+            Message::Assistant { content, .. } => {
+                assert!(
+                    pending_call_keys.is_empty(),
+                    "turn {turn}: assistant message before prior turn's tool calls were resolved"
+                );
+                // Ordering: no text or reasoning after a tool call.
+                let mut seen_tool_call = false;
+                for item in content.iter() {
+                    match item {
+                        AssistantContent::ToolCall(tool_call) => {
+                            seen_tool_call = true;
+                            pending_call_keys.push(
+                                tool_call
+                                    .call_id
+                                    .clone()
+                                    .unwrap_or_else(|| tool_call.id.clone()),
+                            );
+                        }
+                        _ => assert!(
+                            !seen_tool_call,
+                            "turn {turn}: assistant content after a tool call (providers reject)"
+                        ),
+                    }
+                }
+            }
+            Message::User { content } => {
+                for item in content.iter() {
+                    if let UserContent::ToolResult(tool_result) = item {
+                        let key = tool_result
+                            .call_id
+                            .clone()
+                            .unwrap_or_else(|| tool_result.id.clone());
+                        let position = pending_call_keys.iter().position(|call| call == &key);
+                        assert!(
+                            position.is_some(),
+                            "turn {turn}: tool result '{key}' without a preceding tool call"
+                        );
+                        pending_call_keys.remove(position.unwrap());
+                    }
+                }
+            }
+            Message::System { .. } => {}
+        }
+    }
+    assert!(
+        pending_call_keys.is_empty(),
+        "turn {turn}: unpaired tool calls reached the provider: {pending_call_keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
+    // Conformance guard for the loop's own threading: across a multi-tool,
+    // multi-turn run, every request's history must pair calls with results and
+    // keep assistant content provider-ordered — by construction, no sanitizer.
+    let (_node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    let model = ScriptedModel::new_turns(vec![
+        // Turn 1: text + reasoning + two tool calls in one assistant turn.
+        vec![
+            RawStreamingChoice::Message("let me check".to_string()),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({}),
+            )),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-2".to_string(),
+                "echo".to_string(),
+                serde_json::json!({}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        // Turn 2: one more tool call.
+        echo_tool_turn(),
+        // Turn 3: final text.
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("run the tools"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        3,
+        "expected three completion turns; got {histories:?}"
+    );
+    for (index, history) in histories.iter().enumerate() {
+        assert_provider_request_invariants(index + 1, history);
+    }
+}
+
 #[tokio::test]
 async fn oversized_tool_result_is_bounded_before_threading() {
     let (_node, hook) = test_hook().await;
