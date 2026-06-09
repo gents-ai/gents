@@ -10,6 +10,7 @@
 //! be simplified once rig is gone. See
 //! `docs/design/native-llm-types-shed-rig.md`.
 
+pub mod message;
 pub mod rig_compat;
 pub mod tool;
 
