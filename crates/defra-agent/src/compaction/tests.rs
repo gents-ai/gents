@@ -92,7 +92,7 @@ fn drop_unpaired_tool_calls_removes_calls_without_results() {
         tool_result_msg("call-A", "A-result"),
     ];
 
-    let out = super::drop_unpaired_tool_calls(messages);
+    let out = super::history::drop_unpaired_tool_calls(messages);
 
     assert_eq!(
         out.len(),
@@ -136,7 +136,7 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
             content: OneOrMany::one(tool_call_content("call-X")),
         },
     ];
-    let out = super::drop_unpaired_tool_calls(messages);
+    let out = super::history::drop_unpaired_tool_calls(messages);
     assert_eq!(
         out.len(),
         1,
@@ -167,7 +167,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
         tool_result_msg("call-A", "A-result"),
     ];
 
-    let out = super::normalize_assistant_content_order(messages);
+    let out = super::history::normalize_assistant_content_order(messages);
 
     let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
         Message::Assistant { id, content } => (
@@ -231,7 +231,7 @@ fn normalize_assistant_content_order_is_identity_when_already_ordered() {
         },
         tool_result_msg("call-A", "A-result"),
     ];
-    let out = super::normalize_assistant_content_order(messages.clone());
+    let out = super::history::normalize_assistant_content_order(messages.clone());
     assert_eq!(out, messages);
 }
 
@@ -245,7 +245,7 @@ fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
         tool_result_msg("call-A", "A-result"),
         text_msg("user", "next"),
     ];
-    let out = super::drop_unpaired_tool_calls(messages.clone());
+    let out = super::history::drop_unpaired_tool_calls(messages.clone());
     assert_eq!(
         out.len(),
         messages.len(),
@@ -269,7 +269,7 @@ fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
         tool_result_msg("call-A", "A-result"),
     ];
 
-    let out = super::drop_orphaned_tool_results(messages);
+    let out = super::history::drop_orphaned_tool_results(messages);
 
     assert_eq!(
         out.len(),
@@ -307,7 +307,7 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
         ])
         .unwrap(),
     };
-    let out = super::drop_orphaned_tool_results(vec![mixed]);
+    let out = super::history::drop_orphaned_tool_results(vec![mixed]);
     assert_eq!(out.len(), 1);
     let Message::User { content } = &out[0] else {
         panic!("expected user message");

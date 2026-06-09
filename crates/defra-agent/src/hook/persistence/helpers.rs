@@ -370,6 +370,10 @@ pub(super) fn is_subagent_tool_result_payload(raw: &str) -> bool {
         || (value.get("child_request_id").is_some() && value.get("await_mode").is_some())
 }
 
+/// NOTE: payloads built here reach the model verbatim (as skip-tool results),
+/// so any envelope embedding VARIABLE-SIZE content must go through
+/// [`json_envelope_with_bounded_result`] instead — the outer skip bounding has
+/// no JSON awareness and will slice an oversized envelope mid-structure.
 pub(super) fn json_string(value: serde_json::Value) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
 }
@@ -401,7 +405,9 @@ pub(super) fn json_envelope_with_bounded_result(
         &inner_limits,
     );
     envelope[result_key] = serde_json::Value::String(bounded);
-    let rendered = json_string(envelope.clone());
+    // Serialize from a borrow so the common (fits) path never clones the
+    // envelope; only the stub fallback mutates and re-renders.
+    let rendered = serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string());
     if rendered.len() <= limits.max_bytes {
         return rendered;
     }

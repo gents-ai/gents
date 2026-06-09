@@ -194,36 +194,17 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
     history::strip_tool_results(messages)
 }
 
-/// Drop assistant tool-calls with no matching tool-result message before the
-/// messages are sent to the provider (#445). See `history::drop_unpaired_tool_calls`.
-pub fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
-    history::drop_unpaired_tool_calls(messages)
-}
-
-/// Reorder assistant content to the canonical provider order (text, reasoning,
-/// tool calls) before the messages are sent to the provider. See
-/// `history::normalize_assistant_content_order`.
-pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
-    history::normalize_assistant_content_order(messages)
-}
-
-/// Drop tool-result messages whose assistant call does not precede them (the
-/// inverse of [`drop_unpaired_tool_calls`] — orphans left by a compaction
-/// split). See `history::drop_orphaned_tool_results`.
-pub fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
-    history::drop_orphaned_tool_results(messages)
-}
-
 /// The full provider-send boundary sanitization for loaded history: drop
 /// unpaired tool calls (#445), drop orphaned tool results, then normalize
 /// assistant content order. New sanitizers that narrow the permissive durable
-/// transcript to the stricter provider format belong here, NOT in the
-/// conformance-fenced reducers. Runs on the loaded transcript AND on the
-/// compaction output (the recent window can begin mid-exchange).
+/// transcript to the stricter provider format belong here (see the
+/// `history` components), NOT in the conformance-fenced reducers. Runs on
+/// the loaded transcript AND on the compaction output (the recent window can
+/// begin mid-exchange).
 pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
-    normalize_assistant_content_order(drop_orphaned_tool_results(drop_unpaired_tool_calls(
-        messages,
-    )))
+    history::normalize_assistant_content_order(history::drop_orphaned_tool_results(
+        history::drop_unpaired_tool_calls(messages),
+    ))
 }
 
 /// Bound a compaction summary on its way into the prompt. The summary is

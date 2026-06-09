@@ -77,11 +77,7 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
         if let Message::User { content } = message {
             for item in content.iter() {
                 if let UserContent::ToolResult(tool_result) = item {
-                    let key = tool_result
-                        .call_id
-                        .clone()
-                        .unwrap_or_else(|| tool_result.id.clone());
-                    resolved.insert(key);
+                    resolved.insert(tool_result_key(tool_result));
                 }
             }
         }
@@ -141,11 +137,7 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                     .into_iter()
                     .filter(|item| match item {
                         UserContent::ToolResult(tool_result) => {
-                            let key = tool_result
-                                .call_id
-                                .clone()
-                                .unwrap_or_else(|| tool_result.id.clone());
-                            seen_calls.contains(&key)
+                            seen_calls.contains(&tool_result_key(tool_result))
                         }
                         _ => true,
                     })
@@ -304,10 +296,7 @@ fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    let call_id = tool_result
-        .call_id
-        .clone()
-        .unwrap_or_else(|| tool_result.id.clone());
+    let call_id = tool_result_key(&tool_result);
     let tool_name = tool_calls
         .get(&call_id)
         .map(|info| info.name.as_str())
@@ -365,6 +354,15 @@ fn tool_call_key(tool_call: &ToolCall) -> String {
         .call_id
         .clone()
         .unwrap_or_else(|| tool_call.id.clone())
+}
+
+/// The pairing key of a tool result — must mirror [`tool_call_key`] so calls
+/// and results match under the same identity.
+fn tool_result_key(tool_result: &ToolResult) -> String {
+    tool_result
+        .call_id
+        .clone()
+        .unwrap_or_else(|| tool_result.id.clone())
 }
 
 #[derive(Debug, Clone)]
