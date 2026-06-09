@@ -139,11 +139,20 @@ async fn background_tool(
     internal_call_id: &str,
     tool_name: &str,
 ) -> Value {
+    background_tool_with_args(hook, internal_call_id, tool_name, json!({})).await
+}
+
+async fn background_tool_with_args(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_name: &str,
+    args: Value,
+) -> Value {
     skip_reason_json(
         hook.on_tool_call("spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
-            &json!({"tool_name": tool_name, "args": {}}).to_string(),
+            &json!({"tool_name": tool_name, "args": args}).to_string(),
         )
         .await,
     )
@@ -227,29 +236,69 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 }
 
 #[tokio::test]
-async fn read_tool_output_running_returns_empty_live_stream_without_ring_buffer() {
+async fn read_tool_output_running_returns_live_stream_tail() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let tools = defra_agent::ToolSet::builder()
+        .bash_unrestricted(tempdir.path())
+        .build()
+        .build_native_tools()
+        .expect("native tools should build");
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-running",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        registry(tools, &["bash_unrestricted"]),
     )
     .await;
-    let handle = background_tool(&hook, "bg-running", "slow_tool").await;
+    let handle = background_tool_with_args(
+        &hook,
+        "bg-running",
+        "bash_unrestricted",
+        json!({
+            "command": "printf live; sleep 2; printf done",
+            "args": [],
+            "timeout_secs": 5
+        }),
+    )
+    .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
-    let result = read_tool_output(
-        &hook,
-        "read-running",
-        json!({ "tool_call_id": tool_call_id }),
-    )
-    .await;
+    let mut result = json!({});
+    for attempt in 0..40 {
+        result = read_tool_output(
+            &hook,
+            &format!("read-running-{attempt}"),
+            json!({ "tool_call_id": tool_call_id }),
+        )
+        .await;
+        if result["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("live"))
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
     assert_eq!(result["status"].as_str(), Some("running"));
-    assert_eq!(result["tool_name"].as_str(), Some("slow_tool"));
-    assert_eq!(result["output"].as_str(), Some(""));
-    assert_eq!(result["next_offset"].as_u64(), Some(0));
-    assert_eq!(result["total_bytes"].as_u64(), Some(0));
+    assert_eq!(result["tool_name"].as_str(), Some("bash_unrestricted"));
+    assert_eq!(result["output"].as_str(), Some("live"));
+    assert_eq!(result["next_offset"].as_u64(), Some(4));
+    assert_eq!(result["total_bytes"].as_u64(), Some(4));
     assert_eq!(result["has_more"].as_bool(), Some(false));
     assert_eq!(result["exited"].as_bool(), Some(false));
     assert!(result["exit_code"].is_null());
+
+    let waited = wait_tool(&hook, "wait-running-terminal", tool_call_id).await;
+    assert_eq!(waited["status"].as_str(), Some("completed"));
+    let terminal = read_tool_output(
+        &hook,
+        "read-running-terminal",
+        json!({ "tool_call_id": tool_call_id }),
+    )
+    .await;
+    assert_eq!(terminal["status"].as_str(), Some("completed"));
+    assert_eq!(terminal["output"].as_str(), Some("livedone"));
+    assert_eq!(terminal["total_bytes"].as_u64(), Some(8));
+    assert_eq!(terminal["exited"].as_bool(), Some(true));
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use rig::tool::ToolDyn;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::LiveToolOutputRegistry;
 use crate::session;
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelCause, CascadeDispatch, ChildTerminal, ToolCallLifecycle,
@@ -321,6 +322,7 @@ pub struct DefraSessionHook {
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
+    background_live_outputs: LiveToolOutputRegistry,
 }
 
 enum PolicyDecision {
@@ -359,6 +361,7 @@ impl DefraSessionHook {
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
+            background_live_outputs: LiveToolOutputRegistry::default(),
         }
     }
 
@@ -396,6 +399,7 @@ impl DefraSessionHook {
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
+            background_live_outputs: LiveToolOutputRegistry::default(),
         })
     }
 

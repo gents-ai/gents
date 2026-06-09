@@ -16,6 +16,8 @@ use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::LiveToolOutputWriter;
+
 const MARKER_PREFIX: &str = "__defra_agent_tool_lifecycle__:";
 const TIMEOUT_MARKER: &str = "__defra_agent_tool_lifecycle__:timedOut";
 const CANCELLED_MARKER: &str = "__defra_agent_tool_lifecycle__:cancelled";
@@ -31,6 +33,7 @@ struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
 }
 
 #[derive(Clone)]
@@ -38,6 +41,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
+    pub(crate) live_output: Option<LiveToolOutputWriter>,
 }
 
 tokio::task_local! {
@@ -72,12 +76,33 @@ pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
 where
     F: Future<Output = T>,
 {
+    scope_request_tool_execution_with_workspace_and_live_output(
+        deadline_at,
+        cancellation_token,
+        workspace_cwd,
+        None,
+        future,
+    )
+    .await
+}
+
+pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
+                live_output,
             },
             future,
         )
@@ -96,6 +121,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
+            live_output: scope.live_output,
         })
 }
 

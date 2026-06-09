@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
 use rig::completion::{CompletionError, Usage};
@@ -22,6 +22,7 @@ pub(crate) struct AdmissionPermit {
     /// default failed/StreamDroppedBeforeTerminalResponse fallback.
     /// Set from `AdmissionCallContext::inference_token` by the controller.
     cancel_observer: Option<CancellationToken>,
+    terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +40,7 @@ impl AdmissionPermit {
         call: InferenceCallRecord,
         doc_id: String,
         cancel_observer: Option<CancellationToken>,
+        terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Self {
         Self {
             node,
@@ -49,6 +51,7 @@ impl AdmissionPermit {
             terminal: None,
             finished: false,
             cancel_observer,
+            terminal_failure_observer,
         }
     }
 
@@ -141,12 +144,21 @@ impl Drop for AdmissionPermit {
             return;
         }
         self.finished = true;
+        let terminal_failure_reason =
+            self.terminal_failure_observer
+                .as_ref()
+                .and_then(|observer| match observer.lock() {
+                    Ok(reason) => reason.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                });
         let terminal = self.terminal.clone().unwrap_or_else(|| {
             // If the inference_token was cancelled, an interrupt caused the
             // drop. Persist as cancelled/Cancelled to satisfy the cross-layer
             // bridge theorem
             // (`ComposedState::interrupted_request_cancels_live_linked_call`).
-            // Otherwise fall back to the stream-drop default.
+            // If the daemon intentionally drops the stream for a terminal
+            // runtime condition, persist that failure reason. Otherwise fall
+            // back to the stream-drop default.
             if self
                 .cancel_observer
                 .as_ref()
@@ -155,6 +167,12 @@ impl Drop for AdmissionPermit {
                 PermitTerminal {
                     call_state: "cancelled",
                     failure_reason: Some("Cancelled".to_string()),
+                    usage: None,
+                }
+            } else if let Some(reason) = terminal_failure_reason {
+                PermitTerminal {
+                    call_state: "failed",
+                    failure_reason: Some(reason),
                     usage: None,
                 }
             } else {

@@ -169,7 +169,7 @@ async fn ensure_home_identity(
         },
         keychain_label,
         secure_enclave_label,
-        write_tools: false,
+        tool_package: ToolPackageArg::Readonly,
         tool_root: None,
         reset: false,
     })

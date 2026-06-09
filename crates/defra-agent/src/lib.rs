@@ -16,6 +16,7 @@ pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod defra_query;
+pub mod defra_write;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;
@@ -76,12 +77,12 @@ pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
-    list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, load_tool_selection, subagent_target_entry, upsert_agent_behavior,
-    upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    default_tool_selection_id_for_behavior, ensure_agent_principal, is_reserved_builtin_tool_name,
+    list_agent_behaviors, list_inference_profile_records, load_agent_behavior,
+    load_agent_principal, load_inference_profile, load_tool_selection, subagent_target_entry,
+    upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    ToolSelectionDocument,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,

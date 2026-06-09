@@ -2,8 +2,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
-    CommandNetworkMode, SubagentTarget, VariableRef,
+    is_reserved_builtin_tool_name, parse_template_for_validation,
+    schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
+    SubagentTarget, VariableRef, WriteToolDecl,
 };
 
 use super::DesiredStateManifest;
@@ -149,6 +150,12 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             selection.agent_did.trim(),
             selection.subagent_allow_cross_deployment,
             &selection.subagent_targets,
+            errors,
+        );
+        validate_write_tools(
+            &selection.selection_id,
+            &selection.write_tools,
+            &selection.cli_tool_names,
             errors,
         );
         if selection.subagent_spawn_enabled {
@@ -780,6 +787,94 @@ fn validate_subagent_targets(
     }
 }
 
+/// Validate `write_tools` entries pre-apply, mirroring the runtime checks in
+/// `ToolSelectionDocument::validate()` so a malformed decl is rejected by
+/// `config validate` instead of failing only when the runtime ingests it.
+///
+/// Entries are stored as JSON-encoded [`WriteToolDecl`] strings (the same
+/// `[String]` storage form as `subagent_targets`). Each entry must:
+///   * parse as a [`WriteToolDecl`],
+///   * have a non-empty `tool_name` and `collection`,
+///   * have a non-empty `name` on every field,
+///   * and have a `tool_name` that is unique within the selection.
+fn validate_write_tools(
+    selection_id: &str,
+    entries: &[String],
+    cli_tool_names: &[String],
+    errors: &mut Vec<String>,
+) {
+    // Sibling cli_tool_names are advertised as individually-named tools in the
+    // same selection; a write tool reusing one is the same dispatch collision
+    // as reusing a built-in name. Mirrors the runtime check in
+    // `ToolSelectionDocument::validate()`.
+    let cli_tool_names: HashSet<&str> = cli_tool_names.iter().map(|name| name.trim()).collect();
+    let mut seen_tool_names: HashSet<String> = HashSet::new();
+    for entry in entries {
+        let decl: WriteToolDecl = match serde_json::from_str(entry) {
+            Ok(decl) => decl,
+            Err(error) => {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools entry {entry:?} is not valid WriteToolDecl JSON: {error}"
+                ));
+                continue;
+            }
+        };
+        if decl.tool_name.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools entry {entry:?} must have a non-empty tool_name"
+            ));
+        }
+        if decl.collection.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool {:?} must have a non-empty collection",
+                decl.tool_name
+            ));
+        }
+        // A declared write tool may not reuse a built-in tool name: doing so
+        // silently shadows the built-in at registration. Mirrors the runtime
+        // check in `ToolSelectionDocument::validate()`.
+        if is_reserved_builtin_tool_name(&decl.tool_name) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 built-in tool; declared write tools must use a name not already provided by the \
+                 native, meta, subagent, or built-in (defra_query, context_budget, sessions, \
+                 memory) tool surface",
+                decl.tool_name.trim()
+            ));
+        }
+        if cli_tool_names.contains(decl.tool_name.trim()) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 cli_tool_names entry in the same tool selection; each tool must have a unique name",
+                decl.tool_name.trim()
+            ));
+        }
+        let mut seen_field_names: HashSet<String> = HashSet::new();
+        for field in &decl.fields {
+            if field.name.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
+                    decl.tool_name
+                ));
+            } else if !seen_field_names.insert(field.name.trim().to_string()) {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a duplicate field name {:?}",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
+        }
+        if !decl.tool_name.trim().is_empty()
+            && !seen_tool_names.insert(decl.tool_name.trim().to_string())
+        {
+            errors.push(format!(
+                "tool selection {selection_id} has a duplicate write_tools tool_name {:?}",
+                decl.tool_name.trim()
+            ));
+        }
+    }
+}
+
 fn validate_non_empty_values(
     selection_id: &str,
     field: &str,
@@ -871,6 +966,7 @@ mod live_tests {
                 subagent_background_enabled: false,
                 subagent_allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
+                write_tools: Vec::new(),
             }],
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
@@ -1035,6 +1131,7 @@ mod live_tests {
                     subagent_background_enabled: true,
                     subagent_allow_cross_deployment: true,
                     cross_deployment_spawn_timeout_seconds: Some(90),
+                    write_tools: Vec::new(),
                 }],
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),

@@ -25,8 +25,8 @@ use crate::config_writes::{
 use crate::shared::*;
 use crate::{
     clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
-    format_tool_ceiling, normalize_optional_string, print_json, resolve_home_dir,
-    write_init_config, BackendResolutionMode, DEFAULT_HTTP_PORT,
+    format_tool_ceiling, format_tool_package, normalize_optional_string, print_json,
+    resolve_home_dir, write_init_config, BackendResolutionMode, DEFAULT_HTTP_PORT,
 };
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -57,6 +57,8 @@ For long-running commands such as builds, test suites, installs, servers, and lo
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
+    let tool_package = resolve_init_tool_package(args.write_tools, args.tool_package)?;
+    validate_init_tool_flags(&args, tool_package)?;
     if args.dangerously_overwrite {
         dangerously_overwrite_home(&home_dir)?;
     }
@@ -83,7 +85,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             identity_backend: args.identity_backend,
             keychain_label: args.keychain_label.as_deref(),
             secure_enclave_label: args.secure_enclave_label.as_deref(),
-            write_tools: args.write_tools,
+            tool_package,
             tool_root: args.tool_root.as_deref(),
             reset: args.reset,
         })
@@ -95,6 +97,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             "agent_name": summary.agent_name,
             "agent_did": summary.agent_did,
             "key_path": summary.key_path,
+            "tool_package": format_tool_package(summary.tool_package),
             "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
             "tool_root": summary.tool_root,
             "runtime_state_reset": summary.runtime_state_reset,
@@ -152,8 +155,13 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     });
 
     let access = ConfigAccess::Local(node);
-    let summary =
-        initialize_runtime_home(&access, &args, initialized_identity.identity.did()).await?;
+    let summary = initialize_runtime_home(
+        &access,
+        &args,
+        initialized_identity.identity.did(),
+        tool_package,
+    )
+    .await?;
     let stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
         agent_name: args.agent_name.clone(),
@@ -162,6 +170,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         identity_backend: initialized_identity.identity_backend.clone(),
         keychain_label: initialized_identity.keychain_label.clone(),
         secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
+        tool_package: Some(tool_package),
         tool_ceiling: summary.tool_ceiling,
         tool_root: summary.tool_root.clone(),
     };
@@ -184,8 +193,12 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
         "inference_profile_id": summary.inference_profile_id,
+        "tool_package": format_tool_package(summary.tool_package),
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
         "tool_root": summary.tool_root,
+        "enable_memory": summary.enable_memory,
+        "enable_defra_query": summary.enable_defra_query,
+        "defra_query_collections": summary.defra_query_collections,
         "runtime_state_reset": runtime_state_reset,
         "identity": {
             "agent_did": initialized_identity.identity.did(),
@@ -210,7 +223,7 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) identity_backend: IdentityBackendArg,
     pub(crate) keychain_label: Option<&'a str>,
     pub(crate) secure_enclave_label: Option<&'a str>,
-    pub(crate) write_tools: bool,
+    pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_root: Option<&'a Path>,
     pub(crate) reset: bool,
 }
@@ -243,6 +256,7 @@ pub(crate) struct IdentityOnlyHomeSummary {
     pub(crate) keychain_label: Option<String>,
     pub(crate) secure_enclave_label: Option<String>,
     pub(crate) tool_ceiling: ToolCeilingArg,
+    pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_root: Option<String>,
     pub(crate) runtime_state_reset: bool,
 }
@@ -268,16 +282,9 @@ pub(crate) async fn write_identity_only_home_metadata(
         .await
         .context("creating or loading agent identity key")?;
 
-    let tool_ceiling = if options.write_tools {
-        ToolCeilingArg::Readwrite
-    } else {
-        ToolCeilingArg::Readonly
-    };
-    let tool_root = Some(
-        resolve_default_tool_root(options.tool_root)?
-            .to_string_lossy()
-            .to_string(),
-    );
+    let tool_ceiling = tool_ceiling_for_package(options.tool_package);
+    let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
+        .map(|path| path.to_string_lossy().to_string());
     let stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         agent_name: options.agent_name.to_string(),
@@ -286,6 +293,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         identity_backend: initialized_identity.identity_backend.clone(),
         keychain_label: initialized_identity.keychain_label.clone(),
         secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
+        tool_package: Some(options.tool_package),
         tool_ceiling,
         tool_root: tool_root.clone(),
     };
@@ -305,6 +313,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         keychain_label: initialized_identity.keychain_label,
         secure_enclave_label: initialized_identity.secure_enclave_label,
         tool_ceiling,
+        tool_package: options.tool_package,
         tool_root,
         runtime_state_reset,
     })
@@ -397,6 +406,7 @@ async fn initialize_runtime_home(
     access: &ConfigAccess,
     args: &InitArgs,
     agent_did: &str,
+    tool_package: ToolPackageArg,
 ) -> Result<InitSummary> {
     let ConfigAccess::Local(node) = access else {
         anyhow::bail!("init requires local DefraDB access");
@@ -462,12 +472,8 @@ async fn initialize_runtime_home(
     )
     .await?;
     let tool_selection_id = default_tool_selection_id_for_behavior(&default_behavior_id);
-    let tool_ceiling = if args.write_tools {
-        ToolCeilingArg::Readwrite
-    } else {
-        ToolCeilingArg::Readonly
-    };
-    let tool_root = Some(resolve_default_tool_root(args.tool_root.as_deref())?);
+    let tool_ceiling = tool_ceiling_for_package(tool_package);
+    let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
     let backend_doc = InferenceBackendUpsertDocument {
         backend_id: backend_id.clone(),
         name: backend_name.clone(),
@@ -484,7 +490,15 @@ async fn initialize_runtime_home(
     };
     write_inference_backend_document(access, &backend_doc).await?;
 
-    let tool_selection = standard_tool_selection(agent_did, &tool_selection_id, tool_ceiling);
+    let enable_defra_query = init_enable_defra_query(tool_package, args.disable_defra_query);
+    let tool_selection = tool_selection_for_package(
+        agent_did,
+        &tool_selection_id,
+        tool_package,
+        args.enable_memory,
+        enable_defra_query,
+        args.defra_query_collections.clone(),
+    );
     write_tool_selection_document(access, &tool_selection).await?;
 
     let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
@@ -497,7 +511,7 @@ async fn initialize_runtime_home(
         display_name: Some("Default".to_string()),
         description: None,
         summary: None,
-        system_prompt: Some(standard_system_prompt(tool_ceiling).to_string()),
+        system_prompt: Some(standard_system_prompt(tool_package).to_string()),
         backend_id: Some(backend_id.clone()),
         model_name: Some(model_name.to_string()),
         tool_selection_id: Some(tool_selection_id.clone()),
@@ -524,68 +538,186 @@ async fn initialize_runtime_home(
         default_behavior_id,
         tool_selection_id,
         inference_profile_id,
+        tool_package,
         tool_ceiling,
         tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
+        enable_memory: args.enable_memory,
+        enable_defra_query,
+        defra_query_collections: args.defra_query_collections.clone(),
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
 }
 
-fn standard_tool_selection(
+fn tool_selection_for_package(
     agent_did: &str,
     tool_selection_id: &str,
-    tool_ceiling: ToolCeilingArg,
+    tool_package: ToolPackageArg,
+    enable_memory: bool,
+    enable_defra_query: bool,
+    defra_query_collections: Vec<String>,
 ) -> ToolSelectionDocument {
-    let (display_name, file_tools_mode, bash_mode) = match tool_ceiling {
-        ToolCeilingArg::Readwrite => ("Standard Write Tools", "ReadWrite", "Unrestricted"),
-        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => {
-            ("Standard Read-Only Tools", "ReadOnly", "ReadOnly")
-        }
-    };
+    let profile = tool_package_profile(tool_package);
     ToolSelectionDocument {
         selection_id: tool_selection_id.to_string(),
         agent_did: agent_did.to_string(),
-        display_name: Some(display_name.to_string()),
-        enable_file_tools: Some(true),
-        file_tools_mode: Some(file_tools_mode.to_string()),
+        display_name: Some(profile.display_name.to_string()),
+        enable_file_tools: Some(profile.enable_file_tools),
+        file_tools_mode: Some(profile.file_tools_mode.to_string()),
         file_tool_root: None,
-        enable_bash: Some(true),
-        bash_mode: Some(bash_mode.to_string()),
-        command_execution_policy: default_command_execution_policy_for_init(tool_ceiling),
+        enable_bash: Some(profile.enable_bash),
+        bash_mode: Some(profile.bash_mode.to_string()),
+        command_execution_policy: default_command_execution_policy_for_init(tool_package),
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
-        enable_meta_tools: Some(true),
+        enable_meta_tools: Some(profile.enable_meta_tools),
         allowed_mcp_service_ids: Some(Vec::new()),
-        backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_ceiling)),
+        backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_package)),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
         subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
-        enable_memory: Some(false),
+        enable_memory: Some(enable_memory),
         enable_session_history_tool: Some(false),
-        enable_defra_query: None,
-        defra_query_collections: None,
+        enable_defra_query: Some(enable_defra_query),
+        defra_query_collections: Some(defra_query_collections),
+        write_tools: None,
     }
 }
 
-fn default_command_execution_policy_for_init(tool_ceiling: ToolCeilingArg) -> Option<String> {
-    match tool_ceiling {
-        ToolCeilingArg::Readwrite if cfg!(target_os = "macos") => {
-            Some("workspace_write".to_string())
+fn default_command_execution_policy_for_init(tool_package: ToolPackageArg) -> Option<String> {
+    match tool_package {
+        ToolPackageArg::Write if cfg!(target_os = "macos") => Some("workspace_write".to_string()),
+        ToolPackageArg::Write => Some("unrestricted".to_string()),
+        ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => None,
+    }
+}
+
+fn default_backgroundable_tool_names(tool_package: ToolPackageArg) -> Vec<String> {
+    match tool_package {
+        ToolPackageArg::Write => vec!["bash_unrestricted".to_string()],
+        ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => {
+            Vec::new()
         }
-        ToolCeilingArg::Readwrite => Some("unrestricted".to_string()),
-        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => None,
     }
 }
 
-fn default_backgroundable_tool_names(tool_ceiling: ToolCeilingArg) -> Vec<String> {
-    match tool_ceiling {
-        ToolCeilingArg::Readwrite => vec!["bash_unrestricted".to_string()],
-        ToolCeilingArg::Readonly | ToolCeilingArg::MetaOnly => Vec::new(),
+#[derive(Clone, Copy)]
+struct ToolPackageProfile {
+    display_name: &'static str,
+    enable_file_tools: bool,
+    file_tools_mode: &'static str,
+    enable_bash: bool,
+    bash_mode: &'static str,
+    enable_meta_tools: bool,
+    enable_defra_query: bool,
+}
+
+fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
+    match tool_package {
+        ToolPackageArg::Minimal => ToolPackageProfile {
+            display_name: "Minimal Tools",
+            enable_file_tools: false,
+            file_tools_mode: "Off",
+            enable_bash: false,
+            bash_mode: "Off",
+            enable_meta_tools: false,
+            enable_defra_query: false,
+        },
+        ToolPackageArg::Introspection => ToolPackageProfile {
+            display_name: "Introspection Tools",
+            enable_file_tools: false,
+            file_tools_mode: "Off",
+            enable_bash: false,
+            bash_mode: "Off",
+            enable_meta_tools: true,
+            enable_defra_query: true,
+        },
+        ToolPackageArg::Readonly => ToolPackageProfile {
+            display_name: "Standard Read-Only Tools",
+            enable_file_tools: true,
+            file_tools_mode: "ReadOnly",
+            enable_bash: true,
+            bash_mode: "ReadOnly",
+            enable_meta_tools: true,
+            enable_defra_query: true,
+        },
+        ToolPackageArg::Write => ToolPackageProfile {
+            display_name: "Standard Write Tools",
+            enable_file_tools: true,
+            file_tools_mode: "ReadWrite",
+            enable_bash: true,
+            bash_mode: "Unrestricted",
+            enable_meta_tools: true,
+            enable_defra_query: true,
+        },
+    }
+}
+
+fn resolve_init_tool_package(
+    write_tools: bool,
+    explicit: Option<ToolPackageArg>,
+) -> Result<ToolPackageArg> {
+    match (write_tools, explicit) {
+        (true, Some(ToolPackageArg::Write)) | (true, None) => Ok(ToolPackageArg::Write),
+        (true, Some(other)) => anyhow::bail!(
+            "--write-tools is a compatibility alias for --tool-package write; remove --write-tools or choose --tool-package {}",
+            format_tool_package(other)
+        ),
+        (false, Some(package)) => Ok(package),
+        (false, None) => Ok(ToolPackageArg::Readonly),
+    }
+}
+
+fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
+    if args.identity_only
+        && (args.enable_memory
+            || args.disable_defra_query
+            || !args.defra_query_collections.is_empty())
+    {
+        anyhow::bail!(
+            "--enable-memory, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no ToolSelection document is written"
+        );
+    }
+    if !args.defra_query_collections.is_empty() {
+        let profile = tool_package_profile(tool_package);
+        if args.disable_defra_query || !profile.enable_defra_query {
+            anyhow::bail!(
+                "--defra-query-collection requires a tool package with defra_query enabled and cannot be combined with --disable-defra-query"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn init_enable_defra_query(tool_package: ToolPackageArg, disable_defra_query: bool) -> bool {
+    tool_package_profile(tool_package).enable_defra_query && !disable_defra_query
+}
+
+fn tool_ceiling_for_package(tool_package: ToolPackageArg) -> ToolCeilingArg {
+    match tool_package {
+        ToolPackageArg::Minimal | ToolPackageArg::Introspection => ToolCeilingArg::MetaOnly,
+        ToolPackageArg::Readonly => ToolCeilingArg::Readonly,
+        ToolPackageArg::Write => ToolCeilingArg::Readwrite,
+    }
+}
+
+fn resolve_tool_root_for_package(
+    tool_package: ToolPackageArg,
+    explicit: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    let needs_root = matches!(
+        tool_package,
+        ToolPackageArg::Readonly | ToolPackageArg::Write
+    );
+    if needs_root || explicit.is_some() {
+        Ok(Some(resolve_default_tool_root(explicit)?))
+    } else {
+        Ok(None)
     }
 }
 
@@ -606,10 +738,12 @@ fn default_backend_id_for_agent(agent_did: &str) -> String {
     format!("{agent_did}:backend")
 }
 
-fn standard_system_prompt(tool_ceiling: ToolCeilingArg) -> &'static str {
-    match tool_ceiling {
-        ToolCeilingArg::Readwrite => STANDARD_READWRITE_SYSTEM_PROMPT,
-        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => STANDARD_READONLY_SYSTEM_PROMPT,
+fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
+    match tool_package {
+        ToolPackageArg::Write => STANDARD_READWRITE_SYSTEM_PROMPT,
+        ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => {
+            STANDARD_READONLY_SYSTEM_PROMPT
+        }
     }
 }
 
@@ -651,4 +785,259 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_args() -> InitArgs {
+        InitArgs {
+            home: None,
+            data_dir: None,
+            dangerously_overwrite: false,
+            reset: false,
+            identity_only: false,
+            agent_name: "test-agent".to_string(),
+            key_path: None,
+            identity_backend: IdentityBackendArg::File,
+            keychain_label: None,
+            secure_enclave_label: None,
+            inference_endpoint: None,
+            inference_endpoint_legacy: None,
+            backend_id: None,
+            backend_name: None,
+            backend_preset: None,
+            provider_kind: None,
+            api_key: None,
+            api_key_env_var: None,
+            model_name: "test-model".to_string(),
+            max_concurrent: 2,
+            max_queue_depth: 16,
+            write_tools: false,
+            tool_package: None,
+            tool_root: None,
+            enable_memory: false,
+            disable_defra_query: false,
+            defra_query_collections: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn init_affordances_seed_tool_selection_document() {
+        let selection = tool_selection_for_package(
+            "did:key:z-init",
+            "default-tools",
+            ToolPackageArg::Readonly,
+            true,
+            true,
+            vec!["AgentRequest".to_string(), "AgentResponse".to_string()],
+        );
+
+        assert_eq!(selection.enable_memory, Some(true));
+        assert_eq!(selection.enable_defra_query, Some(true));
+        assert_eq!(
+            selection.defra_query_collections,
+            Some(vec![
+                "AgentRequest".to_string(),
+                "AgentResponse".to_string()
+            ])
+        );
+        assert_eq!(selection.enable_file_tools, Some(true));
+        assert_eq!(selection.file_tools_mode.as_deref(), Some("ReadOnly"));
+    }
+
+    #[test]
+    fn init_tool_packages_seed_expected_tool_selection_documents() {
+        struct Case {
+            package: ToolPackageArg,
+            ceiling: ToolCeilingArg,
+            display_name: &'static str,
+            enable_file_tools: bool,
+            file_tools_mode: &'static str,
+            enable_bash: bool,
+            bash_mode: &'static str,
+            enable_meta_tools: bool,
+            enable_defra_query: bool,
+            backgroundable_tools: Vec<String>,
+        }
+
+        let cases = [
+            Case {
+                package: ToolPackageArg::Minimal,
+                ceiling: ToolCeilingArg::MetaOnly,
+                display_name: "Minimal Tools",
+                enable_file_tools: false,
+                file_tools_mode: "Off",
+                enable_bash: false,
+                bash_mode: "Off",
+                enable_meta_tools: false,
+                enable_defra_query: false,
+                backgroundable_tools: Vec::new(),
+            },
+            Case {
+                package: ToolPackageArg::Introspection,
+                ceiling: ToolCeilingArg::MetaOnly,
+                display_name: "Introspection Tools",
+                enable_file_tools: false,
+                file_tools_mode: "Off",
+                enable_bash: false,
+                bash_mode: "Off",
+                enable_meta_tools: true,
+                enable_defra_query: true,
+                backgroundable_tools: Vec::new(),
+            },
+            Case {
+                package: ToolPackageArg::Readonly,
+                ceiling: ToolCeilingArg::Readonly,
+                display_name: "Standard Read-Only Tools",
+                enable_file_tools: true,
+                file_tools_mode: "ReadOnly",
+                enable_bash: true,
+                bash_mode: "ReadOnly",
+                enable_meta_tools: true,
+                enable_defra_query: true,
+                backgroundable_tools: Vec::new(),
+            },
+            Case {
+                package: ToolPackageArg::Write,
+                ceiling: ToolCeilingArg::Readwrite,
+                display_name: "Standard Write Tools",
+                enable_file_tools: true,
+                file_tools_mode: "ReadWrite",
+                enable_bash: true,
+                bash_mode: "Unrestricted",
+                enable_meta_tools: true,
+                enable_defra_query: true,
+                backgroundable_tools: vec!["bash_unrestricted".to_string()],
+            },
+        ];
+
+        for case in cases {
+            let selection = tool_selection_for_package(
+                "did:key:z-init",
+                "default-tools",
+                case.package,
+                false,
+                init_enable_defra_query(case.package, false),
+                Vec::new(),
+            );
+
+            assert_eq!(tool_ceiling_for_package(case.package), case.ceiling);
+            assert_eq!(selection.display_name.as_deref(), Some(case.display_name));
+            assert_eq!(selection.enable_file_tools, Some(case.enable_file_tools));
+            assert_eq!(
+                selection.file_tools_mode.as_deref(),
+                Some(case.file_tools_mode)
+            );
+            assert_eq!(selection.enable_bash, Some(case.enable_bash));
+            assert_eq!(selection.bash_mode.as_deref(), Some(case.bash_mode));
+            assert_eq!(selection.enable_meta_tools, Some(case.enable_meta_tools));
+            assert_eq!(selection.enable_defra_query, Some(case.enable_defra_query));
+            assert_eq!(
+                selection.backgroundable_tool_names,
+                Some(case.backgroundable_tools)
+            );
+            assert_eq!(selection.enable_memory, Some(false));
+            assert_eq!(selection.allowed_mcp_service_ids, Some(Vec::new()));
+            assert_eq!(selection.subagent_targets, Some(Vec::new()));
+            assert_eq!(selection.subagent_spawn_enabled, Some(false));
+            assert_eq!(selection.subagent_background_enabled, Some(false));
+            assert_eq!(selection.subagent_allow_cross_deployment, Some(false));
+        }
+    }
+
+    #[test]
+    fn init_can_seed_defra_query_disabled_document() {
+        let selection = tool_selection_for_package(
+            "did:key:z-init",
+            "default-tools",
+            ToolPackageArg::Write,
+            false,
+            init_enable_defra_query(ToolPackageArg::Write, true),
+            Vec::new(),
+        );
+
+        assert_eq!(selection.enable_memory, Some(false));
+        assert_eq!(selection.enable_defra_query, Some(false));
+        assert_eq!(selection.defra_query_collections, Some(Vec::new()));
+        assert_eq!(
+            selection.backgroundable_tool_names,
+            Some(vec!["bash_unrestricted".to_string()])
+        );
+    }
+
+    #[test]
+    fn init_tool_package_aliases_and_defra_query_scope_validation_match_seeded_docs() {
+        assert_eq!(
+            resolve_init_tool_package(false, None).unwrap(),
+            ToolPackageArg::Readonly
+        );
+        assert_eq!(
+            resolve_init_tool_package(true, None).unwrap(),
+            ToolPackageArg::Write
+        );
+        assert_eq!(
+            resolve_init_tool_package(true, Some(ToolPackageArg::Write)).unwrap(),
+            ToolPackageArg::Write
+        );
+        assert!(
+            resolve_init_tool_package(true, Some(ToolPackageArg::Readonly))
+                .unwrap_err()
+                .to_string()
+                .contains("--write-tools")
+        );
+
+        let mut scoped_introspection = init_args();
+        scoped_introspection.tool_package = Some(ToolPackageArg::Introspection);
+        scoped_introspection.defra_query_collections = vec!["AgentRequest".to_string()];
+        validate_init_tool_flags(&scoped_introspection, ToolPackageArg::Introspection).unwrap();
+
+        let selection = tool_selection_for_package(
+            "did:key:z-init",
+            "default-tools",
+            ToolPackageArg::Introspection,
+            true,
+            init_enable_defra_query(ToolPackageArg::Introspection, false),
+            scoped_introspection.defra_query_collections.clone(),
+        );
+        assert_eq!(selection.enable_memory, Some(true));
+        assert_eq!(selection.enable_defra_query, Some(true));
+        assert_eq!(
+            selection.defra_query_collections,
+            Some(vec!["AgentRequest".to_string()])
+        );
+    }
+
+    #[test]
+    fn init_rejects_affordances_that_would_not_write_documents() {
+        let mut identity_only = init_args();
+        identity_only.identity_only = true;
+        identity_only.enable_memory = true;
+        assert!(
+            validate_init_tool_flags(&identity_only, ToolPackageArg::Readonly)
+                .unwrap_err()
+                .to_string()
+                .contains("--identity-only")
+        );
+
+        let mut scoped_without_tool = init_args();
+        scoped_without_tool.defra_query_collections = vec!["AgentRequest".to_string()];
+        assert!(
+            validate_init_tool_flags(&scoped_without_tool, ToolPackageArg::Minimal)
+                .unwrap_err()
+                .to_string()
+                .contains("--defra-query-collection")
+        );
+
+        let mut scoped_disabled = init_args();
+        scoped_disabled.disable_defra_query = true;
+        scoped_disabled.defra_query_collections = vec!["AgentRequest".to_string()];
+        assert!(
+            validate_init_tool_flags(&scoped_disabled, ToolPackageArg::Readonly)
+                .unwrap_err()
+                .to_string()
+                .contains("--defra-query-collection")
+        );
+    }
 }

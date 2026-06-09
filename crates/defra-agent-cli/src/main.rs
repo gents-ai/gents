@@ -85,6 +85,7 @@ Examples:
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --enable-memory --defra-query-collection AgentRequest
   defra-agent init --identity-only
   defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
@@ -215,7 +216,9 @@ Examples:
   defra-agent config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools";
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-memory true
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --subagent-spawn-enabled true --subagent-target '<json>'";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
@@ -246,6 +249,15 @@ Examples:
   defra-agent diagnose
   defra-agent diagnose --home /path/to/home
   defra-agent diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
+const TOOLS_AFTER_HELP: &str = "\
+Examples:
+  defra-agent tools explain
+  defra-agent tools explain --behavior-id BEHAVIOR_ID
+  defra-agent tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
+
+The explain output separates model-callable tools from operator HTTP/MCP surfaces
+and includes warnings for confusing defaults such as empty allowlists that mean
+all, or built-in read tools that are always included today.";
 const CONFIG_EXPORT_AFTER_HELP: &str = "\
 Exports the desired configuration documents for one agent principal as a
 manifest root directory (per-document subdirectories, optional prompt sidecars).
@@ -305,7 +317,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds";
+pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools";
 pub(crate) const EXPORT_SKILL_FIELDS: &str =
     "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
 pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
@@ -352,6 +364,7 @@ async fn main() -> Result<()> {
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
+        Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => commands::request::dispatch(command).await,
         Command::Response { command } => commands::response::dispatch(command).await,

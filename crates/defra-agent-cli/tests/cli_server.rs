@@ -323,8 +323,11 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     assert!(
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
+                // `/status` serializes behaviors as `SelfBehavior`, whose joined
+                // backend URL field is `endpoint` (not `backend_endpoint`, which
+                // is the field name in the separate `/behavior` detail view).
                 && behavior
-                    .get("backend_endpoint")
+                    .get("endpoint")
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| !endpoint.is_empty())
         }),

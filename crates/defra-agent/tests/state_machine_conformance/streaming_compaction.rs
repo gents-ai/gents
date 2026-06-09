@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::Arc;
 
+use defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use defra_agent::StreamWriter;
 use defra_agent_protocol::transcript::present_persisted_message;
 
@@ -8,7 +9,7 @@ use super::support::fixtures::test_identity;
 use super::support::interrupt::{
     create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
     wait_for_response_content_contains, wait_for_response_doc_id, wait_for_runtime_ready,
-    BootedAgent,
+    BootedAgent, InferenceCallSnapshot,
 };
 use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
 
@@ -16,6 +17,11 @@ const INTERRUPT_FLOW_MODEL: &str = "default";
 const INTERRUPT_FLOW_BACKEND_ID: &str = "backend-streaming-response-interrupt-flow";
 const INTERRUPT_FLOW_MARKER: &str = "streaming-response-interrupt-flow";
 const INTERRUPT_FLOW_PARTIAL: &str = "partial response content ";
+const IDLE_TIMEOUT_MODEL: &str = "default";
+const IDLE_TIMEOUT_BACKEND_ID: &str = "backend-streaming-response-idle-timeout";
+const IDLE_TIMEOUT_MARKER: &str = "streaming-response-idle-timeout";
+const IDLE_TIMEOUT_PARTIAL: &str = "partial before idle timeout ";
+const IDLE_TIMEOUT_ERROR_NEEDLE: &str = "stream liveness timeout";
 
 #[derive(Debug, Deserialize)]
 struct StreamingResponseRow {
@@ -79,6 +85,305 @@ pub(super) async fn generated_streaming_response_interrupt_flow_cases_drive_daem
     for case in cases {
         drive_streaming_response_interrupt_flow_case(case).await;
     }
+}
+
+pub(super) async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
+    let case = lean_response_transition_cases()
+        .iter()
+        .find(|case| case.name == "finalize_error_idle_timeout_requires_deadline")
+        .expect("Lean idle-timeout response transition case should be emitted");
+
+    assert!(case.legal);
+    assert_eq!(case.group, "normal");
+    assert_eq!(case.action, "finalize_error");
+    assert_eq!(case.pre_status, "streaming");
+    assert_eq!(case.post_status, "error");
+    assert_eq!(case.pre_live_tail, "nonEmpty");
+    assert_eq!(case.post_live_tail, "empty");
+    assert_eq!(case.error_reason.as_deref(), Some("streamIdleTimeout"));
+    assert_eq!(case.expected_request_state.as_deref(), Some("failed"));
+    assert_eq!(
+        case.expected_request_persistence.as_deref(),
+        Some("committed")
+    );
+
+    drive_streaming_response_idle_timeout_case(case).await;
+}
+
+async fn drive_streaming_response_idle_timeout_case(
+    case: &lean_vocab_test::LeanResponseTransitionCase,
+) {
+    let db = test_db(&format!("streaming-idle-timeout-{}", case.name)).await;
+    let backend = MockStreamingBackend::start(
+        IDLE_TIMEOUT_MODEL,
+        vec![StreamScript::paused(
+            IDLE_TIMEOUT_MARKER,
+            [IDLE_TIMEOUT_PARTIAL],
+        )],
+    )
+    .expect("start mock streaming backend");
+    let agent = boot_streaming_idle_timeout_agent(&db, &case.name, backend.endpoint()).await;
+
+    let request_id = format!("{}-{}", case.name, uuid::Uuid::new_v4());
+    let session_id = format!("session-{}", uuid::Uuid::new_v4());
+    let request_doc_id = create_runtime_request(
+        db.node.as_ref(),
+        agent.agent_did.as_str(),
+        AGENT_NAME,
+        &request_id,
+        &session_id,
+        IDLE_TIMEOUT_MARKER,
+    )
+    .await;
+
+    wait_for_backend_chunks_with_time_advance(&backend, IDLE_TIMEOUT_MARKER, 1).await;
+    let response_doc_id = wait_for_response_doc_id_realtime(db.node.as_ref(), &request_id).await;
+    let pre_response = wait_for_response_content_contains_realtime(
+        db.node.as_ref(),
+        &response_doc_id,
+        IDLE_TIMEOUT_PARTIAL,
+    )
+    .await;
+    assert_eq!(pre_response.status, case.pre_status);
+    assert_eq!(live_tail_shape(&pre_response), case.pre_live_tail);
+    assert!(pre_response.token_count > 0);
+
+    let pre_request =
+        wait_for_request_lifecycle_state_realtime(db.node.as_ref(), &request_doc_id, "processing")
+            .await;
+    assert_eq!(pre_request.status, "processing");
+    let pre_call =
+        wait_for_latest_inference_call_state_realtime(db.node.as_ref(), &request_id, "running")
+            .await;
+    assert!(!inference_call_state_is_terminal(&pre_call.call_state));
+
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_secs(
+            DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS + 1,
+        ))
+        .await;
+        tokio::task::yield_now().await;
+        if load_streaming_response_row(&db.node, &response_doc_id)
+            .await
+            .status
+            == case.post_status
+        {
+            break;
+        }
+    }
+
+    let post_response =
+        wait_for_response_status_realtime(db.node.as_ref(), &response_doc_id, &case.post_status)
+            .await;
+    assert_eq!(live_tail_shape(&post_response), case.post_live_tail);
+    assert_eq!(post_response.token_count, pre_response.token_count);
+    assert!(
+        post_response
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains(IDLE_TIMEOUT_ERROR_NEEDLE)),
+        "{}: response error should preserve stream liveness timeout reason; actual={:?}",
+        case.name,
+        post_response.error_message
+    );
+    assert!(post_response
+        .completed_at
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
+
+    let post_request = wait_for_request_lifecycle_state_realtime(
+        db.node.as_ref(),
+        &request_doc_id,
+        case.expected_request_state
+            .as_deref()
+            .expect("idle timeout case should project a request state"),
+    )
+    .await;
+    assert_eq!(post_request.status, "error");
+    assert_eq!(post_request.backend_id, IDLE_TIMEOUT_BACKEND_ID);
+    assert!(request_state_is_terminal(&post_request.lifecycle_state));
+    assert!(
+        post_request
+            .failure_reason
+            .contains(IDLE_TIMEOUT_ERROR_NEEDLE),
+        "{}: request failure should preserve stream liveness timeout reason; actual={:?}",
+        case.name,
+        post_request.failure_reason
+    );
+
+    let post_call =
+        wait_for_latest_inference_call_state_realtime(db.node.as_ref(), &request_id, "failed")
+            .await;
+    assert!(inference_call_state_is_terminal(&post_call.call_state));
+    assert!(
+        post_call
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(IDLE_TIMEOUT_ERROR_NEEDLE)),
+        "{}: inference call failure should preserve stream liveness timeout reason; actual={:?}",
+        case.name,
+        post_call.failure_reason
+    );
+
+    drop(agent);
+}
+
+async fn wait_for_response_doc_id_realtime(node: &EmbeddedNode, request_id: &str) -> String {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let started = std::time::Instant::now();
+    loop {
+        let query = format!(
+            r#"{{
+                AgentResponse(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{
+                    _docID
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        if let Some(row) = first_optional_row::<DocIdRow>(&response, "AgentResponse") {
+            return row.doc_id;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for AgentResponse for request_id={request_id}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_backend_chunks_with_time_advance(
+    backend: &MockStreamingBackend,
+    marker: &str,
+    expected: usize,
+) {
+    let started = std::time::Instant::now();
+    loop {
+        let observed = backend.observed_chunks(marker);
+        if observed >= expected {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
+        );
+        tokio::time::advance(Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_response_content_contains_realtime(
+    node: &EmbeddedNode,
+    response_doc_id: &str,
+    expected: &str,
+) -> StreamingResponseRow {
+    let started = std::time::Instant::now();
+    loop {
+        let row = load_streaming_response_row(node, response_doc_id).await;
+        if row.content.contains(expected) {
+            return row;
+        }
+        assert_ne!(
+            row.status, "error",
+            "live response failed before content contained {expected:?}; error_message={:?}",
+            row.error_message
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for response content to contain {expected:?}; last={:?}",
+            row.content
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_response_status_realtime(
+    node: &EmbeddedNode,
+    response_doc_id: &str,
+    expected: &str,
+) -> StreamingResponseRow {
+    let started = std::time::Instant::now();
+    loop {
+        let row = load_streaming_response_row(node, response_doc_id).await;
+        if row.status == expected {
+            return row;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for AgentResponse {response_doc_id} status={expected}; last={}",
+            row.status
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_request_lifecycle_state_realtime(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    expected: &str,
+) -> RequestSnapshot {
+    let started = std::time::Instant::now();
+    loop {
+        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
+        if snapshot.lifecycle_state == expected {
+            return snapshot;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}",
+            snapshot.lifecycle_state
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_latest_inference_call_state_realtime(
+    node: &EmbeddedNode,
+    request_id: &str,
+    expected: &str,
+) -> InferenceCallSnapshot {
+    let started = std::time::Instant::now();
+    loop {
+        let row = fetch_latest_inference_call_snapshot(node, request_id).await;
+        if row
+            .as_ref()
+            .is_some_and(|row| row.call_state.as_str() == expected)
+        {
+            return row.expect("checked Some");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for latest inference call request_id={request_id} call_state={expected}; last={row:?}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn fetch_latest_inference_call_snapshot(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Option<InferenceCallSnapshot> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    call_kind: {{ _eq: "inference" }}
+                }},
+                order: {{ call_seq: DESC }},
+                limit: 1
+            ) {{
+                call_seq
+                call_state
+                failure_reason
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    first_optional_row::<InferenceCallSnapshot>(&response, "InferenceCall")
 }
 
 async fn drive_streaming_response_interrupt_flow_case(
@@ -643,9 +948,59 @@ async fn boot_streaming_interrupt_flow_agent(
     BootedAgent::new(shutdown_tx, handle, agent_did)
 }
 
+async fn boot_streaming_idle_timeout_agent(
+    db: &support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+) -> BootedAgent {
+    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
+    upsert_idle_timeout_backend(db.node.as_ref(), endpoint).await;
+
+    let agent = defra_agent::DefraAgent::builder()
+        .node(db.node.clone())
+        .identity(identity)
+        .default_behavior_id(AGENT_NAME)
+        .tool_ceiling(defra_agent::ToolCeiling::meta_only())
+        .behavior(AGENT_NAME)
+        .backend_id(IDLE_TIMEOUT_BACKEND_ID)
+        .model_name(IDLE_TIMEOUT_MODEL)
+        .stream_batch_ms(0)
+        .deadline_duration_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS * 4)
+        .done()
+        .build()
+        .await
+        .expect("build streaming idle-timeout agent");
+    let agent_did = agent.agent_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready_realtime(db.node.as_ref(), &agent_did).await;
+
+    BootedAgent::new(shutdown_tx, handle, agent_did)
+}
+
 async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
-    let escaped_backend_id = escape_graphql_string(INTERRUPT_FLOW_BACKEND_ID);
+    upsert_streaming_backend(
+        node,
+        INTERRUPT_FLOW_BACKEND_ID,
+        endpoint,
+        INTERRUPT_FLOW_MODEL,
+    )
+    .await;
+}
+
+async fn upsert_idle_timeout_backend(node: &EmbeddedNode, endpoint: &str) {
+    upsert_streaming_backend(node, IDLE_TIMEOUT_BACKEND_ID, endpoint, IDLE_TIMEOUT_MODEL).await;
+}
+
+async fn upsert_streaming_backend(
+    node: &EmbeddedNode,
+    backend_id: &str,
+    endpoint: &str,
+    model_name: &str,
+) {
+    let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_endpoint = escape_graphql_string(endpoint);
+    let escaped_model_name = escape_graphql_string(model_name);
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -660,7 +1015,7 @@ async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
                     max_concurrent: 1,
                     max_queue_depth: 100,
                     enabled: true,
-                    models: ["{INTERRUPT_FLOW_MODEL}"],
+                    models: ["{escaped_model_name}"],
                     probe_status: "healthy"
                 }},
                 update: {{
@@ -670,7 +1025,7 @@ async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
                     max_concurrent: 1,
                     max_queue_depth: 100,
                     enabled: true,
-                    models: ["{INTERRUPT_FLOW_MODEL}"],
+                    models: ["{escaped_model_name}"],
                     probe_status: "healthy"
                 }}
             ) {{ _docID }}
@@ -679,9 +1034,28 @@ async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "upsert interrupt-flow backend failed: {:?}",
+        "upsert streaming backend {backend_id} failed: {:?}",
         response.errors
     );
+}
+
+async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(snapshot) = support::snapshots::fetch_runtime_snapshot(node, agent_did).await {
+            if snapshot.process_state == "ready"
+                && snapshot.reconcile_phase == "idle"
+                && snapshot.runnable_behavior_count >= 1
+            {
+                return;
+            }
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "agent did not reach ready state"
+        );
+        tokio::task::yield_now().await;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

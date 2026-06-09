@@ -194,11 +194,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // InferenceCall as cancelled rather than a generic stream drop.
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
+                let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
-                let mut stream = admission::scope_call_with_token(
+                let mut stream = admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index as i64,
                     inference_token.clone(),
+                    terminal_failure_reason.clone(),
                     async {
                         tokio::select! {
                             biased;
@@ -231,10 +233,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 )
                 .await?;
 
-                admission::scope_call_with_token(
+                admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index as i64,
                     inference_token.clone(),
+                    terminal_failure_reason.clone(),
                     async {
                         let liveness_timeout =
                             Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
@@ -339,11 +342,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to mark in-flight tool calls failed after stream liveness timeout"
                                         );
                                     }
+                                    let timeout_reason = format!(
+                                        "stream liveness timeout: no data received for {}s",
+                                        DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                                    );
+                                    admission::set_terminal_failure_reason(
+                                        &terminal_failure_reason,
+                                        timeout_reason.clone(),
+                                    );
                                     stream_error = Some(rig::agent::StreamingError::Completion(
-                                        rig::completion::CompletionError::ProviderError(format!(
-                                            "stream liveness timeout: no data received for {}s",
-                                            DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
-                                        )),
+                                        rig::completion::CompletionError::ProviderError(
+                                            timeout_reason,
+                                        ),
                                     ));
                                     break;
                                 }

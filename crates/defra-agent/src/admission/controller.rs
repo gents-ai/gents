@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use defra_node::EmbeddedNode;
 use rig::completion::CompletionError;
@@ -68,6 +68,7 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         pending: PendingCallMetadata,
         cancel_observer: Option<CancellationToken>,
+        terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
         if self.is_closed() {
             let call = self.call_record(pending, 0);
@@ -84,7 +85,15 @@ impl BackendAdmissionController {
         match self.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 let call = self.call_record(pending, 0);
-                return self.start_permit(node, permit, call, cancel_observer).await;
+                return self
+                    .start_permit(
+                        node,
+                        permit,
+                        call,
+                        cancel_observer,
+                        terminal_failure_observer,
+                    )
+                    .await;
             }
             Err(tokio::sync::TryAcquireError::Closed) => {
                 let call = self.call_record(pending, 0);
@@ -107,7 +116,15 @@ impl BackendAdmissionController {
                 match self.semaphore.clone().try_acquire_owned() {
                     Ok(permit) => {
                         let call = self.call_record(pending, queue_depth);
-                        return self.start_permit(node, permit, call, cancel_observer).await;
+                        return self
+                            .start_permit(
+                                node,
+                                permit,
+                                call,
+                                cancel_observer,
+                                terminal_failure_observer,
+                            )
+                            .await;
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
                         let call = self.call_record(pending, queue_depth);
@@ -186,6 +203,7 @@ impl BackendAdmissionController {
             call,
             doc_id,
             cancel_observer,
+            terminal_failure_observer,
         ))
     }
 
@@ -195,6 +213,7 @@ impl BackendAdmissionController {
         permit: OwnedSemaphorePermit,
         call: InferenceCallRecord,
         cancel_observer: Option<CancellationToken>,
+        terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
         self.running.fetch_add(1, Ordering::SeqCst);
         match persist_call_started(node.clone(), &call).await {
@@ -205,6 +224,7 @@ impl BackendAdmissionController {
                 call,
                 doc_id,
                 cancel_observer,
+                terminal_failure_observer,
             )),
             Err(error) => {
                 self.release_running();

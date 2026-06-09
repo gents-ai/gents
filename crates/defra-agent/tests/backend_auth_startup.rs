@@ -1,11 +1,6 @@
 mod support;
 
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
@@ -18,16 +13,8 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use support::fixtures::{bind_default_behavior_backend, test_behavior, test_identity};
-use support::http_mock::{read_http_request, write_http_response, HttpRequestData};
+use support::mock_endpoint::MockModelEndpoint;
 use support::waits::wait_for_runtime_process_state;
-
-struct MockModelEndpoint {
-    endpoint: String,
-    port: u16,
-    stop: Arc<AtomicBool>,
-    requests: Arc<Mutex<Vec<HttpRequestData>>>,
-    handle: Option<JoinHandle<()>>,
-}
 
 #[derive(Default)]
 struct RecordingObserver {
@@ -40,147 +27,6 @@ impl ProcessLifecycleObserver for RecordingObserver {
             .lock()
             .expect("recording observer mutex poisoned")
             .push(state);
-    }
-}
-
-impl MockModelEndpoint {
-    fn start_with_required_bearer(
-        model_name: &str,
-        required_bearer: Option<&str>,
-    ) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
-        let port = listener.local_addr()?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = stop.clone();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let requests_for_thread = requests.clone();
-        let model_name = model_name.to_string();
-        let required_bearer = required_bearer.map(ToOwned::to_owned);
-        let handle = thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = match read_http_request(&mut stream) {
-                            Ok(request) => request,
-                            Err(_) => {
-                                let _ = stream.shutdown(Shutdown::Both);
-                                continue;
-                            }
-                        };
-                        requests_for_thread
-                            .lock()
-                            .expect("mock request log mutex poisoned")
-                            .push(request.clone());
-                        let authorized = required_bearer.as_ref().is_none_or(|expected| {
-                            request
-                                .headers
-                                .get("authorization")
-                                .is_some_and(|value| value == &format!("Bearer {expected}"))
-                        });
-                        let (status, content_type, body) = if request.method == "GET"
-                            && (request.path == "/v1/models" || request.path == "/models")
-                        {
-                            if authorized {
-                                (
-                                    "200 OK",
-                                    "application/json",
-                                    format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#),
-                                )
-                            } else {
-                                (
-                                    "401 Unauthorized",
-                                    "application/json",
-                                    r#"{"error":"unauthorized"}"#.to_string(),
-                                )
-                            }
-                        } else if request.method == "GET"
-                            && (request.path == "/v1/key" || request.path == "/key")
-                        {
-                            if authorized {
-                                (
-                                    "200 OK",
-                                    "application/json",
-                                    r#"{"data":{"label":"test-key"}}"#.to_string(),
-                                )
-                            } else {
-                                (
-                                    "401 Unauthorized",
-                                    "application/json",
-                                    r#"{"error":"unauthorized"}"#.to_string(),
-                                )
-                            }
-                        } else if request.method == "POST"
-                            && (request.path == "/v1/chat/completions"
-                                || request.path == "/chat/completions")
-                        {
-                            if authorized {
-                                // The owned loop (#400) streams; reply with an
-                                // OpenAI-style SSE chunk stream, not a JSON body.
-                                let delta = format!(
-                                    r#"{{"id":"chatcmpl-test","provider":"Mock","object":"chat.completion.chunk","model":"{model_name}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"mock response"}},"finish_reason":null}}]}}"#
-                                );
-                                let finish = format!(
-                                    r#"{{"id":"chatcmpl-test","object":"chat.completion.chunk","model":"{model_name}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}}}"#
-                                );
-                                (
-                                    "200 OK",
-                                    "text/event-stream",
-                                    format!("data: {delta}\n\ndata: {finish}\n\ndata: [DONE]\n\n"),
-                                )
-                            } else {
-                                (
-                                    "401 Unauthorized",
-                                    "application/json",
-                                    r#"{"error":"unauthorized"}"#.to_string(),
-                                )
-                            }
-                        } else {
-                            (
-                                "404 Not Found",
-                                "application/json",
-                                r#"{"error":"not found"}"#.to_string(),
-                            )
-                        };
-                        let _ = write_http_response(&mut stream, status, content_type, &body);
-                        let _ = stream.shutdown(Shutdown::Both);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        Ok(Self {
-            endpoint: format!("http://127.0.0.1:{port}/v1"),
-            port,
-            stop,
-            requests,
-            handle: Some(handle),
-        })
-    }
-
-    fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-
-    fn recorded_requests(&self) -> Vec<HttpRequestData> {
-        self.requests
-            .lock()
-            .expect("mock request log mutex poisoned")
-            .clone()
-    }
-}
-
-impl Drop for MockModelEndpoint {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
     }
 }
 

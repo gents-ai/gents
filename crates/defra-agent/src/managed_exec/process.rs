@@ -7,6 +7,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::LiveToolOutputWriter;
+
 use super::output::ManagedExecOutcome;
 
 mod capture;
@@ -36,6 +38,7 @@ pub(crate) struct ManagedExecRequest {
     pub(crate) max_output_bytes: usize,
     pub(crate) stdin: Vec<u8>,
     pub(crate) tool_name: Option<String>,
+    pub(crate) live_output: Option<LiveToolOutputWriter>,
 }
 
 #[cfg(unix)]
@@ -93,8 +96,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout = child.inner.stdout.take();
     let stderr = child.inner.stderr.take();
     let max_output_bytes = request.max_output_bytes;
-    let stdout_task = tokio::spawn(read_optional_capped(stdout, max_output_bytes));
-    let stderr_task = tokio::spawn(read_optional_capped(stderr, max_output_bytes));
+    let stdout_task = tokio::spawn(read_optional_capped(
+        stdout,
+        max_output_bytes,
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
+    ));
+    let stderr_task = tokio::spawn(read_optional_capped(
+        stderr,
+        max_output_bytes,
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
+    ));
 
     let child_pgid = child.pgid();
     let mut wait = Box::pin(child.inner.wait());
@@ -202,8 +219,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout = child.inner.stdout.take();
     let stderr = child.inner.stderr.take();
     let max_output_bytes = request.max_output_bytes;
-    let stdout_task = tokio::spawn(read_optional_capped(stdout, max_output_bytes));
-    let stderr_task = tokio::spawn(read_optional_capped(stderr, max_output_bytes));
+    let stdout_task = tokio::spawn(read_optional_capped(
+        stdout,
+        max_output_bytes,
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
+    ));
+    let stderr_task = tokio::spawn(read_optional_capped(
+        stderr,
+        max_output_bytes,
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
+    ));
 
     let job = child.job();
     let mut wait = Box::pin(child.inner.wait());
