@@ -128,6 +128,14 @@ treasury wallet, across chains, with nothing rotating on transfer.
 5. Emit events for every grant — the command/audit trail the runtime mirrors
    into DefraDB via the existing event-trigger machinery.
 
+This contract is the single point of failure for every agent minted under
+it: a gate bug means CKD will deliver corpus and session keys to an
+attacker's ephemeral key. It gets the same treatment as the runtime's state
+machines — a Lean model of the authority algebra (who may obtain which
+derived capability, under which ownership state), conformance tests, and an
+external audit — plus an explicit immutability/upgrade-governance decision,
+before real value sits behind it.
+
 Open question (carried from README): whether the NFT itself lives on NEAR
 (NEP-171, least mechanism — recommended start) or is mirrored from an EVM
 chain later for marketplace reach. The contract gate doesn't change either

@@ -43,7 +43,10 @@ What the research confirmed:
   keeping escrow funded — when it hits zero the provider may close the lease
   without warning, so the **escrow top-up watchdog is a core agent task**,
   not an afterthought (a `Schedule` task: query blocks-remaining, top up from
-  treasury, attest the spend).
+  treasury, attest the spend). Well-formed agents are **over-provisioned at
+  mint** — months of lease escrow up front — so the watchdog is routine
+  maintenance, not life support, and the funding floor is part of the
+  asset's NAV (see the README's luxury-good framing).
 - **R3 is where our design and Akash agree perfectly.** Persistent volumes do
   *not* survive lease changes, provider migration, or even relaunch on the
   same provider — Akash punishes stateful designs and rewards ours. Provider

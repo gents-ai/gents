@@ -106,14 +106,28 @@ Mint ──> Fund ──> Operate <──> Maintain ──> Sell ──> (new ow
    `Schedule` documents: re-post the DA snapshot inside the retention window,
    write the periodic permanent checkpoint, renew the Akash lease, watch the
    DIEM balance and throttle loops when the daily budget runs low. Resource
-   stewardship is agent behavior, not platform machinery.
+   stewardship is agent behavior, not platform machinery. Honest limit: a
+   *dead* agent cannot top up its own escrow — liveness while running is the
+   agent's job; noticing death is the owner's. **The NFT is also a pager.**
+   The mitigation is provisioning, not mechanism: a well-formed bearer agent
+   ships over-provisioned — months of compute escrow, prepaid storage, a
+   comfortable DIEM stake — which makes death rare and makes the asset
+   *expensive by construction*. A funded, running agent is a luxury good,
+   and the funding floor is most of its NAV.
 5. **Sell.** The NFT transfers. Command authority follows instantly (step 3
    checks current ownership). MPC signing authority follows the contract — the
    DID never rotates, so the résumé survives. The treasury conveys: the sale
    price decomposes into **net asset value** (the DIEM and funds in the
    contract, priceable on the open market) plus an **agent premium** (the
    corpus, the personality, the attested track record). The premium is the
-   value the previous owner *raised* into the agent.
+   value the previous owner *raised* into the agent. What the premium is
+   *made of* — reputation other systems honor, a data moat, lore and
+   provenance, or nothing beyond NAV — is deliberately not engineered here:
+   the design's job is to make title, history, and treasury real and
+   transferable, and the market prices them. One honest physical fact: a
+   seller can always fork the corpus under a fresh DID before listing. The
+   original's identity and verifiable history are the only unforkable
+   things, which is why résumé integrity (below) carries the premium.
 6. **Resurrect.** Anyone holding the NFT, at any time: rent a stateless host,
    download the binary, fetch the latest encrypted checkpoint (DA if fresh,
    Arweave permanent checkpoint otherwise), prove NFT ownership to the MPC
@@ -170,6 +184,33 @@ document-driven and identity-native.
   no-insolvent-dispatch, insolvency-is-terminal-safe, every-spend-attested)
   precedes the Rust.
 
+## Pricing the asset: résumé integrity
+
+A résumé that anyone can inflate prices nothing — that is the lemons problem,
+and two parties have both motive and means: the owner (wash-commanding their
+own agent) and, during any epoch, a malicious host (the session key signs in
+its memory). The design response is not to pick one trust level but to
+**type every attestation by how it can be verified** and let buyers weight
+the tiers:
+
+| Tier | What it proves | Forgeable by |
+|---|---|---|
+| **T0 — external receipts** | on-chain spend (escrow top-ups, storage posts, DIEM staking), checkpoint cadence, lease/uptime history | nobody — these are chain facts |
+| **T1 — owner-commanded work** | every request is wallet-signed by its commander (the command gate provides this for free), so each completion chains to a signed command | sybil wallets — costs gas and leaves an on-chain trail |
+| **T2 — counterparty-signed work** | a non-owner DID signed the request and/or acknowledged the result | collusion only |
+
+Two structural rules fall out:
+
+- **An attestation must chain to a signed command.** A compromised host can
+  forge agent-side completions, but it cannot mint owner-signed commands —
+  forging work history requires the commander's key, not just the box.
+- **Owner curation is a feature with a label, not fraud.** Part of what a
+  buyer pays for *is* how the owner raised the agent; the résumé's job is to
+  disclose which tier each claim sits in, never to imply activity equals
+  value. T0 service records — was it kept funded, checkpointed, decently
+  hosted? — are unforgeable and close to how used physical assets are
+  actually priced.
+
 ## Prior art and differentiation
 
 The field has shipped every leg of this separately and never the combination
@@ -217,7 +258,8 @@ restore rather than a platform migration.
 1. **The NFT-owner → runtime trust seam.** The runtime verifies command
    signatures against chain state; if its view of "current owner" can be
    forged or lagged, ownership is theater off-chain. The bridge must be a
-   verifiable chain read, not a trusted oracle.
+   verifiable chain read — light-client-verified state, not a bare RPC
+   response an eclipsed endpoint could fake.
 2. **MPC network trust.** NEAR's signer set is currently 5-of-8
    professional operators (proof-of-authority flavored, TEE off). Better than
    any single custodian, but it is a real dependency and should be stated
@@ -238,7 +280,22 @@ restore rather than a platform migration.
 6. **Token/economic exposure.** DIEM, AKT, TIA, AR are all volatile; the
    treasury's NAV moves. That is also the point — the asset is partly a
    basket — but budget logic must be denominated in *service units*
-   (tokens/day, GB-months, lease-days), not USD.
+   (tokens/day, GB-months, lease-days), not USD. The DIEM perpetuity is
+   ultimately a claim on one company's solvency; the x402/USDC rail is the
+   operational hedge, but buyers should price Venice risk into the NAV.
+7. **The title contract is the new single point of failure.** It gates
+   signing, key derivation, and treasury authority; a bug is total loss for
+   every agent minted under it, and the upgrade story is a dilemma
+   (upgradeable = backdoor, immutable = bugs are forever). It deserves the
+   same formal treatment as the runtime's state machines — a Lean model of
+   the authority algebra plus external audit — before real value sits
+   behind it.
+8. **Custody risk scales with the asset class, not the asset.** NEAR's
+   5-of-8 signer set is a fine trade for one agent; it is a growing honeypot
+   when every bearer agent's identity and corpus keys hang off the same set.
+   Watch for TEE-on-mainnet and operator-set hardening, and keep the custody
+   seam clean enough that migration (e.g. to Orbis when ready) is a
+   transfer, not an exodus.
 
 ## Open questions
 
@@ -254,3 +311,13 @@ restore rather than a platform migration.
 - What does the owner-facing command UX look like — every command is a wallet
   signature; session-scoped owner auth (sign once per session) is probably
   necessary for usability. Mirror of the agent's own delegation pattern.
+
+## Posture
+
+This is a real product that starts as a flagship sovereignty demo. The v0
+deliverable is the most vivid possible proof of the thesis, live: **mint an
+agent, command it from a wallet, kill its host on stage, and resurrect it
+from chain state with one command.** Everything in these docs is sequenced
+so that demo ships first (attestation wedge → title contract on testnet →
+checkpoint/restore → the demo), and the marketplace grows out of working
+code rather than preceding it.
