@@ -801,6 +801,110 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 }
 
 #[tokio::test]
+async fn dirty_caller_history_is_sanitized_at_loop_entry() {
+    // Chokepoint guarantee: EVERY owned-loop consumer (daemon, oneshot,
+    // compaction summarize, title, subagent children) sends provider-valid
+    // history because the loop sanitizes the caller-provided history at entry
+    // — no call site can forget the sanitizer. Feed a dirty history (unpaired
+    // call, orphaned result, text-after-call ordering) and assert the request
+    // on the wire satisfies the provider invariants.
+    let (_node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    let unpaired_call = rig::completion::message::ToolCall {
+        id: "call-unpaired".to_string(),
+        call_id: Some("call-unpaired".to_string()),
+        function: rig::completion::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    };
+    let paired_call = rig::completion::message::ToolCall {
+        id: "call-paired".to_string(),
+        call_id: Some("call-paired".to_string()),
+        function: rig::completion::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    };
+    let dirty_history = vec![
+        // Orphaned result: its call was compacted away.
+        Message::User {
+            content: OneOrMany::one(UserContent::tool_result(
+                "call-gone".to_string(),
+                OneOrMany::one(rig::completion::message::ToolResultContent::text(
+                    "orphaned",
+                )),
+            )),
+        },
+        // Misordered assistant turn (text AFTER calls) with one unpaired call.
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::ToolCall(paired_call),
+                AssistantContent::ToolCall(unpaired_call),
+                AssistantContent::Text(rig::completion::message::Text {
+                    text: "stale ordering".to_string(),
+                }),
+            ])
+            .unwrap(),
+        },
+        Message::User {
+            content: OneOrMany::one(UserContent::tool_result(
+                "call-paired".to_string(),
+                OneOrMany::one(rig::completion::message::ToolResultContent::text("ok")),
+            )),
+        },
+    ];
+
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("hi".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("continue"),
+        dirty_history,
+        Arc::new(Vec::new()),
+        config(1),
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 1);
+    assert_provider_request_invariants(1, &histories[0]);
+    // The unpaired call is gone but the paired exchange survives.
+    let kept_calls: Vec<String> = histories[0]
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::ToolCall(call) => Some(call.id.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        kept_calls,
+        vec!["call-paired".to_string()],
+        "unpaired call dropped, paired call kept; history: {:?}",
+        histories[0]
+    );
+}
+
+#[tokio::test]
 async fn oversized_tool_result_is_bounded_before_threading() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("read the big thing");

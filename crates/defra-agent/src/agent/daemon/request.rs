@@ -85,12 +85,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
                 );
-                // Provider-send boundary: the durable transcript is permissive —
-                // it may carry an assistant tool-call with no result message
-                // (#445: interrupted/failed/timed-out tools, or a result that was
-                // never persisted) and, for transcripts persisted before the
-                // ordering fix, assistant text after tool calls. Providers reject
-                // both, so sanitize before the messages reach the provider.
+                // Sanitize the loaded transcript early so the compaction
+                // split arithmetic and prompt-builder token estimates operate
+                // on provider-shaped history. Provider validity itself is
+                // GUARANTEED deeper: run_loop_stream sanitizes its history at
+                // entry (the chokepoint every completion request passes
+                // through), so no call site can forget the boundary.
                 let mut history = compaction::sanitize_history_for_provider(history);
                 // Summaries are model-emitted free text headed into the system
                 // reminder; bound them at the consumption point (covers
@@ -136,9 +136,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .await?;
 
                     // The recent window can begin mid tool exchange (the split
-                    // is token-budgeted, not pair-aware), so the compaction
-                    // output crosses the provider-send boundary again.
-                    history = compaction::sanitize_history_for_provider(result.messages);
+                    // is token-budgeted, not pair-aware); run_loop_stream's
+                    // entry sanitization repairs that before the provider
+                    // sees it.
+                    history = result.messages;
                     if let Some(summary) = result.summary {
                         let entry = session::save_compaction_entry(
                             &self.node,

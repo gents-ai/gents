@@ -81,6 +81,15 @@ where
     M::StreamingResponse: 'static,
 {
     try_stream! {
+        // Provider-input chokepoint: every completion request in the system is
+        // born in this loop (daemon inference, oneshot, compaction summarize,
+        // title, subagent children), so sanitizing the caller-provided history
+        // ONCE at entry guarantees provider-valid input for every consumer —
+        // no call site can forget the boundary. Only the loaded history is
+        // sanitized: the loop's own threaded messages (`new_messages`) are
+        // provider-valid by construction, and sanitizing them mid-flight would
+        // mis-drop a tool call whose result rides as the next turn's prompt.
+        let history = crate::compaction::sanitize_history_for_provider(history);
         // The running set of messages produced this request. The last element
         // is always the "prompt" for the next turn (rig semantics): initially
         // the user message, later the trailing tool-result user message.
