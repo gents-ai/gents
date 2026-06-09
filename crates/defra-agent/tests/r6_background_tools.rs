@@ -39,6 +39,32 @@ impl ToolDyn for StaticTool {
     }
 }
 
+struct LargeOutputTool {
+    name: &'static str,
+    output: String,
+}
+
+impl ToolDyn for LargeOutputTool {
+    fn name(&self) -> String {
+        self.name.to_string()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.to_string(),
+                description: "test tool".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        let output = self.output.clone();
+        Box::pin(async move { Ok(output) })
+    }
+}
+
 struct PendingTool;
 
 impl ToolDyn for PendingTool {
@@ -315,6 +341,76 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert_eq!(
         metadata["queue"]["key"],
         format!("background_completion:{session_id}")
+    );
+}
+
+#[tokio::test]
+async fn wait_envelope_bounds_oversized_background_tool_result() {
+    // Model-input correctness: the wait_process envelope is threaded to the
+    // model as a tool result, so an oversized background tool output must be
+    // bounded there — the same way the owned loop bounds foreground results.
+    // The FULL output still lands on the AgentToolCall row (spill semantics).
+    let big_line = "x".repeat(200);
+    let big_output = std::iter::repeat(big_line)
+        .take(5_000)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let full_len = big_output.len();
+    let (db, hook, session_id, _request_id) = setup_hook(
+        "r6-background-bounded",
+        registry(
+            vec![Box::new(LargeOutputTool {
+                name: "big_tool",
+                output: big_output,
+            })],
+            &["big_tool"],
+        ),
+    )
+    .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-big",
+            r#"{"tool_name":"big_tool","args":{}}"#,
+        )
+        .await,
+    );
+    assert_eq!(receipt["status"], "running");
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    // skip_reason_json doubles as the structural assertion: an envelope the
+    // outer bounding sliced mid-JSON fails the parse here.
+    let waited = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "meta-wait-big",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(waited["status"], "completed");
+    let envelope_result = waited["result"].as_str().expect("envelope result string");
+    assert!(
+        envelope_result.len() < full_len,
+        "wait envelope must bound the model-facing result: envelope={} full={}",
+        envelope_result.len(),
+        full_len
+    );
+    assert!(
+        !envelope_result.is_empty(),
+        "bounded result must be non-empty"
+    );
+
+    // The durable row keeps the full output (spill semantics unchanged).
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
+    assert_eq!(
+        row.result.as_deref().map(str::len),
+        Some(full_len),
+        "the AgentToolCall row must keep the full output"
     );
 }
 

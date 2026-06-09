@@ -200,6 +200,21 @@ pub fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     history::drop_unpaired_tool_calls(messages)
 }
 
+/// Reorder assistant content to the canonical provider order (text, reasoning,
+/// tool calls) before the messages are sent to the provider. See
+/// `history::normalize_assistant_content_order`.
+pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
+    history::normalize_assistant_content_order(messages)
+}
+
+/// The full provider-send boundary sanitization for loaded history: drop
+/// unpaired tool calls (#445), then normalize assistant content order. New
+/// sanitizers that narrow the permissive durable transcript to the stricter
+/// provider format belong here, NOT in the conformance-fenced reducers.
+pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
+    normalize_assistant_content_order(drop_unpaired_tool_calls(messages))
+}
+
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {
     let tokens = estimate_message_tokens(messages);
     let budget = (context_window as f64 * threshold) as usize;

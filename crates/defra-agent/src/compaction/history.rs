@@ -113,6 +113,43 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     kept_messages
 }
 
+/// Normalize assistant content to the canonical provider order — text, then
+/// reasoning (and any other non-call content), then tool calls — at the
+/// provider-send boundary.
+///
+/// `AssistantTurnAccumulator::build_message` writes this order for newly
+/// persisted turns, but transcripts persisted before the ordering fix can carry
+/// text *after* tool calls, which strict providers reject on reload. Like
+/// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
+/// provider format at the request-build boundary; the stored messages and the
+/// conformance-fenced reducers are untouched. Relative order within each
+/// category is preserved.
+pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| match message {
+            Message::Assistant { id, content } => {
+                let mut text = Vec::new();
+                let mut middle = Vec::new();
+                let mut calls = Vec::new();
+                for item in content.into_iter() {
+                    match item {
+                        AssistantContent::Text(_) => text.push(item),
+                        AssistantContent::ToolCall(_) => calls.push(item),
+                        other => middle.push(other),
+                    }
+                }
+                let ordered: Vec<AssistantContent> =
+                    text.into_iter().chain(middle).chain(calls).collect();
+                let content = OneOrMany::many(ordered)
+                    .expect("reordering preserves the message's non-empty content");
+                Message::Assistant { id, content }
+            }
+            other => other,
+        })
+        .collect()
+}
+
 pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
     messages
         .into_iter()

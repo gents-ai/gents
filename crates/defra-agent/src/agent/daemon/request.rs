@@ -85,12 +85,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
                 );
-                // #445: the durable transcript may carry an assistant tool-call
-                // with no result message (an interrupted/failed/timed-out tool, or
-                // one whose result was never persisted). Providers reject a reloaded
-                // assistant tool_call that is not followed by its result, so drop
-                // unpaired calls before the messages reach the provider.
-                let mut history = compaction::drop_unpaired_tool_calls(history);
+                // Provider-send boundary: the durable transcript is permissive —
+                // it may carry an assistant tool-call with no result message
+                // (#445: interrupted/failed/timed-out tools, or a result that was
+                // never persisted) and, for transcripts persisted before the
+                // ordering fix, assistant text after tool calls. Providers reject
+                // both, so sanitize before the messages reach the provider.
+                let mut history = compaction::sanitize_history_for_provider(history);
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| entry.summary)

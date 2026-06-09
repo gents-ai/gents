@@ -146,6 +146,96 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
 }
 
 #[test]
+fn normalize_assistant_content_order_moves_text_before_tool_calls() {
+    // Transcripts persisted before the ordering fix can carry assistant text
+    // AFTER tool calls; strict providers reject that on reload. Normalization at
+    // the provider-send boundary must reorder to (text, reasoning, tool calls)
+    // while preserving ids and per-category order.
+    let messages = vec![
+        Message::Assistant {
+            id: Some("msg-1".to_string()),
+            content: OneOrMany::many(vec![
+                AssistantContent::Reasoning(rig::completion::message::Reasoning::new("why")),
+                tool_call_content("call-A"),
+                tool_call_content("call-B"),
+                AssistantContent::Text(Text {
+                    text: "answer".to_string(),
+                }),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::normalize_assistant_content_order(messages);
+
+    let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
+        Message::Assistant { id, content } => (
+            id.clone(),
+            content
+                .iter()
+                .map(|item| match item {
+                    AssistantContent::Text(_) => "text",
+                    AssistantContent::Reasoning(_) => "reasoning",
+                    AssistantContent::ToolCall(_) => "tool_call",
+                    _ => "other",
+                })
+                .collect(),
+        ),
+        other => panic!("expected assistant message, got {other:?}"),
+    };
+    assert_eq!(
+        id.as_deref(),
+        Some("msg-1"),
+        "provider message id preserved"
+    );
+    assert_eq!(
+        kinds,
+        vec!["text", "reasoning", "tool_call", "tool_call"],
+        "text must lead, tool calls must trail"
+    );
+    let call_ids: Vec<String> = match &out[0] {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantContent::ToolCall(tool_call) => Some(tool_call.id.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        call_ids,
+        vec!["call-A".to_string(), "call-B".to_string()],
+        "tool-call relative order preserved"
+    );
+    assert!(
+        matches!(&out[1], Message::User { .. }),
+        "non-assistant messages pass through"
+    );
+}
+
+#[test]
+fn normalize_assistant_content_order_is_identity_when_already_ordered() {
+    let messages = vec![
+        text_msg("user", "go"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Text(Text {
+                    text: "answer".to_string(),
+                }),
+                tool_call_content("call-A"),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+    let out = super::normalize_assistant_content_order(messages.clone());
+    assert_eq!(out, messages);
+}
+
+#[test]
 fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
     let messages = vec![
         Message::Assistant {
