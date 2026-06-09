@@ -1022,7 +1022,10 @@ mod tests {
         });
         let rendered = graphql_input_literal(&value).expect("render literal");
         assert!(rendered.contains("tool_refs: null"), "rendered: {rendered}");
-        assert!(rendered.contains("skill_refs: null"), "rendered: {rendered}");
+        assert!(
+            rendered.contains("skill_refs: null"),
+            "rendered: {rendered}"
+        );
         // Field-specific checks are stronger than a generic !contains("[]")
         // (the latter could be defeated by unrelated substrings in complex values).
         assert!(!rendered.contains("tool_refs: []"), "rendered: {rendered}");
