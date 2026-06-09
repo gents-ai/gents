@@ -3,16 +3,15 @@ use super::*;
 #[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
+use defra_agent::llm::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
 use lean_vocab_test::{
     lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
     lean_response_transition_cases, lean_transcript_cases, LeanClientShellCase,
     LeanResponseTransitionCase, LeanTranscriptCase,
 };
-use rig::completion::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
-use rig::one_or_many::OneOrMany;
 use serde_json::json;
 
 #[test]
@@ -1273,7 +1272,7 @@ fn transcript_message_row(
 fn transcript_assistant_tool_call_message_json(model_call_id: &str) -> String {
     serde_json::to_string(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: model_call_id.to_string(),
             call_id: Some(model_call_id.to_string()),
             function: ToolFunction {
@@ -1282,20 +1281,20 @@ fn transcript_assistant_tool_call_message_json(model_call_id: &str) -> String {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .expect("serialize assistant tool-call message")
 }
 
 fn transcript_tool_result_message_json(result_id: &str, text: &str) -> String {
     serde_json::to_string(&Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: result_id.to_string(),
             call_id: Some(result_id.to_string()),
             content: OneOrMany::one(ToolResultContent::Text(Text {
                 text: text.to_string(),
             })),
-        })),
+        })],
     })
     .expect("serialize tool-result message")
 }

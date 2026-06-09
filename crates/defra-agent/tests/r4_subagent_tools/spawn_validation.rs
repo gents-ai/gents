@@ -194,7 +194,7 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "internal-spawn-transcript".to_string(),
             call_id: Some("model-call-transcript".to_string()),
             function: ToolFunction {
@@ -203,7 +203,7 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -211,9 +211,9 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
         &ToolResult {
             id: "internal-spawn-transcript".to_string(),
             call_id: Some("model-call-transcript".to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: reason.clone(),
-            })),
+            })],
         },
         "internal-spawn-transcript",
     )
@@ -225,8 +225,8 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
         matches!(
             message,
             Message::User { content }
-                if matches!(content.first_ref(), UserContent::ToolResult(tool_result)
-                    if matches!(tool_result.content.first_ref(), ToolResultContent::Text(Text { text })
+                if matches!(content.first().expect("non-empty content"), UserContent::ToolResult(tool_result)
+                    if matches!(tool_result.content.first().expect("non-empty content"), ToolResultContent::Text(Text { text })
                         if text.contains(&child_request_id)
                             && text.contains("\"await_mode\": \"background\"")))
         )

@@ -9,6 +9,10 @@ use defra_agent::background_completion::{
 };
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
 use defra_agent::llm::ToolCallHookAction;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
@@ -18,11 +22,6 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use rig::completion::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
-use rig::one_or_many::OneOrMany;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -317,9 +316,9 @@ async fn persist_child_completion(
 
     let assistant = Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: final_response.to_string(),
-        })),
+        })],
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
@@ -794,7 +793,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
 
     hook.persist_message(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: "spawn-bg-order".to_string(),
             call_id: Some("model-call-order".to_string()),
             function: ToolFunction {
@@ -803,7 +802,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .await
     .unwrap();
@@ -811,7 +810,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         &ToolResult {
             id: "spawn-bg-order".to_string(),
             call_id: Some("model-call-order".to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text { text: receipt })),
+            content: vec![ToolResultContent::Text(Text { text: receipt })],
         },
         "spawn-bg-order",
     )
@@ -1149,9 +1148,9 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         .unwrap();
 
     hook.persist_message(&Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: "parent hook resumes".to_string(),
-        })),
+        })],
     })
     .await
     .unwrap();
