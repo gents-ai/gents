@@ -49,7 +49,7 @@ impl ToolDyn for LargeOutputTool {
         self.name.to_string()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.to_string(),
@@ -59,7 +59,7 @@ impl ToolDyn for LargeOutputTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         let output = self.output.clone();
         Box::pin(async move { Ok(output) })
     }
