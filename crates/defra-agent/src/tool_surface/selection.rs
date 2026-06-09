@@ -8,6 +8,7 @@ use super::modes::{BashMode, FileToolMode};
 use std::path::PathBuf;
 
 use crate::document_config::SubagentTarget;
+use crate::tool_call_lifecycle::AwaitMode;
 use crate::toolset::{
     default_read_only_command_policy, parse_argv_prefixes, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode,
@@ -19,6 +20,7 @@ pub(crate) struct SubagentToolConfig {
     pub spawn_enabled: bool,
     pub steering_enabled: bool,
     pub background_enabled: bool,
+    pub default_await_mode: AwaitMode,
     /// When false (default), cross-deployment (remote-DID) subagent delegation is
     /// disabled: remote-DID targets are not surfaced to the model and remote spawns
     /// are rejected at runtime. Cross-deployment is deferred pending ACP; only
@@ -28,6 +30,15 @@ pub(crate) struct SubagentToolConfig {
 
 impl SubagentToolConfig {
     pub(crate) fn from_document(selection: &crate::document_config::ToolSelectionDocument) -> Self {
+        let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
+        let default_await_mode = selection
+            .subagent_default_await_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(AwaitMode::from_persisted)
+            .filter(|mode| background_enabled || *mode != AwaitMode::Background)
+            .unwrap_or_default();
         let targets = selection
             .subagent_targets
             .iter()
@@ -51,7 +62,8 @@ impl SubagentToolConfig {
             targets,
             spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
             steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
-            background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+            background_enabled,
+            default_await_mode,
             allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
         }
     }

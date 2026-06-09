@@ -122,8 +122,9 @@ impl FailureClass {
 }
 
 /// Whether the parent's narrative is blocked on this tool's terminal state.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum AwaitMode {
+    #[default]
     Foreground,
     Background,
 }

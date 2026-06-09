@@ -431,7 +431,10 @@ impl DefraSessionHook {
         };
         let behavior_id = target.behavior_id.as_str();
 
-        let await_mode = parsed.await_mode.as_await_mode();
+        let await_mode = parsed
+            .await_mode
+            .map(|mode| mode.as_await_mode())
+            .unwrap_or(parent_context.subagent_default_await_mode);
         let target_host = self.subagent_target_host(&target);
         // Cross-deployment (remote-DID) subagent delegation is deferred behind a
         // default-OFF flag (#377). When the parent behavior has not opted in,

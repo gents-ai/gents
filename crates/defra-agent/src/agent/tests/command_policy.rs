@@ -24,6 +24,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        subagent_default_await_mode: Some("foreground".to_string()),
         subagent_allow_cross_deployment: Some(false),
         cross_deployment_spawn_timeout_seconds: None,
         enable_memory: None,
