@@ -87,7 +87,6 @@ const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
 ]"#;
 
-#[allow(dead_code)]
 const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
 ]"#;
