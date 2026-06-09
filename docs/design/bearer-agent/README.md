@@ -2,7 +2,7 @@
 
 Status: concept / design (no implementation yet).
 Supersedes: `docs/design/agent-blockchain-self-sufficiency.md` (removed in this change).
-Companion docs: [inference](./inference.md) · [key custody](./key-custody.md) · [storage](./storage.md) · [compute](./compute.md).
+Companion docs: [inference](./inference.md) · [key custody](./key-custody.md) · [storage](./storage.md) · [compute](./compute.md) · [commerce](./commerce.md).
 
 ## Thesis
 
@@ -211,6 +211,13 @@ Two structural rules fall out:
   hosted? — are unforgeable and close to how used physical assets are
   actually priced.
 
+Where does T2 supply come from? From the agent *selling things*: every paid
+request is a counterparty-signed command, so counterparty attestations are
+the exhaust of commerce, not a separate system to bootstrap. What bearer
+agents sell, which receipts each rail produces, and how receipt graphs (not
+individual receipts) defeat wash-trading is the subject of
+[commerce](./commerce.md).
+
 ## Prior art and differentiation
 
 The field has shipped every leg of this separately and never the combination
@@ -245,9 +252,11 @@ restore rather than a platform migration.
 
 - **Not a launchpad or an agent token.** One NFT, one agent, whole title. No
   fractionalization in v1.
-- **Not autonomous wealth.** The agent stewards a budget the owner deposits;
-  "the agent earns its keep" is a product question explicitly deferred (the
-  superseded doc's §8.4 honesty carries over).
+- **Not autonomous wealth.** The agent stewards a budget the owner deposits.
+  What it can credibly *sell* — and the honest market evidence on which
+  agent revenue is real versus token-subsidized theater — is now examined
+  in [commerce](./commerce.md); profitability of any given agent remains
+  unpromised.
 - **Not multi-behavior fleets.** One principal, one behavior, one deployment.
 - **Not a new chain, DA layer, or key network.** Every pillar buys an existing
   service; the design is deliberately an integration, and each pillar doc is a
