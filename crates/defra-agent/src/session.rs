@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use crate::llm::message::Message;
 use anyhow::Result;
 use defra_node::{EmbeddedNode, QueryResponse};
-use crate::llm::message::Message;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};

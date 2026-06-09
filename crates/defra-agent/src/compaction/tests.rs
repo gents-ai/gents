@@ -13,6 +13,12 @@ use crate::ensure_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::session;
 
+/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
+/// convention in every shape these tests build.
+fn first_content<T>(items: &[T]) -> &T {
+    items.first().expect("non-empty content")
+}
+
 fn text_msg(role: &str, text: &str) -> Message {
     match role {
         "user" => Message::User {
@@ -51,9 +57,9 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
         content: vec![UserContent::ToolResult(ToolResult {
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
-            content: vec_one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: result_text.to_string(),
-            })),
+            })],
         })],
     }
 }
@@ -79,14 +85,13 @@ fn drop_unpaired_tool_calls_removes_calls_without_results() {
     let messages = vec![
         Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::Text(Text {
                     text: "thinking".to_string(),
                 }),
                 tool_call_content("call-A"),
                 tool_call_content("call-B"),
-            ])
-            .unwrap(),
+            ],
         },
         tool_result_msg("call-A", "A-result"),
     ];
@@ -153,15 +158,14 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
     let messages = vec![
         Message::Assistant {
             id: Some("msg-1".to_string()),
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::Reasoning(crate::llm::message::Reasoning::new("why")),
                 tool_call_content("call-A"),
                 tool_call_content("call-B"),
                 AssistantContent::Text(Text {
                     text: "answer".to_string(),
                 }),
-            ])
-            .unwrap(),
+            ],
         },
         tool_result_msg("call-A", "A-result"),
     ];
@@ -220,13 +224,12 @@ fn normalize_assistant_content_order_is_identity_when_already_ordered() {
         text_msg("user", "go"),
         Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::Text(Text {
                     text: "answer".to_string(),
                 }),
                 tool_call_content("call-A"),
-            ])
-            .unwrap(),
+            ],
         },
         tool_result_msg("call-A", "A-result"),
     ];
@@ -292,7 +295,7 @@ fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
 fn drop_orphaned_tool_results_keeps_mixed_user_content() {
     // A user message mixing text with an orphaned result keeps the text.
     let mixed = Message::User {
-        content: OneOrMany::many(vec![
+        content: vec![
             UserContent::Text(Text {
                 text: "also this".to_string(),
             }),
@@ -303,8 +306,7 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
                     text: "orphaned".to_string(),
                 })],
             }),
-        ])
-        .unwrap(),
+        ],
     };
     let out = super::history::drop_orphaned_tool_results(vec![mixed]);
     assert_eq!(out.len(), 1);
@@ -312,7 +314,7 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
         panic!("expected user message");
     };
     assert_eq!(content.len(), 1);
-    assert!(matches!(content.first(), UserContent::Text(_)));
+    assert!(matches!(content.first(), Some(UserContent::Text(_))));
 }
 
 #[test]
@@ -413,9 +415,11 @@ impl CompletionModel for MockSummaryModel {
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
         *self.last_request.lock().unwrap() = Some(request);
         Ok(CompletionResponse {
-            choice: vec![AssistantContent::Text(Text {
-                text: self.response.clone(),
-            })],
+            choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
+                rig::completion::message::Text {
+                    text: self.response.clone(),
+                },
+            )),
             usage: Usage::new(),
             raw_response: (),
             message_id: None,
@@ -464,8 +468,8 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert!(files.files_modified.is_empty());
 
     if let Message::User { content } = &stripped[2] {
-        if let UserContent::ToolResult(tr) = content.first_ref() {
-            if let ToolResultContent::Text(text) = tr.content.first_ref() {
+        if let UserContent::ToolResult(tr) = first_content(&content) {
+            if let ToolResultContent::Text(text) = first_content(&tr.content) {
                 assert_eq!(
                     text.text,
                     "[tool: read, call_id: call-1, 5000 bytes — see DefraDB AgentToolCall for full output]"
@@ -674,7 +678,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .unwrap();
 
     if let Message::User { content } = &built.messages[0] {
-        if let UserContent::Text(text) = content.first_ref() {
+        if let UserContent::Text(text) = first_content(&content) {
             assert!(text.text.contains("inspected the source files"));
             assert!(text
                 .text

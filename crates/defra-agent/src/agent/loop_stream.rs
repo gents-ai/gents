@@ -25,12 +25,12 @@
 
 use std::sync::Arc;
 
+use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
+use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
-use crate::llm::rig_compat;
 use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
 
 use crate::llm::tool::ToolDyn;

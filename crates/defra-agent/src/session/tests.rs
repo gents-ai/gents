@@ -1,7 +1,13 @@
 use super::*;
 use crate::ensure_schemas;
-use defra_agent_protocol::transcript::decode_persisted_message;
 use crate::llm::message::{AssistantContent, Text, UserContent};
+use defra_agent_protocol::transcript::decode_persisted_message;
+
+/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
+/// convention in every shape these tests build.
+fn first_content<T>(items: &[T]) -> &T {
+    items.first().expect("non-empty content")
+}
 
 #[test]
 fn test_load_history_deserializes_plain_text() {
@@ -17,7 +23,7 @@ fn test_load_history_deserializes_plain_text() {
 
 #[test]
 fn test_load_history_deserializes_legacy_assistant_content() {
-    let legacy_content = OneOrMany::many(vec![
+    let legacy_content = vec![
         AssistantContent::Reasoning(
             crate::llm::message::Reasoning::new("Need to inspect first")
                 .with_id("rs_1".to_string()),
@@ -25,8 +31,7 @@ fn test_load_history_deserializes_legacy_assistant_content() {
         AssistantContent::Text(Text {
             text: "Done".to_string(),
         }),
-    ])
-    .unwrap();
+    ];
 
     let restored = decode_persisted_message(
         "assistant",
@@ -36,7 +41,7 @@ fn test_load_history_deserializes_legacy_assistant_content() {
         restored,
         Message::Assistant { content, .. }
             if content.len() == 2
-                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
+                && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
                 && matches!(content.iter().nth(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
     ));
 }

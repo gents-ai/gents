@@ -3,8 +3,8 @@
 //! and serde row mirrors for every replicated collection.
 
 pub mod client_protocol;
-pub mod message;
 pub mod graphql;
+pub mod message;
 pub mod row;
 pub mod schemas;
 pub mod transcript;

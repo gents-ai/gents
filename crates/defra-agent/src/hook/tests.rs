@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::llm::{HookAction, ToolCallHookAction};
 use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
+use crate::llm::{HookAction, ToolCallHookAction};
 use serde_json::json;
 
 use super::*;
@@ -13,6 +13,12 @@ use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
 };
+
+/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
+/// convention in every shape these tests build.
+fn first_content<T>(items: &[T]) -> &T {
+    items.first().expect("non-empty content")
+}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -937,7 +943,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
 
     let streamed_assistant_turn = Message::Assistant {
         id: None,
-        content: OneOrMany::many(vec![
+        content: vec![
             AssistantContent::Reasoning(
                 Reasoning::new("Need to inspect the file first").with_id("rs_1".to_string()),
             ),
@@ -954,8 +960,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             AssistantContent::Text(Text {
                 text: "I'm reading the file now.".to_string(),
             }),
-        ])
-        .unwrap(),
+        ],
     };
     hook.persist_message(&streamed_assistant_turn)
         .await
@@ -992,27 +997,27 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     assert!(matches!(
         &history[0],
         Message::User { content }
-            if matches!(content.first_ref(), UserContent::Text(Text { text }) if text == "Inspect /tmp/main.rs")
+            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "Inspect /tmp/main.rs")
     ));
     assert!(matches!(
         &history[1],
         Message::Assistant { content, .. }
             if content.len() == 3
-                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
+                && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
                 && matches!(content.iter().nth(1), Some(AssistantContent::ToolCall(tool_call)) if tool_call.call_id.as_deref() == Some("call-1"))
                 && matches!(content.iter().nth(2), Some(AssistantContent::Text(Text { text })) if text == "I'm reading the file now.")
     ));
     assert!(matches!(
         &history[2],
         Message::User { content }
-            if matches!(content.first_ref(), UserContent::ToolResult(tool_result)
+            if matches!(first_content(&content), UserContent::ToolResult(tool_result)
                 if tool_result.call_id.as_deref() == Some("call-1")
-                    && matches!(tool_result.content.first_ref(), ToolResultContent::Text(Text { text }) if text == "fn main() {}\n"))
+                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "fn main() {}\n"))
     ));
     assert!(matches!(
         &history[3],
         Message::Assistant { content, .. }
-            if matches!(content.first_ref(), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
+            if matches!(first_content(&content), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
     ));
 
     let resp = node
@@ -1160,11 +1165,11 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let Message::User { content } = &history[2] else {
         panic!("expected tool result message");
     };
-    let UserContent::ToolResult(tool_result) = content.first_ref() else {
+    let UserContent::ToolResult(tool_result) = first_content(&content) else {
         panic!("expected tool result content");
     };
     assert_eq!(tool_result.call_id.as_deref(), Some("call-read"));
-    let ToolResultContent::Text(Text { text }) = tool_result.content.first_ref() else {
+    let ToolResultContent::Text(Text { text }) = first_content(&tool_result.content) else {
         panic!("expected text tool result content");
     };
     assert_eq!(
@@ -1257,9 +1262,9 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         content: vec![UserContent::ToolResult(ToolResult {
             id: model_result_id.to_string(),
             call_id: Some(model_result_id.to_string()),
-            content: vec_one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: tool_result_text.to_string(),
-            })),
+            })],
         })],
     };
     let reused_sequence = hook
@@ -1284,7 +1289,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match content.first_ref() {
+            Message::User { content } => match first_content(&content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result),
                 _ => None,
             },
@@ -1299,7 +1304,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     assert_eq!(tool_results[0].id, model_result_id);
     assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
     assert!(matches!(
-        tool_results[0].content.first_ref(),
+        first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text }) if text == tool_result_text
     ));
 
@@ -1373,9 +1378,9 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
             content: vec![UserContent::ToolResult(ToolResult {
                 id: result_id.to_string(),
                 call_id: Some(result_id.to_string()),
-                content: vec_one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: "same payload".to_string(),
-                })),
+                })],
             })],
         })
         .await
@@ -1389,7 +1394,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match content.first_ref() {
+            Message::User { content } => match first_content(&content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result.id.as_str()),
                 _ => None,
             },
@@ -1547,15 +1552,15 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     assert!(matches!(
         &history[2],
         Message::Assistant { content, .. }
-            if matches!(content.first_ref(), AssistantContent::ToolCall(tool_call)
+            if matches!(first_content(&content), AssistantContent::ToolCall(tool_call)
                 if tool_call.id == "call-2")
     ));
     assert!(matches!(
         &history[3],
         Message::User { content }
-            if matches!(content.first_ref(), UserContent::ToolResult(tool_result)
+            if matches!(first_content(&content), UserContent::ToolResult(tool_result)
                 if tool_result.id == "call-2"
-                    && matches!(tool_result.content.first_ref(), ToolResultContent::Text(Text { text }) if text == "second result"))
+                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "second result"))
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);

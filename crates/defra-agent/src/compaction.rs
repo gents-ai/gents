@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use crate::llm::message::Message;
+use anyhow::Result;
 use rig::completion::CompletionModel;
 
 mod history;

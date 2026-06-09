@@ -591,7 +591,7 @@ fn classifies_uncompleted_tool_call_without_tool_error_as_unclassified() {
 fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
     let message = Message::Assistant {
         id: None,
-        content: OneOrMany::many(vec![
+        content: vec![
             AssistantContent::Text(Text {
                 text: "Checking.".to_string(),
             }),
@@ -605,8 +605,7 @@ fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
                 signature: None,
                 additional_params: None,
             }),
-        ])
-        .unwrap(),
+        ],
     };
     let raw = serde_json::to_string(&message).unwrap();
 

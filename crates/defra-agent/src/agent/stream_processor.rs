@@ -1,9 +1,9 @@
-use anyhow::Result;
-use rig::agent::MultiTurnStreamItem;
 use crate::llm::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
 };
+use anyhow::Result;
+use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::hook::DefraSessionHook;

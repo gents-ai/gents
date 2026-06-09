@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, StreamExt};
-use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message,
-};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+
+use crate::llm::message::Message;
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
     StreamingCompletionResponse,
@@ -24,9 +24,10 @@ use crate::hook::{DefraSessionHook, FailurePolicy};
 #[derive(Clone)]
 struct ScriptedModel {
     turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<()>>>>>,
-    /// `chat_history` of every request the loop sent, in order — lets a test
-    /// assert how the loop threaded prior turns back to the provider.
-    seen_histories: Arc<Mutex<Vec<OneOrMany<Message>>>>,
+    /// `chat_history` of every request the loop sent, in order (converted to
+    /// native at the capture boundary) — lets a test assert how the loop
+    /// threaded prior turns back to the provider.
+    seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
     /// Advertised tool names (`request.tools`) of every request the loop sent,
     /// in order — lets a test assert the toolset is attached on every turn.
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
@@ -56,7 +57,7 @@ impl ScriptedModel {
         model
     }
 
-    async fn seen_histories(&self) -> Vec<OneOrMany<Message>> {
+    async fn seen_histories(&self) -> Vec<Vec<Message>> {
         self.seen_histories.lock().await.clone()
     }
 
@@ -88,10 +89,13 @@ impl CompletionModel for ScriptedModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.seen_histories
-            .lock()
-            .await
-            .push(_request.chat_history.clone());
+        self.seen_histories.lock().await.push(
+            _request
+                .chat_history
+                .iter()
+                .map(crate::llm::rig_compat::from_rig_message)
+                .collect(),
+        );
         self.seen_tools.lock().await.push(
             _request
                 .tools
@@ -343,7 +347,12 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
                 tool_result,
                 ..
             }) => {
-                tool_results.push(tool_result_text(&tool_result.content.first()).to_string());
+                tool_results.push(
+                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                        &tool_result.content.first(),
+                    ))
+                    .to_string(),
+                );
             }
             MultiTurnStreamItem::FinalResponse(final_response) => {
                 final_text = Some(final_response.response().to_string());
@@ -689,9 +698,9 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
 /// provider-side contract that `sanitize_history_for_provider` enforces for
 /// loaded history — the loop must satisfy it by construction for the messages
 /// it threads itself.
-fn assert_provider_request_invariants(turn: usize, history: &OneOrMany<Message>) {
+fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
     let mut pending_call_keys: Vec<String> = Vec::new();
-    for message in history.iter() {
+    for message in history {
         match message {
             Message::Assistant { content, .. } => {
                 assert!(
@@ -834,27 +843,24 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                vec_one(crate::llm::message::ToolResultContent::text(
-                    "orphaned",
-                )),
+                vec![crate::llm::message::ToolResultContent::text("orphaned")],
             )],
         },
         // Misordered assistant turn (text AFTER calls) with one unpaired call.
         Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
                 AssistantContent::Text(crate::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
-            ])
-            .unwrap(),
+            ],
         },
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                vec_one(crate::llm::message::ToolResultContent::text("ok")),
+                vec![crate::llm::message::ToolResultContent::text("ok")],
             )],
         },
     ];
@@ -945,7 +951,12 @@ async fn oversized_tool_result_is_bounded_before_threading() {
             ..
         }) = item.expect("loop item should be Ok")
         {
-            bounded_len = Some(tool_result_text(&tool_result.content.first()).len());
+            bounded_len = Some(
+                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                    &tool_result.content.first(),
+                ))
+                .len(),
+            );
         }
     }
 
@@ -1028,7 +1039,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
         history.iter().any(|message| matches!(message,
             Message::User { content }
                 if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
-                    if tool_result_text(&result.content.first()) == "ECHOED")))),
+                    if result.content.first().is_some_and(|c| tool_result_text(c) == "ECHOED"))))),
         "tool-using one-shot must persist the tool-result message; history: {history:?}"
     );
     assert!(

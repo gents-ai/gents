@@ -6,11 +6,11 @@ mod transcript_render;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
-use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -2184,7 +2184,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::llm::message::{AssistantContent, Text};
-    
+
     #[test]
     fn project_child_terminal_maps_child_states() {
         assert_eq!(

@@ -70,9 +70,9 @@ pub(crate) fn to_rig_message(msg: &message::Message) -> rig::completion::Message
                     .collect::<Vec<_>>(),
             )
             .unwrap_or_else(|_| {
-                rig::one_or_many::OneOrMany::one(
-                    rig::completion::message::AssistantContent::text(""),
-                )
+                rig::one_or_many::OneOrMany::one(rig::completion::message::AssistantContent::text(
+                    "",
+                ))
             }),
         },
     }
