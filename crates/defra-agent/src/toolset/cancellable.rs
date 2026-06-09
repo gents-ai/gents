@@ -18,7 +18,7 @@
 //!
 //! # Dispatch integration (deferred)
 //!
-//! This codebase uses `rig::agent::Agent` for tool dispatch. rig's
+//! Tool dispatch is owned by the completion loop (#400). The legacy note:
 //! current API does not expose a hook that allows us to call
 //! `call_cancellable` instead of `call` when `supports_cancellation()`
 //! is `true`. Until rig gains such a hook — or until we fork/wrap

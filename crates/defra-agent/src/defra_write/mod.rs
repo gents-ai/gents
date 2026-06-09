@@ -12,7 +12,7 @@
 //! Unlike `DefraQueryTool` (a single tool with a shared
 //! `const NAME: &str = "defra_query"`), bounded write tools are *named per
 //! declaration*: a `request_action` decl and a `record_finding` decl are
-//! distinct tools backed by the same type. `rig`'s [`rig::tool::Tool`] trait
+//! distinct tools backed by the same type. The native [`crate::llm::tool::Tool`] trait
 //! supports this directly: it requires a `const NAME` but also exposes a
 //! `fn name(&self) -> String` that defaults to that const — and which we
 //! override here to return `self.decl.tool_name`. The blanket
@@ -40,7 +40,7 @@ use serde_json::{json, Map, Value};
 use crate::document_config::WriteToolDecl;
 use crate::graphql::escape_graphql_string;
 
-/// Placeholder const for the `rig::tool::Tool` impl. Bounded write tools are
+/// Placeholder const for the `Tool` impl. Bounded write tools are
 /// named per declaration (see module docs); the real, advertised name always
 /// comes from [`BoundedWriteTool::name`] / [`BoundedWriteTool::definition`],
 /// never from this const.

@@ -1291,9 +1291,9 @@ fn transcript_tool_result_message_json(result_id: &str, text: &str) -> String {
         content: vec![UserContent::ToolResult(ToolResult {
             id: result_id.to_string(),
             call_id: Some(result_id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: text.to_string(),
-            })),
+            })],
         })],
     })
     .expect("serialize tool-result message")
