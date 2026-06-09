@@ -64,6 +64,20 @@ struct WakeRequestRow {
     metadata: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ChildRequestStateRow {
+    status: Option<String>,
+    lifecycle_state: Option<String>,
+    failure_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseStateRow {
+    status: Option<String>,
+    content: Option<String>,
+    error_message: Option<String>,
+}
+
 async fn setup_fixture(test_name: &str) -> (support::TestDb, String, String) {
     let db = test_db(test_name).await;
     upsert_tool_selection(
@@ -382,6 +396,108 @@ async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &st
         "set request lifecycle failed: {:?}",
         response.errors
     );
+}
+
+async fn set_child_processing_deadline(
+    node: &EmbeddedNode,
+    request_id: &str,
+    deadline: chrono::DateTime<chrono::Utc>,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let deadline = escape_graphql_string(&deadline.to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    deadline: "{deadline}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set child processing deadline failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_streaming_child_response(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+    content: &str,
+) {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_session_id = escape_graphql_string(child_session_id);
+    let escaped_content = escape_graphql_string(content);
+    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{escaped_child_request_id}",
+                request_id: "{escaped_child_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_child_session_id}",
+                content: "{escaped_content}",
+                reasoning: "",
+                status: "streaming",
+                error_message: "",
+                token_count: 0,
+                progress_seq: 1,
+                created_at: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create streaming child AgentResponse failed: {:?}",
+        response.errors
+    );
+}
+
+async fn fetch_child_request_state(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> ChildRequestStateRow {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                lifecycle_state
+                failure_reason
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentRequest")
+}
+
+async fn fetch_response_state(node: &EmbeddedNode, request_id: &str) -> ResponseStateRow {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                content
+                error_message
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentResponse")
 }
 
 async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
@@ -913,6 +1029,88 @@ async fn recovery_fails_running_background_bridge_after_parent_completes() {
     assert!(
         interrupt.is_some(),
         "cascade background child should be interrupted once recovery fails the parent bridge"
+    );
+}
+
+#[tokio::test]
+async fn recovery_terminalizes_expired_background_child_before_projection() {
+    let (db, session_id, parent_request_id) =
+        setup_fixture("background_completion_expired_child").await;
+    let (child_request_id, child_session_id) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-expired-child",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    let expired_deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+    set_child_processing_deadline(db.node.as_ref(), &child_request_id, expired_deadline).await;
+    create_streaming_child_response(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "partial child output",
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 1);
+
+    let child = fetch_child_request_state(db.node.as_ref(), &child_request_id).await;
+    assert_eq!(child.status.as_deref(), Some("dead"));
+    assert_eq!(child.lifecycle_state.as_deref(), Some("dead"));
+    assert!(
+        child
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("child request deadline exceeded")),
+        "child failure reason should explain deadline expiry: {:?}",
+        child.failure_reason
+    );
+
+    let response = fetch_response_state(db.node.as_ref(), &child_request_id).await;
+    assert_eq!(response.status.as_deref(), Some("error"));
+    assert!(
+        response
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains("partial child output")
+                && content.contains("Response interrupted")),
+        "streaming child response should be finalized with prior content: {:?}",
+        response.content
+    );
+    assert!(
+        response
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("child request deadline exceeded")),
+        "response error message should explain deadline expiry: {:?}",
+        response.error_message
+    );
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-expired-child").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(tool.await_mode.as_deref(), Some("background"));
+
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].content.contains(r#"<subagent-notification"#));
+    assert!(messages[0].content.contains(r#"status="dead""#));
+    assert!(messages[0].content.contains(&child_request_id));
+
+    let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].content, WAKE_PROMPT);
+    let metadata: serde_json::Value =
+        serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["queue"]["source"], "background_completion");
+    assert_eq!(
+        metadata["queue"]["queued_after_request_id"],
+        parent_request_id
     );
 }
 
