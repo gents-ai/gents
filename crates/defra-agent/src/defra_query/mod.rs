@@ -12,10 +12,10 @@
 
 use std::sync::Arc;
 
-use anyhow::anyhow;
-use defra_node::EmbeddedNode;
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
+use anyhow::anyhow;
+use defra_node::EmbeddedNode;
 use serde_json::json;
 
 /// Maximum number of UTF-8 bytes kept per string field value in the query

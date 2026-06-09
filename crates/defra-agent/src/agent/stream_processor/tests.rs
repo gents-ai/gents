@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rig::agent::MultiTurnStreamItem;
 use crate::llm::HookAction;
+use rig::agent::MultiTurnStreamItem;
 use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
@@ -572,7 +572,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     assert!(matches!(
         hook.on_tool_call("echo", Some(call_id.to_string()), call_id, tool_args)
             .await,
-        rig::agent::ToolCallHookAction::Continue
+        crate::llm::ToolCallHookAction::Continue
     ));
     assert!(matches!(
         hook.on_tool_result(

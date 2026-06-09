@@ -1,6 +1,6 @@
+use crate::llm::ToolChoice;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
-use crate::llm::ToolChoice;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::loop_stream::LoopConfig;

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
+use anyhow::{anyhow, bail, Context, Result};
+use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

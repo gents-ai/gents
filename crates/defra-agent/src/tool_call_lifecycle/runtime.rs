@@ -10,10 +10,10 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use crate::llm::tool::BoxFuture;
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{ToolDyn, ToolError};
-use crate::llm::tool::BoxFuture;
+use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::LiveToolOutputWriter;

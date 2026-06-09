@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
-use crate::llm::tool::ToolDyn;
 
 use super::{
     assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,

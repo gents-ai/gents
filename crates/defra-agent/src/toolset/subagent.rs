@@ -1,6 +1,6 @@
-use anyhow::anyhow;
-use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
+use anyhow::anyhow;
 
 use crate::background_tools::r4c_args::{
     ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentArgs, ReadToolOutputArgs,

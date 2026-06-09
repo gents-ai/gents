@@ -4,11 +4,11 @@ mod support;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
 use rig::one_or_many::OneOrMany;
 use serde_json::{json, Value};

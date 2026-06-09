@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelCause, CancelPolicy, CascadeDispatch,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
@@ -15,7 +16,6 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
     ToolSelectionDocument,
 };
-use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,

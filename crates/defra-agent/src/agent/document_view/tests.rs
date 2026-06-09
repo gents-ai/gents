@@ -251,8 +251,8 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
 /// demand with a degrade note for tool_refs outside the behavior ceiling (D3).
 #[tokio::test]
 async fn resolve_composes_principal_scoped_skill_into_prompt() {
-    use crate::prompt::LayeredPromptBuilder;
     use crate::llm::tool::Tool;
+    use crate::prompt::LayeredPromptBuilder;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

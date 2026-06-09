@@ -4,12 +4,12 @@ mod support;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
-use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use defra_agent::llm::ToolCallHookAction;
+use defra_agent::llm::tool::BoxFuture;
 use defra_agent::llm::tool::ToolDefinition;
 use defra_agent::llm::tool::{ToolDyn, ToolError};
-use defra_agent::llm::tool::BoxFuture;
+use defra_agent::llm::ToolCallHookAction;
+use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
+use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
 use support::{test_db, AGENT_DID};

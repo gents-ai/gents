@@ -2,13 +2,13 @@
 // glob, grep) that share private helpers defined in the same file. Splitting
 // each tool into its own file would scatter the shared defaults and make
 // cross-tool consistency harder to verify.
+use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _, Result};
 use defra_native_fs_runner::protocol::{
     GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
     NativeFsRunnerRequest,
 };
-use crate::llm::tool::ToolDefinition;
-use crate::llm::tool::Tool;
 use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};

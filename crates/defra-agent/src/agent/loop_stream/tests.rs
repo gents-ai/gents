@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, StreamExt};
 use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
 use rig::completion::{
@@ -10,7 +11,6 @@ use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
     StreamingCompletionResponse,
 };
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use tokio::sync::Mutex;
 
 use super::*;
@@ -179,7 +179,7 @@ impl ToolDyn for RecordingDefinitionTool {
         "record".to_string()
     }
 
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         let seen = self.seen_prompt.clone();
         Box::pin(async move {
             *seen.lock().await = Some(prompt);
@@ -191,7 +191,7 @@ impl ToolDyn for RecordingDefinitionTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok("ok".to_string()) })
     }
 }

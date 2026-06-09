@@ -25,19 +25,19 @@
 
 use std::sync::Arc;
 
+use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use crate::llm::{HookAction, ToolCallHookAction};
 use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{
     CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,
 };
 
+use crate::llm::tool::ToolDyn;
 use crate::llm::ToolChoice;
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
-use crate::llm::tool::ToolDyn;
 
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;

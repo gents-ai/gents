@@ -1,10 +1,10 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use crate::llm::tool::BoxFuture;
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{ToolDyn, ToolError};
-use crate::llm::tool::BoxFuture;
+use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 
 use super::args::CliToolArgs;

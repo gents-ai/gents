@@ -15,8 +15,8 @@ pub use selection::{CustomToolFactory, ToolSelection};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use anyhow::Result;
 use crate::llm::tool::ToolDyn;
+use anyhow::Result;
 
 use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
 use crate::defra_write::BoundedWriteTool;

@@ -7,6 +7,10 @@ use defra_agent::event_delivery_contract::{
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use defra_agent::llm::tool::BoxFuture;
+use defra_agent::llm::tool::ToolDefinition;
+use defra_agent::llm::tool::{ToolDyn, ToolError};
+use defra_agent::llm::{HookAction, ToolCallHookAction};
 use defra_agent::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
@@ -15,15 +19,11 @@ use defra_agent::{
     write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
     DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,
 };
-use defra_agent::llm::{HookAction, ToolCallHookAction};
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use defra_agent::llm::tool::ToolDefinition;
 use rig::one_or_many::OneOrMany;
-use defra_agent::llm::tool::{ToolDyn, ToolError};
-use defra_agent::llm::tool::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use crate::llm::tool::ToolDyn;
+use anyhow::Result;
 
 use super::modes::{BashMode, FileToolMode};
 

@@ -4,6 +4,7 @@ mod support;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
@@ -11,7 +12,6 @@ use defra_agent::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
     AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
-use defra_agent::llm::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 

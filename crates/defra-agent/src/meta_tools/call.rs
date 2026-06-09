@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _};
-use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
+use anyhow::{anyhow, Context as _};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 

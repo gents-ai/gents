@@ -9,6 +9,7 @@ use defra_agent::background_completion::{
 };
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
@@ -17,7 +18,6 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use defra_agent::llm::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
