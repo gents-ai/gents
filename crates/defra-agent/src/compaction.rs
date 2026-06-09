@@ -207,12 +207,38 @@ pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message>
     history::normalize_assistant_content_order(messages)
 }
 
+/// Drop tool-result messages whose assistant call does not precede them (the
+/// inverse of [`drop_unpaired_tool_calls`] — orphans left by a compaction
+/// split). See `history::drop_orphaned_tool_results`.
+pub fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
+    history::drop_orphaned_tool_results(messages)
+}
+
 /// The full provider-send boundary sanitization for loaded history: drop
-/// unpaired tool calls (#445), then normalize assistant content order. New
-/// sanitizers that narrow the permissive durable transcript to the stricter
-/// provider format belong here, NOT in the conformance-fenced reducers.
+/// unpaired tool calls (#445), drop orphaned tool results, then normalize
+/// assistant content order. New sanitizers that narrow the permissive durable
+/// transcript to the stricter provider format belong here, NOT in the
+/// conformance-fenced reducers. Runs on the loaded transcript AND on the
+/// compaction output (the recent window can begin mid-exchange).
 pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
-    normalize_assistant_content_order(drop_unpaired_tool_calls(messages))
+    normalize_assistant_content_order(drop_orphaned_tool_results(drop_unpaired_tool_calls(
+        messages,
+    )))
+}
+
+/// Bound a compaction summary on its way into the prompt. The summary is
+/// model-emitted free text injected into every subsequent request's system
+/// reminder; bounding at the consumption point covers oversized entries
+/// already persisted as well as new ones.
+pub fn bounded_summary(summary: String) -> String {
+    // Head mode: the narrative leads the summary; bulleted file/decision
+    // lists trail and are the right part to lose.
+    let (bounded, _, _) = crate::truncation::truncate_text(
+        &summary,
+        crate::truncation::TruncationMode::Head,
+        &crate::truncation::TruncationLimits::default(),
+    );
+    bounded
 }
 
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {

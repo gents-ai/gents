@@ -92,9 +92,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // ordering fix, assistant text after tool calls. Providers reject
                 // both, so sanitize before the messages reach the provider.
                 let mut history = compaction::sanitize_history_for_provider(history);
+                // Summaries are model-emitted free text headed into the system
+                // reminder; bound them at the consumption point (covers
+                // oversized entries already persisted).
                 let mut summaries = compaction_entries
                     .into_iter()
-                    .map(|entry| entry.summary)
+                    .map(|entry| compaction::bounded_summary(entry.summary))
                     .collect::<Vec<_>>();
 
                 let mut built = self
@@ -132,7 +135,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     )
                     .await?;
 
-                    history = result.messages;
+                    // The recent window can begin mid tool exchange (the split
+                    // is token-budgeted, not pair-aware), so the compaction
+                    // output crosses the provider-send boundary again.
+                    history = compaction::sanitize_history_for_provider(result.messages);
                     if let Some(summary) = result.summary {
                         let entry = session::save_compaction_entry(
                             &self.node,
@@ -145,7 +151,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             result.compacted_token_estimate,
                         )
                         .await?;
-                        summaries.push(entry.summary);
+                        summaries.push(compaction::bounded_summary(entry.summary));
                     }
 
                     built = self

@@ -113,6 +113,53 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     kept_messages
 }
 
+/// Drop tool-result user content whose assistant tool-call does not PRECEDE it
+/// in the message list, at the provider-send boundary.
+///
+/// The inverse of [`drop_unpaired_tool_calls`]: a compaction split
+/// (`split_messages_for_summary`) or compacted-prefix drop can place an
+/// assistant tool-call in the compacted-away window while its result message
+/// survives in the recent window. Providers reject a tool-result message with
+/// no preceding assistant tool call, so the orphan is dropped (its information
+/// lives on in the compaction summary and the durable AgentToolCall row). A
+/// user message left with no content is dropped entirely.
+pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
+    let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut kept_messages = Vec::with_capacity(messages.len());
+    for message in messages {
+        match message {
+            Message::Assistant { id, content } => {
+                for item in content.iter() {
+                    if let AssistantContent::ToolCall(tool_call) = item {
+                        seen_calls.insert(tool_call_key(tool_call));
+                    }
+                }
+                kept_messages.push(Message::Assistant { id, content });
+            }
+            Message::User { content } => {
+                let kept: Vec<UserContent> = content
+                    .into_iter()
+                    .filter(|item| match item {
+                        UserContent::ToolResult(tool_result) => {
+                            let key = tool_result
+                                .call_id
+                                .clone()
+                                .unwrap_or_else(|| tool_result.id.clone());
+                            seen_calls.contains(&key)
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                if let Ok(content) = OneOrMany::many(kept) {
+                    kept_messages.push(Message::User { content });
+                }
+            }
+            other => kept_messages.push(other),
+        }
+    }
+    kept_messages
+}
+
 /// Normalize assistant content to the canonical provider order — text, then
 /// reasoning (and any other non-call content), then tool calls — at the
 /// provider-send boundary.

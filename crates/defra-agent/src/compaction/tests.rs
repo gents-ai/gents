@@ -253,6 +253,114 @@ fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
     );
 }
 
+#[test]
+fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
+    // A compaction split (or compacted-prefix drop) can leave a tool result
+    // whose assistant call was compacted away. Providers reject a tool message
+    // with no preceding assistant tool call, so the orphan must be dropped;
+    // paired results and other user content survive.
+    let messages = vec![
+        tool_result_msg("call-GONE", "orphaned"),
+        text_msg("user", "continue"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::drop_orphaned_tool_results(messages);
+
+    assert_eq!(
+        out.len(),
+        3,
+        "the orphaned-result message is dropped entirely; got {out:?}"
+    );
+    assert!(
+        matches!(&out[0], Message::User { content }
+            if content.iter().any(|c| matches!(c, UserContent::Text(_)))),
+        "the plain user message must lead after the orphan is dropped"
+    );
+    assert!(
+        matches!(&out[2], Message::User { content }
+            if content.iter().any(|c| matches!(c, UserContent::ToolResult(r)
+                if r.call_id.as_deref() == Some("call-A")))),
+        "the paired result must survive"
+    );
+}
+
+#[test]
+fn drop_orphaned_tool_results_keeps_mixed_user_content() {
+    // A user message mixing text with an orphaned result keeps the text.
+    let mixed = Message::User {
+        content: OneOrMany::many(vec![
+            UserContent::Text(Text {
+                text: "also this".to_string(),
+            }),
+            UserContent::ToolResult(ToolResult {
+                id: "call-GONE".to_string(),
+                call_id: Some("call-GONE".to_string()),
+                content: OneOrMany::one(ToolResultContent::Text(Text {
+                    text: "orphaned".to_string(),
+                })),
+            }),
+        ])
+        .unwrap(),
+    };
+    let out = super::drop_orphaned_tool_results(vec![mixed]);
+    assert_eq!(out.len(), 1);
+    let Message::User { content } = &out[0] else {
+        panic!("expected user message");
+    };
+    assert_eq!(content.len(), 1);
+    assert!(matches!(content.first(), UserContent::Text(_)));
+}
+
+#[test]
+fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
+    // Unpaired call AND orphaned result in one history: both removed, the
+    // paired exchange survives.
+    let messages = vec![
+        tool_result_msg("call-GONE", "orphaned"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-UNPAIRED")),
+        },
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+    let out = super::sanitize_history_for_provider(messages);
+    assert_eq!(
+        out.len(),
+        2,
+        "only the paired exchange survives; got {out:?}"
+    );
+}
+
+#[test]
+fn bounded_summary_truncates_oversized_model_emitted_summaries() {
+    // The compaction summary is model-emitted free text injected into every
+    // later request's system reminder — it must be bounded on its way to the
+    // prompt (covers oversized entries already persisted, too).
+    let oversized = "s".repeat(200 * 1024);
+    let bounded = super::bounded_summary(oversized.clone());
+    assert!(
+        bounded.len() < oversized.len(),
+        "oversized summary must be bounded"
+    );
+    assert!(!bounded.is_empty());
+
+    let small = "concise summary".to_string();
+    assert_eq!(
+        super::bounded_summary(small.clone()),
+        small,
+        "small summaries pass through untouched"
+    );
+}
+
 #[derive(Clone, Default)]
 struct MockSummaryModel {
     response: String,
