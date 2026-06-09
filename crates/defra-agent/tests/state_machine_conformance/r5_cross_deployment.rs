@@ -8,7 +8,7 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
-use rig::agent::{ToolCallHookAction};
+use rig::agent::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -370,12 +370,14 @@ async fn spawn_from_parent_hook(
     })
     .to_string();
 
-    let action = hook.on_tool_call(&case.action,
-        Some(format!("model-{}", case.parent_tool_call_id)),
-        &case.parent_tool_call_id,
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            &case.action,
+            Some(format!("model-{}", case.parent_tool_call_id)),
+            &case.parent_tool_call_id,
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true, "{}", case.name);
     assert_eq!(

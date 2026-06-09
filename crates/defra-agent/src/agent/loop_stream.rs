@@ -431,11 +431,7 @@ where
 /// `MaxTurnsError` / `PromptCancelled` carry input history *plus* new messages —
 /// classification aside, this keeps prior context in an inspected error.
 fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
-    history
-        .iter()
-        .chain(new_messages.iter())
-        .cloned()
-        .collect()
+    history.iter().chain(new_messages.iter()).cloned().collect()
 }
 
 /// The rag/context text handed to each tool's `definition`, mirroring rig's
@@ -501,7 +497,10 @@ async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> 
     };
 
     let Some(scope) = current_tool_runtime_context() else {
-        return tool.call(args).await.unwrap_or_else(|error| error.to_string());
+        return tool
+            .call(args)
+            .await
+            .unwrap_or_else(|error| error.to_string());
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {

@@ -4,7 +4,8 @@ use std::sync::Arc;
 use futures::{stream, StreamExt};
 use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
 use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message, ToolDefinition,
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message,
+    ToolDefinition,
 };
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
@@ -229,7 +230,8 @@ fn config(max_turns: usize) -> LoopConfig {
 }
 
 async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
-    let data_path = std::env::temp_dir().join(format!("agent-loop-stream-{}", uuid::Uuid::new_v4()));
+    let data_path =
+        std::env::temp_dir().join(format!("agent-loop-stream-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(&data_path)
@@ -256,7 +258,9 @@ async fn single_turn_no_tools_yields_text_then_final() {
         RawStreamingChoice::FinalResponse(()),
     ]);
 
-    let stream = run_loop_stream(model, Some(hook),
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -308,14 +312,24 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         output: "ECHOED".to_string(),
     })];
 
-    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        prompt,
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
     futures::pin_mut!(stream);
 
     let mut tool_results = Vec::new();
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) => {
+            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                tool_result,
+                ..
+            }) => {
                 tool_results.push(tool_result_text(&tool_result.content.first()).to_string());
             }
             MultiTurnStreamItem::FinalResponse(final_response) => {
@@ -338,7 +352,11 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
         .await;
-    assert!(!resp.has_errors(), "AgentToolCall query failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "AgentToolCall query failed: {:?}",
+        resp.errors
+    );
     let rows = resp
         .data
         .as_ref()
@@ -373,14 +391,25 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
 
     // One turn: emit a tool call, then hang (no FinalResponse, no EOF).
     let model = ScriptedModel::new_stalling(vec![RawStreamingChoice::ToolCall(
-        RawStreamingToolCall::new("call-1".to_string(), "echo".to_string(), serde_json::json!({})),
+        RawStreamingToolCall::new(
+            "call-1".to_string(),
+            "echo".to_string(),
+            serde_json::json!({}),
+        ),
     )]);
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
         name: "echo".to_string(),
         output: "ECHOED".to_string(),
     })];
 
-    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        prompt,
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
     futures::pin_mut!(stream);
 
     // Item 1 is the tool call. Resuming the stream then runs the tool inline and
@@ -402,7 +431,11 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
         .await;
-    assert!(!resp.has_errors(), "AgentToolCall query failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "AgentToolCall query failed: {:?}",
+        resp.errors
+    );
     let rows = resp
         .data
         .as_ref()
@@ -467,7 +500,14 @@ async fn exceeding_max_turns_terminates_with_error() {
     // a model that keeps calling tools is blocked on the completion past the cap
     // and surfaces a max-turns error.
     let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
-    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(vec![echo_tool()]), config(0));
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        prompt,
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(0),
+    );
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -510,7 +550,14 @@ async fn managed_terminal_tool_result_terminates_loop() {
         output: marker,
     })];
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
-    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        prompt,
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
     futures::pin_mut!(stream);
 
     let mut items = Vec::new();
@@ -591,7 +638,10 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     // (threaded/yielded) result must be bounded, while on_tool_result still
     // receives the full output for spill (#401 closed natively).
     let big_line = "x".repeat(200);
-    let big_output = std::iter::repeat(big_line).take(10_000).collect::<Vec<_>>().join("\n");
+    let big_output = std::iter::repeat(big_line)
+        .take(10_000)
+        .collect::<Vec<_>>()
+        .join("\n");
     let full_len = big_output.len();
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
         name: "echo".to_string(),
@@ -604,13 +654,22 @@ async fn oversized_tool_result_is_bounded_before_threading() {
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let stream = run_loop_stream(model, Some(hook), prompt, Vec::new(), Arc::new(tools), config(4));
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        prompt,
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
     futures::pin_mut!(stream);
 
     let mut bounded_len = None;
     while let Some(item) = stream.next().await {
-        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, .. }) =
-            item.expect("loop item should be Ok")
+        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+            tool_result,
+            ..
+        }) = item.expect("loop item should be Ok")
         {
             bounded_len = Some(tool_result_text(&tool_result.content.first()).len());
         }

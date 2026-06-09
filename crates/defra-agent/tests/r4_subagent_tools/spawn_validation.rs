@@ -118,12 +118,9 @@ async fn spawn_subagent_rejects_local_target_whose_behavior_was_deleted() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-ghost",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-ghost", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["ok"], false, "spawn must be rejected");
     assert_eq!(
@@ -179,12 +176,14 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        Some("model-call-transcript".to_string()),
-        "internal-spawn-transcript",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-transcript".to_string()),
+            "internal-spawn-transcript",
+            &args,
+        )
+        .await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("expected Skip action");
     };
@@ -253,12 +252,9 @@ async fn spawn_subagent_rejects_unauthorized_target_without_child_request() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-denied",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-denied", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["ok"], false);
     assert_eq!(error["failure_class"], "tool_not_allowed");
@@ -301,12 +297,9 @@ async fn spawn_subagent_rejects_when_spawn_disabled_without_child_request() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-disabled",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-disabled", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["failure_class"], "tool_not_allowed");
 
@@ -342,12 +335,9 @@ async fn spawn_subagent_rejects_background_when_background_disabled_without_chil
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-bg-disabled",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-bg-disabled", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["failure_class"], "tool_not_allowed");
     assert_eq!(error["requested_tool_name"], "background");
@@ -381,12 +371,9 @@ async fn spawn_subagent_rejects_deadline_after_parent_without_child_request() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-deadline",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-deadline", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["failure_class"], "invalid_tool_arguments");
     assert_eq!(error["path"], "/deadline");
@@ -420,12 +407,9 @@ async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
     })
     .to_string();
 
-    let action = hook.on_tool_call("spawn_subagent",
-        None,
-        "internal-spawn-depth",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call("spawn_subagent", None, "internal-spawn-depth", &args)
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["ok"], false);
     assert_eq!(error["failure_class"], "invalid_tool_arguments");

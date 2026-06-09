@@ -453,7 +453,8 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
-        hook.on_tool_call("read", None, "internal-deadline", "{}").await,
+        hook.on_tool_call("read", None, "internal-deadline", "{}")
+            .await,
         ToolCallHookAction::Continue
     ));
 
@@ -494,7 +495,8 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Run"), &[]).await,
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -504,16 +506,19 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
-        hook.on_tool_call("never", None, "internal-timeout", "{}").await,
+        hook.on_tool_call("never", None, "internal-timeout", "{}")
+            .await,
         ToolCallHookAction::Continue
     ));
-    let action = hook.on_tool_result("never",
-        None,
-        "internal-timeout",
-        "{}",
-        &crate::tool_call_lifecycle::runtime::timeout_result(Some(deadline)),
-    )
-    .await;
+    let action = hook
+        .on_tool_result(
+            "never",
+            None,
+            "internal-timeout",
+            "{}",
+            &crate::tool_call_lifecycle::runtime::timeout_result(Some(deadline)),
+        )
+        .await;
     assert!(matches!(action, HookAction::Terminate { .. }));
 
     let row = fetch_tool_call_row(&node, &session_id, "internal-timeout").await;
@@ -554,10 +559,8 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Run an oversized tool"),
-            &[],
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Run an oversized tool"), &[],)
+            .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -574,16 +577,13 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     // on_tool_result the FULL output; on_tool_result spills the full text and
     // persists a bounded model observation carrying a spill pointer.
     assert!(matches!(
-        hook.on_tool_call("oversized",
-            None,
-            "internal-oversized",
-            tool_args,
-        )
-        .await,
+        hook.on_tool_call("oversized", None, "internal-oversized", tool_args,)
+            .await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        hook.on_tool_result("oversized",
+        hook.on_tool_result(
+            "oversized",
             None,
             "internal-oversized",
             tool_args,
@@ -658,11 +658,15 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook_a.on_completion_call(&user_text_message("A"), &[]).await,
+        hook_a
+            .on_completion_call(&user_text_message("A"), &[])
+            .await,
         HookAction::Continue
     ));
     assert!(matches!(
-        hook_b.on_completion_call(&user_text_message("B"), &[]).await,
+        hook_b
+            .on_completion_call(&user_text_message("B"), &[])
+            .await,
         HookAction::Continue
     ));
     let session_a = hook_a.session_id().await.expect("session a");
@@ -851,7 +855,8 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("fail"), &[]).await,
+        hook.on_completion_call(&user_text_message("fail"), &[])
+            .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -914,17 +919,14 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
 
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
     assert!(matches!(
-        hook.on_tool_call("read",
-            Some("call-1".to_string()),
-            "internal-1",
-            tool_args,
-        )
-        .await,
+        hook.on_tool_call("read", Some("call-1".to_string()), "internal-1", tool_args,)
+            .await,
         ToolCallHookAction::Continue
     ));
 
     assert!(matches!(
-        hook.on_tool_result("read",
+        hook.on_tool_result(
+            "read",
             Some("call-1".to_string()),
             "internal-1",
             tool_args,
@@ -1084,16 +1086,15 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Read notes.txt"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Read notes.txt"), &[])
+            .await,
         HookAction::Continue
     ));
 
     let tool_args = r#"{"path":"notes.txt","start_line":2,"end_line":3}"#;
     assert!(matches!(
-        hook.on_tool_call("read_file",
+        hook.on_tool_call(
+            "read_file",
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
@@ -1107,7 +1108,8 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         "\ncontent:\nL2: beta\nL3: gamma"
     );
     assert!(matches!(
-        hook.on_tool_result("read_file",
+        hook.on_tool_result(
+            "read_file",
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
@@ -1203,10 +1205,8 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Inspect /tmp/main.rs"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Inspect /tmp/main.rs"), &[])
+            .await,
         HookAction::Continue
     ));
 
@@ -1216,7 +1216,8 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let tool_result_text = "fn main() {}\n";
 
     assert!(matches!(
-        hook.on_tool_call("read",
+        hook.on_tool_call(
+            "read",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -1242,7 +1243,8 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     .unwrap();
 
     assert!(matches!(
-        hook.on_tool_result("read",
+        hook.on_tool_result(
+            "read",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -1362,10 +1364,8 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Run two tools"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Run two tools"), &[])
+            .await,
         HookAction::Continue
     ));
 
@@ -1453,7 +1453,8 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        hook.on_tool_result("second",
+        hook.on_tool_result(
+            "second",
             Some("call-2".to_string()),
             "internal-2",
             "{}",
@@ -1560,4 +1561,3 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
-

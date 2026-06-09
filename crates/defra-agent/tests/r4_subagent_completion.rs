@@ -17,7 +17,7 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use rig::agent::{ToolCallHookAction};
+use rig::agent::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -649,12 +649,14 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         "await_mode": "background"
     })
     .to_string();
-    let action = hook.on_tool_call("spawn_subagent",
-        Some("model-call-order".to_string()),
-        "spawn-bg-order",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-order".to_string()),
+            "spawn-bg-order",
+            &args,
+        )
+        .await;
     let receipt = skip_reason(action);
     let (child_request_id, child_session_id) =
         wait_for_child_for_tool(db.node.as_ref(), "spawn-bg-order").await;

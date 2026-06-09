@@ -20,12 +20,14 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     })
     .to_string();
 
-    let spawn_action = hook.on_tool_call("spawn_subagent",
-        Some("model-call-wait-spawn".to_string()),
-        "internal-wait-spawn",
-        &spawn_args,
-    )
-    .await;
+    let spawn_action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-wait-spawn".to_string()),
+            "internal-wait-spawn",
+            &spawn_args,
+        )
+        .await;
     let spawn_receipt = skip_reason_json(spawn_action);
     assert_eq!(spawn_receipt["ok"], true);
     assert_eq!(spawn_receipt["await_mode"], "background");
@@ -40,12 +42,14 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        hook_for_wait.on_tool_call("wait_subagent",
-            Some("model-call-wait".to_string()),
-            "internal-wait-tool",
-            &wait_args,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "wait_subagent",
+                Some("model-call-wait".to_string()),
+                "internal-wait-tool",
+                &wait_args,
+            )
+            .await
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -149,12 +153,14 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         })
         .to_string();
 
-        let spawn_action = hook.on_tool_call("spawn_subagent",
-            Some(format!("model-call-wait-terminal-spawn-{child_state}")),
-            &internal_call_id,
-            &spawn_args,
-        )
-        .await;
+        let spawn_action = hook
+            .on_tool_call(
+                "spawn_subagent",
+                Some(format!("model-call-wait-terminal-spawn-{child_state}")),
+                &internal_call_id,
+                &spawn_args,
+            )
+            .await;
         let spawn_receipt = skip_reason_json(spawn_action);
         assert_eq!(spawn_receipt["ok"], true);
         assert_eq!(spawn_receipt["await_mode"], "background");
@@ -181,12 +187,14 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         let hook_for_wait = hook.clone();
         let wait_args = json!({ "child_request_id": child_request_id }).to_string();
         let wait_handle = tokio::spawn(async move {
-            hook_for_wait.on_tool_call("wait_subagent",
-                Some(format!("model-call-wait-terminal-{child_state}")),
-                "internal-wait-terminal",
-                &wait_args,
-            )
-            .await
+            hook_for_wait
+                .on_tool_call(
+                    "wait_subagent",
+                    Some(format!("model-call-wait-terminal-{child_state}")),
+                    "internal-wait-terminal",
+                    &wait_args,
+                )
+                .await
         });
 
         let foregrounded_bridge = wait_for_tool_call_await_mode(
@@ -251,12 +259,14 @@ async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
     let session_id = fixture.session_id.clone();
     let wait_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
 
-    let action = hook.on_tool_call("wait_subagent",
-        Some("model-call-wait-denied".to_string()),
-        "internal-wait-denied",
-        &wait_args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "wait_subagent",
+            Some("model-call-wait-denied".to_string()),
+            "internal-wait-denied",
+            &wait_args,
+        )
+        .await;
     let error = skip_reason_json(action);
     assert_eq!(error["ok"], false);
     assert_eq!(error["failure_class"], "service_unavailable");
@@ -290,12 +300,14 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     })
     .to_string();
 
-    let spawn_action = hook.on_tool_call("spawn_subagent",
-        Some("model-call-wait-resume-spawn".to_string()),
-        "internal-wait-resume-spawn",
-        &spawn_args,
-    )
-    .await;
+    let spawn_action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-wait-resume-spawn".to_string()),
+            "internal-wait-resume-spawn",
+            &spawn_args,
+        )
+        .await;
     let spawn_receipt = skip_reason_json(spawn_action);
     let child_request_id = spawn_receipt["child_request_id"]
         .as_str()
@@ -323,12 +335,14 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     let hook_for_wait = resumed_hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        hook_for_wait.on_tool_call("wait_subagent",
-            Some("model-call-wait-resume".to_string()),
-            "internal-wait-resume",
-            &wait_args,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "wait_subagent",
+                Some("model-call-wait-resume".to_string()),
+                "internal-wait-resume",
+                &wait_args,
+            )
+            .await
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -390,12 +404,14 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     })
     .to_string();
 
-    let spawn_action = hook.on_tool_call("spawn_subagent",
-        Some("model-call-wait-bg-spawn".to_string()),
-        "internal-wait-bg-spawn",
-        &spawn_args,
-    )
-    .await;
+    let spawn_action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-wait-bg-spawn".to_string()),
+            "internal-wait-bg-spawn",
+            &spawn_args,
+        )
+        .await;
     let spawn_receipt = skip_reason_json(spawn_action);
     let child_request_id = spawn_receipt["child_request_id"]
         .as_str()
@@ -407,12 +423,14 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     let hook_for_wait = hook.clone();
     let wait_args = json!({ "child_request_id": child_request_id }).to_string();
     let wait_handle = tokio::spawn(async move {
-        hook_for_wait.on_tool_call("wait_subagent",
-            Some("model-call-wait-bg".to_string()),
-            "internal-wait-bg",
-            &wait_args,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "wait_subagent",
+                Some("model-call-wait-bg".to_string()),
+                "internal-wait-bg",
+                &wait_args,
+            )
+            .await
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;

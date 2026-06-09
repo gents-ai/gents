@@ -314,5 +314,4 @@ mod tests {
         assert_eq!(result, "ok");
         assert_eq!(classify_managed_tool_result(&result), None);
     }
-
 }

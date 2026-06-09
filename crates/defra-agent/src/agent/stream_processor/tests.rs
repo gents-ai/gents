@@ -44,10 +44,8 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("Inspect the repo"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Inspect the repo"), &[])
+            .await,
         HookAction::Continue
     ));
 
@@ -328,10 +326,8 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("discover available tools"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("discover available tools"), &[])
+            .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -399,7 +395,8 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("discover_tools",
+        hook.on_tool_call(
+            "discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -412,7 +409,8 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap());
     assert!(matches!(
-        hook.on_tool_result("discover_tools",
+        hook.on_tool_result(
+            "discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
@@ -576,8 +574,14 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         rig::agent::ToolCallHookAction::Continue
     ));
     assert!(matches!(
-        hook.on_tool_result("echo", Some(call_id.to_string()), call_id, tool_args, tool_output)
-            .await,
+        hook.on_tool_result(
+            "echo",
+            Some(call_id.to_string()),
+            call_id,
+            tool_args,
+            tool_output
+        )
+        .await,
         HookAction::Continue
     ));
 
@@ -596,7 +600,10 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
 
     // Backfill reconciles the completed tool call's result message.
     let reconciled = hook.backfill_completed_tool_results().await.unwrap();
-    assert_eq!(reconciled, 1, "one completed tool call should be reconciled");
+    assert_eq!(
+        reconciled, 1,
+        "one completed tool call should be reconciled"
+    );
     assert_eq!(
         count_tool_result_messages(&node, &session_id).await,
         1,
@@ -614,10 +621,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-async fn count_tool_result_messages(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-) -> usize {
+async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id: &str) -> usize {
     crate::session::load_history(node, session_id)
         .await
         .unwrap()

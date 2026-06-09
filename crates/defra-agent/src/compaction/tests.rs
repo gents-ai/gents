@@ -94,7 +94,11 @@ fn drop_unpaired_tool_calls_removes_calls_without_results() {
 
     let out = super::drop_unpaired_tool_calls(messages);
 
-    assert_eq!(out.len(), 2, "assistant turn + its one paired result remain");
+    assert_eq!(
+        out.len(),
+        2,
+        "assistant turn + its one paired result remain"
+    );
     let kept_calls: Vec<String> = match &out[0] {
         Message::Assistant { content, .. } => content
             .iter()
@@ -115,7 +119,10 @@ fn drop_unpaired_tool_calls_removes_calls_without_results() {
             if content.iter().any(|c| matches!(c, AssistantContent::Text(_)))),
         "text content must be preserved"
     );
-    assert!(matches!(&out[1], Message::User { .. }), "result must remain");
+    assert!(
+        matches!(&out[1], Message::User { .. }),
+        "result must remain"
+    );
 }
 
 #[test]
@@ -130,7 +137,11 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
         },
     ];
     let out = super::drop_unpaired_tool_calls(messages);
-    assert_eq!(out.len(), 1, "the all-unpaired assistant message is dropped");
+    assert_eq!(
+        out.len(),
+        1,
+        "the all-unpaired assistant message is dropped"
+    );
     assert!(matches!(&out[0], Message::User { .. }));
 }
 

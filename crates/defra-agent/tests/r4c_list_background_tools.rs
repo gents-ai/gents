@@ -6,7 +6,7 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::{ToolCallHookAction};
+use rig::agent::ToolCallHookAction;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
@@ -118,7 +118,8 @@ async fn background_tool_with_args(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        hook.on_tool_call("spawn_process",
+        hook.on_tool_call(
+            "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({"tool_name": tool_name, "args": args}).to_string(),
@@ -129,7 +130,8 @@ async fn background_tool_with_args(
 
 async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
-        hook.on_tool_call("wait_process",
+        hook.on_tool_call(
+            "wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({ "tool_call_id": tool_call_id }).to_string(),
@@ -144,7 +146,8 @@ async fn list_background_tools(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        hook.on_tool_call("list_processes",
+        hook.on_tool_call(
+            "list_processes",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &args.to_string(),
