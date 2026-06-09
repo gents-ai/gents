@@ -10,7 +10,10 @@
 //! be simplified once rig is gone. See
 //! `docs/design/native-llm-types-shed-rig.md`.
 
-pub mod message;
+/// Native message family — lives in `defra-agent-protocol` (the persisted
+/// format is protocol vocabulary shared by every peer); re-exported here so
+/// crate paths read `crate::llm::message::Message`.
+pub use defra_agent_protocol::message;
 pub mod rig_compat;
 pub mod tool;
 

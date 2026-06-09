@@ -1,8 +1,7 @@
-use rig::completion::message::{
+use crate::message::{
     AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::one_or_many::OneOrMany;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentedMessageRole {
@@ -50,13 +49,13 @@ pub fn decode_persisted_message(role: &str, content: &str) -> Message {
     }
 
     if role == "assistant" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<AssistantContent>>(content) {
+        if let Ok(content) = serde_json::from_str::<Vec<AssistantContent>>(content) {
             return Message::Assistant { id: None, content };
         }
     }
 
     if role == "user" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<UserContent>>(content) {
+        if let Ok(content) = serde_json::from_str::<Vec<UserContent>>(content) {
             return Message::User { content };
         }
     }
@@ -64,14 +63,14 @@ pub fn decode_persisted_message(role: &str, content: &str) -> Message {
     match role {
         "assistant" => Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: content.to_string(),
-            })),
+            })],
         },
         _ => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: content.to_string(),
-            })),
+            })],
         },
     }
 }
@@ -219,13 +218,13 @@ mod tests {
     #[test]
     fn tool_result_messages_present_as_tool_rows() {
         let tool_result_message = Message::User {
-            content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            content: vec![UserContent::ToolResult(ToolResult {
                 id: "tool-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: "src/app.rs: audit target live".to_string(),
-                })),
-            })),
+                })],
+            })],
         };
 
         let presentation = present_persisted_message(
@@ -242,13 +241,12 @@ mod tests {
     fn assistant_reasoning_is_extracted_from_persisted_messages() {
         let message = Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::Reasoning(Reasoning::new("Need to inspect the CLI flow first")),
                 AssistantContent::Text(Text {
                     text: "I checked the CLI flow.".to_string(),
                 }),
-            ])
-            .expect("assistant content"),
+            ],
         };
 
         let presentation = present_persisted_message(
