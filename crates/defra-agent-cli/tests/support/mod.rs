@@ -16,7 +16,7 @@ pub use graphql::{doc_id_for_selection, escape_graphql_string, first_graphql_row
 pub use mocks::{
     completion_text_sse, request_contains_role_text, request_has_tool_result_message,
     request_system_message, request_tool_names, request_tool_result_text, tool_call_sse,
-    HttpRequestData, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
+    MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
 };
 pub use ports::{allocate_port, graphql_url};
 pub use process::{

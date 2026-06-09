@@ -2,12 +2,7 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::io::Write;
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -579,88 +574,45 @@ async fn request_lifecycle_state(graphql: &str, request_id: &str) -> Result<Stri
         .ok_or_else(|| anyhow!("AgentRequest {request_id} missing lifecycle_state: {row}"))
 }
 
+/// Mock backend for cascade-cancel tests: the first turn whose user prompt
+/// matches `target_prompt` (and carries no tool result yet) replies with a
+/// `spawn_subagent` tool call naming the configured behavior id; every other
+/// request hangs until the mock is dropped. Built on the shared robust
+/// [`support::mocks::fake_llm::FakeLlm`].
 struct BlockingSpawnEndpoint {
-    endpoint: String,
-    port: u16,
+    inner: support::mocks::fake_llm::FakeLlm,
     behavior_id: Arc<Mutex<String>>,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
 }
 
 impl BlockingSpawnEndpoint {
     fn start(model_name: &str, target_prompt: &str, child_prompt: &str) -> Result<Self> {
-        let listener =
-            TcpListener::bind(("127.0.0.1", 0)).context("binding blocking spawn mock")?;
-        listener
-            .set_nonblocking(true)
-            .context("marking blocking spawn mock nonblocking")?;
-        let port = listener.local_addr()?.port();
+        use support::mocks::fake_llm::{ChatAction, FakeLlm};
+
         let behavior_id = Arc::new(Mutex::new("default".to_string()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let behavior_id_for_thread = behavior_id.clone();
-        let stop_for_thread = stop.clone();
-        let model_name = model_name.to_string();
+        let behavior_for_responder = behavior_id.clone();
         let target_prompt = target_prompt.to_string();
         let child_prompt = child_prompt.to_string();
-
-        let handle = thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = match support::mocks::read_http_request(&mut stream) {
-                            Ok(request) => request,
-                            Err(_) => {
-                                let _ = stream.shutdown(Shutdown::Both);
-                                continue;
-                            }
-                        };
-                        match (request.method.as_str(), request.path.as_str()) {
-                            ("GET", "/v1/models") => {
-                                let body = format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#);
-                                let _ = support::mocks::write_http_response(
-                                    &mut stream,
-                                    "200 OK",
-                                    "application/json",
-                                    &body,
-                                );
-                            }
-                            ("POST", "/v1/chat/completions") => {
-                                handle_chat_request(
-                                    &mut stream,
-                                    &request.body,
-                                    &target_prompt,
-                                    &child_prompt,
-                                    &behavior_id_for_thread,
-                                    &stop_for_thread,
-                                );
-                            }
-                            _ => {
-                                let _ = support::mocks::write_http_response(
-                                    &mut stream,
-                                    "404 Not Found",
-                                    "application/json",
-                                    r#"{"error":"not found"}"#,
-                                );
-                            }
-                        }
-                        let _ = stream.flush();
-                        let _ = stream.shutdown(Shutdown::Both);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
-                }
+        let responder = Arc::new(move |request: &Value| {
+            if support::mocks::request_contains_role_text(request, "user", &target_prompt)
+                && !support::mocks::request_has_tool_result_message(request)
+            {
+                let behavior = behavior_for_responder
+                    .lock()
+                    .expect("behavior id lock poisoned")
+                    .clone();
+                let args = json!({
+                    "name": behavior,
+                    "prompt": child_prompt,
+                    "await_mode": "background"
+                })
+                .to_string();
+                ChatAction::Sse(support::mocks::tool_call_sse("spawn_subagent", &args))
+            } else {
+                ChatAction::Hang
             }
         });
-
-        Ok(Self {
-            endpoint: format!("http://127.0.0.1:{port}/v1"),
-            port,
-            behavior_id,
-            stop,
-            handle: Some(handle),
-        })
+        let inner = FakeLlm::start(model_name, None, responder)?;
+        Ok(Self { inner, behavior_id })
     }
 
     fn set_behavior_id(&self, behavior_id: String) {
@@ -668,66 +620,6 @@ impl BlockingSpawnEndpoint {
     }
 
     fn endpoint(&self) -> &str {
-        &self.endpoint
+        self.inner.endpoint()
     }
-}
-
-impl Drop for BlockingSpawnEndpoint {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn handle_chat_request(
-    stream: &mut TcpStream,
-    body: &[u8],
-    target_prompt: &str,
-    child_prompt: &str,
-    behavior_id: &Arc<Mutex<String>>,
-    stop: &AtomicBool,
-) {
-    let request_json: Value = match serde_json::from_slice(body) {
-        Ok(value) => value,
-        Err(_) => {
-            let _ = support::mocks::write_http_response(
-                stream,
-                "400 Bad Request",
-                "application/json",
-                r#"{"error":"invalid json"}"#,
-            );
-            return;
-        }
-    };
-
-    if request_contains_role_text(&request_json, "user", target_prompt)
-        && !request_has_tool_result_message(&request_json)
-    {
-        let behavior_id = behavior_id
-            .lock()
-            .expect("behavior id lock poisoned")
-            .clone();
-        let args = serde_json::json!({
-            "name": behavior_id,
-            "prompt": child_prompt,
-            "await_mode": "background"
-        })
-        .to_string();
-        let sse = tool_call_sse("spawn_subagent", &args);
-        let _ = support::mocks::write_http_response(stream, "200 OK", "text/event-stream", &sse);
-        return;
-    }
-
-    while !stop.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(50));
-    }
-    let _ = support::mocks::write_http_response(
-        stream,
-        "503 Service Unavailable",
-        "application/json",
-        r#"{"error":"mock stopped"}"#,
-    );
 }
