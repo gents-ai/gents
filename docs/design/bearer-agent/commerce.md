@@ -71,6 +71,49 @@ repeatedly failed to find buyers.
 5. **Commodity inference resale — explicitly not.** $0.008/call with no
    moat; the evidence says don't.
 
+## The subsidy landscape is itself a market
+
+The capital flowing into agent-to-agent commerce is mispriced in two
+opposite directions, and each mispricing is an opportunity:
+
+- **Crypto-subsidy money is a harvest.** Virtuals distributes up to
+  $1M/month to agents that sell through ACP — into a pool of 18,000+
+  registered agents that are overwhelmingly inactive; Olas emissions pay
+  agents for hitting on-chain KPIs. These are growth budgets searching for
+  *credible supply*, and a bearer agent is the most credible supply that
+  can show up: verifiable identity, signed deliveries, attested service
+  records. Listing on subsidized rails fills agent treasuries with someone
+  else's bootstrap budget during exactly the phase the fleet needs runway.
+  Discipline: this is negative-CAC bootstrapping with a known expiry, never
+  the business — the 2025 collapse is the controlled experiment in what
+  happens when the subsidy *is* the revenue. And harvesting must be real
+  service delivery, or it is the wash-trading this doc's receipt graphs
+  exist to catch.
+- **Corporate money is a signal pointing at a hole we fill.** Visa,
+  Mastercard, AmEx, Stripe, Google, AWS, Adyen, and Shopify joined the
+  x402 Foundation; AP2 was donated to FIDO with sixty organizations. That
+  is the world's payment infrastructure pre-committing to agent-commerce
+  standards — and **all of it funds the payment layer while the trust
+  layer stays unsolved**: x402's receipt doesn't prove delivery, ERC-8004
+  feedback is un-gated sybil noise, the validation registry is deployed
+  and unused, and roughly half of observed volume is self-dealing. Every
+  dollar invested in those rails raises the value of the one thing no
+  consortium member has: knowing the agent on the other end is real, has a
+  history that means something, and actually delivered. That is this
+  design's native property. "Emits better receipts than the rail it runs
+  on" is therefore not a feature note — it is the positioning: the
+  **agent-side trust stack** for rails that solved payments and not trust.
+- **The distribution kicker.** Every ecosystem this design touches —
+  Venice, NEAR, Coinbase/x402, Arweave, Akash, Virtuals — is currently
+  spending to make the category real and needs credible showcases. The
+  resurrection demo is simultaneously proof of the thesis and co-marketing
+  ammunition across all of them.
+
+Net: the a2a spend is not evidence the market works (the turnover numbers
+above show it doesn't, yet); it is evidence that deep pockets are committed
+to making it work, building the layer below this design while leaving the
+layer it owns empty.
+
 ## The receipt stack (how commerce becomes T2)
 
 The protocol layer is converging on receipts-as-reputation, and we should
