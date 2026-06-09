@@ -17,14 +17,12 @@ use defra_agent::{
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::ToolCallHookAction;
 use rig::completion::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::one_or_many::OneOrMany;
-use rig::streaming::StreamingCompletionResponse;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -36,38 +34,6 @@ const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
 const WAKE_PROMPT: &str =
     "Review pending subagent completion notifications in this session and continue the task if needed.";
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in R4 subagent completion tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in R4 subagent completion tests".to_string(),
-        ))
-    }
-}
 
 #[derive(Debug, Deserialize)]
 struct RequestSessionRow {
@@ -683,14 +649,14 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         "await_mode": "background"
     })
     .to_string();
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-order".to_string()),
-        "spawn-bg-order",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-order".to_string()),
+            "spawn-bg-order",
+            &args,
+        )
+        .await;
     let receipt = skip_reason(action);
     let (child_request_id, child_session_id) =
         wait_for_child_for_tool(db.node.as_ref(), "spawn-bg-order").await;

@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
-
 use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
 };
@@ -18,7 +16,6 @@ use super::shared::{
     ToolContext, ToolError,
 };
 use super::*;
-use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
     lean_command_sandbox_cases, lean_native_filesystem_boundary_cases, LeanCommandPolicyCase,

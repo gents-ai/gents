@@ -8,9 +8,7 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
-use rig::agent::{PromptHook, ToolCallHookAction};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::StreamingCompletionResponse;
+use rig::agent::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -21,34 +19,6 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
 const PARENT_AGENT_DID: &str = "did:defra-agent:r5-lean-parent";
-
-#[derive(Clone, Default)]
-struct R5DispatchTestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for R5DispatchTestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        panic!("R5 dispatch test reached completion path; spawn_subagent should short-circuit")
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        panic!("R5 dispatch test reached streaming path; spawn_subagent should short-circuit")
-    }
-}
 
 struct RunningChildAgent {
     db: TestDb,
@@ -400,14 +370,14 @@ async fn spawn_from_parent_hook(
     })
     .to_string();
 
-    let action = PromptHook::<R5DispatchTestModel>::on_tool_call(
-        hook,
-        &case.action,
-        Some(format!("model-{}", case.parent_tool_call_id)),
-        &case.parent_tool_call_id,
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            &case.action,
+            Some(format!("model-{}", case.parent_tool_call_id)),
+            &case.parent_tool_call_id,
+            &args,
+        )
+        .await;
     let receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true, "{}", case.name);
     assert_eq!(

@@ -6,47 +6,13 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::agent::ToolCallHookAction;
 use rig::completion::ToolDefinition;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::StreamingCompletionResponse;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{json, Value};
 
 use support::{test_db, AGENT_DID};
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in R4c list_background_tools tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in R4c list_background_tools tests".to_string(),
-        ))
-    }
-}
 
 struct StaticTool {
     name: &'static str,
@@ -152,8 +118,7 @@ async fn background_tool_with_args(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
+        hook.on_tool_call(
             "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -165,8 +130,7 @@ async fn background_tool_with_args(
 
 async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
+        hook.on_tool_call(
             "wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -182,8 +146,7 @@ async fn list_background_tools(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        PromptHook::<TestModel>::on_tool_call(
-            hook,
+        hook.on_tool_call(
             "list_processes",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,

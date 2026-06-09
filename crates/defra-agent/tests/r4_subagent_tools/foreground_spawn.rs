@@ -24,14 +24,14 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
     let hook_for_wait = hook.clone();
     let args_for_wait = args.clone();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "spawn_subagent",
-            Some("model-call-fg".to_string()),
-            "internal-spawn-fg",
-            &args_for_wait,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "spawn_subagent",
+                Some("model-call-fg".to_string()),
+                "internal-spawn-fg",
+                &args_for_wait,
+            )
+            .await
     });
 
     let child = wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg").await;
@@ -80,14 +80,14 @@ async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
     })
     .to_string();
 
-    let action = PromptHook::<TestModel>::on_tool_call(
-        &hook,
-        "spawn_subagent",
-        Some("model-call-fg-deadline".to_string()),
-        "internal-spawn-fg-deadline",
-        &args,
-    )
-    .await;
+    let action = hook
+        .on_tool_call(
+            "spawn_subagent",
+            Some("model-call-fg-deadline".to_string()),
+            "internal-spawn-fg-deadline",
+            &args,
+        )
+        .await;
     let result = skip_reason_json(action);
     assert_eq!(result["ok"], false);
     assert_eq!(result["await_mode"], "foreground");
@@ -116,14 +116,14 @@ async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_w
     let hook_for_wait = hook.clone();
     let args_for_wait = args.clone();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "spawn_subagent",
-            Some("model-call-fg-cancel".to_string()),
-            "internal-spawn-fg-cancel",
-            &args_for_wait,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "spawn_subagent",
+                Some("model-call-fg-cancel".to_string()),
+                "internal-spawn-fg-cancel",
+                &args_for_wait,
+            )
+            .await
     });
 
     let child = wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg-cancel").await;
@@ -187,14 +187,14 @@ async fn foreground_spawn_subagent_user_backgrounding_returns_background_receipt
     let hook_for_wait = hook.clone();
     let args_for_wait = args.clone();
     let wait_handle = tokio::spawn(async move {
-        PromptHook::<TestModel>::on_tool_call(
-            &hook_for_wait,
-            "spawn_subagent",
-            Some("model-call-fg-backgrounded".to_string()),
-            "internal-spawn-fg-backgrounded",
-            &args_for_wait,
-        )
-        .await
+        hook_for_wait
+            .on_tool_call(
+                "spawn_subagent",
+                Some("model-call-fg-backgrounded".to_string()),
+                "internal-spawn-fg-backgrounded",
+                &args_for_wait,
+            )
+            .await
     });
 
     let child =
@@ -256,14 +256,14 @@ async fn foreground_spawn_subagent_maps_child_terminal_failures() {
         let args_for_wait = args.clone();
         let internal_call_id_for_wait = internal_call_id.clone();
         let wait_handle = tokio::spawn(async move {
-            PromptHook::<TestModel>::on_tool_call(
-                &hook_for_wait,
-                "spawn_subagent",
-                Some(format!("model-call-{child_state}")),
-                &internal_call_id_for_wait,
-                &args_for_wait,
-            )
-            .await
+            hook_for_wait
+                .on_tool_call(
+                    "spawn_subagent",
+                    Some(format!("model-call-{child_state}")),
+                    &internal_call_id_for_wait,
+                    &args_for_wait,
+                )
+                .await
         });
 
         let child = wait_for_child_request_for_tool(db.node.as_ref(), &internal_call_id).await;

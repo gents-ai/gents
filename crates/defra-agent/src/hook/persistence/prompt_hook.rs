@@ -1,7 +1,13 @@
 use super::*;
 
-impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
-    async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
+/// Persistence/lifecycle side-effects for the owned completion loop (#400).
+///
+/// These were rig `PromptHook` callbacks; the owned loop (`agent::loop_stream`)
+/// now calls them directly as inherent methods, so the trait and its generic
+/// `M` are gone. They keep returning rig's `HookAction` / `ToolCallHookAction`
+/// (kept per decision D3).
+impl DefraSessionHook {
+    pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
         let result: anyhow::Result<()> = async {
             let mut state = self.state.lock().await;
 
@@ -28,32 +34,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         }
     }
 
-    async fn on_completion_response(
-        &self,
-        _prompt: &Message,
-        response: &CompletionResponse<M::Response>,
-    ) -> HookAction {
-        let result: anyhow::Result<()> = async {
-            let message = Message::Assistant {
-                id: response.message_id.clone(),
-                content: response.choice.clone(),
-            };
-            let sequence = self.persist_message(&message).await?;
-            self.mark_current_response_materialized(sequence).await?;
-            Ok(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                self.record_success();
-                HookAction::Continue
-            }
-            Err(e) => self.on_persistence_error("persist assistant response", &e),
-        }
-    }
-
-    async fn on_tool_call(
+    pub async fn on_tool_call(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
@@ -267,12 +248,6 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 None,
                 tool_call_id.as_deref(),
             );
-            crate::tool_call_lifecycle::runtime::register_pending_tool_result(
-                tool_name,
-                args,
-                internal_call_id,
-            )
-            .await;
 
             let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
                 self.node.clone(),
@@ -309,7 +284,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         }
     }
 
-    async fn on_tool_result(
+    pub async fn on_tool_result(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
@@ -372,13 +347,10 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             let truncator =
                 DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id);
-            let recorded =
-                crate::tool_call_lifecycle::runtime::take_recorded_tool_result(internal_call_id)
-                    .await;
-            let result_for_persistence = recorded
-                .as_ref()
-                .map(|record| record.full_result.as_str())
-                .unwrap_or(result);
+            // The owned loop (#400) passes the full tool output here directly, so
+            // the persisted copy spills/truncates the complete result. (The old
+            // rig path needed a recorder shim to recover the full output; gone.)
+            let result_for_persistence = result;
             let truncated = truncator
                 .truncate(
                     tool_name,

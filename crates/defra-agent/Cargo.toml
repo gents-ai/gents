@@ -12,6 +12,7 @@ rocksdb = ["defra-node/rocksdb"]
 
 [dependencies]
 anyhow.workspace = true
+async-stream = "0.3"
 async-trait = "0.1"
 bytes.workspace = true
 chrono.workspace = true
