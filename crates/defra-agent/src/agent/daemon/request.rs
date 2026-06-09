@@ -81,10 +81,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         compacted_message_count = tracing::field::Empty,
                     ))
                     .await?;
-                let mut history = drop_compacted_prefix(
+                let history = drop_compacted_prefix(
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
                 );
+                // #445: the durable transcript may carry an assistant tool-call
+                // with no result message (an interrupted/failed/timed-out tool, or
+                // one whose result was never persisted). Providers reject a reloaded
+                // assistant tool_call that is not followed by its result, so drop
+                // unpaired calls before the messages reach the provider.
+                let mut history = compaction::drop_unpaired_tool_calls(history);
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| entry.summary)

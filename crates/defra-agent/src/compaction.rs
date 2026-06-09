@@ -194,6 +194,12 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
     history::strip_tool_results(messages)
 }
 
+/// Drop assistant tool-calls with no matching tool-result message before the
+/// messages are sent to the provider (#445). See `history::drop_unpaired_tool_calls`.
+pub fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
+    history::drop_unpaired_tool_calls(messages)
+}
+
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {
     let tokens = estimate_message_tokens(messages);
     let budget = (context_window as f64 * threshold) as usize;

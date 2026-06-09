@@ -59,6 +59,99 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
     }
 }
 
+fn tool_call_content(id: &str) -> AssistantContent {
+    AssistantContent::ToolCall(ToolCall {
+        id: id.to_string(),
+        call_id: Some(id.to_string()),
+        function: rig::completion::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    })
+}
+
+#[test]
+fn drop_unpaired_tool_calls_removes_calls_without_results() {
+    // #445: assistant turn has text + a paired call (call-A, has a result) + an
+    // unpaired call (call-B, no result). The unpaired call must be dropped before
+    // the provider sees it; text and the paired call (with its result) survive.
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Text(Text {
+                    text: "thinking".to_string(),
+                }),
+                tool_call_content("call-A"),
+                tool_call_content("call-B"),
+            ])
+            .unwrap(),
+        },
+        tool_result_msg("call-A", "A-result"),
+    ];
+
+    let out = super::drop_unpaired_tool_calls(messages);
+
+    assert_eq!(out.len(), 2, "assistant turn + its one paired result remain");
+    let kept_calls: Vec<String> = match &out[0] {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantContent::ToolCall(tool_call) => Some(tool_call.id.clone()),
+                _ => None,
+            })
+            .collect(),
+        other => panic!("expected assistant message, got {other:?}"),
+    };
+    assert_eq!(
+        kept_calls,
+        vec!["call-A".to_string()],
+        "unpaired call-B must be dropped, paired call-A kept"
+    );
+    assert!(
+        matches!(&out[0], Message::Assistant { content, .. }
+            if content.iter().any(|c| matches!(c, AssistantContent::Text(_)))),
+        "text content must be preserved"
+    );
+    assert!(matches!(&out[1], Message::User { .. }), "result must remain");
+}
+
+#[test]
+fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
+    // An assistant turn that is nothing but an unpaired tool call is dropped
+    // entirely (no dangling call reaches the provider).
+    let messages = vec![
+        text_msg("user", "go"),
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-X")),
+        },
+    ];
+    let out = super::drop_unpaired_tool_calls(messages);
+    assert_eq!(out.len(), 1, "the all-unpaired assistant message is dropped");
+    assert!(matches!(&out[0], Message::User { .. }));
+}
+
+#[test]
+fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(tool_call_content("call-A")),
+        },
+        tool_result_msg("call-A", "A-result"),
+        text_msg("user", "next"),
+    ];
+    let out = super::drop_unpaired_tool_calls(messages.clone());
+    assert_eq!(
+        out.len(),
+        messages.len(),
+        "fully-paired history must pass through unchanged"
+    );
+}
+
 #[derive(Clone, Default)]
 struct MockSummaryModel {
     response: String,

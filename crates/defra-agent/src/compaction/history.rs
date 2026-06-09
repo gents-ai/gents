@@ -56,6 +56,63 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
     (stripped_messages, file_activity)
 }
 
+/// Drop assistant tool-calls that have no matching tool-result message, at the
+/// provider-send boundary (#445).
+///
+/// The durable transcript intentionally permits an assistant tool-call with no
+/// result (a tool that was interrupted/failed/timed-out, or whose result was
+/// never persisted) — `Transcript.PairClosed` only requires *completed* calls to
+/// be paired. But providers (OpenAI/Anthropic) reject a reloaded assistant
+/// `tool_call` that is not followed by its tool result. This narrows the
+/// permissive transcript to the stricter provider format: a call is kept only if
+/// some tool-result message carries the same call key. Dropping an unpaired call
+/// never orphans a result (a result implies its call is paired, so that call is
+/// kept); an assistant message left with no content is dropped entirely.
+///
+/// This runs at the request-build boundary, not inside the conformance-fenced
+/// `strip_tool_results` reducer, so the transcript-reduction model is unchanged.
+pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
+    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for message in &messages {
+        if let Message::User { content } = message {
+            for item in content.iter() {
+                if let UserContent::ToolResult(tool_result) = item {
+                    let key = tool_result
+                        .call_id
+                        .clone()
+                        .unwrap_or_else(|| tool_result.id.clone());
+                    resolved.insert(key);
+                }
+            }
+        }
+    }
+
+    let mut kept_messages = Vec::with_capacity(messages.len());
+    for message in messages {
+        match message {
+            Message::Assistant { id, content } => {
+                let kept: Vec<AssistantContent> = content
+                    .into_iter()
+                    .filter(|item| match item {
+                        AssistantContent::ToolCall(tool_call) => {
+                            resolved.contains(&tool_call_key(tool_call))
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                // Keep the message only if content survives filtering; an
+                // assistant turn that was nothing but unpaired tool calls is
+                // dropped so no dangling call reaches the provider.
+                if let Ok(content) = OneOrMany::many(kept) {
+                    kept_messages.push(Message::Assistant { id, content });
+                }
+            }
+            other => kept_messages.push(other),
+        }
+    }
+    kept_messages
+}
+
 pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
     messages
         .into_iter()
