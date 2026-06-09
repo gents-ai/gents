@@ -29,6 +29,9 @@ struct ScriptedModel {
     /// `chat_history` of every request the loop sent, in order — lets a test
     /// assert how the loop threaded prior turns back to the provider.
     seen_histories: Arc<Mutex<Vec<OneOrMany<Message>>>>,
+    /// Advertised tool names (`request.tools`) of every request the loop sent,
+    /// in order — lets a test assert the toolset is attached on every turn.
+    seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
     /// When set, every turn's stream yields its scripted chunks then hangs
     /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
@@ -43,6 +46,7 @@ impl ScriptedModel {
         Self {
             turns: Arc::new(Mutex::new(turns.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
+            seen_tools: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
         }
     }
@@ -56,6 +60,10 @@ impl ScriptedModel {
 
     async fn seen_histories(&self) -> Vec<OneOrMany<Message>> {
         self.seen_histories.lock().await.clone()
+    }
+
+    async fn seen_tools(&self) -> Vec<Vec<String>> {
+        self.seen_tools.lock().await.clone()
     }
 }
 
@@ -86,6 +94,13 @@ impl CompletionModel for ScriptedModel {
             .lock()
             .await
             .push(_request.chat_history.clone());
+        self.seen_tools.lock().await.push(
+            _request
+                .tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect(),
+        );
         let chunks = self
             .turns
             .lock()
@@ -626,6 +641,49 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
         "threaded assistant turn must carry the provider message id; history: {:?}",
         histories[1]
     );
+}
+
+#[tokio::test]
+async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
+    // Regression for the CLI tool-loop test: rig's Agent re-sent the full tool
+    // list on every turn; the owned loop must too. The follow-up request after a
+    // tool result is folded in (turn 2) must still advertise the toolset, or the
+    // provider sees a tool-result conversation with no tools.
+    let (_node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    // Turn 1: the model calls `echo`. Turn 2: it answers with text.
+    let model = ScriptedModel::new_turns(vec![
+        echo_tool_turn(),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let seen_tools = model.seen_tools().await;
+    assert_eq!(
+        seen_tools.len(),
+        2,
+        "expected two completion turns; got {seen_tools:?}"
+    );
+    for (turn, tools) in seen_tools.iter().enumerate() {
+        assert!(
+            tools.contains(&"echo".to_string()),
+            "completion request for turn {} must advertise the toolset; got {seen_tools:?}",
+            turn + 1
+        );
+    }
 }
 
 #[tokio::test]
