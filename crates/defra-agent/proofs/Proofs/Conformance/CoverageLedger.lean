@@ -267,7 +267,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "SessionRecoveryLatestRequestState"
-      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "vocabulary"
@@ -307,17 +307,17 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "AwaitMode"
-      "state_machine_conformance::lean_emits_await_mode_vocabulary")
+      "conformance::lean_emits_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "CancelPolicy"
-      "state_machine_conformance::lean_emits_cancel_policy_vocabulary")
+      "conformance::lean_emits_cancel_policy_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "ChildTerminal"
-      "state_machine_conformance::lean_emits_child_terminal_vocabulary_and_projections")
+      "conformance::lean_emits_child_terminal_vocabulary_and_projections")
       "background-tools" [Surface.agentFacing]
   ]
 
@@ -336,25 +336,25 @@ def stateMachineCoverage : List CoverageEntry :=
       "state_machine"
       "Persistence.failClosed"
       boundaryStorageHookFailurePolicyId
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains")
+      "conformance::lean_executable_contracts_cover_initial_domains")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "Persistence.failOpen"
       boundaryStorageHookFailurePolicyId
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains")
+      "conformance::lean_executable_contracts_cover_initial_domains")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "StorageObservation.failClosed"
       boundaryStorageObservationDaemonVisibleId
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains")
+      "conformance::lean_executable_contracts_cover_initial_domains")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "StorageObservation.failOpen"
       boundaryStorageObservationDaemonVisibleId
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains")
+      "conformance::lean_executable_contracts_cover_initial_domains")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
@@ -369,7 +369,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "state_machine"
       "SessionRecovery"
-      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
@@ -389,17 +389,17 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "state_machine"
       "AwaitMode"
-      "state_machine_conformance::lean_emits_await_mode_vocabulary")
+      "conformance::lean_emits_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "state_machine"
       "CancelPolicy"
-      "state_machine_conformance::lean_emits_cancel_policy_vocabulary")
+      "conformance::lean_emits_cancel_policy_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "state_machine"
       "ChildTerminal"
-      "state_machine_conformance::lean_emits_child_terminal_vocabulary_and_projections")
+      "conformance::lean_emits_child_terminal_vocabulary_and_projections")
       "background-tools" [Surface.agentFacing]
   ]
 
@@ -407,7 +407,7 @@ def caseCoverage : List CoverageEntry :=
   [ tagged (consumerCoverage
       "lifecycle_transition_cases"
       "RequestTransitions"
-      "state_machine_conformance::generated_request_transition_cases_cover_lifecycle_policy")
+      "conformance::generated_request_transition_cases_cover_lifecycle_policy")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_transition_cases"
@@ -442,7 +442,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
-      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "slot_cases"
@@ -491,7 +491,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "managed_exec_cases"
       "ManagedExecLivenessCases"
-      "state_machine_conformance::managed_exec_liveness_cases_pin_native_process_boundary")
+      "conformance::managed_exec_liveness_cases_pin_native_process_boundary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "frontend_client_shell_cases"
@@ -506,7 +506,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "live_overlay_cases"
       "LiveOverlayCases"
-      "live_overlay_conformance::live_overlay_cases_match_lean_table")
+      "live_overlay::live_overlay_cases_match_lean_table")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "request_lifecycle_operator_ui_cases"
@@ -516,7 +516,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "tool_cases"
       "ToolExecutionPreflight"
-      "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts")
+      "conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "tool_cases"
@@ -546,27 +546,27 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "queue_deadline_cases"
       "QueueDeadlineConformanceCases"
-      "state_machine_conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
+      "conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "state_machine_conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
+      "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_equivalence_cases"
       "RecoveryEquivalenceCases"
-      "state_machine_conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract")
+      "conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")
+      "conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r5_cross_deployment_cases"
       "R5CrossDeploymentCases"
-      "state_machine_conformance::generated_r5_cross_deployment_cases_drive_production_dispatch")
+      "conformance::generated_r5_cross_deployment_cases_drive_production_dispatch")
       "subagents-cross-deployment" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r5_cross_deployment_cases"
@@ -581,22 +581,22 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
-      "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant")
+      "conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "CascadeCancelsChildTheoremWitness"
-      "state_machine_conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
+      "conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "subagent_delegation_graph_cases"
       "SubagentDelegationGraphCases"
-      "state_machine_conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract")
+      "conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
-      "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes")
+      "conformance::generated_r4c_background_work_cases_pin_observable_shapes")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
@@ -606,17 +606,17 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "codex_shim_projection_cases"
       "CodexShimProjectionCases"
-      "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "codex_shim_turn_lifecycle_cases"
       "CodexShimTurnLifecycleCases"
-      "state_machine_conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
-      "state_machine_conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
+      "conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
       "transcript_cases"
@@ -626,12 +626,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "identity_structural_cases"
       "IdentityStructuralCases"
-      "identity_conformance::identity_structural_cases_match_lean_verdicts")
+      "identity::identity_structural_cases_match_lean_verdicts")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_permission_cases"
       "IdentityPermissionCases"
-      "identity_conformance::identity_permission_cases_pin_runtime_permission_contract_shape")
+      "identity::identity_permission_cases_pin_runtime_permission_contract_shape")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_permission_cases"
@@ -641,17 +641,17 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "identity_contracts"
       "IdentityContracts"
-      "identity_conformance::identity_respects_principal_contract_enforced_by_runtime_routing")
+      "identity::identity_respects_principal_contract_enforced_by_runtime_routing")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "streaming_response_cases"
       "ResponseTransitionCases"
-      "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract")
+      "conformance::generated_streaming_response_cases_pin_lifecycle_contract")
       "streaming-response" [Surface.agentFacing]
   , tagged (consumerCoverage
       "streaming_response_interrupt_flow_cases"
       "ResponseInterruptFlowCases"
-      "state_machine_conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract")
+      "conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract")
       "streaming-response" [Surface.agentFacing]
   , tagged (consumerCoverage
       "streaming_response_cases"
@@ -661,22 +661,22 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
-      "state_machine_conformance::generated_compaction_reducer_cases_pin_contract")
+      "conformance::generated_compaction_reducer_cases_pin_contract")
       "compaction" [Surface.agentFacing]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
-      "state_machine_conformance::event_delivery_transition_cases_match_contract")
+      "conformance::event_delivery_transition_cases_match_contract")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliverySourceInstances"
-      "state_machine_conformance::event_delivery_source_instances_match_runtime")
+      "conformance::event_delivery_source_instances_match_runtime")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryConvergenceTraces"
-      "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation")
+      "conformance::event_delivery_convergence_traces_match_runtime_or_deviation")
       "event-delivery" [Surface.runtimeInternal]
   -- Closed by #253: the Rust consumer drives the full K=1 and K>=2 domain.
   , tagged (consumerCoverage
