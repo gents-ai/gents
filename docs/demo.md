@@ -85,7 +85,7 @@ With `--write-tools`, the same tool root also caps write/edit and write-capable
 bash access. On macOS, the default write-capable bash policy uses
 `sandbox-exec` to contain writes to that root. Custom tool selections with
 `bash_mode: Unrestricted` default to the unsandboxed command policy unless they
-explicitly request `workspace_write`. See [macOS Bash Sandbox Policies](docs/macos-bash-sandbox.md)
+explicitly request `workspace_write`. See [macOS Bash Sandbox Policies](macos-bash-sandbox.md)
 for the policy tiers and the host-diagnostics configuration path.
 
 If you want to wipe and recreate the configured agent home from scratch:
@@ -326,7 +326,9 @@ The main regression path should use the shipped CLI binary against the full loca
 2. `defra-agent server`
 3. `defra-agent chat` or `defra-agent request submit`
 
-That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tests/cli_e2e.rs](crates/defra-agent-cli/tests/cli_e2e.rs). Those tests are intentionally:
+That flow already has a mocked end-to-end harness in the per-subcommand
+suites under [crates/defra-agent-cli/tests](../crates/defra-agent-cli/tests)
+(`cli_init`, `cli_chat`, `cli_reconciliation`, ...). Those tests are intentionally:
 
 - idempotent
 - isolated to a temp home directory
@@ -338,12 +340,12 @@ That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tes
 - Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
 - Lean proof guide: `crates/defra-agent/proofs/README.md`
 - Client turn observation protocol: `crates/defra-agent/proofs/client-state-machine.md`
-- macOS release signing: `docs/macos-signing.md`
+- macOS release signing: `macos-signing.md`
 
-Run the mocked binary-flow suite locally with:
+Run the mocked binary-flow suites locally with:
 
 ```bash
-cargo test -p defra-agent-cli --test cli_e2e -- --nocapture --test-threads=1
+cargo test -p defra-agent-cli
 ```
 
 Run the library/integration suite with:
@@ -366,7 +368,7 @@ export DEFRA_AGENT_CLI_E2E_MODEL_NAME=MiniMax-M2.7-NVFP4
 # export DEFRA_AGENT_CLI_E2E_API_KEY=...   # if your endpoint requires auth
 
 cargo test -p defra-agent-cli \
-  --test cli_e2e \
+  --test cli_live \
   cli_flow_runs_real_tool_loop_against_live_endpoint \
   -- --ignored --nocapture --test-threads=1
 ```
