@@ -24,14 +24,21 @@ use crate::bridge::types::DerivedCancelCauseView;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RequestEvidence {
+    /// Carried for Debug-trace evidence (the unknown-cause case logs the
+    /// full evidence struct), not read by derivation itself.
+    #[allow(dead_code)]
     pub request_id: String,
     pub interrupt_requested_at: Option<String>,
     pub caused_by_parent_request_id: Option<String>,
+    /// Carried for Debug-trace evidence; derivation reads the tool-side flag.
+    #[allow(dead_code)]
     pub deadline_breached: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolCallEvidence {
+    /// Carried for Debug-trace evidence, not read by derivation itself.
+    #[allow(dead_code)]
     pub tool_call_id: String,
     pub lifecycle_state: Option<String>,
     pub deadline_at: Option<String>,
@@ -43,6 +50,8 @@ pub(crate) struct ToolCallEvidence {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResponseEvidence {
     pub interrupted_at: Option<String>,
+    /// Carried for Debug-trace evidence, not read by derivation itself.
+    #[allow(dead_code)]
     pub completed_at: Option<String>,
 }
 

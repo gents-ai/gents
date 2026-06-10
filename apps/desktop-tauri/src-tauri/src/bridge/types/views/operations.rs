@@ -1,5 +1,5 @@
 //! Operator-surfaces view types per
-//! docs/superpowers/specs/2026-05-20-desktop-operator-surfaces-design.md
+//! docs/superpowers/specs/2026-05-20-desktop-operator-surfaces-design.md (git history)
 //! "Operations Snapshot Type" (line ~799). Stubs only — the panels in their
 //! own PRs (#276/#277/#278/#281/#283/#284/#285/#286/#288) build and populate
 //! these structs.

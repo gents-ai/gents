@@ -10,10 +10,10 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::llm::tool::BoxFuture;
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::{ToolDyn, ToolError};
 use chrono::{DateTime, Utc};
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::LiveToolOutputWriter;
@@ -158,11 +158,11 @@ impl ToolDyn for RuntimeManagedTool {
         self.inner.name()
     }
 
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.inner.definition(prompt)
     }
 
-    fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let Some(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone).ok() else {
                 return self.inner.call(args).await;
@@ -204,7 +204,7 @@ pub(crate) fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::completion::ToolDefinition;
+    use crate::llm::tool::ToolDefinition;
 
     struct PendingTool;
 
@@ -213,7 +213,7 @@ mod tests {
             "pending".to_string()
         }
 
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
             Box::pin(async {
                 ToolDefinition {
                     name: "pending".to_string(),
@@ -223,7 +223,7 @@ mod tests {
             })
         }
 
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(std::future::pending())
         }
     }
@@ -235,7 +235,7 @@ mod tests {
             "fast".to_string()
         }
 
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
             Box::pin(async {
                 ToolDefinition {
                     name: "fast".to_string(),
@@ -245,7 +245,7 @@ mod tests {
             })
         }
 
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("ok".to_string()) })
         }
     }

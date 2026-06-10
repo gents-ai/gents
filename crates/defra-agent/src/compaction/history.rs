@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
-use rig::one_or_many::OneOrMany;
 
 use super::summary::dedupe_paths;
 use super::{estimate_message_tokens, FileActivity};
@@ -38,12 +37,7 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
                     })
                     .collect();
 
-                let content = OneOrMany::many(items).unwrap_or_else(|_| {
-                    OneOrMany::one(UserContent::Text(Text {
-                        text: String::new(),
-                    }))
-                });
-                stripped_messages.push(Message::User { content });
+                stripped_messages.push(Message::User { content: items });
             }
             Message::System { content } => {
                 stripped_messages.push(Message::System { content });
@@ -99,8 +93,8 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
                 // Keep the message only if content survives filtering; an
                 // assistant turn that was nothing but unpaired tool calls is
                 // dropped so no dangling call reaches the provider.
-                if let Ok(content) = OneOrMany::many(kept) {
-                    kept_messages.push(Message::Assistant { id, content });
+                if !kept.is_empty() {
+                    kept_messages.push(Message::Assistant { id, content: kept });
                 }
             }
             other => kept_messages.push(other),
@@ -142,8 +136,10 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                         _ => true,
                     })
                     .collect();
-                if let Ok(content) = OneOrMany::many(kept) {
-                    kept_messages.push(Message::User { content });
+                // Content is non-empty by convention (was `OneOrMany`); an
+                // emptied message is dropped rather than sent hollow.
+                if !kept.is_empty() {
+                    kept_messages.push(Message::User { content: kept });
                 }
             }
             other => kept_messages.push(other),
@@ -180,9 +176,10 @@ pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<M
                 }
                 let ordered: Vec<AssistantContent> =
                     text.into_iter().chain(middle).chain(calls).collect();
-                let content = OneOrMany::many(ordered)
-                    .expect("reordering preserves the message's non-empty content");
-                Message::Assistant { id, content }
+                Message::Assistant {
+                    id,
+                    content: ordered,
+                }
             }
             other => other,
         })
@@ -203,25 +200,14 @@ pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize)
                                 .into_iter()
                                 .map(|content| truncate_tool_result_content(content, max_chars))
                                 .collect();
-                            tool_result.content = OneOrMany::many(truncated_contents)
-                                .unwrap_or_else(|_| {
-                                    OneOrMany::one(ToolResultContent::Text(Text {
-                                        text: "[empty tool result]".to_string(),
-                                    }))
-                                });
+                            tool_result.content = truncated_contents;
                             UserContent::ToolResult(tool_result)
                         }
                         other => other,
                     })
                     .collect();
 
-                Message::User {
-                    content: OneOrMany::many(items).unwrap_or_else(|_| {
-                        OneOrMany::one(UserContent::Text(Text {
-                            text: String::new(),
-                        }))
-                    }),
-                }
+                Message::User { content: items }
             }
             other => other,
         })
@@ -313,7 +299,7 @@ fn strip_tool_result(
         )
     };
 
-    tool_result.content = OneOrMany::one(ToolResultContent::Text(Text { text: stub }));
+    tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result
 }
 
