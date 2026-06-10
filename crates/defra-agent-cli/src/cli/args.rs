@@ -12,8 +12,8 @@ use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
-    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
+    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
+    SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
     SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
@@ -60,6 +60,11 @@ pub(crate) enum Command {
     P2p {
         #[command(subcommand)]
         command: P2pCommand,
+    },
+    #[command(about = "Apply app-specific collection schemas", after_help = SCHEMA_AFTER_HELP)]
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommand,
     },
     #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
     Show {
@@ -1367,6 +1372,34 @@ pub(crate) struct ConfigApplyArgs {
 pub(crate) enum ManifestAgentDidBindingArg {
     Home,
     Live,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SchemaCommand {
+    #[command(about = "Apply SDL and JSON Patch schema files")]
+    Apply(SchemaApplyArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SchemaApplyArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to apply to instead of local home state"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        value_name = "PATH",
+        help = "Schema file or directory. Directories apply *.graphql/*.gql files, then *.patch.json/*.json-patch files"
+    )]
+    pub(crate) path: PathBuf,
+    #[arg(
+        long = "patch",
+        value_name = "PATCH",
+        help = "Extra JSON Patch file to apply after SDL files. May be repeated"
+    )]
+    pub(crate) patches: Vec<PathBuf>,
 }
 
 #[derive(Subcommand)]
