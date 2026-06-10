@@ -218,8 +218,12 @@ pub(crate) struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    /// Accepted from the client but not yet consumed: snapshot filtering by
+    /// root request / terminal inclusion is staged (operator-surfaces spec).
+    #[allow(dead_code)]
     pub root_request_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub include_terminal: Option<bool>,
 }
 

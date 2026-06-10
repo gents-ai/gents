@@ -5,7 +5,7 @@
 //!
 //! Tools implement [`Tool`] (typed args/output); the blanket impl gives every
 //! `Tool` a dyn-safe [`ToolDyn`] (string-in / string-out) that the owned loop
-//! dispatches. See `docs/design/native-llm-types-shed-rig.md`.
+//! dispatches. See `docs/design/native-llm-types-shed-rig.md` (removed from the tree; see git history).
 
 use std::future::Future;
 use std::pin::Pin;

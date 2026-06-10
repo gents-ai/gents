@@ -409,6 +409,7 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
 /// Inbound full-message conversion (used by in-crate tests that capture wire
 /// requests, and by any future consume-side seam that receives whole rig
 /// messages).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {
         rig::completion::Message::System { content } => message::Message::System {
@@ -424,6 +425,7 @@ pub(crate) fn from_rig_message(msg: &rig::completion::Message) -> message::Messa
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn from_rig_user_content(
     content: &rig::completion::message::UserContent,
 ) -> message::UserContent {
@@ -453,6 +455,7 @@ pub(crate) fn from_rig_user_content(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn from_rig_assistant_content(
     content: &rig::completion::message::AssistantContent,
 ) -> message::AssistantContent {
