@@ -514,18 +514,27 @@ fn transcript_user_message(text: &str) -> Message {
 }
 
 fn transcript_assistant_tool_call_message(model_call_id: &str) -> Message {
+    transcript_assistant_tool_calls_message(&[model_call_id])
+}
+
+fn transcript_assistant_tool_calls_message(model_call_ids: &[&str]) -> Message {
     Message::Assistant {
         id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: model_call_id.to_string(),
-            call_id: Some(model_call_id.to_string()),
-            function: ToolFunction {
-                name: "read".to_string(),
-                arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
-            },
-            signature: None,
-            additional_params: None,
-        })],
+        content: model_call_ids
+            .iter()
+            .map(|model_call_id| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: model_call_id.to_string(),
+                    call_id: Some(model_call_id.to_string()),
+                    function: ToolFunction {
+                        name: "read".to_string(),
+                        arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
     }
 }
 
@@ -745,7 +754,7 @@ async fn persist_completed_tool_sequence(
 
 fn assert_transcript_case_shape() {
     let cases = lean_transcript_cases();
-    assert_eq!(cases.len(), 6);
+    assert_eq!(cases.len(), 7);
 
     let names = cases
         .iter()
@@ -757,6 +766,7 @@ fn assert_transcript_case_shape() {
             "ordering_user_assistant_tool_result",
             "dedupe_duplicate_reuses_sequence",
             "distinct_result_ids_append_distinct_rows",
+            "parallel_results_share_assistant_turn",
             "completed_tool_pair_closed",
             "explicit_drain_terminalizes_ownership",
             "drop_abandon_not_strong_drain",
@@ -793,6 +803,23 @@ fn assert_transcript_case_shape() {
     assert_ne!(distinct.logical_result_id, ordering.logical_result_id);
     assert_eq!(distinct.pre_message_count + 1, distinct.post_message_count);
     assert!(!distinct.expected_duplicate_reused_sequence);
+
+    let parallel = lean_transcript_case("parallel_results_share_assistant_turn");
+    assert!(parallel.legal);
+    assert_eq!(parallel.group.as_str(), "ordering");
+    assert_eq!(
+        parallel.action.as_str(),
+        "persist_assistant_once_then_complete_each_parallel_result"
+    );
+    assert_eq!(parallel.pre_message_count, 0);
+    assert_eq!(parallel.post_message_count, 5);
+    assert_eq!(parallel.pre_tool_call_count, 0);
+    assert_eq!(parallel.post_tool_call_count, 3);
+    assert_eq!(parallel.assistant_sequence, 2);
+    assert_eq!(parallel.result_sequence, 3);
+    assert_ne!(parallel.logical_result_id, ordering.logical_result_id);
+    assert!(parallel.expected_pair_closed);
+    assert!(!parallel.expected_duplicate_reused_sequence);
 
     let pair = lean_transcript_case("completed_tool_pair_closed");
     assert_eq!(pair.group.as_str(), "pairing");
@@ -1515,6 +1542,123 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
         distinct.post_message_count,
         "{}: distinct result rows",
         distinct.name
+    );
+
+    // Lean fence: Transcript.parallel_results_complete_independently — three
+    // parallel tool calls accumulate in ONE assistant turn; persisting that
+    // turn once keeps the result gate open for EVERY streamed result, and each
+    // result appends its own user row.
+    let parallel = lean_transcript_case("parallel_results_share_assistant_turn");
+    let (db, hook, session_id) = transcript_hook_fixture("transcript-parallel-results").await;
+    assert_transcript_counts(
+        &format!("{} pre-state", parallel.name),
+        &db.node,
+        &session_id,
+        parallel.pre_message_count,
+        parallel.pre_tool_call_count,
+    )
+    .await;
+    assert!(matches!(
+        hook.on_completion_call(
+            &transcript_user_message("run parallel transcript conformance tools"),
+            &[],
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let tool_args = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
+    let model_call_ids = (0..parallel.post_tool_call_count)
+        .map(|offset| format!("result-{}", parallel.logical_result_id + offset))
+        .collect::<Vec<_>>();
+    for (offset, model_call_id) in model_call_ids.iter().enumerate() {
+        let internal_call_id = format!("internal-{}", parallel.logical_result_id + offset);
+        assert!(matches!(
+            hook.on_tool_call(
+                "read",
+                Some(model_call_id.clone()),
+                &internal_call_id,
+                tool_args,
+            )
+            .await,
+            ToolCallHookAction::Continue
+        ));
+    }
+
+    let assistant_sequence = hook
+        .persist_message(&transcript_assistant_tool_calls_message(
+            &model_call_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ))
+        .await
+        .expect("persist accumulated parallel assistant turn");
+    assert_eq!(
+        assistant_sequence as usize, parallel.assistant_sequence,
+        "{}: assistant_sequence",
+        parallel.name
+    );
+
+    for (offset, model_call_id) in model_call_ids.iter().enumerate() {
+        let internal_call_id = format!("internal-{}", parallel.logical_result_id + offset);
+        let payload = format!("payload-{}", parallel.payload_hash);
+        assert!(
+            matches!(
+                hook.on_tool_result(
+                    "read",
+                    Some(model_call_id.clone()),
+                    &internal_call_id,
+                    tool_args,
+                    &payload,
+                )
+                .await,
+                HookAction::Continue
+            ),
+            "{}: result #{} must persist under the once-persisted turn",
+            parallel.name,
+            offset + 1
+        );
+    }
+
+    assert_eq!(
+        hook.cancel_in_flight_tool_calls().await.unwrap(),
+        parallel.post_in_flight_count,
+        "{}: post_in_flight_count",
+        parallel.name
+    );
+    let (messages, tool_calls, history) =
+        assert_transcript_post_state(parallel, &db.node, &session_id).await;
+    let result_sequences = messages
+        .iter()
+        .filter(|message| message.role.as_str() == "user" && message.sequence > 1)
+        .map(|message| message.sequence as usize)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        result_sequences,
+        (parallel.result_sequence..parallel.result_sequence + parallel.post_tool_call_count)
+            .collect::<Vec<_>>(),
+        "{}: each parallel result appends its own row",
+        parallel.name
+    );
+    for call in &tool_calls {
+        assert_eq!(
+            call.message_sequence as usize, parallel.assistant_sequence,
+            "{}: every parallel call reserves the one persisted assistant turn",
+            parallel.name
+        );
+        assert_eq!(
+            call.lifecycle_state.as_deref(),
+            Some("completed"),
+            "{}: parallel call completed",
+            parallel.name
+        );
+    }
+    assert_eq!(
+        transcript_tool_result_count(&history),
+        parallel.post_tool_call_count,
+        "{}: history result rows",
+        parallel.name
     );
 
     let pair = lean_transcript_case("completed_tool_pair_closed");

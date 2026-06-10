@@ -602,15 +602,13 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// OPEN CONFORMANCE QUESTION (this branch's work cue): with three parallel
-/// tool calls accumulated in one assistant turn, the first streamed result
-/// persists the turn but the second hits the hook.rs:245 guard ("cannot
-/// persist streamed tool result before its assistant turn is persisted") —
-/// the persisted-turn bookkeeping appears to register only the first call id.
-/// Verify against the StreamingResponse/PromptAssembly Lean models, then fix
-/// the runtime or the expectation and un-ignore.
+/// Three parallel tool calls accumulate in ONE assistant turn; persisting that
+/// turn on the first streamed result keeps the gate open for the remaining
+/// results (Lean: `Transcript.parallel_results_complete_independently`). The
+/// historical bug: the first result's user message reset the turn state to
+/// Idle, so the second streamed result tripped the "cannot persist streamed
+/// tool result before its assistant turn is persisted" guard.
 #[tokio::test]
-#[ignore = "open: multi-tool-result accumulated-turn persistence fails on current main; see doc comment"]
 async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-stream-processor-multi-inline-tool-result-{}",

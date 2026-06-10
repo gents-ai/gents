@@ -93,6 +93,32 @@ def distinctResultIdsAppendDistinctRowsCase : TranscriptCase :=
   , expectedStrongDrain := true
   }
 
+/-- Three parallel tool calls accumulate in ONE assistant turn; after that turn
+persists once, EACH streamed result appends its own user row
+(`parallel_results_complete_independently`). Sequences: user 1, assistant 2,
+results 3..5. `resultSequence`/`logicalResultId`/`payloadHash` describe the
+FIRST result; the driver derives the siblings by offset. -/
+def parallelResultsShareAssistantTurnCase : TranscriptCase :=
+  { name := "parallel_results_share_assistant_turn"
+  , group := "ordering"
+  , action := "persist_assistant_once_then_complete_each_parallel_result"
+  , legal := true
+  , preMessageCount := 0
+  , postMessageCount := 5
+  , preToolCallCount := 0
+  , postToolCallCount := 3
+  , preInFlightCount := 0
+  , postInFlightCount := 0
+  , assistantSequence := 2
+  , resultSequence := 3
+  , logicalResultId := 30
+  , payloadHash := 40
+  , expectedPairClosed := true
+  , expectedOrdered := true
+  , expectedDuplicateReusedSequence := false
+  , expectedStrongDrain := true
+  }
+
 def completedToolPairClosedCase : TranscriptCase :=
   { orderingUserAssistantToolResultCase with
     name := "completed_tool_pair_closed"
@@ -146,6 +172,7 @@ def transcriptConformanceCases : List TranscriptCase :=
   [ orderingUserAssistantToolResultCase
   , dedupeDuplicateReusesSequenceCase
   , distinctResultIdsAppendDistinctRowsCase
+  , parallelResultsShareAssistantTurnCase
   , completedToolPairClosedCase
   , explicitDrainTerminalizesOwnershipCase
   , dropAbandonNotStrongDrainCase
