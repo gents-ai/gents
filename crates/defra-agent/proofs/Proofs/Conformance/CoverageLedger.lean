@@ -734,6 +734,16 @@ def followUpHookCoverage : List CoverageEntry :=
       "Subagent.BridgedState.bridgedUniqueCallIds_preserved"
       "Subagent.BridgedState.bridgedUniqueCallIds_preserved proves parent and child tool call ids remain unique across bridged traces. Accepted Lean-only today because the theorem lifts a structural uniqueness proof rather than an operational R6 witness.")
       "background-tools" []
+  , tagged (boundaryCoverage
+      "follow_up_hook"
+      "StreamingResponse.Transition.streamIdleTimeout.deadlinePrecondition"
+      boundaryStreamingResponseIdleTimeoutDeadlineId)
+      "streaming-response" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "follow_up_hook"
+      "PromptAssembly.providerInput.sanitizeLoadedHistory"
+      boundaryPromptAssemblyProviderInputSanitizationId)
+      "compaction" [Surface.agentFacing]
   ]
 
 def followUpHookIds : List String :=
