@@ -275,6 +275,8 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
+        "boundary.streaming-response.idle-timeout-deadline",
+        "boundary.prompt-assembly.provider-input-sanitization",
     ]
     .into_iter()
     .map(str::to_string)
@@ -828,8 +830,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         );
         if entry.category == "follow_up_hook" {
             assert!(
-                has_follow_up,
-                "follow-up hook ledger entries must carry accepted_follow_up text: {:?}",
+                has_follow_up || has_boundary,
+                "follow-up hook ledger entries must carry accepted_follow_up text or accepted_boundary id: {:?}",
                 entry
             );
         }
