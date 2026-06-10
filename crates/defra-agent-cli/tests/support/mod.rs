@@ -8,11 +8,14 @@ pub mod process;
 pub mod waits;
 
 pub use fs::{
-    assert_manifest_agent_dids, assert_runtime_init_state, manifest_contains,
-    project_object_fields, read_captured_log, read_json_file, read_runtime_state_json,
-    rewrite_manifest_agent_dids, write_json_file, write_manifest_root_from_export,
+    assert_json_schema_valid, assert_manifest_agent_dids, assert_runtime_init_state,
+    manifest_contains, parse_jsonl, project_object_fields, read_captured_log, read_json_file,
+    read_runtime_state_json, read_workspace_json, rewrite_manifest_agent_dids, workspace_root,
+    write_json_file, write_manifest_root_from_export,
 };
-pub use graphql::{doc_id_for_selection, escape_graphql_string, first_graphql_row, graphql_query};
+pub use graphql::{
+    doc_id_for_selection, escape_graphql_string, exec, first_graphql_row, graphql_query,
+};
 pub use mocks::{
     completion_text_sse, request_contains_role_text, request_has_tool_result_message,
     request_system_message, request_tool_names, request_tool_result_text, tool_call_sse,

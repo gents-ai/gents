@@ -206,6 +206,28 @@ pub(crate) fn manifest_from_export_bundle(
             .iter()
             .map(tool_service_registry_from_live_value)
             .collect::<Result<Vec<_>>>()?,
+        projection_acp_bindings: bundle
+            .projection_acp_bindings
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "binding_id",
+                        "agent_did",
+                        "behavior_id",
+                        "projection_id",
+                        "policy_id",
+                        "staged_policy_id",
+                        "previous_policy_id",
+                        "resource_map_json",
+                        "publication_status",
+                        "published_at",
+                        "enabled",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
         tasks: bundle
             .tasks
             .iter()
@@ -303,6 +325,11 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
         tool_service_registries: manifest
             .tool_service_registries
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        projection_acp_bindings: manifest
+            .projection_acp_bindings
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,

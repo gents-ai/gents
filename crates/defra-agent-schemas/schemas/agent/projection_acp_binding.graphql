@@ -1,0 +1,28 @@
+type ProjectionAcpBinding {
+    # Stable manifest/config id for this projection access binding.
+    binding_id: String @index(unique: true)
+    # Required owner agent DID. Runtime auto-discovery only considers bindings for
+    # the root AgentRequest.agent_did.
+    agent_did: String @index
+    # Optional narrower behavior scope within the owner agent.
+    behavior_id: String @index
+    # Optional adapter projection id. Empty means all adapter projections for the
+    # scoped agent/behavior.
+    projection_id: String @index
+    # Active DefraDB Document ACP policy id used for runtime read decisions.
+    policy_id: String @index
+    # Policy rotation metadata. Runtime enforcement continues to use policy_id;
+    # staged_policy_id is only valid for staged or rotating bindings.
+    staged_policy_id: String @index
+    previous_policy_id: String @index
+    # Optional JSON object mapping runtime collection names, for example
+    # AgentRequest or AgentMessage, to DefraDB ACP resource names.
+    resource_map_json: String
+    # Lifecycle metadata for config publication. Enabled runtime discovery only
+    # accepts published or rotating bindings.
+    publication_status: String @index
+    published_at: String @index(direction: DESC)
+    enabled: Boolean @index
+    created_at: String @index(direction: DESC)
+    updated_at: String @index(direction: DESC)
+}

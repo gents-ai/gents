@@ -733,6 +733,21 @@ pub(crate) struct RuntimeShowArgs {
 pub(crate) enum TraceCommand {
     #[command(name = "export", about = "Export Amy-style tool-call JSONL")]
     Export(TraceExportArgs),
+    #[command(
+        name = "timeline",
+        about = "Export a reconstructed run timeline for one AgentRequest"
+    )]
+    Timeline(TraceTimelineArgs),
+    #[command(
+        name = "project",
+        about = "Project a reconstructed run into an adapter-facing interop shape"
+    )]
+    Project(TraceProjectArgs),
+    #[command(
+        name = "project-schema",
+        about = "Print the JSON Schema for an adapter projection output"
+    )]
+    ProjectSchema(TraceProjectSchemaArgs),
 }
 
 #[derive(clap::Args)]
@@ -757,6 +772,113 @@ pub(crate) struct TraceExportArgs {
     pub(crate) limit: usize,
     #[arg(long = "output-file", help = "Write JSONL to a file instead of stdout")]
     pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceTimelineArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id", help = "Request id to reconstruct")]
+    pub(crate) request_id: String,
+    #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceProjectArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id", help = "Request id to reconstruct and project")]
+    pub(crate) request_id: String,
+    #[arg(long, value_enum, help = "Adapter projection to export")]
+    pub(crate) projection: TraceProjectionArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionRedactionArg::Full,
+        help = "Redaction policy to apply before serializing adapter output"
+    )]
+    pub(crate) redaction: TraceProjectionRedactionArg,
+    #[arg(
+        long = "actor-did",
+        help = "Actor identity used for projection provenance"
+    )]
+    pub(crate) actor_did: Option<String>,
+    #[arg(
+        long = "acp-policy-id",
+        help = "DefraDB Document ACP policy id used to enforce row-level read decisions before projection. Requires --graphql and --actor-did."
+    )]
+    pub(crate) acp_policy_id: Option<String>,
+    #[arg(
+        long = "scope-agent-did",
+        help = "Require the root request to match this agent DID and omit content-bearing events for other agents"
+    )]
+    pub(crate) scope_agent_did: Option<String>,
+    #[arg(
+        long = "scope-behavior-id",
+        help = "Require the root request to match this behavior id and omit content-bearing events for other behaviors"
+    )]
+    pub(crate) scope_behavior_id: Option<String>,
+    #[arg(
+        long = "scope-session-id",
+        help = "Require the root request to belong to this session id"
+    )]
+    pub(crate) scope_session_id: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionFormatArg::Json,
+        help = "Adapter projection output format"
+    )]
+    pub(crate) format: TraceProjectionFormatArg,
+    #[arg(
+        long = "output-file",
+        help = "Write projection output to a file instead of stdout"
+    )]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceProjectSchemaArgs {
+    #[arg(long, value_enum, help = "Adapter projection schema to print")]
+    pub(crate) projection: TraceProjectionArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TraceProjectionFormatArg::Json,
+        help = "Output schema for a JSON projection envelope or JSONL record"
+    )]
+    pub(crate) format: TraceProjectionFormatArg,
+    #[arg(
+        long = "output-file",
+        help = "Write JSON Schema to a file instead of stdout"
+    )]
+    pub(crate) output_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionArg {
+    OpenaiCodex,
+    Langgraph,
+    MultiAgent,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionRedactionArg {
+    Full,
+    TrainingSafe,
+    Public,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum TraceProjectionFormatArg {
+    Json,
+    Jsonl,
+    EvalJsonl,
 }
 
 #[derive(Subcommand)]

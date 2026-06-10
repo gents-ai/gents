@@ -1,23 +1,866 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use defra_agent::adapter_projection::{
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
+    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
+    adapter_projection_jsonl_records, build_adapter_projection,
+    validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
+    ProjectionRedactionMode,
+};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::run_timeline::{
+    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
+    TimelineMessageRow, TimelineRequestEvent, TimelineRequestRow, TimelineResponseRow,
+    TimelineSessionRow, TimelineToolCallEvent, TimelineToolCallRow,
+};
 use defra_agent::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
     raw_message_json, AmyToolCallTraceRecord,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
-use crate::cli::args::{TraceCommand, TraceExportArgs};
+use crate::cli::args::{
+    TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectSchemaArgs, TraceProjectionArg,
+    TraceProjectionFormatArg, TraceProjectionRedactionArg, TraceTimelineArgs,
+};
 use crate::config_writes::ConfigAccess;
-use crate::{graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal};
+use crate::{
+    graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal, print_json,
+    write_json_output_file,
+};
 
 pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
     match command {
         TraceCommand::Export(args) => trace_export(args).await,
+        TraceCommand::Timeline(args) => trace_timeline(args).await,
+        TraceCommand::Project(args) => trace_project(args).await,
+        TraceCommand::ProjectSchema(args) => trace_project_schema(args),
+    }
+}
+
+async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
+    let (access, _home_dir) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let timeline = load_run_timeline(&access, &args.request_id).await?;
+    let value = serde_json::to_value(&timeline)?;
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &value)?;
+    } else {
+        print_json(&value)?;
+    }
+    Ok(())
+}
+
+async fn trace_project(args: TraceProjectArgs) -> Result<()> {
+    let (access, _home_dir) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let actor_did = args.actor_did;
+    let projection_kind = adapter_projection_kind(args.projection);
+    let scope = ProjectionDocumentScope {
+        agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
+        behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
+        session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
+    };
+    let rows = load_run_timeline_rows(&access, &args.request_id).await?;
+    let acp_scope = projection_acp_read_scope(
+        &access,
+        args.acp_policy_id.as_deref(),
+        actor_did.as_deref(),
+        projection_kind,
+        &rows.request,
+    )
+    .await?;
+    let rows = match acp_scope.as_ref() {
+        Some(acp_scope) => apply_projection_acp_read_filter(rows, acp_scope).await?,
+        None => rows,
+    };
+    let timeline = apply_projection_document_scope(build_run_timeline(rows), &scope)?;
+    let context = ProjectionContext {
+        actor_did,
+        redaction_mode: projection_redaction_mode(args.redaction),
+    };
+    let projection = build_adapter_projection(projection_kind, &timeline, &context);
+    validate_adapter_projection_contract(&projection)?;
+    match args.format {
+        TraceProjectionFormatArg::Json => {
+            let value = serde_json::to_value(&projection)?;
+            if let Some(path) = args.output_file.as_deref() {
+                write_json_output_file(path, &value)?;
+            } else {
+                print_json(&value)?;
+            }
+        }
+        TraceProjectionFormatArg::Jsonl => {
+            let records = adapter_projection_jsonl_records(&projection);
+            write_jsonl(args.output_file.as_deref(), &records)?;
+        }
+        TraceProjectionFormatArg::EvalJsonl => {
+            let records = adapter_projection_eval_jsonl_records(&projection);
+            write_jsonl(args.output_file.as_deref(), &records)?;
+        }
+    }
+    Ok(())
+}
+
+fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
+    let kind = adapter_projection_kind(args.projection);
+    let schema = match args.format {
+        TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
+        TraceProjectionFormatArg::Jsonl => adapter_projection_jsonl_record_schema(kind),
+        TraceProjectionFormatArg::EvalJsonl => adapter_projection_eval_jsonl_record_schema(kind),
+    };
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &schema)?;
+    } else {
+        print_json(&schema)?;
+    }
+    Ok(())
+}
+
+async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
+    Ok(build_run_timeline(
+        load_run_timeline_rows(access, request_id).await?,
+    ))
+}
+
+async fn load_run_timeline_rows(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<RunTimelineRows> {
+    let request = load_timeline_request_by_id(access, request_id).await?;
+    let root_session_id = request.session_id.clone();
+
+    let mut requests = match root_session_id.as_deref() {
+        Some(session_id) => load_timeline_requests_for_session(access, session_id).await?,
+        None => Vec::new(),
+    };
+    merge_timeline_request(&mut requests, request.clone());
+    for child in load_timeline_child_requests(access, &request.request_id).await? {
+        merge_timeline_request(&mut requests, child);
+    }
+
+    let session_ids = timeline_session_ids(&requests);
+    let mut messages = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut responses = Vec::new();
+    for session_id in &session_ids {
+        messages.extend(load_timeline_messages_for_session(access, session_id).await?);
+        tool_calls.extend(load_timeline_tool_calls_for_session(access, session_id).await?);
+        responses.extend(load_timeline_responses_for_session(access, session_id).await?);
+    }
+    if session_ids.is_empty() || root_session_id.is_none() {
+        responses.extend(load_timeline_responses_for_request(access, &request.request_id).await?);
+    }
+
+    let session = match root_session_id.as_deref() {
+        Some(session_id) => load_timeline_session(access, session_id).await?,
+        None => None,
+    };
+    let conversation = match root_session_id.as_deref() {
+        Some(session_id) => load_timeline_conversation(access, session_id).await?,
+        None => None,
+    };
+
+    Ok(RunTimelineRows {
+        request,
+        session,
+        conversation,
+        requests,
+        messages,
+        tool_calls,
+        responses,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ProjectionAcpReadScope {
+    actor_did: String,
+    policy_id: String,
+    api_base: String,
+    resource_names: BTreeMap<String, String>,
+}
+
+impl ProjectionAcpReadScope {
+    fn resource_name<'a>(&'a self, collection: &'a str) -> &'a str {
+        self.resource_names
+            .get(collection)
+            .map(String::as_str)
+            .unwrap_or(collection)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectionAcpDecisionResponse {
+    allowed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProjectionAcpBindingRow {
+    #[serde(default)]
+    binding_id: String,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    behavior_id: Option<String>,
+    #[serde(default)]
+    projection_id: Option<String>,
+    #[serde(default)]
+    policy_id: String,
+    #[serde(default)]
+    staged_policy_id: Option<String>,
+    #[serde(default)]
+    previous_policy_id: Option<String>,
+    #[serde(default)]
+    resource_map_json: Option<String>,
+    #[serde(default)]
+    publication_status: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentResponse",
+    "AgentSession",
+    "AgentConversation",
+];
+
+async fn projection_acp_read_scope(
+    access: &ConfigAccess,
+    policy_id: Option<&str>,
+    actor_did: Option<&str>,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
+) -> Result<Option<ProjectionAcpReadScope>> {
+    let (policy_id, resource_names) =
+        match policy_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(policy_id) => (policy_id.to_string(), BTreeMap::new()),
+            None => {
+                let Some(binding) =
+                    discover_projection_acp_binding(access, projection_kind, request).await?
+                else {
+                    return Ok(None);
+                };
+                (
+                    binding.policy_id.trim().to_string(),
+                    parse_projection_resource_map(binding.resource_map_json.as_deref())?,
+                )
+            }
+        };
+    let actor_did = actor_did
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("projection ACP enforcement requires --actor-did"))?;
+    let ConfigAccess::Graphql(graphql) = access else {
+        anyhow::bail!(
+            "projection ACP enforcement requires --graphql so DefraDB ACP can decide documents"
+        );
+    };
+    Ok(Some(ProjectionAcpReadScope {
+        actor_did: actor_did.to_string(),
+        policy_id,
+        api_base: crate::graphql_access::graphql_api_base(graphql)?,
+        resource_names,
+    }))
+}
+
+async fn discover_projection_acp_binding(
+    access: &ConfigAccess,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
+) -> Result<Option<ProjectionAcpBindingRow>> {
+    let Some(agent_did) = normalize_projection_binding_field(request.agent_did.as_deref()) else {
+        return Ok(None);
+    };
+    let query = format!(
+        r#"{{
+            ProjectionAcpBinding(
+                filter: {{
+                    enabled: {{ _eq: true }}
+                    agent_did: {{ _eq: "{agent_did}" }}
+                }}
+            ) {{
+                binding_id
+                agent_did
+                behavior_id
+                projection_id
+                policy_id
+                staged_policy_id
+                previous_policy_id
+                resource_map_json
+                publication_status
+                enabled
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let rows = load_rows::<ProjectionAcpBindingRow>(access, "ProjectionAcpBinding", &query).await?;
+    select_projection_acp_binding(rows, projection_kind, request)
+}
+
+fn select_projection_acp_binding(
+    rows: Vec<ProjectionAcpBindingRow>,
+    projection_kind: AdapterProjectionKind,
+    request: &TimelineRequestRow,
+) -> Result<Option<ProjectionAcpBindingRow>> {
+    let mut best = None::<(u8, ProjectionAcpBindingRow)>;
+    let projection_id = projection_kind.id();
+    for row in rows {
+        if row.enabled == Some(false) {
+            continue;
+        }
+        if row.policy_id.trim().is_empty() {
+            continue;
+        }
+        let Some(scope_mask) = projection_binding_scope_mask(&row, projection_id, request) else {
+            continue;
+        };
+        validate_projection_binding_operational_state(&row)?;
+        match &best {
+            None => best = Some((scope_mask, row)),
+            Some((best_mask, _)) if projection_binding_scope_dominates(scope_mask, *best_mask) => {
+                best = Some((scope_mask, row));
+            }
+            Some((best_mask, _)) if projection_binding_scope_dominates(*best_mask, scope_mask) => {}
+            Some((_, best_row)) => {
+                anyhow::bail!(
+                    "ambiguous ProjectionAcpBinding rows for projection {} request {}: {} and {}",
+                    projection_id,
+                    request.request_id,
+                    projection_binding_label(best_row),
+                    projection_binding_label(&row)
+                );
+            }
+        }
+    }
+    Ok(best.map(|(_, row)| row))
+}
+
+const PROJECTION_ACP_BINDING_PROJECTION_SCOPE: u8 = 0b100;
+const PROJECTION_ACP_BINDING_AGENT_SCOPE: u8 = 0b010;
+const PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE: u8 = 0b001;
+
+fn projection_binding_scope_mask(
+    row: &ProjectionAcpBindingRow,
+    projection_id: &str,
+    request: &TimelineRequestRow,
+) -> Option<u8> {
+    let row_agent_did = normalize_projection_binding_field(row.agent_did.as_deref())?;
+    if request.agent_did.as_deref() != Some(row_agent_did) {
+        return None;
+    }
+    let mut scope_mask = PROJECTION_ACP_BINDING_AGENT_SCOPE;
+    if let Some(row_projection_id) =
+        normalize_projection_binding_field(row.projection_id.as_deref())
+    {
+        if row_projection_id != projection_id {
+            return None;
+        }
+        scope_mask |= PROJECTION_ACP_BINDING_PROJECTION_SCOPE;
+    }
+    if let Some(row_behavior_id) = normalize_projection_binding_field(row.behavior_id.as_deref()) {
+        if request.behavior_id.as_deref() != Some(row_behavior_id) {
+            return None;
+        }
+        scope_mask |= PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE;
+    }
+    Some(scope_mask)
+}
+
+fn validate_projection_binding_operational_state(row: &ProjectionAcpBindingRow) -> Result<()> {
+    let status = normalize_projection_binding_field(row.publication_status.as_deref())
+        .unwrap_or("published");
+    let staged_policy_id = normalize_projection_binding_field(row.staged_policy_id.as_deref());
+    let previous_policy_id = normalize_projection_binding_field(row.previous_policy_id.as_deref());
+    let active_policy_id = row.policy_id.trim();
+    match status {
+        "published" => {
+            if staged_policy_id.is_some() {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} is published but still has staged_policy_id",
+                    projection_binding_label(row)
+                );
+            }
+        }
+        "rotating" => {
+            let Some(staged_policy_id) = staged_policy_id else {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} is rotating but has no staged_policy_id",
+                    projection_binding_label(row)
+                );
+            };
+            if staged_policy_id == active_policy_id {
+                anyhow::bail!(
+                    "enabled ProjectionAcpBinding {} staged_policy_id must differ from policy_id",
+                    projection_binding_label(row)
+                );
+            }
+        }
+        "draft" | "staged" | "retired" => {
+            anyhow::bail!(
+                "enabled ProjectionAcpBinding {} has non-operational publication_status {}; disable it or publish it before projection enforcement",
+                projection_binding_label(row),
+                status
+            );
+        }
+        _ => {
+            anyhow::bail!(
+                "enabled ProjectionAcpBinding {} has invalid publication_status {}",
+                projection_binding_label(row),
+                status
+            );
+        }
+    }
+    if previous_policy_id == Some(active_policy_id) {
+        anyhow::bail!(
+            "enabled ProjectionAcpBinding {} previous_policy_id must differ from policy_id",
+            projection_binding_label(row)
+        );
+    }
+    if previous_policy_id == staged_policy_id && previous_policy_id.is_some() {
+        anyhow::bail!(
+            "enabled ProjectionAcpBinding {} previous_policy_id must differ from staged_policy_id",
+            projection_binding_label(row)
+        );
+    }
+    Ok(())
+}
+
+fn projection_binding_scope_dominates(candidate: u8, current: u8) -> bool {
+    candidate != current && (candidate & current) == current
+}
+
+fn normalize_projection_binding_field(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn projection_binding_label(row: &ProjectionAcpBindingRow) -> &str {
+    normalize_projection_binding_field(Some(&row.binding_id)).unwrap_or("<unnamed>")
+}
+
+fn parse_projection_resource_map(
+    resource_map_json: Option<&str>,
+) -> Result<BTreeMap<String, String>> {
+    let Some(raw) = resource_map_json
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let raw_map = serde_json::from_str::<BTreeMap<String, String>>(raw)
+        .context("parsing ProjectionAcpBinding.resource_map_json")?;
+    let mut map = BTreeMap::new();
+    for (collection, resource_name) in raw_map {
+        let collection = collection.trim();
+        let resource_name = resource_name.trim();
+        if collection.is_empty() || resource_name.is_empty() {
+            anyhow::bail!(
+                "ProjectionAcpBinding.resource_map_json must map non-empty collection names to non-empty ACP resource names"
+            );
+        }
+        if !PROJECTION_ACP_RUNTIME_COLLECTIONS.contains(&collection) {
+            anyhow::bail!(
+                "ProjectionAcpBinding.resource_map_json contains unknown runtime collection {collection}; expected one of {}",
+                PROJECTION_ACP_RUNTIME_COLLECTIONS.join(", ")
+            );
+        }
+        map.insert(collection.to_string(), resource_name.to_string());
+    }
+    Ok(map)
+}
+
+async fn apply_projection_acp_read_filter(
+    rows: RunTimelineRows,
+    scope: &ProjectionAcpReadScope,
+) -> Result<RunTimelineRows> {
+    let mut decider = ProjectionAcpReadDecider::new(scope)?;
+    let request_doc_id = required_doc_id(
+        "AgentRequest",
+        rows.request.request_id.as_str(),
+        &rows.request.doc_id,
+    )?;
+    if !decider
+        .read_allowed(scope.resource_name("AgentRequest"), request_doc_id)
+        .await?
+    {
+        anyhow::bail!(
+            "DefraDB ACP denied read access to root request {}",
+            rows.request.request_id
+        );
+    }
+
+    let mut filtered_requests = Vec::new();
+    for request in rows.requests {
+        let doc_id = required_doc_id("AgentRequest", request.request_id.as_str(), &request.doc_id)?;
+        if decider
+            .read_allowed(scope.resource_name("AgentRequest"), doc_id)
+            .await?
+        {
+            filtered_requests.push(request);
+        }
+    }
+
+    let mut filtered_messages = Vec::new();
+    for message in rows.messages {
+        let label = format!("{}:{}", message.session_id, message.sequence);
+        let doc_id = required_doc_id("AgentMessage", &label, &message.doc_id)?;
+        if decider
+            .read_allowed(scope.resource_name("AgentMessage"), doc_id)
+            .await?
+        {
+            filtered_messages.push(message);
+        }
+    }
+
+    let mut filtered_tool_calls = Vec::new();
+    for tool_call in rows.tool_calls {
+        let doc_id = required_doc_id(
+            "AgentToolCall",
+            tool_call.tool_call_id.as_str(),
+            &tool_call.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("AgentToolCall"), doc_id)
+            .await?
+        {
+            filtered_tool_calls.push(tool_call);
+        }
+    }
+
+    let mut filtered_responses = Vec::new();
+    for response in rows.responses {
+        let doc_id = required_doc_id(
+            "AgentResponse",
+            response.request_id.as_str(),
+            &response.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("AgentResponse"), doc_id)
+            .await?
+        {
+            filtered_responses.push(response);
+        }
+    }
+
+    let session = match rows.session {
+        Some(session) => {
+            let doc_id =
+                required_doc_id("AgentSession", session.session_id.as_str(), &session.doc_id)?;
+            if decider
+                .read_allowed(scope.resource_name("AgentSession"), doc_id)
+                .await?
+            {
+                Some(session)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let conversation = match rows.conversation {
+        Some(conversation) => {
+            let doc_id = required_doc_id(
+                "AgentConversation",
+                conversation.session_id.as_str(),
+                &conversation.doc_id,
+            )?;
+            if decider
+                .read_allowed(scope.resource_name("AgentConversation"), doc_id)
+                .await?
+            {
+                Some(conversation)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
+    Ok(RunTimelineRows {
+        request: rows.request,
+        session,
+        conversation,
+        requests: filtered_requests,
+        messages: filtered_messages,
+        tool_calls: filtered_tool_calls,
+        responses: filtered_responses,
+    })
+}
+
+struct ProjectionAcpReadDecider<'a> {
+    scope: &'a ProjectionAcpReadScope,
+    client: reqwest::Client,
+    cache: BTreeMap<(String, String), bool>,
+}
+
+impl<'a> ProjectionAcpReadDecider<'a> {
+    fn new(scope: &'a ProjectionAcpReadScope) -> Result<Self> {
+        Ok(Self {
+            scope,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .context("building ACP decision client")?,
+            cache: BTreeMap::new(),
+        })
+    }
+
+    async fn read_allowed(&mut self, resource_name: &str, doc_id: &str) -> Result<bool> {
+        let key = (resource_name.to_string(), doc_id.to_string());
+        if let Some(allowed) = self.cache.get(&key) {
+            return Ok(*allowed);
+        }
+        let url = format!(
+            "{}/acp/document/decide",
+            self.scope.api_base.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .post(url)
+            .json(&json!({
+                "actor": self.scope.actor_did,
+                "permission": "read",
+                "policyID": self.scope.policy_id,
+                "resourceName": resource_name,
+                "docID": doc_id,
+            }))
+            .send()
+            .await
+            .with_context(|| {
+                format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
+            })?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .context("reading DefraDB ACP decision response")?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {text}"
+            );
+        }
+        let decision =
+            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).with_context(|| {
+                format!("parsing DefraDB ACP decision response for {resource_name}/{doc_id}")
+            })?;
+        self.cache.insert(key, decision.allowed);
+        Ok(decision.allowed)
+    }
+}
+
+fn required_doc_id<'a>(
+    resource_name: &str,
+    label: &str,
+    doc_id: &'a Option<String>,
+) -> Result<&'a str> {
+    doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "DefraDB ACP projection decisions require _docID for {resource_name} {label}"
+            )
+        })
+}
+
+#[derive(Debug, Default)]
+struct ProjectionDocumentScope {
+    agent_did: Option<String>,
+    behavior_id: Option<String>,
+    session_id: Option<String>,
+}
+
+impl ProjectionDocumentScope {
+    fn has_filters(&self) -> bool {
+        self.agent_did.is_some() || self.behavior_id.is_some() || self.session_id.is_some()
+    }
+
+    fn description(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(agent_did) = self.agent_did.as_deref() {
+            parts.push(format!("agent_did={agent_did}"));
+        }
+        if let Some(behavior_id) = self.behavior_id.as_deref() {
+            parts.push(format!("behavior_id={behavior_id}"));
+        }
+        if let Some(session_id) = self.session_id.as_deref() {
+            parts.push(format!("session_id={session_id}"));
+        }
+        parts.join(", ")
+    }
+}
+
+fn apply_projection_document_scope(
+    mut timeline: RunTimeline,
+    scope: &ProjectionDocumentScope,
+) -> Result<RunTimeline> {
+    if !scope.has_filters() {
+        return Ok(timeline);
+    }
+
+    if !timeline_root_matches_scope(&timeline, scope) {
+        anyhow::bail!(
+            "projection scope denied request {} for {}",
+            timeline.request_id,
+            scope.description()
+        );
+    }
+
+    let allowed_request_ids = scoped_request_ids(&timeline, scope);
+    timeline.events.retain(|event| {
+        should_keep_scoped_timeline_event(event, &timeline.request_id, &allowed_request_ids, scope)
+    });
+    Ok(timeline)
+}
+
+fn timeline_root_matches_scope(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> bool {
+    scope_value_matches(
+        scope.agent_did.as_deref(),
+        [
+            timeline.request.agent_did.as_deref(),
+            timeline.agent_did.as_deref(),
+        ],
+    ) && scope_value_matches(
+        scope.behavior_id.as_deref(),
+        [
+            timeline.request.behavior_id.as_deref(),
+            timeline.behavior_id.as_deref(),
+            timeline
+                .session
+                .as_ref()
+                .and_then(|session| session.behavior_id.as_deref()),
+        ],
+    ) && scope_value_matches(
+        scope.session_id.as_deref(),
+        [
+            timeline.request.session_id.as_deref(),
+            timeline.session_id.as_deref(),
+        ],
+    )
+}
+
+fn scoped_request_ids(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> BTreeSet<String> {
+    let mut allowed = BTreeSet::from([timeline.request_id.clone()]);
+    for event in &timeline.events {
+        if let RunTimelineEvent::Request(request) = event {
+            if request_event_matches_scope(request, scope) {
+                allowed.insert(request.request_id.clone());
+            }
+        }
+    }
+    allowed
+}
+
+fn request_event_matches_scope(
+    request: &TimelineRequestEvent,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    scope_value_matches(scope.agent_did.as_deref(), [request.agent_did.as_deref()])
+        && scope_value_matches(
+            scope.behavior_id.as_deref(),
+            [request.behavior_id.as_deref()],
+        )
+        && scope_value_matches(scope.session_id.as_deref(), [request.session_id.as_deref()])
+}
+
+fn should_keep_scoped_timeline_event(
+    event: &RunTimelineEvent,
+    root_request_id: &str,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    match event {
+        RunTimelineEvent::Request(request) => {
+            request.request_id == root_request_id
+                || allowed_request_ids.contains(&request.request_id)
+                || request
+                    .parent_request_id
+                    .as_deref()
+                    .is_some_and(|parent_request_id| {
+                        allowed_request_ids.contains(parent_request_id)
+                    })
+        }
+        RunTimelineEvent::Message(message) => scoped_request_id_allowed(
+            message.request_id.as_deref(),
+            Some(message.session_id.as_str()),
+            allowed_request_ids,
+            scope,
+        ),
+        RunTimelineEvent::ToolCall(tool_call) => {
+            scoped_tool_call_allowed(tool_call, allowed_request_ids, scope)
+        }
+        RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
+    }
+}
+
+fn scoped_tool_call_allowed(
+    tool_call: &TimelineToolCallEvent,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    scoped_request_id_allowed(
+        tool_call.request_id.as_deref(),
+        Some(tool_call.session_id.as_str()),
+        allowed_request_ids,
+        scope,
+    )
+}
+
+fn scoped_request_id_allowed(
+    request_id: Option<&str>,
+    session_id: Option<&str>,
+    allowed_request_ids: &BTreeSet<String>,
+    scope: &ProjectionDocumentScope,
+) -> bool {
+    request_id
+        .map(|request_id| allowed_request_ids.contains(request_id))
+        .unwrap_or_else(|| {
+            scope.agent_did.is_none()
+                && scope.behavior_id.is_none()
+                && scope_value_matches(scope.session_id.as_deref(), [session_id])
+        })
+}
+
+fn scope_value_matches<'a>(
+    expected: Option<&str>,
+    actual_values: impl IntoIterator<Item = Option<&'a str>>,
+) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    actual_values
+        .into_iter()
+        .flatten()
+        .any(|actual| actual.trim() == expected)
+}
+
+fn optional_scope_arg(field: &str, value: Option<String>) -> Result<Option<String>> {
+    value
+        .map(|value| crate::require_non_empty(field, &value).map(ToOwned::to_owned))
+        .transpose()
+}
+
+fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {
+    match arg {
+        TraceProjectionArg::OpenaiCodex => AdapterProjectionKind::OpenAiCodexRunTrace,
+        TraceProjectionArg::Langgraph => AdapterProjectionKind::LangGraphStateHistory,
+        TraceProjectionArg::MultiAgent => AdapterProjectionKind::MultiAgentTask,
+    }
+}
+
+fn projection_redaction_mode(arg: TraceProjectionRedactionArg) -> ProjectionRedactionMode {
+    match arg {
+        TraceProjectionRedactionArg::Full => ProjectionRedactionMode::Full,
+        TraceProjectionRedactionArg::TrainingSafe => ProjectionRedactionMode::TrainingSafe,
+        TraceProjectionRedactionArg::Public => ProjectionRedactionMode::Public,
     }
 }
 
@@ -45,7 +888,7 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
     });
     let tool_calls = load_tool_calls(&access, args.limit, session_filter).await?;
     if tool_calls.is_empty() {
-        write_jsonl(args.output_file.as_deref(), &[])?;
+        write_jsonl::<AmyToolCallTraceRecord>(args.output_file.as_deref(), &[])?;
         return Ok(());
     }
 
@@ -287,6 +1130,354 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+}
+
+async fn load_timeline_request_by_id(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<TimelineRequestRow> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(request_id)
+    );
+    load_rows::<TimelineRequestRow>(access, "AgentRequest", &query)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+}
+
+async fn load_timeline_requests_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineRequestRow>> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentRequest", &query).await
+}
+
+async fn load_timeline_child_requests(
+    access: &ConfigAccess,
+    parent_request_id: &str,
+) -> Result<Vec<TimelineRequestRow>> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                metadata
+                status
+                lifecycle_state
+                backend_id
+                failure_reason
+                created_at
+                retry_count
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#,
+        escape_graphql_string(parent_request_id)
+    );
+    load_rows(access, "AgentRequest", &query).await
+}
+
+async fn load_timeline_messages_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineMessageRow>> {
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                _docID
+                session_id
+                request_id
+                sequence
+                role
+                content
+                timestamp
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    match load_rows(access, "AgentMessage", &query).await {
+        Ok(rows) => Ok(rows),
+        Err(error) if error.to_string().contains("request_id") => {
+            let fallback_query = format!(
+                r#"{{
+                    AgentMessage(
+                        filter: {{ session_id: {{ _eq: "{}" }} }},
+                        order: {{ sequence: ASC }}
+                    ) {{
+                        _docID
+                        session_id
+                        sequence
+                        role
+                        content
+                        timestamp
+                    }}
+                }}"#,
+                escape_graphql_string(session_id)
+            );
+            load_rows(access, "AgentMessage", &fallback_query).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn load_timeline_tool_calls_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineToolCallRow>> {
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ started_at: ASC }}
+            ) {{
+                _docID
+                request_id
+                session_id
+                message_sequence
+                tool_name
+                tool_call_id
+                args
+                result
+                status
+                lifecycle_state
+                started_at
+                deadline_at
+                completed_at
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                denial_reason
+                denied_argv
+                denied_command
+                denied_argument
+                denied_subcommand
+                denied_prefix
+                policy_mode
+                policy_network
+                latency_ms
+                await_mode
+                cancel_policy
+                cancel_cause
+                child_request_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentToolCall", &query).await
+}
+
+async fn load_timeline_responses_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineResponseRow>> {
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                reasoning
+                status
+                error_message
+                token_count
+                progress_seq
+                materialized_message_sequence
+                materialized_at
+                created_at
+                completed_at
+                interrupted_at
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "AgentResponse", &query).await
+}
+
+async fn load_timeline_responses_for_request(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Vec<TimelineResponseRow>> {
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                reasoning
+                status
+                error_message
+                token_count
+                progress_seq
+                materialized_message_sequence
+                materialized_at
+                created_at
+                completed_at
+                interrupted_at
+            }}
+        }}"#,
+        escape_graphql_string(request_id)
+    );
+    load_rows(access, "AgentResponse", &query).await
+}
+
+async fn load_timeline_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Option<TimelineSessionRow>> {
+    let query = format!(
+        r#"{{
+            AgentSession(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                session_id
+                agent_name
+                behavior_id
+                started
+                ended
+                status
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    Ok(
+        load_rows::<TimelineSessionRow>(access, "AgentSession", &query)
+            .await?
+            .into_iter()
+            .next(),
+    )
+}
+
+async fn load_timeline_conversation(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Option<TimelineConversationRow>> {
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                session_id
+                agent_name
+                agent_did
+                behavior_id
+                title
+                title_source
+                preview_text
+                status
+                created_at
+                updated_at
+                latest_request_id
+                forked_from_session_id
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    Ok(
+        load_rows::<TimelineConversationRow>(access, "AgentConversation", &query)
+            .await?
+            .into_iter()
+            .next(),
+    )
+}
+
+fn merge_timeline_request(rows: &mut Vec<TimelineRequestRow>, request: TimelineRequestRow) {
+    if !rows.iter().any(|row| row.request_id == request.request_id) {
+        rows.push(request);
+    }
+}
+
+fn timeline_session_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 async fn load_requests_for_sessions(
@@ -655,7 +1846,7 @@ fn graphql_int_list_literal(values: &[i64]) -> String {
     )
 }
 
-fn write_jsonl(path: Option<&std::path::Path>, records: &[AmyToolCallTraceRecord]) -> Result<()> {
+fn write_jsonl<T: Serialize>(path: Option<&std::path::Path>, records: &[T]) -> Result<()> {
     let mut output = String::new();
     for record in records {
         output.push_str(&serde_json::to_string(record)?);
@@ -800,7 +1991,62 @@ struct BehaviorRow {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct MockAcpDecisionRequest {
+        actor: String,
+        permission: String,
+        #[serde(rename = "policyID")]
+        policy_id: String,
+        #[serde(rename = "resourceName")]
+        resource_name: String,
+        #[serde(rename = "docID")]
+        doc_id: String,
+    }
+
+    async fn mock_acp_decide(
+        State(allowed): State<Arc<BTreeMap<(String, String), bool>>>,
+        Json(body): Json<MockAcpDecisionRequest>,
+    ) -> (StatusCode, Json<Value>) {
+        if body.actor != "did:defra-agent:projection-reader"
+            || body.permission != "read"
+            || body.policy_id != "projection-policy"
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unexpected ACP decision request" })),
+            );
+        }
+        let allowed = allowed
+            .get(&(body.resource_name, body.doc_id))
+            .copied()
+            .unwrap_or(false);
+        (StatusCode::OK, Json(json!({ "allowed": allowed })))
+    }
+
+    async fn spawn_mock_acp(
+        allowed: BTreeMap<(String, String), bool>,
+    ) -> Result<ProjectionAcpReadScope> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let router = Router::new()
+            .route("/api/v0/acp/document/decide", post(mock_acp_decide))
+            .with_state(Arc::new(allowed));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Ok(ProjectionAcpReadScope {
+            actor_did: "did:defra-agent:projection-reader".to_string(),
+            policy_id: "projection-policy".to_string(),
+            api_base: format!("http://{addr}/api/v0"),
+            resource_names: BTreeMap::new(),
+        })
+    }
 
     #[test]
     fn request_metadata_hydrates_run_and_case_ids() {
@@ -861,6 +2107,412 @@ mod tests {
             .expect("request");
 
         assert_eq!(request.request_id, "req-1");
+    }
+
+    #[test]
+    fn projection_acp_binding_selects_most_specific_matching_row() -> Result<()> {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            behavior_id: Some("amy:default".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let selected = select_projection_acp_binding(
+            vec![
+                projection_binding("global", None, None, None),
+                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+                projection_binding(
+                    "exact",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    Some("openai_codex_run_trace"),
+                ),
+                projection_binding(
+                    "other-projection",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    Some("langgraph_state_history"),
+                ),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )?
+        .expect("binding");
+
+        assert_eq!(selected.binding_id, "exact");
+        Ok(())
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_ambiguous_rows() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let error = select_projection_acp_binding(
+            vec![
+                projection_binding("first", Some("did:defra-agent:amy"), None, None),
+                projection_binding("second", Some("did:defra-agent:amy"), None, None),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("ambiguous rows should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ambiguous ProjectionAcpBinding rows"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_incomparable_matching_scopes() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            behavior_id: Some("amy:default".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let error = select_projection_acp_binding(
+            vec![
+                projection_binding(
+                    "behavior",
+                    Some("did:defra-agent:amy"),
+                    Some("amy:default"),
+                    None,
+                ),
+                projection_binding(
+                    "projection",
+                    Some("did:defra-agent:amy"),
+                    None,
+                    Some("openai_codex_run_trace"),
+                ),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("overlapping incomparable scopes should fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ambiguous ProjectionAcpBinding rows"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_acp_binding_ignores_unscoped_rows() -> Result<()> {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let selected = select_projection_acp_binding(
+            vec![
+                projection_binding("global", None, None, Some("openai_codex_run_trace")),
+                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+            ],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )?
+        .expect("agent-scoped binding");
+
+        assert_eq!(selected.binding_id, "agent");
+        Ok(())
+    }
+
+    #[test]
+    fn projection_acp_binding_rejects_enabled_non_operational_status() {
+        let request = TimelineRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra-agent:amy".to_string()),
+            ..TimelineRequestRow::default()
+        };
+        let mut binding = projection_binding("draft", Some("did:defra-agent:amy"), None, None);
+        binding.publication_status = Some("draft".to_string());
+
+        let error = select_projection_acp_binding(
+            vec![binding],
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            &request,
+        )
+        .expect_err("enabled draft binding should fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("non-operational publication_status draft"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_resource_map_parses_nonempty_collection_resource_pairs() -> Result<()> {
+        let map = parse_projection_resource_map(Some(
+            r#"{"AgentRequest":"runtime_request"," AgentToolCall ":" runtime_tool_call "}"#,
+        ))?;
+
+        assert_eq!(
+            map.get("AgentRequest").map(String::as_str),
+            Some("runtime_request")
+        );
+        assert_eq!(
+            map.get("AgentToolCall").map(String::as_str),
+            Some("runtime_tool_call")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn projection_resource_map_rejects_empty_resource_names() {
+        let error = parse_projection_resource_map(Some(r#"{"AgentRequest":""}"#))
+            .expect_err("empty resource names should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must map non-empty collection names"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn projection_resource_map_rejects_unknown_collection_names() {
+        let error = parse_projection_resource_map(Some(r#"{"AgentMesage":"messages"}"#))
+            .expect_err("unknown collection names should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown runtime collection AgentMesage"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> Result<()> {
+        let mut allowed = BTreeMap::new();
+        for (resource_name, doc_id) in [
+            ("AgentRequest", "doc-request-root"),
+            ("AgentMessage", "doc-message-allowed"),
+            ("AgentToolCall", "doc-tool-allowed"),
+            ("AgentResponse", "doc-response-allowed"),
+            ("AgentConversation", "doc-conversation"),
+        ] {
+            allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
+        }
+        let scope = spawn_mock_acp(allowed).await?;
+
+        let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
+
+        assert_eq!(
+            filtered
+                .requests
+                .iter()
+                .map(|request| request.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-root"]
+        );
+        assert_eq!(
+            filtered
+                .messages
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            filtered
+                .tool_calls
+                .iter()
+                .map(|tool_call| tool_call.tool_call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-allowed"]
+        );
+        assert_eq!(
+            filtered
+                .responses
+                .iter()
+                .map(|response| response.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-root"]
+        );
+        assert!(
+            filtered.session.is_none(),
+            "session row should be omitted when ACP denies it"
+        );
+        assert!(
+            filtered.conversation.is_some(),
+            "conversation row should remain when ACP allows it"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_uses_configured_resource_names() -> Result<()> {
+        let mut allowed = BTreeMap::new();
+        for (resource_name, doc_id) in [
+            ("runtime_request", "doc-request-root"),
+            ("runtime_message", "doc-message-allowed"),
+            ("runtime_tool_call", "doc-tool-allowed"),
+            ("runtime_response", "doc-response-allowed"),
+            ("runtime_conversation", "doc-conversation"),
+        ] {
+            allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
+        }
+        let mut scope = spawn_mock_acp(allowed).await?;
+        scope.resource_names = BTreeMap::from([
+            ("AgentRequest".to_string(), "runtime_request".to_string()),
+            ("AgentMessage".to_string(), "runtime_message".to_string()),
+            ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
+            ("AgentResponse".to_string(), "runtime_response".to_string()),
+            (
+                "AgentConversation".to_string(),
+                "runtime_conversation".to_string(),
+            ),
+        ]);
+
+        let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
+
+        assert_eq!(filtered.requests.len(), 1);
+        assert_eq!(filtered.messages.len(), 1);
+        assert_eq!(filtered.tool_calls.len(), 1);
+        assert_eq!(filtered.responses.len(), 1);
+        assert!(filtered.conversation.is_some());
+        assert!(filtered.session.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projection_acp_filter_denies_root_request_fail_closed() -> Result<()> {
+        let scope = spawn_mock_acp(BTreeMap::new()).await?;
+        let error = apply_projection_acp_read_filter(acp_fixture_rows(), &scope)
+            .await
+            .expect_err("root request should be denied");
+
+        assert!(
+            error
+                .to_string()
+                .contains("DefraDB ACP denied read access to root request req-root"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    fn acp_fixture_rows() -> RunTimelineRows {
+        RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-request-root".to_string()),
+                request_id: "req-root".to_string(),
+                session_id: Some("session-acp".to_string()),
+                ..TimelineRequestRow::default()
+            },
+            session: Some(TimelineSessionRow {
+                doc_id: Some("doc-session".to_string()),
+                session_id: "session-acp".to_string(),
+                ..TimelineSessionRow::default()
+            }),
+            conversation: Some(TimelineConversationRow {
+                doc_id: Some("doc-conversation".to_string()),
+                session_id: "session-acp".to_string(),
+                ..TimelineConversationRow::default()
+            }),
+            requests: vec![
+                TimelineRequestRow {
+                    doc_id: Some("doc-request-root".to_string()),
+                    request_id: "req-root".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    ..TimelineRequestRow::default()
+                },
+                TimelineRequestRow {
+                    doc_id: Some("doc-request-child".to_string()),
+                    request_id: "req-child".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    caused_by_parent_request_id: Some("req-root".to_string()),
+                    ..TimelineRequestRow::default()
+                },
+            ],
+            messages: vec![
+                TimelineMessageRow {
+                    doc_id: Some("doc-message-allowed".to_string()),
+                    session_id: "session-acp".to_string(),
+                    request_id: Some("req-root".to_string()),
+                    sequence: 1,
+                    role: "user".to_string(),
+                    content: "allowed".to_string(),
+                    timestamp: None,
+                },
+                TimelineMessageRow {
+                    doc_id: Some("doc-message-denied".to_string()),
+                    session_id: "session-acp".to_string(),
+                    request_id: Some("req-child".to_string()),
+                    sequence: 2,
+                    role: "assistant".to_string(),
+                    content: "denied".to_string(),
+                    timestamp: None,
+                },
+            ],
+            tool_calls: vec![
+                TimelineToolCallRow {
+                    doc_id: Some("doc-tool-allowed".to_string()),
+                    request_id: Some("req-root".to_string()),
+                    session_id: "session-acp".to_string(),
+                    tool_call_id: "call-allowed".to_string(),
+                    tool_name: "handoff".to_string(),
+                    status: "completed".to_string(),
+                    ..TimelineToolCallRow::default()
+                },
+                TimelineToolCallRow {
+                    doc_id: Some("doc-tool-denied".to_string()),
+                    request_id: Some("req-child".to_string()),
+                    session_id: "session-acp".to_string(),
+                    tool_call_id: "call-denied".to_string(),
+                    tool_name: "review".to_string(),
+                    status: "completed".to_string(),
+                    ..TimelineToolCallRow::default()
+                },
+            ],
+            responses: vec![
+                TimelineResponseRow {
+                    doc_id: Some("doc-response-allowed".to_string()),
+                    request_id: "req-root".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    status: Some("completed".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+                TimelineResponseRow {
+                    doc_id: Some("doc-response-denied".to_string()),
+                    request_id: "req-child".to_string(),
+                    session_id: Some("session-acp".to_string()),
+                    status: Some("completed".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+            ],
+        }
+    }
+
+    fn projection_binding(
+        binding_id: &str,
+        agent_did: Option<&str>,
+        behavior_id: Option<&str>,
+        projection_id: Option<&str>,
+    ) -> ProjectionAcpBindingRow {
+        ProjectionAcpBindingRow {
+            binding_id: binding_id.to_string(),
+            agent_did: agent_did.map(ToOwned::to_owned),
+            behavior_id: behavior_id.map(ToOwned::to_owned),
+            projection_id: projection_id.map(ToOwned::to_owned),
+            policy_id: "projection-policy".to_string(),
+            staged_policy_id: None,
+            previous_policy_id: None,
+            resource_map_json: None,
+            publication_status: None,
+            enabled: Some(true),
+        }
     }
 
     fn empty_tool_call() -> ToolCallRow {

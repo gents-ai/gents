@@ -156,8 +156,6 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: agent_did.clone(),
             display_name: Some("R4 parent".to_string()),
@@ -170,6 +168,8 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-12T00:00:00Z".to_string()),
         },
@@ -179,8 +179,6 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: agent_did.clone(),
             display_name: Some("R4 child".to_string()),
@@ -193,6 +191,8 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-12T00:00:01Z".to_string()),
         },

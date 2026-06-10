@@ -56,6 +56,7 @@ uuid.workspace = true
 acp.workspace = true
 defra-agent-lean-contract.workspace = true
 identity.workspace = true
+jsonschema = { version = "0.46.5", default-features = false }
 regex = "1"
 tempfile = "3"
 tokio-tungstenite = "0.26.2"

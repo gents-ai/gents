@@ -92,6 +92,7 @@ def collectionName : Collection → String
   | .inferenceBackend => "InferenceBackend"
   | .inferenceProfile => "InferenceProfile"
   | .toolServiceRegistry => "ToolServiceRegistry"
+  | .projectionAcpBinding => "ProjectionAcpBinding"
   | .task => "Task"
   | .schedule => "Schedule"
   | .eventTrigger => "EventTrigger"
@@ -104,6 +105,7 @@ def collectionUniqueField : Collection → String
   | .inferenceBackend => "backend_id"
   | .inferenceProfile => "profile_id"
   | .toolServiceRegistry => "service_id"
+  | .projectionAcpBinding => "binding_id"
   | .task => "task_id"
   | .schedule => "schedule_id"
   | .eventTrigger => "trigger_id"
@@ -115,6 +117,7 @@ def productionWriteOrder : List Collection :=
   , .toolSelection
   , .skill
   , .agentBehavior
+  , .projectionAcpBinding
   , .task
   , .schedule
   , .eventTrigger

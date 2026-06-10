@@ -7,9 +7,9 @@ use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
-    DesiredInferenceProfile, DesiredSchedule, DesiredSkill, DesiredStateCounts,
-    DesiredStateManifest, DesiredStateValidationReport, DesiredTask, DesiredToolSelection,
-    DesiredToolServiceRegistry, HasUniqueId,
+    DesiredInferenceProfile, DesiredProjectionAcpBinding, DesiredSchedule, DesiredSkill,
+    DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport, DesiredTask,
+    DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
 };
 use defra_agent::Collection;
 
@@ -41,6 +41,8 @@ pub(crate) fn load_manifest_root(
         load_per_doc_collection(root, Collection::InferenceProfile, &mut errors);
     let tool_service_registries: Vec<DesiredToolServiceRegistry> =
         load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
+    let projection_acp_bindings: Vec<DesiredProjectionAcpBinding> =
+        load_per_doc_collection(root, Collection::ProjectionAcpBinding, &mut errors);
     let mut tasks: Vec<DesiredTask> = load_per_doc_collection(root, Collection::Task, &mut errors);
     let schedules: Vec<DesiredSchedule> =
         load_per_doc_collection(root, Collection::Schedule, &mut errors);
@@ -71,6 +73,7 @@ pub(crate) fn load_manifest_root(
         inference_backends: inference_backends.len(),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
+        projection_acp_bindings: projection_acp_bindings.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
         event_triggers: event_triggers.len(),
@@ -87,6 +90,7 @@ pub(crate) fn load_manifest_root(
             inference_backends,
             inference_profiles,
             tool_service_registries,
+            projection_acp_bindings,
             tasks,
             schedules,
             event_triggers,

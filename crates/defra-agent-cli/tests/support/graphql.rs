@@ -63,3 +63,13 @@ pub async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<S
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("ToolSelection row missing _docID for {selection_id}"))
 }
+
+/// Run a GraphQL mutation/query against an embedded node, failing on any
+/// GraphQL-level errors.
+pub async fn exec(node: &defra_agent::defra_node::EmbeddedNode, query: &str) -> Result<()> {
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        bail!("GraphQL mutation failed: {:?}", response.errors);
+    }
+    Ok(())
+}

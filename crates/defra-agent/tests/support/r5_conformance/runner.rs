@@ -670,8 +670,6 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
     upsert_agent_behavior(
         node.db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),
@@ -684,6 +682,8 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-14T00:00:00Z".to_string()),
         },
