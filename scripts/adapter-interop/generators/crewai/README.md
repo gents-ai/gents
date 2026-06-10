@@ -35,7 +35,7 @@ Validate the generated fixture with the shared external adapter harness:
 
 ```sh
 DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-crewai-fixtures \
-  cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The generator avoids live inference by using custom deterministic LLMs, but it

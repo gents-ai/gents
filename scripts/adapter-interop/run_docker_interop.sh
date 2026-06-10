@@ -94,7 +94,7 @@ if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
   (
     cd "${repo_root}"
     DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES="${out_dir}" \
-      cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
+      cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
   )
 
   export_dir="${out_dir}/defra-exports"

@@ -52,7 +52,7 @@ Validate the generated fixture with the shared external adapter harness:
 
 ```sh
 DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-langgraph-fixtures \
-  cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The normal Rust test suite does not run Docker. This generator is an

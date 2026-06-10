@@ -22,14 +22,14 @@ adapter envelope JSON files to any directory and run:
 
 ```sh
 DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/path/to/generated/fixtures \
-  cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The same harness can be pointed at the checked-in fixtures:
 
 ```sh
 DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=scripts/adapter-interop/v1 \
-  cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The harness accepts either a direct adapter envelope:
