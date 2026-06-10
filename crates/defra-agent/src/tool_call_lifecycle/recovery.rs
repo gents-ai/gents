@@ -177,7 +177,7 @@ impl super::ToolCallLifecycle {
     ) -> Result<SubagentLivenessReport> {
         let mut report = SubagentLivenessReport::default();
 
-        for row in load_running_tool_call_rows(node).await? {
+        for row in load_running_subagent_bridge_rows(node).await? {
             if child_request_id(&row).is_none() {
                 continue;
             }
@@ -563,10 +563,27 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
 }
 
 async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
-    let query = r#"{
+    load_running_tool_call_rows_with_filter(node, "").await
+}
+
+/// Running bridge rows only (`child_request_id` set) — the periodic liveness
+/// sweep's scope, filtered server-side so the 5s tick never pays for
+/// non-subagent tool rows.
+async fn load_running_subagent_bridge_rows(
+    node: &EmbeddedNode,
+) -> Result<Vec<RunningToolCallRow>> {
+    load_running_tool_call_rows_with_filter(node, r#", child_request_id: { _ne: "" }"#).await
+}
+
+async fn load_running_tool_call_rows_with_filter(
+    node: &EmbeddedNode,
+    extra_filter: &str,
+) -> Result<Vec<RunningToolCallRow>> {
+    let query = format!(
+        r#"{{
         AgentToolCall(
-            filter: { lifecycle_state: { _eq: "running" } }
-        ) {
+            filter: {{ lifecycle_state: {{ _eq: "running" }}{extra_filter} }}
+        ) {{
             _docID
             request_id
             session_id
@@ -580,10 +597,11 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
             cancel_cause
             child_request_id
             unclaimed_deadline_at
-        }
-    }"#;
+        }}
+    }}"#
+    );
 
-    let resp = node.execute(query).await;
+    let resp = node.execute(&query).await;
     if resp.has_errors() {
         anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
     }
@@ -656,11 +674,17 @@ struct PendingDescendantRow {
 /// running-child cascade interrupt, applied as a direct filtered terminal
 /// write because a pending row has no executor to observe an interrupt.
 ///
-/// Scope guard: only requests referenced by an `AgentToolCall` bridge
-/// (`child_request_id == request_id`) qualify. Queue rows that merely CARRY
-/// spawn lineage — background-completion wake notifications, steering
-/// messages — are never referenced by a bridge and must survive a terminal
-/// caller, so lineage fields alone are deliberately not trusted.
+/// Scope guard (Lean: `QueuedDescendantRow.bridgeLinked`): only requests
+/// referenced by an `AgentToolCall` bridge (`child_request_id == request_id`)
+/// qualify. Queue rows that merely CARRY spawn lineage —
+/// background-completion wake notifications, steering messages — are never
+/// referenced by a bridge and must survive a terminal caller, so lineage
+/// fields alone are deliberately not trusted.
+///
+/// The parent is looked up by `request_id` alone (no agent_did filter) so a
+/// CROSS-DEPLOYMENT terminal parent whose replicated row is visible here also
+/// releases its queued children; a parent row that has not replicated yet
+/// yields `None` and the child is conservatively left pending.
 async fn interrupt_queued_descendants_of_terminal_parents(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -671,7 +695,8 @@ async fn interrupt_queued_descendants_of_terminal_parents(
             AgentRequest(
                 filter: {{
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "pending" }},
+                    caused_by_parent_tool_call_id: {{ _ne: "" }}
                 }}
             ) {{
                 _docID
@@ -714,10 +739,17 @@ async fn interrupt_queued_descendants_of_terminal_parents(
         let parent_terminal = match parent_terminal_cache.get(parent_request_id) {
             Some(&terminal) => terminal,
             None => {
-                let terminal = lookup_parent_request(node, agent_did, parent_request_id)
+                // By request_id alone: the parent of a cross-deployment spawn
+                // carries a remote agent_did, and its replicated terminal row
+                // must still release the queued child here.
+                let terminal = load_child_liveness_row(node, parent_request_id)
                     .await?
-                    .as_ref()
-                    .is_some_and(request_is_terminal);
+                    .is_some_and(|parent| {
+                        request_status_or_lifecycle_is_terminal(
+                            parent.status.as_deref(),
+                            parent.lifecycle_state.as_deref(),
+                        )
+                    });
                 parent_terminal_cache.insert(parent_request_id.to_string(), terminal);
                 terminal
             }

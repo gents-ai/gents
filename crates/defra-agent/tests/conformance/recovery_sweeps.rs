@@ -233,20 +233,15 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
     .await;
 
     let tool_call_id = format!("{}-bridge", case.name);
-    let mut bridge = ToolCallLifecycle::new_subagent(
+    start_running_background_bridge(
         db.node.clone(),
-        parent_request_id.clone(),
-        parent_session_id.clone(),
-        tool_call_id.clone(),
+        &parent_request_id,
+        &parent_session_id,
+        &tool_call_id,
         1,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        child_request_id.clone(),
-    );
-    bridge.start_running().await.unwrap();
+        &child_request_id,
+    )
+    .await;
 
     let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
         .await
@@ -315,20 +310,15 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
         &tool_call_id,
     )
     .await;
-    let mut bridge = ToolCallLifecycle::new_subagent(
+    start_running_background_bridge(
         db.node.clone(),
-        parent_request_id.clone(),
-        parent_session_id.clone(),
-        tool_call_id.clone(),
+        &parent_request_id,
+        &parent_session_id,
+        &tool_call_id,
         1,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        child_request_id.clone(),
-    );
-    bridge.start_running().await.unwrap();
+        &child_request_id,
+    )
+    .await;
 
     // Lineage-carrying queue row with NO bridge referencing it — the wake/
     // steering analogue. The sweep's bridge-existence scope guard must leave
@@ -343,12 +333,37 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
     )
     .await;
 
+    // Cross-deployment shape: the parent row carries a REMOTE agent_did but
+    // its replicated terminal row is visible here; the locally-owned queued
+    // child must still be released (parent is looked up by request_id alone).
+    let remote_parent_request_id = format!("{}-remote-parent", case.name);
+    create_remote_terminal_parent(&db.node, &remote_parent_request_id).await;
+    let remote_tool_call_id = format!("{}-remote-bridge", case.name);
+    let remote_child_request_id = format!("{}-remote-child", case.name);
+    create_linked_pending_child(
+        &db.node,
+        &remote_child_request_id,
+        &format!("{remote_child_request_id}-session"),
+        &remote_parent_request_id,
+        &remote_tool_call_id,
+    )
+    .await;
+    start_running_background_bridge(
+        db.node.clone(),
+        &remote_parent_request_id,
+        &format!("{remote_parent_request_id}-session"),
+        &remote_tool_call_id,
+        1,
+        &remote_child_request_id,
+    )
+    .await;
+
     let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
         .await
         .unwrap();
     assert_eq!(
-        report.queued_descendants_interrupted, 1,
-        "{}: exactly the bridged queued descendant is interrupted",
+        report.queued_descendants_interrupted, 2,
+        "{}: both bridged queued descendants (local + remote parent) interrupted",
         case.name
     );
 
@@ -357,6 +372,13 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
         child.lifecycle_state.as_str(),
         case.terminal_state.as_str(),
         "{}: queued descendant terminal state drifted",
+        case.name
+    );
+    let remote_child = fetch_request_recovery_row(&db.node, &remote_child_request_id).await;
+    assert_eq!(
+        remote_child.lifecycle_state.as_str(),
+        case.terminal_state.as_str(),
+        "{}: queued descendant of replicated remote terminal parent released",
         case.name
     );
     let bystander = fetch_request_recovery_row(&db.node, &bystander_request_id).await;
@@ -413,20 +435,15 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
             &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
         )
         .await;
-        let mut bridge = ToolCallLifecycle::new_subagent(
+        start_running_background_bridge(
             db.node.clone(),
-            parent_request_id.to_string(),
-            parent_session_id.to_string(),
-            format!("convergence-465-bridge-{index}"),
+            parent_request_id,
+            parent_session_id,
+            &format!("convergence-465-bridge-{index}"),
             index,
-            "spawn_subagent".to_string(),
-            "{}".to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
-            AwaitMode::Background,
-            CancelPolicy::Cascade,
-            child_request_id,
-        );
-        bridge.start_running().await.unwrap();
+            &child_request_id,
+        )
+        .await;
     }
 
     let terminal_parent_request_id = "convergence-465-done-parent";
@@ -449,20 +466,15 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
         "convergence-465-done-bridge",
     )
     .await;
-    let mut done_bridge = ToolCallLifecycle::new_subagent(
+    start_running_background_bridge(
         db.node.clone(),
-        terminal_parent_request_id.to_string(),
-        "convergence-465-done-parent-session".to_string(),
-        "convergence-465-done-bridge".to_string(),
+        terminal_parent_request_id,
+        "convergence-465-done-parent-session",
+        "convergence-465-done-bridge",
         1,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        queued_child_request_id.to_string(),
-    );
-    done_bridge.start_running().await.unwrap();
+        queued_child_request_id,
+    )
+    .await;
 
     assert_eq!(
         count_expired_active_requests(&db.node).await,
@@ -538,6 +550,66 @@ async fn count_expired_active_requests(node: &EmbeddedNode) -> usize {
                 .is_some_and(|deadline| now > deadline.with_timezone(&chrono::Utc))
         })
         .count()
+}
+
+/// Terminal parent row owned by a REMOTE deployment (different `agent_did`),
+/// as a replicated cross-deployment parent appears to the child's deployment.
+async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "did:defra-agent:remote-deployment",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_request_id}-session",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "remote parent prompt",
+                status: "completed",
+                lifecycle_state: "completed",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{RECOVERY_CREATED_AT}",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create remote terminal parent failed: {:?}",
+        resp.errors
+    );
+}
+
+/// Persist a running background spawn bridge (`AwaitMode::Background`,
+/// `CancelPolicy::Cascade`) referencing `child_request_id` — the bridge shape
+/// every subagent-liveness driver seeds.
+async fn start_running_background_bridge(
+    node: Arc<EmbeddedNode>,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    tool_call_id: &str,
+    sequence: u32,
+    child_request_id: &str,
+) {
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        node,
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        tool_call_id.to_string(),
+        sequence,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    bridge.start_running().await.unwrap();
 }
 
 async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {

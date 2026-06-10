@@ -19,7 +19,11 @@ Two staleness sources, two sweeps:
   applies at startup).
 * `queuedDescendantSweep` — a pending child whose parent request is already
   terminal can never legally run; recovery interrupts it (the queued-side
-  analogue of the cascade interrupt for running children).
+  analogue of the cascade interrupt for running children). `bridgeLinked`
+  is the scope discriminator: only rows referenced by an `AgentToolCall`
+  bridge are spawn descendants. Queue rows that merely CARRY spawn lineage —
+  background-completion wake notifications, steering messages — are never
+  bridge-linked and must survive a terminal caller.
 -/
 
 namespace Recovery
@@ -101,10 +105,14 @@ def expiredChildRecoveryEquivalence : RecoveryEquivalence expiredSubagentChildSw
 structure QueuedDescendantRow where
   state : RequestState
   parentTerminal : Bool
+  /-- True iff an `AgentToolCall` bridge references this row as its child
+  (`child_request_id == request_id`). Lineage-only queue rows (wake
+  notifications, steering messages) are NOT bridge-linked and never stale. -/
+  bridgeLinked : Bool
   deriving Repr
 
 def queuedDescendantStale (row : QueuedDescendantRow) : Prop :=
-  row.state = .pending ∧ row.parentTerminal = true
+  row.state = .pending ∧ row.parentTerminal = true ∧ row.bridgeLinked = true
 
 instance (row : QueuedDescendantRow) : Decidable (queuedDescendantStale row) := by
   unfold queuedDescendantStale
@@ -143,7 +151,7 @@ theorem queuedDescendantRecover_zero :
   intro row _h_stale
   have h_not : ¬ queuedDescendantStale (queuedDescendantRecover row) := by
     intro h_stale
-    rcases h_stale with ⟨h_pending, _⟩
+    rcases h_stale with ⟨h_pending, _, _⟩
     simp [queuedDescendantRecover] at h_pending
   simp [queuedDescendantMeasure, h_not]
 
