@@ -128,6 +128,30 @@ def recoverySweepCases : List RecoverySweepCase :=
       "timedOut"
       "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
   , recoveryCase
+      toolCallRecoverySweep
+      "tool_running_child_dead_to_failed"
+      "running"
+      "failed"
+      "defra-agent-465-subagent-liveness"
+  , recoveryCase
+      expiredSubagentChildSweep
+      "expired_processing_child_to_dead"
+      "processing"
+      "dead"
+      "defra-agent-465-subagent-liveness"
+  , recoveryCase
+      expiredSubagentChildSweep
+      "expired_claimed_child_to_dead"
+      "claimed"
+      "dead"
+      "defra-agent-465-subagent-liveness"
+  , recoveryCase
+      queuedDescendantSweep
+      "queued_descendant_terminal_parent_to_interrupted"
+      "pending"
+      "interrupted"
+      "defra-agent-465-subagent-liveness"
+  , recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"
       "queued"
@@ -158,6 +182,10 @@ def recoveryEquivalenceTheorem (sweepId : String) : String :=
     "Recovery.detachedBridgeRecover_matches_uninterrupted"
   else if sweepId = inferenceCallRecoverySweep.sweepId then
     "Recovery.inferenceCallRecover_matches_uninterrupted"
+  else if sweepId = expiredSubagentChildSweep.sweepId then
+    "Recovery.expiredChildRecover_matches_uninterrupted"
+  else if sweepId = queuedDescendantSweep.sweepId then
+    "Recovery.queuedDescendantRecover_matches_uninterrupted"
   else
     "unregistered_recovery_equivalence"
 

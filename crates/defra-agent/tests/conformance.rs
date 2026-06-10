@@ -112,6 +112,11 @@ fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract()
     recovery_sweeps::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract();
 }
 
+#[tokio::test]
+async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
+    recovery_sweeps::subagent_liveness_reconciliation_converges_expired_processing_to_zero().await;
+}
+
 #[test]
 fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
     transcript_background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();

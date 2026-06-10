@@ -3,19 +3,24 @@ import Proofs.Basic
 /-!
 # Recovery Sweep Contract
 
-Closed, finite contract for persisted startup recovery sweeps.
+Closed, finite contract for persisted recovery sweeps. Most sweeps run once at
+startup over rows orphaned by a daemon restart; `periodic` sweeps additionally
+run on the live reconciler tick, for staleness that accrues without a restart
+(#465: expired subagent children whose executors died mid-run).
 -/
 
 namespace Recovery
 
 inductive RecoveryCadence where
   | startup
+  | periodic
   deriving DecidableEq, Repr
 
 namespace RecoveryCadence
 
 def toContract : RecoveryCadence → String
   | .startup => "startup"
+  | .periodic => "periodic"
 
 end RecoveryCadence
 
@@ -64,7 +69,8 @@ end PersistedRecoveryCollection
 Per-sweep recovery contract.
 
 `Row` is dependent so each persisted collection can reuse its existing Lean row
-model. A sweep is intentionally a startup action over stale persisted rows, not
+model. A sweep is intentionally an action over stale persisted rows — run once
+at startup, or repeatedly on the reconciler tick for `periodic` cadences — not
 a live observer loop.
 -/
 structure RecoverySweep where

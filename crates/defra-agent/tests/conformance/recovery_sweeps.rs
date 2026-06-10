@@ -7,7 +7,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        19,
+        23,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -17,6 +17,8 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "tool_call_lifecycle_recover_all_running_calls",
         "tool_call_lifecycle_recover_detached_bridge_rows",
         "inference_call_recover_all_stale_calls",
+        "subagent_liveness_terminalize_expired_children",
+        "subagent_liveness_interrupt_queued_descendants",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -45,7 +47,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        19,
+        23,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -75,8 +77,8 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
             "Rust function drifted"
         );
         assert_eq!(
-            case.cadence, "startup",
-            "recovery equivalence cadence drifted"
+            case.cadence, source.cadence,
+            "recovery equivalence cadence drifted from its source sweep case"
         );
         assert_eq!(case.pre_state, source.pre_state, "pre-state drifted");
         assert_eq!(
@@ -131,12 +133,23 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         "inference_call_recover_all_stale_calls" => {
             "Recovery.inferenceCallRecover_matches_uninterrupted"
         }
+        "subagent_liveness_terminalize_expired_children" => {
+            "Recovery.expiredChildRecover_matches_uninterrupted"
+        }
+        "subagent_liveness_interrupt_queued_descendants" => {
+            "Recovery.queuedDescendantRecover_matches_uninterrupted"
+        }
         other => panic!("unhandled recovery equivalence sweep id {other}"),
     }
 }
 
 fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    assert_eq!(case.cadence.as_str(), "startup");
+    let expected_cadence = match case.sweep_id.as_str() {
+        "subagent_liveness_terminalize_expired_children"
+        | "subagent_liveness_interrupt_queued_descendants" => "periodic",
+        _ => "startup",
+    };
+    assert_eq!(case.cadence.as_str(), expected_cadence, "{}", case.name);
     assert_eq!(
         case.implementation_status.as_str(),
         "implemented",
@@ -167,13 +180,429 @@ fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) 
 }
 
 async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    match case.collection.as_str() {
-        "AgentRequest" => drive_request_recovery_case(case).await,
-        "AgentResponse" => drive_response_recovery_case(case).await,
-        "AgentToolCall" => drive_tool_call_recovery_case(case).await,
-        "InferenceCall" => drive_inference_call_recovery_case(case).await,
-        other => panic!("unhandled recovery collection {other} for {}", case.name),
+    match (case.collection.as_str(), case.sweep_id.as_str()) {
+        ("AgentRequest", "subagent_liveness_terminalize_expired_children") => {
+            drive_expired_child_recovery_case(case).await
+        }
+        ("AgentRequest", "subagent_liveness_interrupt_queued_descendants") => {
+            drive_queued_descendant_recovery_case(case).await
+        }
+        ("AgentRequest", _) => drive_request_recovery_case(case).await,
+        ("AgentResponse", _) => drive_response_recovery_case(case).await,
+        ("AgentToolCall", _) => drive_tool_call_recovery_case(case).await,
+        ("InferenceCall", _) => drive_inference_call_recovery_case(case).await,
+        (other, _) => panic!("unhandled recovery collection {other} for {}", case.name),
     }
+}
+
+/// #465 case 1: a background subagent child in claimed/processing whose
+/// deadline has passed terminalizes to `dead` on the periodic sweep, and its
+/// background bridge immediately projects the dead child to a terminal failed
+/// result (case 2), all without a daemon restart.
+async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let parent_request_id = format!("{}-parent", case.name);
+    let parent_session_id = format!("{}-parent-session", case.name);
+    create_request(
+        &db.node,
+        &parent_request_id,
+        &parent_session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+
+    let child_request_id = format!("{}-child", case.name);
+    let child_session_id = format!("{child_request_id}-session");
+    let child_doc_id = create_request(
+        &db.node,
+        &child_request_id,
+        &child_session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    if case.pre_state == "claimed" {
+        set_request_status_and_lifecycle(&db.node, &child_doc_id, "processing", "claimed").await;
+    }
+    set_request_deadline(
+        &db.node,
+        &child_doc_id,
+        &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
+    )
+    .await;
+
+    let tool_call_id = format!("{}-bridge", case.name);
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.clone(),
+        parent_session_id.clone(),
+        tool_call_id.clone(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.clone(),
+    );
+    bridge.start_running().await.unwrap();
+
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.expired_children_terminalized, 1,
+        "{}: expired child terminalized",
+        case.name
+    );
+    assert_eq!(
+        report.bridges_projected, 1,
+        "{}: background bridge projected the dead child",
+        case.name
+    );
+
+    let child = fetch_request_recovery_row(&db.node, &child_request_id).await;
+    assert_eq!(
+        child.lifecycle_state.as_str(),
+        case.terminal_state.as_str(),
+        "{}: child terminal state drifted",
+        case.name
+    );
+    let bridge_row = fetch_tool_recovery_row(&db.node, &tool_call_id).await;
+    assert_eq!(
+        bridge_row.lifecycle_state.as_deref(),
+        Some("failed"),
+        "{}: bridge must reach terminal failed so the parent unblocks",
+        case.name
+    );
+
+    let second = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert!(
+        second.is_noop(),
+        "{}: reconciliation must be idempotent across ticks, got {second:?}",
+        case.name
+    );
+}
+
+/// #465 case 3: a pending (queued) spawn descendant of an already-terminal
+/// parent is interrupted on the periodic sweep. Queue rows that merely carry
+/// spawn lineage but are not referenced by a bridge (wake notifications,
+/// steering messages) must survive.
+async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let parent_request_id = format!("{}-parent", case.name);
+    let parent_session_id = format!("{}-parent-session", case.name);
+    let parent_doc_id = create_request(
+        &db.node,
+        &parent_request_id,
+        &parent_session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    set_request_status_and_lifecycle(&db.node, &parent_doc_id, "completed", "completed").await;
+
+    let tool_call_id = format!("{}-bridge", case.name);
+    let child_request_id = format!("{}-child", case.name);
+    create_linked_pending_child(
+        &db.node,
+        &child_request_id,
+        &format!("{child_request_id}-session"),
+        &parent_request_id,
+        &tool_call_id,
+    )
+    .await;
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.clone(),
+        parent_session_id.clone(),
+        tool_call_id.clone(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.clone(),
+    );
+    bridge.start_running().await.unwrap();
+
+    // Lineage-carrying queue row with NO bridge referencing it — the wake/
+    // steering analogue. The sweep's bridge-existence scope guard must leave
+    // it pending.
+    let bystander_request_id = format!("{}-wake", case.name);
+    create_linked_pending_child(
+        &db.node,
+        &bystander_request_id,
+        &parent_session_id,
+        &parent_request_id,
+        &tool_call_id,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.queued_descendants_interrupted, 1,
+        "{}: exactly the bridged queued descendant is interrupted",
+        case.name
+    );
+
+    let child = fetch_request_recovery_row(&db.node, &child_request_id).await;
+    assert_eq!(
+        child.lifecycle_state.as_str(),
+        case.terminal_state.as_str(),
+        "{}: queued descendant terminal state drifted",
+        case.name
+    );
+    let bystander = fetch_request_recovery_row(&db.node, &bystander_request_id).await;
+    assert_eq!(
+        bystander.lifecycle_state.as_str(),
+        "pending",
+        "{}: lineage-only queue rows (wake/steering) must survive",
+        case.name
+    );
+
+    let second = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert!(
+        second.is_noop(),
+        "{}: reconciliation must be idempotent across ticks, got {second:?}",
+        case.name
+    );
+}
+
+/// #465 case 4: the runtime-status liveness invariant. A wedged state —
+/// expired processing children, no live executors, a queued descendant of a
+/// terminal parent — must CONVERGE under the periodic reconciler: the
+/// operator-visible expired-processing measure reaches zero and stays zero
+/// across subsequent polls (Lean:
+/// `Recovery.RecoverySweep.finite_stale_rows_converge`).
+pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
+    let db = test_db("recovery-465-convergence").await;
+
+    let parent_request_id = "convergence-465-parent";
+    let parent_session_id = "convergence-465-parent-session";
+    create_request(
+        &db.node,
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+
+    for index in 1..=2 {
+        let child_request_id = format!("convergence-465-child-{index}");
+        let child_doc_id = create_request(
+            &db.node,
+            &child_request_id,
+            &format!("{child_request_id}-session"),
+            "processing",
+            RECOVERY_CREATED_AT,
+        )
+        .await;
+        set_request_deadline(
+            &db.node,
+            &child_doc_id,
+            &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
+        )
+        .await;
+        let mut bridge = ToolCallLifecycle::new_subagent(
+            db.node.clone(),
+            parent_request_id.to_string(),
+            parent_session_id.to_string(),
+            format!("convergence-465-bridge-{index}"),
+            index,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+            AwaitMode::Background,
+            CancelPolicy::Cascade,
+            child_request_id,
+        );
+        bridge.start_running().await.unwrap();
+    }
+
+    let terminal_parent_request_id = "convergence-465-done-parent";
+    let terminal_parent_doc_id = create_request(
+        &db.node,
+        terminal_parent_request_id,
+        "convergence-465-done-parent-session",
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    set_request_status_and_lifecycle(&db.node, &terminal_parent_doc_id, "completed", "completed")
+        .await;
+    let queued_child_request_id = "convergence-465-queued-child";
+    create_linked_pending_child(
+        &db.node,
+        queued_child_request_id,
+        "convergence-465-queued-child-session",
+        terminal_parent_request_id,
+        "convergence-465-done-bridge",
+    )
+    .await;
+    let mut done_bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        terminal_parent_request_id.to_string(),
+        "convergence-465-done-parent-session".to_string(),
+        "convergence-465-done-bridge".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        queued_child_request_id.to_string(),
+    );
+    done_bridge.start_running().await.unwrap();
+
+    assert_eq!(
+        count_expired_active_requests(&db.node).await,
+        2,
+        "wedge precondition: expired processing children visible to status"
+    );
+
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.expired_children_terminalized, 2);
+    assert_eq!(report.bridges_projected, 2);
+    assert_eq!(report.queued_descendants_interrupted, 1);
+
+    assert_eq!(
+        count_expired_active_requests(&db.node).await,
+        0,
+        "expired processing measure must converge to zero after one tick"
+    );
+    for index in 1..=2 {
+        let bridge_row =
+            fetch_tool_recovery_row(&db.node, &format!("convergence-465-bridge-{index}")).await;
+        assert_eq!(
+            bridge_row.lifecycle_state.as_deref(),
+            Some("failed"),
+            "bridge {index} must project its dead child so the parent unblocks"
+        );
+    }
+    let queued_child = fetch_request_recovery_row(&db.node, queued_child_request_id).await;
+    assert_eq!(queued_child.lifecycle_state.as_str(), "interrupted");
+
+    let second = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert!(
+        second.is_noop(),
+        "converged state must be stable across status polls, got {second:?}"
+    );
+    assert_eq!(count_expired_active_requests(&db.node).await, 0);
+}
+
+/// Mirror of the operator liveness measure (`expired_processing_count` in the
+/// CLI status endpoint): active-lifecycle requests whose deadline has passed.
+async fn count_expired_active_requests(node: &EmbeddedNode) -> usize {
+    #[derive(Debug, Deserialize)]
+    struct DeadlineRow {
+        #[serde(default)]
+        deadline: Option<String>,
+    }
+    let query = r#"{
+        AgentRequest(
+            filter: { lifecycle_state: { _in: ["claimed", "processing"] } }
+        ) { deadline }
+    }"#;
+    let response = node.execute(query).await;
+    assert!(
+        !response.has_errors(),
+        "query active requests failed: {:?}",
+        response.errors
+    );
+    let rows: Vec<DeadlineRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    rows.iter()
+        .filter(|row| {
+            row.deadline
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|deadline| now > deadline.with_timezone(&chrono::Utc))
+        })
+        .count()
+}
+
+async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let deadline = escape_graphql_string(deadline);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ deadline: "{deadline}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set request deadline failed: {:?}",
+        resp.errors
+    );
+}
+
+/// Create a pending child `AgentRequest` carrying spawn lineage
+/// (`caused_by_parent_request_id` / `caused_by_parent_tool_call_id`), the
+/// shape `SubagentSource` materializes for queued spawn children.
+async fn create_linked_pending_child(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    parent_request_id: &str,
+    parent_tool_call_id: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "queued child prompt",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{RECOVERY_CREATED_AT}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{escaped_parent_request_id}",
+                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create linked pending child failed: {:?}",
+        resp.errors
+    );
 }
 
 async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
@@ -384,11 +813,13 @@ async fn seed_tool_parent_and_row(
         }
         "tool_running_child_completed_to_completed"
         | "tool_running_child_failed_to_failed"
+        | "tool_running_child_dead_to_failed"
         | "tool_running_child_interrupted_to_cancelled" => {
             let child_request_id = format!("{tool_call_id}-child");
             let child_state = match case.name.as_str() {
                 "tool_running_child_completed_to_completed" => "completed",
                 "tool_running_child_failed_to_failed" => "failed",
+                "tool_running_child_dead_to_failed" => "dead",
                 "tool_running_child_interrupted_to_cancelled" => "interrupted",
                 _ => unreachable!(),
             };
@@ -539,6 +970,17 @@ async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_sta
             )
             .await;
             set_request_status_and_lifecycle(node, &doc_id, "interrupted", "interrupted").await;
+        }
+        "dead" => {
+            let doc_id = create_request(
+                node,
+                request_id,
+                &session_id,
+                "processing",
+                RECOVERY_CREATED_AT,
+            )
+            .await;
+            set_request_status_and_lifecycle(node, &doc_id, "dead", "dead").await;
         }
         "processing" => {
             create_request(

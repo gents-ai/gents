@@ -1,4 +1,7 @@
-//! Startup recovery for persisted running tool calls.
+//! Recovery for persisted running tool calls: the startup sweep over rows
+//! orphaned by a daemon restart, plus the periodic subagent-liveness sweep
+//! (#465) that terminalizes expired children and orphaned queued descendants
+//! on the live reconciler tick.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -22,6 +25,19 @@ use super::{
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
     pub tool_calls_recovered: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SubagentLivenessReport {
+    pub expired_children_terminalized: usize,
+    pub bridges_projected: usize,
+    pub queued_descendants_interrupted: usize,
+}
+
+impl SubagentLivenessReport {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +149,61 @@ impl super::ToolCallLifecycle {
         Ok(ToolCallRecoveryReport {
             tool_calls_recovered: recover_stuck_running_tool_calls(node, agent_did).await?,
         })
+    }
+
+    /// Periodic subagent-liveness reconciliation (#465; Lean:
+    /// `Recovery.expiredSubagentChildSweep` / `Recovery.queuedDescendantSweep`,
+    /// cadence `periodic`). Startup recovery already terminalizes expired
+    /// children and bridges terminal children — but only on restart. Without a
+    /// restart, a background child whose executor died past its deadline stays
+    /// `processing` forever: the bridge never projects a terminal result and
+    /// the parent's response wait wedges. This applies the same transitions on
+    /// the live reconciler tick:
+    ///
+    /// 1. Terminalize locally-owned claimed/processing children of running
+    ///    bridges whose deadline has passed (a live executor enforces its own
+    ///    request deadline, so an expired non-terminal row means the executor
+    ///    is gone). Safe against races: the underlying mutation only flips
+    ///    non-terminal rows.
+    /// 2. For BACKGROUND bridges, immediately project the now-terminal child
+    ///    onto the bridge (failed/deadline) and queue the parent wake
+    ///    notification. Foreground bridges are left to their live waiter,
+    ///    which polls the child edge and owns the bridge lifecycle in-memory.
+    /// 3. Interrupt pending (queued) descendants whose parent request is
+    ///    already terminal — they can never legally run.
+    pub async fn reconcile_subagent_liveness(
+        node: &EmbeddedNode,
+        agent_did: &str,
+    ) -> Result<SubagentLivenessReport> {
+        let mut report = SubagentLivenessReport::default();
+
+        for row in load_running_tool_call_rows(node).await? {
+            if child_request_id(&row).is_none() {
+                continue;
+            }
+            if !terminalize_expired_local_child_request(node, agent_did, &row).await? {
+                continue;
+            }
+            report.expired_children_terminalized += 1;
+            if is_background_subagent_tool(&row)
+                && recover_bridge_terminal_child(node, agent_did, &row).await?
+            {
+                report.bridges_projected += 1;
+            }
+        }
+
+        report.queued_descendants_interrupted =
+            interrupt_queued_descendants_of_terminal_parents(node, agent_did).await?;
+
+        if !report.is_noop() {
+            tracing::info!(
+                expired_children_terminalized = report.expired_children_terminalized,
+                bridges_projected = report.bridges_projected,
+                queued_descendants_interrupted = report.queued_descendants_interrupted,
+                "reconciled subagent liveness"
+            );
+        }
+        Ok(report)
     }
 }
 
@@ -565,6 +636,169 @@ async fn lookup_parent_request(
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
     Ok(rows.into_iter().next())
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingDescendantRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    #[serde(default)]
+    caused_by_parent_request_id: Option<String>,
+    #[serde(default)]
+    caused_by_parent_tool_call_id: Option<String>,
+}
+
+/// Interrupt pending (queued) subagent child requests whose parent request is
+/// already terminal (#465; Lean: `Recovery.queuedDescendantSweep`). A queued
+/// spawn child of a terminal parent can never legally run; leaving it pending
+/// wedges the live queue forever. This is the queued-side analogue of the
+/// running-child cascade interrupt, applied as a direct filtered terminal
+/// write because a pending row has no executor to observe an interrupt.
+///
+/// Scope guard: only requests referenced by an `AgentToolCall` bridge
+/// (`child_request_id == request_id`) qualify. Queue rows that merely CARRY
+/// spawn lineage — background-completion wake notifications, steering
+/// messages — are never referenced by a bridge and must survive a terminal
+/// caller, so lineage fields alone are deliberately not trusted.
+async fn interrupt_queued_descendants_of_terminal_parents(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<usize> {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }}
+            ) {{
+                _docID
+                request_id
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("querying pending descendant requests: {:?}", resp.errors);
+    }
+    let rows: Vec<PendingDescendantRow> = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+
+    let mut parent_terminal_cache: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+    let mut interrupted = 0usize;
+    for row in rows {
+        let Some(parent_request_id) = row
+            .caused_by_parent_request_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        if row
+            .caused_by_parent_tool_call_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            continue;
+        }
+
+        let parent_terminal = match parent_terminal_cache.get(parent_request_id) {
+            Some(&terminal) => terminal,
+            None => {
+                let terminal = lookup_parent_request(node, agent_did, parent_request_id)
+                    .await?
+                    .as_ref()
+                    .is_some_and(request_is_terminal);
+                parent_terminal_cache.insert(parent_request_id.to_string(), terminal);
+                terminal
+            }
+        };
+        if !parent_terminal {
+            continue;
+        }
+        if !bridge_exists_for_child(node, &row.request_id).await? {
+            continue;
+        }
+
+        if interrupt_pending_descendant_row(node, &row.doc_id, parent_request_id).await? {
+            interrupted += 1;
+            tracing::info!(
+                doc_id = %row.doc_id,
+                request_id = %row.request_id,
+                parent_request_id,
+                "interrupted queued subagent descendant of terminal parent"
+            );
+        }
+    }
+    Ok(interrupted)
+}
+
+async fn bridge_exists_for_child(node: &EmbeddedNode, child_request_id: &str) -> Result<bool> {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ child_request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "querying bridge for child request {child_request_id}: {:?}",
+            resp.errors
+        );
+    }
+    Ok(resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .is_some_and(|rows| !rows.is_empty()))
+}
+
+async fn interrupt_pending_descendant_row(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    parent_request_id: &str,
+) -> Result<bool> {
+    let reason = format!(
+        "parent request {parent_request_id} reached a terminal state before this queued child was claimed"
+    );
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_reason = escape_graphql_string(&reason);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                input: {{
+                    status: "interrupted",
+                    lifecycle_state: "interrupted",
+                    failure_reason: "{escaped_reason}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response =
+        execute_mutation_with_retry(node, &mutation, "interrupt_queued_descendant").await?;
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents))
 }
 
 async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<bool> {
