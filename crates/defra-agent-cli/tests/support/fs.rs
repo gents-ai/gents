@@ -175,6 +175,17 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
             "cli_tool_names",
             "enable_meta_tools",
             "allowed_mcp_service_ids",
+            "delegate_to",
+            "backgroundable_tool_names",
+            "enable_defra_query",
+            "defra_query_collections",
+            "subagent_targets",
+            "subagent_spawn_enabled",
+            "subagent_steering_enabled",
+            "subagent_background_enabled",
+            "subagent_default_await_mode",
+            "subagent_allow_cross_deployment",
+            "cross_deployment_spawn_timeout_seconds",
         ],
     )?;
     write_per_doc_collection(
@@ -209,6 +220,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "max_turns",
                 "temperature",
                 "stream_batch_ms",
+                "stream_liveness_timeout_secs",
                 "deadline_duration_secs",
             ],
         )?;
@@ -360,6 +372,7 @@ pub async fn assert_runtime_init_state(
                 max_turns
                 temperature
                 stream_batch_ms
+                stream_liveness_timeout_secs
                 deadline_duration_secs
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -513,12 +526,17 @@ pub async fn assert_runtime_init_state(
             .and_then(Value::as_bool),
         Some(true)
     );
+    // An empty MCP allowlist may be stored as `null` rather than `[]`: the
+    // GraphQL writer renders empty string-lists as `null` to avoid corrupting
+    // DefraDB NillableStringArray columns, and the runtime collapses both
+    // `null` and `[]` to an empty `Vec` (`unwrap_or_default`), so they are
+    // semantically identical. Accept null/absent/[] as "empty".
+    let mcp_allowlist = tool_selection.get("allowed_mcp_service_ids");
     assert!(
-        tool_selection
-            .get("allowed_mcp_service_ids")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "expected default tool selection MCP allowlist to be empty: {tool_selection}"
+        mcp_allowlist.map_or(true, |value| {
+            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+        }),
+        "expected default tool selection MCP allowlist to be empty (null or []): {tool_selection}"
     );
 
     Ok(())

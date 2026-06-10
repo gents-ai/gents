@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::mpsc;
 
 use super::*;
 use crate::ensure_runtime_schemas;
@@ -21,12 +22,37 @@ struct AgentRuntimeRow {
     default_behavior_id: String,
     runnable_behavior_count: i64,
     unavailable_behavior_count: i64,
+    behavior_executor_capacity: i64,
+    behavior_executor_queue_depth: i64,
+    behavior_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_error: String,
 }
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+}
+
+fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
+    crate::watcher::AgentRequest {
+        doc_id: format!("{request_id}-doc"),
+        request_id: request_id.to_string(),
+        agent_did: "did:defra-agent:status-test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: format!("{request_id}-session"),
+        content: "status test".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: Some("interactive".to_string()),
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    }
 }
 
 async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> AgentRuntimeRow {
@@ -41,6 +67,9 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
                 default_behavior_id
                 runnable_behavior_count
                 unavailable_behavior_count
+                behavior_executor_capacity
+                behavior_executor_queue_depth
+                behavior_executor_status_json
                 last_reconcile_result
                 last_reconcile_error
             }}
@@ -282,6 +311,8 @@ async fn runtime_status_persists_process_and_reconcile_state() {
             unavailable_event_triggers: HashSet::new(),
             active_tasks: HashMap::new(),
             dispatchers: HashMap::new(),
+            behavior_executor_capacities: HashMap::new(),
+            behavior_executor_queue_capacities: HashMap::new(),
         })
         .await;
     status.publish_router_generation(1).await;
@@ -297,6 +328,56 @@ async fn runtime_status_persists_process_and_reconcile_state() {
     assert_eq!(row.unavailable_behavior_count, 1);
     assert_eq!(row.last_reconcile_result, "startup");
     assert!(row.last_reconcile_error.is_empty());
+}
+
+#[tokio::test]
+async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let (tx, _rx) = mpsc::channel(4);
+    tx.try_send(status_test_request("queued-1")).unwrap();
+    tx.try_send(status_test_request("queued-2")).unwrap();
+
+    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:executor-status");
+    status
+        .publish_startup_snapshot(&ActiveRuntimeSnapshot {
+            generation: 1,
+            principal: None,
+            local_did: String::new(),
+            paired_peer_dids: HashSet::new(),
+            default_behavior_id: "general".to_string(),
+            behaviors: HashMap::new(),
+            tool_surfaces: HashMap::new(),
+            backend_admission_configs: HashMap::new(),
+            unavailable_behaviors: HashMap::new(),
+            active_schedules: HashMap::new(),
+            unavailable_schedules: HashSet::new(),
+            active_event_triggers: HashMap::new(),
+            unavailable_event_triggers: HashSet::new(),
+            active_tasks: HashMap::new(),
+            dispatchers: HashMap::from([("general".to_string(), tx)]),
+            behavior_executor_capacities: HashMap::from([("general".to_string(), 3)]),
+            behavior_executor_queue_capacities: HashMap::from([("general".to_string(), 4)]),
+        })
+        .await;
+
+    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:executor-status").await;
+    assert_eq!(row.behavior_executor_capacity, 3);
+    assert_eq!(row.behavior_executor_queue_depth, 2);
+
+    let executor_status: serde_json::Value =
+        serde_json::from_str(&row.behavior_executor_status_json).unwrap();
+    assert_eq!(
+        executor_status,
+        serde_json::json!({
+            "general": {
+                "worker_capacity": 3,
+                "queue_depth": 2,
+                "queue_capacity": 4
+            }
+        })
+    );
 }
 
 #[tokio::test]
@@ -321,6 +402,8 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
         generation: 2,
@@ -338,6 +421,8 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     };
 
     status.publish_startup_snapshot(&startup).await;
@@ -385,6 +470,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
         generation: publish.post_active_generation as u64,
@@ -402,6 +489,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
     };
 
     status.publish_startup_snapshot(&startup).await;

@@ -7,10 +7,13 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use super::client::scope_call_with_token;
 use super::{
-    scope_call, scope_call_with_token, scope_request,
+    scope_call, scope_call_with_token_and_failure_reason, scope_request,
+    set_terminal_failure_reason,
     slot_accounting::{reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow},
-    AdmissionCallContext, AdmissionRegistry, BackendAdmissionConfig, CallKind,
+    terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
+    BackendAdmissionConfig, CallKind,
 };
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
@@ -62,6 +65,25 @@ fn request(request_id: &str) -> AgentRequest {
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: None,
     }
+}
+
+#[tokio::test]
+async fn current_session_id_reflects_request_scope() {
+    // Outside any admission scope there is no session id to attach.
+    assert_eq!(super::current_session_id(), None);
+
+    let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
+    scope_request(context, async {
+        assert_eq!(
+            super::current_session_id().as_deref(),
+            Some("session-req-x"),
+            "the in-flight request's session id must be visible for x-session-id tagging"
+        );
+    })
+    .await;
+
+    // It is cleared again once the request scope ends.
+    assert_eq!(super::current_session_id(), None);
 }
 
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
@@ -988,6 +1010,54 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "cancelled");
     assert_eq!(rows[0]["failure_reason"], "Cancelled");
+    assert_reconstructed_slot_count(&rows, "backend-a", 0);
+}
+
+#[tokio::test]
+async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+    );
+    let context =
+        AdmissionCallContext::for_request(&request("req-timeout-drop"), "default", "backend-a");
+
+    let token = CancellationToken::new();
+    let observer = terminal_failure_reason_observer();
+    let observer_for_scope = observer.clone();
+    let observer_for_drop = observer.clone();
+
+    scope_request(context, async {
+        scope_call_with_token_and_failure_reason(
+            CallKind::Inference,
+            1,
+            token,
+            observer_for_scope,
+            async {
+                let permit = registry.acquire_current_call().await.unwrap();
+                let rows = call_rows(node.as_ref()).await;
+                assert_reconstructed_slot_count(&rows, "backend-a", 1);
+                set_terminal_failure_reason(
+                    &observer_for_drop,
+                    "stream liveness timeout: no data received for 1800s",
+                );
+                drop(permit);
+            },
+        )
+        .await;
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["call_state"], "failed");
+    assert_eq!(
+        rows[0]["failure_reason"],
+        "stream liveness timeout: no data received for 1800s"
+    );
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
 }
 

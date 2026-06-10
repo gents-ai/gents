@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rig::client::CompletionClient;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
@@ -169,6 +169,9 @@ pub(crate) struct AdmissionCallContext {
     pub(super) backend_id: String,
     pub(super) behavior_id: String,
     pub(super) agent_did: String,
+    /// Stable per-conversation id, emitted as `x-session-id` on inference
+    /// requests for sticky-session load-balancer routing (issue #447).
+    pub(super) session_id: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
@@ -178,6 +181,10 @@ pub(crate) struct AdmissionCallContext {
     /// error. `None` means no cancellation observation (e.g. one-shot CLI
     /// calls without a daemon-side interrupt observer).
     pub(super) inference_token: Option<CancellationToken>,
+    /// Daemon-owned terminal failure reason for cases where an outer runtime
+    /// condition intentionally drops a guarded stream before the stream can
+    /// yield a provider error itself.
+    pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
 }
 
 impl AdmissionCallContext {
@@ -191,10 +198,12 @@ impl AdmissionCallContext {
             backend_id: backend_id.into(),
             behavior_id: behavior_id.into(),
             agent_did: request.agent_did.clone(),
+            session_id: request.session_id.clone(),
             call_kind: CallKind::Inference,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
             inference_token: None,
+            terminal_failure_reason: None,
         }
     }
 
@@ -240,6 +249,7 @@ pub(crate) async fn scope_call<T>(
 /// `AdmittedCompletionModel` observes during the inner completion/stream
 /// call. When the token cancels, the permit is marked as interrupted so
 /// the `InferenceCall` row lands as `cancelled` rather than `failed`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn scope_call_with_token<T>(
     call_kind: CallKind,
     attempt: i64,
@@ -253,8 +263,49 @@ pub(crate) async fn scope_call_with_token<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
+pub(crate) type TerminalFailureReasonObserver = Arc<Mutex<Option<String>>>;
+
+pub(crate) fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {
+    Arc::new(Mutex::new(None))
+}
+
+pub(crate) fn set_terminal_failure_reason(
+    observer: &TerminalFailureReasonObserver,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    match observer.lock() {
+        Ok(mut slot) => *slot = Some(reason),
+        Err(poisoned) => *poisoned.into_inner() = Some(reason),
+    }
+}
+
+pub(crate) async fn scope_call_with_token_and_failure_reason<T>(
+    call_kind: CallKind,
+    attempt: i64,
+    token: CancellationToken,
+    terminal_failure_reason: TerminalFailureReasonObserver,
+    future: impl Future<Output = T>,
+) -> T {
+    let mut context = current_context().expect("admission call scope requires request context");
+    context.call_kind = call_kind;
+    context.attempt = attempt;
+    context.inference_token = Some(token);
+    context.terminal_failure_reason = Some(terminal_failure_reason);
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
 pub(super) fn current_context() -> Result<AdmissionCallContext, CompletionError> {
     ADMISSION_CALL_CONTEXT
         .try_with(Clone::clone)
         .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
+}
+
+/// The session id of the in-flight inference request, if called within a
+/// request scope. Used to tag outbound inference requests with `x-session-id`
+/// for sticky-session routing (issue #447); returns `None` outside a scope.
+pub(crate) fn current_session_id() -> Option<String> {
+    ADMISSION_CALL_CONTEXT
+        .try_with(|context| context.session_id.clone())
+        .ok()
 }

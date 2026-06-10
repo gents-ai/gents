@@ -141,6 +141,8 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
+        enable_memory: Some(false),
+        enable_session_history_tool: Some(false),
         subagent_targets: vec![subagent_target_entry(
             "repo-audit-subagent",
             agent_did,
@@ -174,6 +176,8 @@ async fn seed_live_behavior_documents(
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
         backgroundable_tool_names: Vec::new(),
+        enable_memory: Some(false),
+        enable_session_history_tool: Some(false),
         subagent_targets: Vec::new(),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
@@ -192,6 +196,7 @@ async fn seed_live_behavior_documents(
         max_turns: Some(20),
         temperature: Some(0.0),
         stream_batch_ms: Some(250),
+        stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
     })
     .await?;

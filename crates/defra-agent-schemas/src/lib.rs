@@ -10,6 +10,8 @@ pub const AGENT_BEHAVIOR_NAME: &str = "AgentBehavior";
 pub const AGENT_BEHAVIOR: &str = include_str!("../schemas/agent/agent_behavior.graphql");
 pub const AGENT_RUNTIME_NAME: &str = "AgentRuntime";
 pub const AGENT_RUNTIME: &str = include_str!("../schemas/agent/agent_runtime.graphql");
+pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
+pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
 pub const AGENT_CONVERSATION_NAME: &str = "AgentConversation";
 pub const AGENT_CONVERSATION: &str = include_str!("../schemas/agent/agent_conversation.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
@@ -51,6 +53,7 @@ pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL,
     AGENT_BEHAVIOR,
     AGENT_RUNTIME,
+    AGENT_MEMORY,
     TOOL_SELECTION,
     SKILL,
     AGENT_CONVERSATION,
@@ -74,6 +77,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
     AGENT_BEHAVIOR_NAME,
     AGENT_RUNTIME_NAME,
+    AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,
     SKILL_NAME,
     AGENT_CONVERSATION_NAME,
@@ -95,6 +99,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 /// Agent-domain collections that can be replicated across desktop branches.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_RUNTIME_NAME,
+    AGENT_MEMORY_NAME,
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,

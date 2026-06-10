@@ -1,4 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
+use defra_agent::retry::{
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 use serde_json::Value;
 
 pub fn escape_graphql_string(value: &str) -> String {
@@ -10,17 +14,26 @@ pub fn escape_graphql_string(value: &str) -> String {
 }
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let response = reqwest::Client::new()
-        .post(graphql)
-        .json(&serde_json::json!({ "query": query }))
-        .send()
-        .await
-        .with_context(|| format!("posting GraphQL to {graphql}"))?;
-    let value: Value = response.json().await.context("decoding GraphQL response")?;
-    if let Some(errors) = value.get("errors") {
-        bail!("graphql returned errors: {errors}");
+    let client = reqwest::Client::new();
+    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
+        let response = client
+            .post(graphql)
+            .json(&serde_json::json!({ "query": query }))
+            .send()
+            .await
+            .with_context(|| format!("posting GraphQL to {graphql}"))?;
+        let value: Value = response.json().await.context("decoding GraphQL response")?;
+        if let Some(errors) = value.get("errors") {
+            let transient = is_defradb_transaction_conflict_text(&errors.to_string());
+            if transient && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
+                tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
+                continue;
+            }
+            bail!("graphql returned errors: {errors}");
+        }
+        return Ok(value);
     }
-    Ok(value)
+    unreachable!("graphql_query loop always returns or bails within MAX_ATTEMPTS")
 }
 
 pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> {

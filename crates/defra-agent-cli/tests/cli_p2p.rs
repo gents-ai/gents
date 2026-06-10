@@ -8,6 +8,72 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+#[test]
+fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home = tempdir.path().join("pairings-agent");
+    fs::create_dir_all(&home)?;
+
+    let set = run_cli_json(
+        &home,
+        &[
+            "p2p",
+            "pairings",
+            "set",
+            "--peer",
+            "peer-one",
+            "--did",
+            "did:key:peer-one",
+            "--address",
+            "/ip4/127.0.0.1/tcp/4001/p2p/peer-one",
+            "--collection",
+            "AgentRequest",
+        ],
+    )?;
+    assert_eq!(
+        set.get("status").and_then(Value::as_str),
+        Some("pairing_set")
+    );
+    assert_eq!(
+        set.get("access_mode").and_then(Value::as_str),
+        Some("local")
+    );
+    assert_eq!(set.get("peer_id").and_then(Value::as_str), Some("peer-one"));
+    assert!(set
+        .get("note")
+        .and_then(Value::as_str)
+        .is_some_and(|note| note.contains("Headless defra-agent server")));
+
+    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
+    let row = list
+        .get("pairings")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .ok_or_else(|| anyhow!("pairings list missing row: {list}"))?;
+    assert_eq!(row.get("peer_id").and_then(Value::as_str), Some("peer-one"));
+    assert_eq!(
+        row.get("agent_did").and_then(Value::as_str),
+        Some("did:key:peer-one")
+    );
+    assert!(row
+        .get("collections")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))));
+
+    let remove = run_cli_json(&home, &["p2p", "unpair", "--peer", "peer-one"])?;
+    assert_eq!(
+        remove.get("status").and_then(Value::as_str),
+        Some("pairing_removed")
+    );
+    assert_eq!(remove.get("removed_count").and_then(Value::as_u64), Some(1));
+
+    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

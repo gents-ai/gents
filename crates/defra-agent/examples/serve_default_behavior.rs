@@ -140,10 +140,14 @@ async fn seed_demo_documents(
             subagent_spawn_enabled: Some(false),
             subagent_steering_enabled: Some(false),
             subagent_background_enabled: Some(false),
+            subagent_default_await_mode: Some("foreground".to_string()),
             subagent_allow_cross_deployment: Some(false),
             cross_deployment_spawn_timeout_seconds: None,
+            enable_memory: None,
+            enable_session_history_tool: None,
             enable_defra_query: None,
             defra_query_collections: None,
+            write_tools: None,
         },
     )
     .await?;
@@ -157,6 +161,7 @@ async fn seed_demo_documents(
             max_turns: Some(50),
             temperature: None,
             stream_batch_ms: Some(1_000),
+            stream_liveness_timeout_secs: None,
             deadline_duration_secs: Some(deadline_secs as i64),
         },
     )

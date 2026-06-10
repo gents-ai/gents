@@ -24,6 +24,10 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
+- provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
+  #448): `sanitize` soundness/fixpoint/idempotence/split-stability over the
+  permissive transcript, loop-threading validity (the `run_loop_stream`
+  entry chokepoint), and the fixed layer order of the assembled request
 
 They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool

@@ -258,6 +258,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
                 "max_turns": 16,
                 "temperature": 0.0,
                 "stream_batch_ms": 40,
+                "stream_liveness_timeout_secs": 90,
                 "deadline_duration_secs": 300
             },
             {
@@ -268,6 +269,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
                 "max_turns": 32,
                 "temperature": 0.2,
                 "stream_batch_ms": 80,
+                "stream_liveness_timeout_secs": 120,
                 "deadline_duration_secs": 600
             }
         ],

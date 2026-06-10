@@ -1,9 +1,8 @@
+use defra_agent::llm::message::{Message, Text, UserContent};
 use defra_agent_desktop_core::client::{ClientStore, ClientStoreRows};
 use defra_agent_protocol::row::{
     AgentConversationRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentSessionRow,
 };
-use rig::completion::message::{Message, Text, UserContent};
-use rig::one_or_many::OneOrMany;
 
 use super::super::types::{
     ConversationSummary, RenderedTimelineItem, ScheduleView, TaskRecentRunsView, TaskView,
@@ -17,9 +16,9 @@ use super::task_run_history;
 
 fn user_message_json(text: &str) -> String {
     serde_json::to_string(&Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     })
     .expect("serialize user message")
 }

@@ -2706,7 +2706,12 @@ fn require_command(name: &str) -> Result<()> {
 }
 
 fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
+    // Disable commit signing so the test is hermetic against the host/CI git
+    // config: a runner with `commit.gpgsign=true` but no usable gpg key (headless)
+    // would otherwise fail `git commit` with "gpg failed to sign the data".
+    // Harmless for non-commit subcommands (init/add).
     let output = Command::new("git")
+        .args(["-c", "commit.gpgsign=false"])
         .args(args)
         .current_dir(cwd)
         .output()

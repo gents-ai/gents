@@ -14,6 +14,7 @@ use super::selection::{
     BackgroundToolConfig, CustomToolFactory, SubagentToolConfig, ToolSelection,
 };
 use super::ToolSurface;
+use crate::document_config::WriteToolDecl;
 
 #[derive(Clone)]
 pub struct BehaviorToolConfig {
@@ -23,8 +24,11 @@ pub struct BehaviorToolConfig {
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
+    enable_memory: bool,
+    enable_session_history_tool: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
+    write_tools: Vec<WriteToolDecl>,
 }
 
 impl BehaviorToolConfig {
@@ -36,8 +40,11 @@ impl BehaviorToolConfig {
             subagent_tools: SubagentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
+            enable_memory: false,
+            enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
         }
     }
 
@@ -52,6 +59,21 @@ impl BehaviorToolConfig {
             selection,
             ceiling,
             SubagentToolConfig::default(),
+            custom_tools,
+        )
+    }
+
+    pub fn from_tool_selection_document(
+        behavior_name: &str,
+        selection: &crate::document_config::ToolSelectionDocument,
+        ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        Self::from_selection_with_subagent_tools(
+            behavior_name,
+            ToolSelection::from_document(selection)?,
+            ceiling,
+            SubagentToolConfig::from_document(selection),
             custom_tools,
         )
     }
@@ -72,8 +94,11 @@ impl BehaviorToolConfig {
             enable_meta_tools,
             allowed_mcp_service_ids,
             backgroundable_tool_names,
+            enable_memory,
+            enable_session_history_tool,
             enable_defra_query,
             defra_query_collections,
+            write_tools,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
@@ -107,14 +132,18 @@ impl BehaviorToolConfig {
                 spawn_enabled: subagent_tools.spawn_enabled,
                 steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
+                default_await_mode: subagent_tools.default_await_mode,
                 allow_cross_deployment: subagent_tools.allow_cross_deployment,
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
             },
             custom_tools,
+            enable_memory,
+            enable_session_history_tool,
             enable_defra_query,
             defra_query_collections: dedupe_strings(defra_query_collections),
+            write_tools,
         })
     }
 
@@ -124,6 +153,14 @@ impl BehaviorToolConfig {
 
     pub fn meta_tools_requested(&self) -> bool {
         self.enable_meta_tools
+    }
+
+    pub(crate) fn memory_requested(&self) -> bool {
+        self.enable_memory
+    }
+
+    pub(crate) fn defra_query_requested(&self) -> bool {
+        self.enable_defra_query
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
@@ -157,22 +194,30 @@ impl BehaviorToolConfig {
         node: &EmbeddedNode,
         subagent_tools: SubagentToolConfig,
     ) -> Result<ToolSurface> {
-        let include_meta_tools = if self.enable_meta_tools {
-            has_registered_mcp_services(node).await?
-        } else {
-            false
-        };
+        let mcp_services_online = has_registered_mcp_services(node).await?;
+        Ok(self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools))
+    }
 
-        Ok(ToolSurface {
+    pub(crate) fn resolve_with_subagent_tools_for_mcp_presence(
+        &self,
+        mcp_services_online: bool,
+        subagent_tools: SubagentToolConfig,
+    ) -> ToolSurface {
+        let include_meta_tools = self.enable_meta_tools && mcp_services_online;
+
+        ToolSurface {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
             subagent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
+            enable_memory: self.enable_memory,
+            enable_session_history_tool: self.enable_session_history_tool,
             enable_defra_query: self.enable_defra_query,
             defra_query_collections: self.defra_query_collections.clone(),
-        })
+            write_tools: self.write_tools.clone(),
+        }
     }
 
     /// Resolve the tool surface, dropping local-DID subagent targets whose
@@ -198,6 +243,24 @@ impl BehaviorToolConfig {
         });
         self.resolve_with_subagent_tools(node, subagent_tools).await
     }
+
+    pub(crate) fn resolve_with_available_subagent_targets_for_mcp_presence(
+        &self,
+        mcp_services_online: bool,
+        own_agent_did: &str,
+        active_behavior_ids: &HashSet<String>,
+    ) -> ToolSurface {
+        let mut subagent_tools = self.subagent_tools.clone();
+        let allow_cross_deployment = subagent_tools.allow_cross_deployment;
+        subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                allow_cross_deployment
+            }
+        });
+        self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools)
+    }
 }
 
 impl Default for BehaviorToolConfig {
@@ -222,8 +285,14 @@ impl std::fmt::Debug for BehaviorToolConfig {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
+            .field("enable_memory", &self.enable_memory)
+            .field(
+                "enable_session_history_tool",
+                &self.enable_session_history_tool,
+            )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
+            .field("write_tools", &self.write_tools)
             .finish()
     }
 }

@@ -2,8 +2,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use defra_agent::{
-    parse_template_for_validation, schedule_cron::validate_cron_schedule, CommandExecutionMode,
-    CommandNetworkMode, SubagentTarget, VariableRef,
+    is_reserved_builtin_tool_name, parse_template_for_validation,
+    schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
+    SubagentTarget, VariableRef, WriteToolDecl,
 };
 
 use super::DesiredStateManifest;
@@ -109,6 +110,26 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
+        if let Some(mode) = selection
+            .subagent_default_await_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            match mode {
+                "foreground" => {}
+                "background" if selection.subagent_background_enabled => {}
+                "background" => errors.push(format!(
+                    "tool selection {} sets subagent_default_await_mode=background but subagent_background_enabled is false",
+                    selection.selection_id
+                )),
+                other => errors.push(format!(
+                    "tool selection {} has invalid subagent_default_await_mode {other:?}; expected foreground or background",
+                    selection.selection_id
+                )),
+            }
+        }
+
         if let Some(mode) = selection.command_execution_policy.as_deref() {
             if let Err(error) = CommandExecutionMode::parse(mode) {
                 errors.push(format!(
@@ -122,6 +143,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             if tool_name.trim().is_empty() {
                 errors.push(format!(
                     "tool selection {} has empty backgroundable_tool_names[{index}]",
+                    selection.selection_id
+                ));
+            }
+        }
+        for (index, target) in selection.subagent_targets.iter().enumerate() {
+            if target.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {} has empty subagent_targets[{index}]",
                     selection.selection_id
                 ));
             }
@@ -155,17 +184,18 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         validate_subagent_targets(
             &selection.selection_id,
             selection.agent_did.trim(),
-            selection.subagent_allow_cross_deployment.unwrap_or(false),
-            selection.subagent_targets.as_deref().unwrap_or(&[]),
+            selection.subagent_allow_cross_deployment,
+            &selection.subagent_targets,
             errors,
         );
-        if selection.subagent_spawn_enabled == Some(true) {
-            let targets_empty = selection
-                .subagent_targets
-                .as_ref()
-                .map(|t| t.is_empty())
-                .unwrap_or(true);
-            if targets_empty {
+        validate_write_tools(
+            &selection.selection_id,
+            &selection.write_tools,
+            &selection.cli_tool_names,
+            errors,
+        );
+        if selection.subagent_spawn_enabled {
+            if selection.subagent_targets.is_empty() {
                 errors.push(format!(
                     "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
                     selection.selection_id
@@ -183,6 +213,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         } else if !profile_ids.insert(profile_id.to_string()) {
             errors.push(format!(
                 "duplicate profile_id in inference-profiles.json: {profile_id}"
+            ));
+        }
+        if profile
+            .stream_liveness_timeout_secs
+            .is_some_and(|value| value <= 0)
+        {
+            errors.push(format!(
+                "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
             ));
         }
     }
@@ -992,6 +1030,94 @@ fn validate_subagent_targets(
     }
 }
 
+/// Validate `write_tools` entries pre-apply, mirroring the runtime checks in
+/// `ToolSelectionDocument::validate()` so a malformed decl is rejected by
+/// `config validate` instead of failing only when the runtime ingests it.
+///
+/// Entries are stored as JSON-encoded [`WriteToolDecl`] strings (the same
+/// `[String]` storage form as `subagent_targets`). Each entry must:
+///   * parse as a [`WriteToolDecl`],
+///   * have a non-empty `tool_name` and `collection`,
+///   * have a non-empty `name` on every field,
+///   * and have a `tool_name` that is unique within the selection.
+fn validate_write_tools(
+    selection_id: &str,
+    entries: &[String],
+    cli_tool_names: &[String],
+    errors: &mut Vec<String>,
+) {
+    // Sibling cli_tool_names are advertised as individually-named tools in the
+    // same selection; a write tool reusing one is the same dispatch collision
+    // as reusing a built-in name. Mirrors the runtime check in
+    // `ToolSelectionDocument::validate()`.
+    let cli_tool_names: HashSet<&str> = cli_tool_names.iter().map(|name| name.trim()).collect();
+    let mut seen_tool_names: HashSet<String> = HashSet::new();
+    for entry in entries {
+        let decl: WriteToolDecl = match serde_json::from_str(entry) {
+            Ok(decl) => decl,
+            Err(error) => {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools entry {entry:?} is not valid WriteToolDecl JSON: {error}"
+                ));
+                continue;
+            }
+        };
+        if decl.tool_name.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools entry {entry:?} must have a non-empty tool_name"
+            ));
+        }
+        if decl.collection.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool {:?} must have a non-empty collection",
+                decl.tool_name
+            ));
+        }
+        // A declared write tool may not reuse a built-in tool name: doing so
+        // silently shadows the built-in at registration. Mirrors the runtime
+        // check in `ToolSelectionDocument::validate()`.
+        if is_reserved_builtin_tool_name(&decl.tool_name) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 built-in tool; declared write tools must use a name not already provided by the \
+                 native, meta, subagent, or built-in (defra_query, context_budget, sessions, \
+                 memory) tool surface",
+                decl.tool_name.trim()
+            ));
+        }
+        if cli_tool_names.contains(decl.tool_name.trim()) {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool_name {:?} collides with a \
+                 cli_tool_names entry in the same tool selection; each tool must have a unique name",
+                decl.tool_name.trim()
+            ));
+        }
+        let mut seen_field_names: HashSet<String> = HashSet::new();
+        for field in &decl.fields {
+            if field.name.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
+                    decl.tool_name
+                ));
+            } else if !seen_field_names.insert(field.name.trim().to_string()) {
+                errors.push(format!(
+                    "tool selection {selection_id} write_tools tool {:?} has a duplicate field name {:?}",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
+        }
+        if !decl.tool_name.trim().is_empty()
+            && !seen_tool_names.insert(decl.tool_name.trim().to_string())
+        {
+            errors.push(format!(
+                "tool selection {selection_id} has a duplicate write_tools tool_name {:?}",
+                decl.tool_name.trim()
+            ));
+        }
+    }
+}
+
 fn validate_non_empty_values(
     selection_id: &str,
     field: &str,
@@ -1071,15 +1197,20 @@ mod live_tests {
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
+                delegate_to: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
+                enable_memory: false,
+                enable_session_history_tool: false,
                 enable_defra_query: true,
                 defra_query_collections: Vec::new(),
-                subagent_targets: Some(targets),
-                subagent_spawn_enabled: Some(true),
-                subagent_steering_enabled: None,
-                subagent_background_enabled: None,
-                subagent_allow_cross_deployment: None,
+                subagent_targets: targets,
+                subagent_spawn_enabled: true,
+                subagent_steering_enabled: false,
+                subagent_background_enabled: false,
+                subagent_default_await_mode: None,
+                subagent_allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
+                write_tools: Vec::new(),
             }],
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
@@ -1159,17 +1290,17 @@ mod live_tests {
         Ok(())
     }
 
-    /// Apply a tool selection with all five subagent fields set, then:
-    ///   (a) read the ToolSelection back and assert all five persisted, and
+    /// Apply a tool selection with all subagent fields set, then:
+    ///   (a) read the ToolSelection back and assert all persisted, and
     ///   (b) recompute the apply diff and assert it shows UNCHANGED (idempotent).
     ///
     /// Before the fix this test fails because:
     ///  - `DesiredToolSelection` was missing the three new fields → manifest
     ///    deserialization with `deny_unknown_fields` would reject them.
-    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted all five fields → live read
+    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted subagent fields → live read
     ///    always saw them as `None` → diff never converged.
     #[tokio::test]
-    async fn all_five_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
+    async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
         use std::path::PathBuf;
 
         use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
@@ -1199,7 +1330,7 @@ mod live_tests {
                 .await?;
         }
 
-        // Build the desired manifest with all five subagent fields set.
+        // Build the desired manifest with all subagent fields set.
         let desired_manifest = {
             use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
             DesiredStateManifest {
@@ -1227,21 +1358,26 @@ mod live_tests {
                     cli_tool_names: Vec::new(),
                     enable_meta_tools: false,
                     allowed_mcp_service_ids: Vec::new(),
+                    delegate_to: Vec::new(),
                     backgroundable_tool_names: Vec::new(),
+                    enable_memory: false,
+                    enable_session_history_tool: false,
                     enable_defra_query: true,
                     defra_query_collections: Vec::new(),
-                    subagent_targets: Some(vec![SubagentTarget {
+                    subagent_targets: vec![SubagentTarget {
                         name: "researcher".to_string(),
                         agent_did: "did:key:test-subagent-idempotency".to_string(),
                         behavior_id: "amy-research".to_string(),
                         description: None,
                     }
-                    .to_entry()]),
-                    subagent_spawn_enabled: Some(true),
-                    subagent_steering_enabled: Some(true),
-                    subagent_background_enabled: Some(true),
-                    subagent_allow_cross_deployment: Some(true),
+                    .to_entry()],
+                    subagent_spawn_enabled: true,
+                    subagent_steering_enabled: true,
+                    subagent_background_enabled: true,
+                    subagent_default_await_mode: Some("background".to_string()),
+                    subagent_allow_cross_deployment: true,
                     cross_deployment_spawn_timeout_seconds: Some(90),
+                    write_tools: Vec::new(),
                 }],
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
@@ -1273,7 +1409,7 @@ mod live_tests {
         apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
         txn.commit().await?;
 
-        // ── (a) Read back and assert all five fields persisted ────────────────
+        // ── (a) Read back and assert all subagent fields persisted ────────────
         let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (remaining_principal, remaining_manifest) =
             live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
@@ -1286,33 +1422,34 @@ mod live_tests {
 
         assert_eq!(
             live_sel.subagent_targets,
-            Some(vec![SubagentTarget {
+            vec![SubagentTarget {
                 name: "researcher".to_string(),
                 agent_did: "did:key:test-subagent-idempotency".to_string(),
                 behavior_id: "amy-research".to_string(),
                 description: None,
             }
-            .to_entry()]),
+            .to_entry()],
             "subagent_targets must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_spawn_enabled,
-            Some(true),
+            live_sel.subagent_spawn_enabled, true,
             "subagent_spawn_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_steering_enabled,
-            Some(true),
+            live_sel.subagent_steering_enabled, true,
             "subagent_steering_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_background_enabled,
-            Some(true),
+            live_sel.subagent_background_enabled, true,
             "subagent_background_enabled must persist through apply"
         );
         assert_eq!(
-            live_sel.subagent_allow_cross_deployment,
-            Some(true),
+            live_sel.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_allow_cross_deployment, true,
             "subagent_allow_cross_deployment must persist through apply"
         );
         assert_eq!(

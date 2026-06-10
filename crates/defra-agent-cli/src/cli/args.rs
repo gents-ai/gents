@@ -12,9 +12,9 @@ use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
-    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
-    SUBAGENT_LIST_AFTER_HELP, TRACE_AFTER_HELP,
+    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
+    SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
+    SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -61,6 +61,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: P2pCommand,
     },
+    #[command(about = "Apply app-specific collection schemas", after_help = SCHEMA_AFTER_HELP)]
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommand,
+    },
     #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
     Show {
         #[command(subcommand)]
@@ -98,6 +103,11 @@ pub(crate) enum Command {
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
+    #[command(about = "Explain resolved behavior tool surfaces", after_help = TOOLS_AFTER_HELP)]
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
+    },
     #[command(about = "Inspect and write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
     Config {
         #[command(subcommand)]
@@ -308,9 +318,32 @@ pub(crate) struct InitArgs {
     pub(crate) write_tools: bool,
     #[arg(
         long,
+        value_enum,
+        help = "Bootstrap a named tool package. Defaults to readonly; --write-tools is a compatibility alias for --tool-package write"
+    )]
+    pub(crate) tool_package: Option<ToolPackageArg>,
+    #[arg(
+        long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Enable the feature-gated per-agent memory tool in the default ToolSelection"
+    )]
+    pub(crate) enable_memory: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable the default read-only defra_query tool in the default ToolSelection"
+    )]
+    pub(crate) disable_defra_query: bool,
+    #[arg(
+        long = "defra-query-collection",
+        help = "Restrict init's default defra_query tool to these collections (repeatable); omit for all collections"
+    )]
+    pub(crate) defra_query_collections: Vec<String>,
 }
 
 impl InitArgs {
@@ -899,6 +932,14 @@ pub(crate) enum ToolCeilingArg {
     Readwrite,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
+pub(crate) enum ToolPackageArg {
+    Minimal,
+    Introspection,
+    Readonly,
+    Write,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum BackendCommand {
     #[command(name = "set")]
@@ -943,6 +984,27 @@ pub(crate) enum SkillCommand {
     Enable(SkillRefArgs),
     #[command(name = "disable", about = "Disable a Skill document")]
     Disable(SkillRefArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ToolsCommand {
+    #[command(
+        name = "explain",
+        about = "Explain final model-callable tools per behavior"
+    )]
+    Explain(ToolExplainArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ToolExplainArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Only explain one behavior_id")]
+    pub(crate) behavior_id: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1074,43 +1136,93 @@ pub(crate) struct ToolSelectionUpsertArgs {
     #[arg(long)]
     pub(crate) display_name: Option<String>,
     #[arg(long, default_value_t = false)]
-    pub(crate) enable_file_tools: bool,
+    pub(crate) clear_display_name: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable file tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_file_tools: Option<bool>,
     #[arg(long)]
     pub(crate) file_tools_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_file_tools_mode: bool,
     #[arg(
         long,
         help = "Optional per-behavior file-tool root; relative paths resolve from the daemon cwd and must stay within any node-level tool root"
     )]
     pub(crate) file_tool_root: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
-    pub(crate) enable_bash: bool,
+    pub(crate) clear_file_tool_root: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable bash tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_bash: Option<bool>,
     #[arg(long)]
     pub(crate) bash_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_bash_mode: bool,
     #[arg(
         long,
         help = "Command policy for bash: read_only, workspace_write, managed_write, or unrestricted"
     )]
     pub(crate) command_execution_policy: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_execution_policy: bool,
     #[arg(
         long,
         help = "Network policy hint for bash commands: inherit, disabled, or enabled"
     )]
     pub(crate) command_network_mode: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_network_mode: bool,
     #[arg(long = "command-allowed-argv-prefix")]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_allowed_argv_prefixes: bool,
     #[arg(long = "command-forbidden-argv-prefix")]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_command_forbidden_argv_prefixes: bool,
     #[arg(long = "cli-tool-name")]
     pub(crate) cli_tool_names: Vec<String>,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enable_meta_tools: bool,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_cli_tool_names: bool,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable meta MCP tools. Omit to preserve existing setting"
+    )]
+    pub(crate) enable_meta_tools: Option<bool>,
     #[arg(long = "allowed-mcp-service-id")]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_allowed_mcp_service_ids: bool,
     #[arg(
         long = "backgroundable-tool-name",
         help = "Host tool that may be spawned as a background process via spawn_process, e.g. bash_unrestricted"
     )]
     pub(crate) backgroundable_tool_names: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_backgroundable_tool_names: bool,
+    #[arg(
+        long,
+        help = "Enable or disable the feature-gated memory tool: --enable-memory true|false. Omit to leave the existing document setting unchanged (default is disabled)"
+    )]
+    pub(crate) enable_memory: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable the sessions history convenience tool: --enable-session-history-tool true|false. Omit to leave the existing document setting unchanged (default is disabled)"
+    )]
+    pub(crate) enable_session_history_tool: Option<bool>,
     #[arg(
         long,
         help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
@@ -1121,6 +1233,46 @@ pub(crate) struct ToolSelectionUpsertArgs {
         help = "Restrict defra_query to these collections (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_defra_query_collections: bool,
+    #[arg(
+        long = "subagent-target",
+        help = "SubagentTarget JSON entry allowed for spawn_subagent (repeatable); omit to preserve existing targets"
+    )]
+    pub(crate) subagent_targets: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Clear existing subagent_targets when no --subagent-target values are provided"
+    )]
+    pub(crate) clear_subagent_targets: bool,
+    #[arg(
+        long,
+        help = "Enable or disable spawn_subagent: --subagent-spawn-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_spawn_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable subagent steering tools: --subagent-steering-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_steering_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable background subagent steering: --subagent-background-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_background_enabled: Option<bool>,
+    #[arg(
+        long,
+        help = "Enable or disable remote-DID subagent targets: --subagent-allow-cross-deployment true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) subagent_allow_cross_deployment: Option<bool>,
+    #[arg(
+        long,
+        help = "Cross-deployment spawn timeout in seconds. Omit to preserve existing setting"
+    )]
+    pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_cross_deployment_spawn_timeout_seconds: bool,
 }
 
 #[derive(Subcommand)]
@@ -1174,6 +1326,8 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) temperature: Option<f64>,
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
+    #[arg(long)]
+    pub(crate) stream_liveness_timeout_secs: Option<i64>,
     #[arg(long)]
     pub(crate) deadline_duration_secs: Option<i64>,
 }
@@ -1345,6 +1499,34 @@ pub(crate) enum ManifestAgentDidBindingArg {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum SchemaCommand {
+    #[command(about = "Apply SDL and JSON Patch schema files")]
+    Apply(SchemaApplyArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SchemaApplyArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to apply to instead of local home state"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        value_name = "PATH",
+        help = "Schema file or directory. Directories apply *.graphql/*.gql files, then *.patch.json/*.json-patch files"
+    )]
+    pub(crate) path: PathBuf,
+    #[arg(
+        long = "patch",
+        value_name = "PATCH",
+        help = "Extra JSON Patch file to apply after SDL files. May be repeated"
+    )]
+    pub(crate) patches: Vec<PathBuf>,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum P2pCommand {
     #[command(about = "Show live P2P connectivity for the running runtime")]
     Status(P2pAccessArgs),
@@ -1369,6 +1551,20 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(about = "Manage desired out-of-band P2P pairings")]
+    Pairings {
+        #[command(subcommand)]
+        command: P2pPairingsCommand,
+    },
+    #[command(
+        about = "Remove a desired out-of-band P2P pairing",
+        after_help = "\
+Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
+reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
+should change live connectivity immediately, use p2p collections/replicators \
+commands against the running server."
+    )]
+    Unpair(P2pPairingRefArgs),
     #[command(
         about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
         after_help = "\
@@ -1443,6 +1639,57 @@ pub(crate) enum P2pDocumentsCommand {
     Remove(P2pDocumentsMutateArgs),
     #[command(about = "Fetch documents from connected peers")]
     Sync(P2pDocumentsSyncArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum P2pPairingsCommand {
+    #[command(about = "List desired out-of-band P2P pairings")]
+    List(P2pAccessArgs),
+    #[command(
+        about = "Create or update a desired out-of-band P2P pairing",
+        after_help = "\
+Writes PeerPairingDesired for desktop pairing reconcile. Desktop reconcile \
+runs when DEFRA_AGENT_PAIRING_RECONCILE=1 and a saved peer record exists. For \
+headless servers, use `defra-agent p2p pair --peer <multiaddr>` to apply live \
+P2P wiring immediately."
+    )]
+    Set(P2pPairingSetArgs),
+    #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
+    Remove(P2pPairingRefArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingSetArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
+    /// Agent DID expected for the remote peer.
+    #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+    /// Replicator multiaddr to install during reconcile. Repeat for multiple addresses.
+    #[arg(long = "address", value_name = "MULTIADDR")]
+    pub(crate) addresses: Vec<String>,
+    /// Collection name to include in the desired pairing. Repeat or combine with --profile.
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    pub(crate) collections: Vec<String>,
+    /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingRefArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
 }
 
 #[derive(clap::Args)]
@@ -1895,6 +2142,16 @@ mod tests {
         }
     }
 
+    fn parse_init(extra: &[&str]) -> InitArgs {
+        let mut argv = vec!["defra-agent", "init"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("init should parse");
+        match cli.command {
+            Command::Init(args) => args,
+            _ => panic!("expected `init`"),
+        }
+    }
+
     #[test]
     fn enable_defra_query_flag_accepts_false_true_and_omission() {
         // Omitted -> None, so an unrelated `config tools set` preserves the
@@ -1909,5 +2166,111 @@ mod tests {
             parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
             Some(true)
         );
+    }
+
+    #[test]
+    fn enable_memory_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_memory, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-memory", "false"]).enable_memory,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-memory", "true"]).enable_memory,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn enable_session_history_tool_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_session_history_tool, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-session-history-tool", "false"])
+                .enable_session_history_tool,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-session-history-tool", "true"]).enable_session_history_tool,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn init_tool_audit_flags_parse() {
+        let args = parse_init(&[
+            "--enable-memory",
+            "--disable-defra-query",
+            "--tool-package",
+            "write",
+        ]);
+        assert!(args.enable_memory);
+        assert!(args.disable_defra_query);
+        assert_eq!(args.tool_package, Some(ToolPackageArg::Write));
+
+        let scoped = parse_init(&[
+            "--defra-query-collection",
+            "AgentRequest",
+            "--defra-query-collection",
+            "AgentResponse",
+        ]);
+        assert_eq!(
+            scoped.defra_query_collections,
+            vec!["AgentRequest".to_string(), "AgentResponse".to_string()]
+        );
+    }
+
+    #[test]
+    fn subagent_tool_flags_preserve_when_omitted_and_parse_when_present() {
+        let omitted = parse_tools_set(&[]);
+        assert_eq!(omitted.enable_file_tools, None);
+        assert_eq!(omitted.enable_bash, None);
+        assert_eq!(omitted.enable_meta_tools, None);
+        assert!(omitted.subagent_targets.is_empty());
+        assert!(!omitted.clear_subagent_targets);
+        assert_eq!(omitted.subagent_spawn_enabled, None);
+        assert_eq!(omitted.subagent_steering_enabled, None);
+        assert_eq!(omitted.subagent_background_enabled, None);
+        assert_eq!(omitted.subagent_allow_cross_deployment, None);
+        assert_eq!(omitted.cross_deployment_spawn_timeout_seconds, None);
+
+        let configured = parse_tools_set(&[
+            "--subagent-target",
+            r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker","description":"worker"}"#,
+            "--subagent-spawn-enabled",
+            "true",
+            "--subagent-steering-enabled",
+            "true",
+            "--subagent-background-enabled",
+            "false",
+            "--subagent-allow-cross-deployment",
+            "true",
+            "--cross-deployment-spawn-timeout-seconds",
+            "90",
+        ]);
+        assert_eq!(configured.subagent_targets.len(), 1);
+        assert_eq!(configured.subagent_spawn_enabled, Some(true));
+        assert_eq!(configured.subagent_steering_enabled, Some(true));
+        assert_eq!(configured.subagent_background_enabled, Some(false));
+        assert_eq!(configured.subagent_allow_cross_deployment, Some(true));
+        assert_eq!(configured.cross_deployment_spawn_timeout_seconds, Some(90));
+    }
+
+    #[test]
+    fn legacy_tool_bool_flags_are_patch_optional() {
+        let bare = parse_tools_set(&["--enable-file-tools", "--enable-bash"]);
+        assert_eq!(bare.enable_file_tools, Some(true));
+        assert_eq!(bare.enable_bash, Some(true));
+
+        let explicit = parse_tools_set(&[
+            "--enable-file-tools",
+            "false",
+            "--enable-bash",
+            "false",
+            "--enable-meta-tools",
+            "false",
+        ]);
+        assert_eq!(explicit.enable_file_tools, Some(false));
+        assert_eq!(explicit.enable_bash, Some(false));
+        assert_eq!(explicit.enable_meta_tools, Some(false));
     }
 }

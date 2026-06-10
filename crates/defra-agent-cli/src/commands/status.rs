@@ -41,6 +41,9 @@ pub(crate) async fn load_runtime_status_output(
                 default_behavior_id
                 runnable_behavior_count
                 unavailable_behavior_count
+                behavior_executor_capacity
+                behavior_executor_queue_depth
+                behavior_executor_status_json
                 last_reconcile_result
                 last_reconcile_error
                 last_reconcile_completed_at
@@ -80,6 +83,8 @@ pub(crate) async fn load_runtime_status_output(
             "default_behavior_id",
             "runnable_behavior_count",
             "unavailable_behavior_count",
+            "behavior_executor_capacity",
+            "behavior_executor_queue_depth",
             "last_reconcile_result",
             "last_reconcile_error",
             "last_reconcile_completed_at",
@@ -89,6 +94,12 @@ pub(crate) async fn load_runtime_status_output(
                 runtime_row.get(field).cloned().unwrap_or(Value::Null),
             );
         }
+        let behavior_executors = runtime_row
+            .get("behavior_executor_status_json")
+            .and_then(Value::as_str)
+            .and_then(|json| serde_json::from_str::<Value>(json).ok())
+            .unwrap_or(Value::Null);
+        map.insert("behavior_executors".to_string(), behavior_executors);
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
         crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
     }

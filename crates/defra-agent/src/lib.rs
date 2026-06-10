@@ -17,6 +17,7 @@ pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod defra_query;
+pub mod defra_write;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;
@@ -26,10 +27,22 @@ pub mod graphql;
 pub mod health_checker;
 pub mod hook;
 pub mod identity;
+pub mod inference_http;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+
+/// Shared in-crate test utilities.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
+    /// convention in every shape the tests build.
+    pub(crate) fn first_content<T>(items: &[T]) -> &T {
+        items.first().expect("non-empty content")
+    }
+}
 pub mod lifecycle;
+pub mod llm;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
@@ -42,6 +55,7 @@ pub mod retry;
 pub mod run_timeline;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
+pub(crate) mod runtime_trace;
 pub mod schedule_cron;
 pub mod schema;
 pub mod session;
@@ -80,19 +94,19 @@ pub use compaction::CompactionStrategy;
 pub use config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
-    list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, load_tool_selection, subagent_target_entry, upsert_agent_behavior,
-    upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    default_tool_selection_id_for_behavior, ensure_agent_principal, is_reserved_builtin_tool_name,
+    list_agent_behaviors, list_inference_profile_records, load_agent_behavior,
+    load_agent_principal, load_inference_profile, load_tool_selection, subagent_target_entry,
+    upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    ToolSelectionDocument,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
@@ -129,6 +143,8 @@ pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
     ResolvedTask, ScheduleCadence,
 };
+#[cfg(feature = "agent-memory")]
+pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,

@@ -1,10 +1,9 @@
-use anyhow::Result;
-use rig::agent::MultiTurnStreamItem;
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
 };
-use rig::one_or_many::OneOrMany;
+use anyhow::Result;
+use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::hook::DefraSessionHook;
@@ -71,6 +70,7 @@ impl<'a> StreamProcessor<'a> {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
                 reasoning,
             ))) => {
+                let reasoning = crate::llm::rig_compat::from_rig_reasoning(&reasoning);
                 let rendered = render_reasoning_text(&reasoning);
                 self.assistant_turn.push_reasoning(reasoning);
                 if !rendered.is_empty() {
@@ -106,7 +106,8 @@ impl<'a> StreamProcessor<'a> {
                         tool_call.call_id.as_deref(),
                     )
                     .await;
-                self.assistant_turn.push_tool_call(tool_call);
+                self.assistant_turn
+                    .push_tool_call(crate::llm::rig_compat::from_rig_tool_call(&tool_call));
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
@@ -126,7 +127,10 @@ impl<'a> StreamProcessor<'a> {
                 }
                 self.persistence_hook.apply_persistence_policy(
                     self.persistence_hook
-                        .persist_stream_tool_result_message(&tool_result, &internal_call_id)
+                        .persist_stream_tool_result_message(
+                            &crate::llm::rig_compat::from_rig_tool_result(&tool_result),
+                            &internal_call_id,
+                        )
                         .await,
                     "persist streamed tool result",
                 )?;
@@ -192,7 +196,7 @@ impl<'a> StreamProcessor<'a> {
 }
 
 #[derive(Default)]
-struct AssistantTurnAccumulator {
+pub(crate) struct AssistantTurnAccumulator {
     text: String,
     reasoning: Vec<AssistantReasoning>,
     pending_reasoning_delta_text: String,
@@ -201,26 +205,30 @@ struct AssistantTurnAccumulator {
 }
 
 impl AssistantTurnAccumulator {
-    fn push_text(&mut self, text: &str) {
+    pub(crate) fn push_text(&mut self, text: &str) {
         self.text.push_str(text);
     }
 
-    fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
+    pub(crate) fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
         merge_reasoning_blocks(&mut self.reasoning, &reasoning);
     }
 
-    fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
+    pub(crate) fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
         self.pending_reasoning_delta_text.push_str(reasoning);
         if self.pending_reasoning_delta_id.is_none() {
             self.pending_reasoning_delta_id = id;
         }
     }
 
-    fn push_tool_call(&mut self, tool_call: AssistantToolCall) {
+    pub(crate) fn push_tool_call(&mut self, tool_call: AssistantToolCall) {
         self.tool_calls.push(tool_call);
     }
 
-    fn reconcile_text(&mut self, final_text: &str) {
+    pub(crate) fn take_message(&mut self) -> Option<CompletionMessage> {
+        self.build_message()
+    }
+
+    pub(crate) fn reconcile_text(&mut self, final_text: &str) {
         if final_text.is_empty() {
             return;
         }
@@ -231,7 +239,7 @@ impl AssistantTurnAccumulator {
         }
     }
 
-    fn take_message(&mut self) -> Option<CompletionMessage> {
+    fn build_message(&mut self) -> Option<CompletionMessage> {
         if self.reasoning.is_empty() && !self.pending_reasoning_delta_text.is_empty() {
             let mut assembled =
                 AssistantReasoning::new(&std::mem::take(&mut self.pending_reasoning_delta_text));
@@ -241,7 +249,16 @@ impl AssistantTurnAccumulator {
             self.push_reasoning(assembled);
         }
 
+        // Order matches rig's streaming loop (text, then reasoning, then tool
+        // calls) so the assistant message we thread back to the provider — and
+        // persist — never places text after tool calls, which strict providers
+        // reject.
         let mut content = Vec::new();
+        if !self.text.is_empty() {
+            content.push(AssistantMessageContent::Text(CompletionText {
+                text: std::mem::take(&mut self.text),
+            }));
+        }
         content.extend(
             self.reasoning
                 .drain(..)
@@ -253,18 +270,12 @@ impl AssistantTurnAccumulator {
                 .map(AssistantMessageContent::ToolCall),
         );
 
-        if !self.text.is_empty() {
-            content.push(AssistantMessageContent::Text(CompletionText {
-                text: std::mem::take(&mut self.text),
-            }));
-        }
-
         self.pending_reasoning_delta_text.clear();
         self.pending_reasoning_delta_id = None;
 
-        OneOrMany::many(content)
-            .ok()
-            .map(|content| CompletionMessage::Assistant { id: None, content })
+        // Non-empty by convention (was `OneOrMany::many(..).ok()`): an empty
+        // turn yields no message at all.
+        (!content.is_empty()).then_some(CompletionMessage::Assistant { id: None, content })
     }
 
     fn has_content(&self) -> bool {
@@ -298,7 +309,7 @@ fn merge_reasoning_blocks(
 }
 
 fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
-    use rig::completion::message::ReasoningContent;
+    use crate::llm::message::ReasoningContent;
 
     let mut rendered = String::new();
     for part in &reasoning.content {
@@ -306,7 +317,6 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
             ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
             ReasoningContent::Redacted { .. } => "[redacted reasoning]",
-            _ => "[opaque reasoning]",
         };
 
         if piece.is_empty() {

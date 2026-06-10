@@ -412,12 +412,32 @@ async fn query_existing_documents_by_unique_values(
         .iter()
         .map(|doc| doc.unique_value.clone())
         .collect::<Vec<_>>();
+    query_document_refs_by_unique_values(txn, collection_name, unique_field, &unique_values, true)
+        .await
+}
+
+async fn query_document_refs_by_unique_values(
+    txn: &ConfigApplyTxn<'_>,
+    collection_name: &str,
+    unique_field: &str,
+    unique_values: &[String],
+    show_deleted: bool,
+) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
+    if unique_values.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let show_deleted_arg = if show_deleted {
+        "showDeleted: true,"
+    } else {
+        ""
+    };
+    let unique_values_literal = graphql_string_list_literal(unique_values);
     let limit = unique_values.len().saturating_mul(16).max(16);
-    let unique_values_literal = graphql_string_list_literal(&unique_values);
     let query = format!(
         r#"{{
             {collection_name}(
-                showDeleted: true,
+                {show_deleted_arg}
                 filter: {{ {unique_field}: {{ _in: {unique_values_literal} }} }},
                 limit: {limit}
             ) {{
@@ -795,6 +815,19 @@ mod tests {
 doc_0: create_Task(input: { task_id: "a" }) { _docID }
 doc_1: create_Task(input: { task_id: "b" }) { _docID }
 }"#
+        );
+    }
+
+    #[test]
+    fn delete_mutation_field_escapes_unique_value() {
+        let field = delete_mutation_field(7, "Task", "task_id", r#"task"with\chars"#);
+
+        assert_eq!(field.alias, "doc_7");
+        assert_eq!(
+            field.field,
+            r#"doc_7: delete_Task(
+            filter: { task_id: { _eq: "task\"with\\chars" } }
+        ) { _docID }"#
         );
     }
 
@@ -1830,15 +1863,20 @@ mod lean_apply_write_boundary_tests {
                 })
                 .map(|reference| reference.id.clone())
                 .collect(),
+            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
+            enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
-            subagent_targets: None,
-            subagent_spawn_enabled: None,
-            subagent_steering_enabled: None,
-            subagent_background_enabled: None,
-            subagent_allow_cross_deployment: None,
+            subagent_targets: Vec::new(),
+            subagent_spawn_enabled: false,
+            subagent_steering_enabled: false,
+            subagent_background_enabled: false,
+            subagent_default_await_mode: None,
+            subagent_allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
+            write_tools: Vec::new(),
         }
     }
 
@@ -1866,6 +1904,7 @@ mod lean_apply_write_boundary_tests {
             max_turns: None,
             temperature: None,
             stream_batch_ms: None,
+            stream_liveness_timeout_secs: None,
             deadline_duration_secs: None,
         }
     }

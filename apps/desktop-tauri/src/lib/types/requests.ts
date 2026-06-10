@@ -40,6 +40,7 @@ export type InferenceProfileSaveRequest = {
   maxTurns?: number | null;
   temperature?: number | null;
   streamBatchMs?: number | null;
+  streamLivenessTimeoutSecs?: number | null;
   deadlineDurationSecs?: number | null;
 };
 
@@ -66,6 +67,8 @@ export type ToolSelectionSaveRequest = {
   subagentSteeringEnabled?: boolean | null;
   subagentBackgroundEnabled?: boolean | null;
   crossDeploymentSpawnTimeoutSeconds?: number | null;
+  enableMemory?: boolean | null;
+  enableSessionHistoryTool?: boolean | null;
 };
 
 export type ToolServiceSaveRequest = {

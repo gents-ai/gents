@@ -111,6 +111,14 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "cross_deployment_spawn_timeout_seconds",
             row.cross_deployment_spawn_timeout_seconds,
         )),
+        Some(graphql_optional_bool_field(
+            "enable_memory",
+            row.enable_memory,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_session_history_tool",
+            row.enable_session_history_tool,
+        )),
     ];
     let update_fields = [
         Some(format!(
@@ -190,6 +198,14 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_int_field(
             "cross_deployment_spawn_timeout_seconds",
             row.cross_deployment_spawn_timeout_seconds,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_memory",
+            row.enable_memory,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_session_history_tool",
+            row.enable_session_history_tool,
         )),
     ];
 

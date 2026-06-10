@@ -98,7 +98,7 @@ jobs:
 
       - name: Run PR proof conformance tests
         if: github.event_name == 'pull_request'
-        run: cargo test -p defra-agent --test state_machine_conformance
+        run: cargo test -p defra-agent --test conformance
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'

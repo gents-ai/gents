@@ -55,6 +55,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         max_turns: Some(24),
         temperature: Some(0.2),
         stream_batch_ms: Some(50),
+        stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
     })
     .await?;
@@ -77,6 +78,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: vec!["read_file".to_string()],
+        enable_memory: Some(false),
+        enable_session_history_tool: Some(false),
         enable_defra_query: Some(true),
         defra_query_collections: Vec::new(),
         subagent_targets: vec!["amy-research".to_string()],

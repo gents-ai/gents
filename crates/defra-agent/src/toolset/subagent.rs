@@ -1,6 +1,6 @@
+use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
 use anyhow::anyhow;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
 
 use crate::background_tools::r4c_args::{
     ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentArgs, ReadToolOutputArgs,
@@ -64,7 +64,11 @@ impl SpawnSubagentTool {
             ));
         }
 
-        match args.await_mode.as_await_mode() {
+        match args
+            .await_mode
+            .map(|mode| mode.as_await_mode())
+            .unwrap_or(self.config.default_await_mode)
+        {
             AwaitMode::Foreground => {}
             AwaitMode::Background if self.config.background_enabled => {}
             AwaitMode::Background => {
@@ -181,7 +185,7 @@ impl Tool for SpawnSubagentTool {
                     "await_mode": {
                         "type": "string",
                         "enum": await_modes,
-                        "default": "foreground",
+                        "default": self.config.default_await_mode.as_str(),
                         "description": "Use foreground to wait for the child result. Use background only when the schema exposes it."
                     },
                     "deadline": {

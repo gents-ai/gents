@@ -105,7 +105,6 @@ pub struct PairingCollectionStatus {
     first_failure_at: Option<SystemTime>,
 }
 
-pub const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 pub const STUCK_THRESHOLD_ATTEMPTS: u32 = 6;
 pub const STUCK_THRESHOLD_DURATION: Duration = Duration::from_secs(5 * 60);
 

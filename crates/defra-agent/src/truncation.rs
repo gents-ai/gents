@@ -16,6 +16,13 @@ pub enum TruncationMode {
     Tail,
 }
 
+pub(crate) fn tool_result_truncation_mode(tool_name: &str) -> TruncationMode {
+    match tool_name {
+        "bash" | "shell" | "command" => TruncationMode::Tail,
+        _ => TruncationMode::Head,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TruncationResult {
     pub text: String,
@@ -46,6 +53,18 @@ impl Default for TruncationLimits {
         }
     }
 }
+
+/// Per-stream capacity of the in-memory ring buffer that holds *live* output
+/// for a still-running background tool (see `background_tools::buffer`).
+///
+/// Kept here, alongside [`TruncationLimits`], so the codebase has one home for
+/// tool-output size policy. It is deliberately a *separate* budget rather than
+/// reusing `TruncationLimits`: those bound a *finished* tool result before it
+/// is replayed to the model (and spill the full copy to DefraDB as the durable
+/// record), whereas this bounds a transient streaming *window* that is never
+/// the durable record and is dropped once the tool reaches a terminal state.
+/// It is larger because a live tail view is cheap, in-memory, and short-lived.
+pub(crate) const LIVE_STREAM_CAPACITY_BYTES: usize = 256 * 1024;
 
 pub trait Truncator: Send + Sync {
     fn truncate(

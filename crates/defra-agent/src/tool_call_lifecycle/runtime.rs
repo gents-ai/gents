@@ -10,11 +10,13 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::llm::tool::BoxFuture;
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::{ToolDyn, ToolError};
 use chrono::{DateTime, Utc};
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
 use tokio_util::sync::CancellationToken;
+
+use crate::background_tools::LiveToolOutputWriter;
 
 const MARKER_PREFIX: &str = "__defra_agent_tool_lifecycle__:";
 const TIMEOUT_MARKER: &str = "__defra_agent_tool_lifecycle__:timedOut";
@@ -31,6 +33,7 @@ struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
 }
 
 #[derive(Clone)]
@@ -38,6 +41,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
+    pub(crate) live_output: Option<LiveToolOutputWriter>,
 }
 
 tokio::task_local! {
@@ -72,12 +76,33 @@ pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
 where
     F: Future<Output = T>,
 {
+    scope_request_tool_execution_with_workspace_and_live_output(
+        deadline_at,
+        cancellation_token,
+        workspace_cwd,
+        None,
+        future,
+    )
+    .await
+}
+
+pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
+                live_output,
             },
             future,
         )
@@ -96,6 +121,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
+            live_output: scope.live_output,
         })
 }
 
@@ -132,11 +158,11 @@ impl ToolDyn for RuntimeManagedTool {
         self.inner.name()
     }
 
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.inner.definition(prompt)
     }
 
-    fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let Some(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone).ok() else {
                 return self.inner.call(args).await;
@@ -153,23 +179,20 @@ impl ToolDyn for RuntimeManagedTool {
                 }
             });
 
+            // Apply the request's deadline/cancellation envelope. Result bounding
+            // is owned by the completion loop for foreground tools (#400); this
+            // wrapper now only guards background tool execution.
             tokio::select! {
                 biased;
-                _ = scope.cancellation_token.cancelled() => {
-                    Ok(cancelled_result())
-                }
-                _ = &mut deadline => {
-                    Ok(timeout_result(scope.deadline_at))
-                }
-                result = self.inner.call(args) => {
-                    result
-                }
+                _ = scope.cancellation_token.cancelled() => Ok(cancelled_result()),
+                _ = &mut deadline => Ok(timeout_result(scope.deadline_at)),
+                result = self.inner.call(args) => result,
             }
         })
     }
 }
 
-fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
+pub(crate) fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
     let deadline_at = deadline_at?;
     let now = Utc::now();
     if now >= deadline_at {
@@ -181,7 +204,7 @@ fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::completion::ToolDefinition;
+    use crate::llm::tool::ToolDefinition;
 
     struct PendingTool;
 
@@ -190,7 +213,7 @@ mod tests {
             "pending".to_string()
         }
 
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
             Box::pin(async {
                 ToolDefinition {
                     name: "pending".to_string(),
@@ -200,7 +223,7 @@ mod tests {
             })
         }
 
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(std::future::pending())
         }
     }
@@ -212,7 +235,7 @@ mod tests {
             "fast".to_string()
         }
 
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
             Box::pin(async {
                 ToolDefinition {
                     name: "fast".to_string(),
@@ -222,7 +245,7 @@ mod tests {
             })
         }
 
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("ok".to_string()) })
         }
     }

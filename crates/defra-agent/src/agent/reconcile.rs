@@ -18,7 +18,12 @@ mod diff;
 mod slot;
 
 use diff::diff_counts;
-use slot::{retire_slot, spawn_slot, spawn_slots, BehaviorSlot, BehaviorSlotState};
+#[cfg(test)]
+use slot::spawn_slot;
+use slot::{
+    behavior_executor_capacity, retire_slot, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
+    BehaviorSlotState,
+};
 
 pub(super) struct GenerationSupervisor<F> {
     current_snapshot: Arc<ActiveRuntimeSnapshot>,
@@ -62,7 +67,20 @@ where
             .iter()
             .map(|(behavior_id, slot)| (behavior_id.clone(), slot.dispatcher.clone()))
             .collect();
-        let current_snapshot = Arc::new(resolved_snapshot.activate(1, dispatchers));
+        let executor_capacities = active_slots
+            .iter()
+            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.executor_capacity))
+            .collect();
+        let executor_queue_capacities = active_slots
+            .iter()
+            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.queue_capacity))
+            .collect();
+        let current_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
+            1,
+            dispatchers,
+            executor_capacities,
+            executor_queue_capacities,
+        ));
 
         Ok(Self {
             current_snapshot,
@@ -199,18 +217,21 @@ where
                 .get(behavior_id)
                 .cloned()
                 .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
+            let executor_capacity =
+                behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs);
 
             match self.active_slots.remove(behavior_id) {
-                Some(existing) if existing.matches(behavior, &tool_surface) => {
+                Some(existing) if existing.matches(behavior, &tool_surface, executor_capacity) => {
                     next_slots.insert(behavior_id.clone(), existing);
                 }
                 Some(existing) => {
                     retired_slots.push(existing);
                     next_slots.insert(
                         behavior_id.clone(),
-                        spawn_slot(
+                        spawn_slot_with_capacity(
                             behavior.clone(),
                             tool_surface,
+                            executor_capacity,
                             self.retry_policy.clone(),
                             self.runner.clone(),
                             shutdown.clone(),
@@ -220,9 +241,10 @@ where
                 None => {
                     next_slots.insert(
                         behavior_id.clone(),
-                        spawn_slot(
+                        spawn_slot_with_capacity(
                             behavior.clone(),
                             tool_surface,
+                            executor_capacity,
                             self.retry_policy.clone(),
                             self.runner.clone(),
                             shutdown.clone(),
@@ -238,7 +260,20 @@ where
             .iter()
             .map(|(behavior_id, slot)| (behavior_id.clone(), slot.dispatcher.clone()))
             .collect();
-        let next_snapshot = Arc::new(resolved_snapshot.activate(generation, dispatchers));
+        let executor_capacities = next_slots
+            .iter()
+            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.executor_capacity))
+            .collect();
+        let executor_queue_capacities = next_slots
+            .iter()
+            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.queue_capacity))
+            .collect();
+        let next_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
+            generation,
+            dispatchers,
+            executor_capacities,
+            executor_queue_capacities,
+        ));
         self.admission_registry
             .reconcile(generation, &next_snapshot.backend_admission_configs);
 

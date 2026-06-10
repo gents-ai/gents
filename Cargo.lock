@@ -4373,11 +4373,12 @@ dependencies = [
 
 [[package]]
 name = "defra-agent"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "acp",
  "agent-tool-call-lifecycle-v1-to-v2-lens",
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum",
  "bytes",
@@ -4400,6 +4401,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "minijinja",
+ "opentelemetry",
  "p2p",
  "proptest",
  "rand 0.9.2",
@@ -4415,13 +4417,14 @@ dependencies = [
  "tokio-util",
  "toml 0.8.2",
  "tracing",
+ "tracing-opentelemetry",
  "uuid",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "defra-agent-cli"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "acp",
  "anyhow",
@@ -4467,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4480,7 +4483,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-core"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4508,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-tauri"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -4535,7 +4538,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-lean-contract"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -4544,7 +4547,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-protocol"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4560,7 +4563,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-schemas"
-version = "0.2.5"
+version = "0.3.0"
 
 [[package]]
 name = "defra-core"
@@ -4619,7 +4622,7 @@ dependencies = [
 
 [[package]]
 name = "defra-native-fs-runner"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "glob",

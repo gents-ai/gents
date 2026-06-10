@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
-use rig::tool::ToolDyn;
 
 use super::{
     assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,
@@ -20,7 +20,7 @@ use crate::compaction::CompactionStrategy;
 use crate::config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
@@ -287,6 +287,16 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_memory(mut self, enable_memory: bool) -> Self {
+        self.behavior.tool_selection.enable_memory = enable_memory;
+        self
+    }
+
+    pub fn enable_session_history_tool(mut self, enable_session_history_tool: bool) -> Self {
+        self.behavior.tool_selection.enable_session_history_tool = enable_session_history_tool;
+        self
+    }
+
     pub fn defra_query_collections<I, S>(mut self, collections: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -337,6 +347,11 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn stream_liveness_timeout_secs(mut self, stream_liveness_timeout_secs: u64) -> Self {
+        self.behavior.stream_liveness_timeout = Duration::from_secs(stream_liveness_timeout_secs);
+        self
+    }
+
     pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
         self.behavior.deadline_duration = Duration::from_secs(deadline_duration_secs);
         self
@@ -375,6 +390,7 @@ pub(crate) struct PendingAgentBehavior {
     compaction_threshold: f64,
     compaction_strategy: CompactionStrategy,
     stream_batch_ms: u64,
+    stream_liveness_timeout: Duration,
     deadline_duration: Duration,
     sampling: SamplingConfig,
     skills: Vec<crate::skills::Skill>,
@@ -397,6 +413,7 @@ impl PendingAgentBehavior {
             compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
             compaction_strategy: CompactionStrategy::StripThenSummarize,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+            stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
@@ -546,6 +563,7 @@ impl PendingAgentBehavior {
             compaction_threshold: self.compaction_threshold,
             compaction_strategy: self.compaction_strategy,
             stream_batch_ms: self.stream_batch_ms,
+            stream_liveness_timeout: self.stream_liveness_timeout,
             deadline_duration: self.deadline_duration,
             sampling: self.sampling,
             skills: self.skills,

@@ -5,11 +5,12 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
+use crate::background_completion::ensure_background_subagent_completion_side_effects;
 use crate::background_tools::{
     child_request_completed, fail_running_subagent_tool_call, load_parent_subagent_authorization,
     project_child_terminal, subagent_spawn_denial, subagent_tool_not_allowed_payload,
 };
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
 
@@ -59,6 +60,27 @@ struct ParentRequestRow {
     lifecycle_state: Option<String>,
     #[serde(default)]
     subagent_depth: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChildRequestLivenessRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    agent_did: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+    #[serde(default)]
+    deadline: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamingChildResponseRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,7 +366,11 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             None => None,
         };
 
-        if recover_bridge_terminal_child(node, &row).await? {
+        if child_request_id(&row).is_some() {
+            let _ = terminalize_expired_local_child_request(node, agent_did, &row).await?;
+        }
+
+        if recover_bridge_terminal_child(node, agent_did, &row).await? {
             recovered += 1;
             continue;
         }
@@ -568,6 +594,7 @@ async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<b
 
 async fn recover_bridge_terminal_child(
     node: &EmbeddedNode,
+    agent_did: &str,
     row: &RunningToolCallRow,
 ) -> Result<bool> {
     let Some(child_request_id) = child_request_id(row) else {
@@ -584,6 +611,8 @@ async fn recover_bridge_terminal_child(
             .await?
             .unwrap_or_else(|| format!("child request {child_request_id} completed"));
         recover_bridge_completed_row(node, row, &result).await?;
+        ensure_background_subagent_projection_side_effects(node, agent_did, row, child_request_id)
+            .await?;
         return Ok(true);
     }
 
@@ -591,7 +620,213 @@ async fn recover_bridge_terminal_child(
         return Ok(false);
     };
     recover_bridge_failed_row(node, row, &terminal).await?;
+    ensure_background_subagent_projection_side_effects(node, agent_did, row, child_request_id)
+        .await?;
     Ok(true)
+}
+
+async fn ensure_background_subagent_projection_side_effects(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    row: &RunningToolCallRow,
+    child_request_id: &str,
+) -> Result<()> {
+    if !is_background_subagent_tool(row) {
+        return Ok(());
+    }
+    let outcome =
+        ensure_background_subagent_completion_side_effects(node, child_request_id, agent_did)
+            .await?;
+    tracing::debug!(
+        doc_id = %row.doc_id,
+        request_id = row.request_id.as_deref().unwrap_or(""),
+        session_id = %row.session_id,
+        tool_call_id = %row.tool_call_id,
+        child_request_id,
+        outcome = ?outcome,
+        "ensured recovered background subagent projection side effects"
+    );
+    Ok(())
+}
+
+async fn terminalize_expired_local_child_request(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    row: &RunningToolCallRow,
+) -> Result<bool> {
+    let Some(child_request_id) = child_request_id(row) else {
+        return Ok(false);
+    };
+    let Some(child) = load_child_liveness_row(node, child_request_id).await? else {
+        return Ok(false);
+    };
+    if child.agent_did != agent_did {
+        return Ok(false);
+    }
+    if request_status_or_lifecycle_is_terminal(
+        child.status.as_deref(),
+        child.lifecycle_state.as_deref(),
+    ) {
+        return Ok(false);
+    }
+    let Some(deadline_at) = parse_datetime(child.deadline.as_deref()) else {
+        return Ok(false);
+    };
+    if Utc::now() < deadline_at {
+        return Ok(false);
+    }
+
+    let reason = format!(
+        "child request deadline exceeded at {} before terminal response",
+        deadline_at.to_rfc3339()
+    );
+    if !mark_child_request_dead(node, &child, &reason).await? {
+        return Ok(false);
+    }
+    finalize_streaming_child_response(node, child_request_id, &reason).await?;
+    tracing::info!(
+        doc_id = %row.doc_id,
+        request_id = row.request_id.as_deref().unwrap_or(""),
+        session_id = %row.session_id,
+        tool_call_id = %row.tool_call_id,
+        child_request_id,
+        child_deadline_at = %deadline_at,
+        "terminalized expired subagent child request during tool-call recovery"
+    );
+    Ok(true)
+}
+
+async fn load_child_liveness_row(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Result<Option<ChildRequestLivenessRow>> {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                agent_did
+                status
+                lifecycle_state
+                deadline
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query child AgentRequest liveness for {child_request_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| {
+            serde_json::from_value::<Vec<ChildRequestLivenessRow>>(value.clone()).ok()
+        })
+        .and_then(|mut rows| rows.pop()))
+}
+
+async fn mark_child_request_dead(
+    node: &EmbeddedNode,
+    child: &ChildRequestLivenessRow,
+    reason: &str,
+) -> Result<bool> {
+    let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
+    let escaped_doc_id = escape_graphql_string(&child.doc_id);
+    let escaped_agent_did = escape_graphql_string(&child.agent_did);
+    let escaped_reason = escape_graphql_string(reason);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    lifecycle_state: {{ _in: {active_runtime_states} }},
+                    status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
+                }},
+                input: {{
+                    status: "dead",
+                    lifecycle_state: "dead",
+                    failure_reason: "{escaped_reason}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response =
+        execute_mutation_with_retry(node, &mutation, "terminalize_expired_child_request").await?;
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents))
+}
+
+async fn finalize_streaming_child_response(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    reason: &str,
+) -> Result<()> {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_child_request_id}" }},
+                    status: {{ _eq: "streaming" }}
+                }}
+            ) {{
+                _docID
+                content
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query streaming child AgentResponse {child_request_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<StreamingChildResponseRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let now = Utc::now().to_rfc3339();
+    let escaped_reason = escape_graphql_string(reason);
+    for row in rows {
+        let content = row.content.unwrap_or_default();
+        let final_content = if content.trim().is_empty() {
+            format!("Error: {reason}")
+        } else {
+            format!("{content}\n\n[Response interrupted - {reason}]")
+        };
+        let escaped_doc_id = escape_graphql_string(&row.doc_id);
+        let escaped_content = escape_graphql_string(&final_content);
+        let escaped_now = escape_graphql_string(&now);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        content: "{escaped_content}",
+                        status: "error",
+                        error_message: "{escaped_reason}",
+                        completed_at: "{escaped_now}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        execute_mutation_with_retry(node, &mutation, "finalize_expired_child_response").await?;
+    }
+    Ok(())
 }
 
 async fn load_child_completion_result(
@@ -825,12 +1060,22 @@ fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    matches!(
-        parent.status.as_str(),
-        "completed" | "error" | "superseded" | "dead" | "interrupted"
-    ) || matches!(
+    request_status_or_lifecycle_is_terminal(
+        Some(parent.status.as_str()),
         parent.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
+    )
+}
+
+fn request_status_or_lifecycle_is_terminal(
+    status: Option<&str>,
+    lifecycle_state: Option<&str>,
+) -> bool {
+    matches!(
+        status,
+        Some("completed" | "complete" | "error" | "failed" | "superseded" | "dead" | "interrupted")
+    ) || matches!(
+        lifecycle_state,
+        Some("completed" | "complete" | "failed" | "error" | "superseded" | "dead" | "interrupted")
     )
 }
 

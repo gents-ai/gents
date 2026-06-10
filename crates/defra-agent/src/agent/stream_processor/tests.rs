@@ -1,59 +1,27 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rig::agent::{HookAction, MultiTurnStreamItem, PromptHook};
-use rig::completion::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
-    ToolResultContent, UserContent,
+use crate::llm::message::{
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
+    UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::one_or_many::OneOrMany;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingCompletionResponse};
+use crate::llm::HookAction;
+use rig::agent::MultiTurnStreamItem;
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
 use crate::ensure_schemas;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
+use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
-
-#[derive(Clone, Default)]
-struct TestModel;
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for TestModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in stream processor tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming is unused in stream processor tests".to_string(),
-        ))
-    }
-}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
@@ -77,12 +45,8 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("Inspect the repo"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("Inspect the repo"), &[])
+            .await,
         HookAction::Continue
     ));
 
@@ -152,10 +116,11 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         &history[1],
         Message::Assistant { content, .. }
             if content.len() == 2
-                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning)
-                    if reasoning.id.as_deref() == Some("rs_partial"))
-                && matches!(content.iter().nth(1), Some(AssistantContent::Text(Text { text }))
+                // Order is text, then reasoning (rig's threading/persist order).
+                && matches!(first_content(&content), AssistantContent::Text(Text { text })
                     if text == "I started by checking the repo layout.")
+                && matches!(content.iter().nth(1), Some(AssistantContent::Reasoning(reasoning))
+                    if reasoning.id.as_deref() == Some("rs_partial"))
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -267,7 +232,7 @@ async fn load_response_doc(
 
 fn text_item(text: &str) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamAssistantItem(
-        StreamedAssistantContent::Text(Text {
+        StreamedAssistantContent::Text(rig::completion::message::Text {
             text: text.to_string(),
         }),
     ))
@@ -290,10 +255,10 @@ fn tool_call_item_with_ids(
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamAssistantItem(
         StreamedAssistantContent::ToolCall {
-            tool_call: ToolCall {
+            tool_call: rig::completion::message::ToolCall {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
-                function: ToolFunction {
+                function: rig::completion::message::ToolFunction {
                     name: name.to_string(),
                     arguments: serde_json::from_str(args_json).unwrap(),
                 },
@@ -321,12 +286,16 @@ fn tool_result_item_with_call_id(
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamUserItem(
         StreamedUserContent::ToolResult {
-            tool_result: ToolResult {
+            tool_result: rig::completion::message::ToolResult {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
-                    text: result_json.to_string(),
-                })),
+                content: rig::one_or_many::OneOrMany::one(
+                    rig::completion::message::ToolResultContent::Text(
+                        rig::completion::message::Text {
+                            text: result_json.to_string(),
+                        },
+                    ),
+                ),
             },
             internal_call_id: internal_id.to_string(),
         },
@@ -362,12 +331,8 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(
-            &hook,
-            &user_text_message("discover available tools"),
-            &[]
-        )
-        .await,
+        hook.on_completion_call(&user_text_message("discover available tools"), &[])
+            .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
@@ -435,23 +400,21 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_call(
-            &hook,
+        hook.on_tool_call(
             "discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
         )
         .await,
-        rig::agent::ToolCallHookAction::Continue
+        crate::llm::ToolCallHookAction::Continue
     ));
     assert!(processor
         .persist_partial_turn("persist streamed assistant tool call")
         .await
         .unwrap());
     assert!(matches!(
-        PromptHook::<TestModel>::on_tool_result(
-            &hook,
+        hook.on_tool_result(
             "discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
@@ -478,7 +441,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match content.first_ref() {
+            Message::User { content } => match first_content(&content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result),
                 _ => None,
             },
@@ -494,7 +457,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     assert_eq!(tool_results[0].id, model_result_id);
     assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
     assert!(matches!(
-        tool_results[0].content.first_ref(),
+        first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text }) if text == tool_result
     ));
     assert_eq!(
@@ -505,6 +468,174 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn backfill_pairs_completed_tool_result_after_provider_stall() {
+    // #442 regression. Owned-loop order on a provider stall: the tool runs
+    // inline (on_tool_result marks the AgentToolCall row .completed and records
+    // its result, but persists NO result message because the assistant turn is
+    // not yet persisted), then the provider stalls so the streamed ToolResult
+    // never arrives. The abort path persists the partial assistant turn (with
+    // the tool call) — leaving a completed tool call with no result message,
+    // violating Transcript.CompletedToolCallsPaired. backfill_completed_tool_results
+    // must reconcile it (and be idempotent).
+    let data_path =
+        std::env::temp_dir().join(format!("agent-442-backfill-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = crate::hook::DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("use the echo tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    // The AgentToolCall row records its request_id from the hook's active request,
+    // which is what backfill scopes its query by.
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "use the echo tool".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    let call_id = "call-1";
+    let tool_args = r#"{"x":1}"#;
+    let tool_output = "ECHOED-RESULT";
+
+    // Accumulate the assistant tool call so persist_partial_turn writes the turn.
+    processor.assistant_turn.push_tool_call(ToolCall {
+        id: call_id.to_string(),
+        call_id: Some(call_id.to_string()),
+        function: ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::from_str(tool_args).unwrap(),
+        },
+        signature: None,
+        additional_params: None,
+    });
+    hook.register_stream_tool_call_identity(call_id, call_id, Some(call_id))
+        .await;
+
+    // Tool runs inline: lifecycle started, then completed with its result. No
+    // result message persists yet (assistant turn not persisted).
+    assert!(matches!(
+        hook.on_tool_call("echo", Some(call_id.to_string()), call_id, tool_args)
+            .await,
+        crate::llm::ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "echo",
+            Some(call_id.to_string()),
+            call_id,
+            tool_args,
+            tool_output
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    // Abort: persist the partial assistant turn (the tool-call message).
+    assert!(processor
+        .persist_partial_turn("persist errored assistant turn")
+        .await
+        .unwrap());
+
+    // The orphan: the completed tool call has no paired result message yet.
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        0,
+        "result message must be absent before backfill (the #442 orphan)"
+    );
+
+    // Backfill reconciles the completed tool call's result message.
+    let reconciled = hook.backfill_completed_tool_results().await.unwrap();
+    assert_eq!(
+        reconciled, 1,
+        "one completed tool call should be reconciled"
+    );
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        1,
+        "backfill must persist exactly one tool-result message (pair closure)"
+    );
+
+    // Idempotent: a second backfill must not duplicate the result message.
+    hook.backfill_completed_tool_results().await.unwrap();
+    assert_eq!(
+        count_tool_result_messages(&node, &session_id).await,
+        1,
+        "backfill must be idempotent (dedup)"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id: &str) -> usize {
+    crate::session::load_history(node, session_id)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::User { content }
+                if matches!(first_content(&content), UserContent::ToolResult(_)))
+        })
+        .count()
 }
 
 #[tokio::test]
@@ -530,7 +661,7 @@ async fn post_tool_resumed_resets_response_tail() {
         FailurePolicy::default(),
     );
     assert!(matches!(
-        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("test prompt"), &[])
+        hook.on_completion_call(&user_text_message("test prompt"), &[])
             .await,
         HookAction::Continue
     ));

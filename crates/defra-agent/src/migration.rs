@@ -82,6 +82,15 @@ const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
+]"#;
+
+const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
@@ -103,6 +112,12 @@ const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
 
 const ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH: &str = r#"[
     {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":5}}
+]"#;
+
+const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":5}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":5}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
 ]"#;
 
 /// WASM lens bytes embedded at compile time. Built by build.rs.
@@ -469,6 +484,46 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v5 = %v5.version_id,
                 "ToolSelection patched with R5 cross-deployment timeout"
             );
+            active_version = v5;
+        }
+
+        if collection_has_field(&active_version, "enable_session_history_tool") {
+            tracing::debug!("ToolSelection already has session history flag; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v6 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH)
+                .await
+                .context("patch_collection ToolSelection session history tool flag")?;
+            node.set_active_collection_version(&v6.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection session history flag")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v6 = %v6.version_id,
+                "ToolSelection patched with session history tool flag"
+            );
+            active_version = v6;
+        }
+
+        if collection_has_field(&active_version, "subagent_default_await_mode") {
+            tracing::debug!(
+                "ToolSelection already has subagent default await mode; skipping patch"
+            );
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v7 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH)
+                .await
+                .context("patch_collection ToolSelection subagent default await mode")?;
+            node.set_active_collection_version(&v7.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection default await mode")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v7 = %v7.version_id,
+                "ToolSelection patched with subagent default await mode"
+            );
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -576,9 +631,11 @@ pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) ->
 }
 
 /// Idempotent migration for AgentBehavior: adds `description` and `summary`
-/// fields (Kind 11, nullable String) introduced on branch issue-377.
-/// Existing DBs upgraded from a prior schema version need these fields patched
-/// in so that GraphQL reads/writes referencing them do not fail.
+/// fields (Kind 11, nullable String) introduced on branch issue-377, plus
+/// `skill_refs` and `skill_excludes` (Kind 21, `[String]`) introduced by the
+/// Skills feature (#340). Existing DBs upgraded from a prior schema version
+/// need these fields patched in so that GraphQL reads/writes referencing them
+/// do not fail.
 pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     let Some(collection) = node
         .get_collection("AgentBehavior")
@@ -599,10 +656,24 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
             r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}"#,
         );
     }
+    // `skill_refs` and `skill_excludes` are selected by the AgentBehavior load
+    // query; an old-schema DB missing either fails reads with
+    // `Cannot query field "..."`. Kind 21 is `[String]`, matching
+    // `subagent_targets`.
+    if !collection_has_field(&collection, "skill_refs") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_refs","Kind":21}}"#,
+        );
+    }
+    if !collection_has_field(&collection, "skill_excludes") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_excludes","Kind":21}}"#,
+        );
+    }
 
     if field_patches.is_empty() {
         tracing::debug!(
-            "AgentBehavior already has description and summary fields; migration no-op"
+            "AgentBehavior already has description, summary, skill_refs, and skill_excludes fields; migration no-op"
         );
         return Ok(());
     }
@@ -611,14 +682,14 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
     let next = node
         .patch_collection("AgentBehavior", &patch)
         .await
-        .context("patch_collection AgentBehavior description+summary")?;
+        .context("patch_collection AgentBehavior description+summary+skill fields")?;
     node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version AgentBehavior description+summary")?;
+        .context("set_active_collection_version AgentBehavior description+summary+skill fields")?;
     tracing::info!(
         version = %next.version_id,
         fields = ?field_patches,
-        "AgentBehavior patched with description and summary fields"
+        "AgentBehavior patched with description, summary, skill_refs, and skill_excludes fields"
     );
     Ok(())
 }
@@ -647,6 +718,33 @@ pub async fn ensure_tool_service_health_state_migrations(node: Arc<EmbeddedNode>
     tracing::info!(
         version = %next.version_id,
         "ToolServiceHealthState patched with tool_count field"
+    );
+    Ok(())
+}
+
+pub async fn ensure_agent_runtime_executor_status_migrations(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentRuntime")
+        .context("get AgentRuntime collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "behavior_executor_status_json") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection("AgentRuntime", ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH)
+        .await
+        .context("patch_collection AgentRuntime executor status fields")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version AgentRuntime executor status fields")?;
+    tracing::info!(
+        version = %next.version_id,
+        "AgentRuntime patched with behavior executor status fields"
     );
     Ok(())
 }
@@ -720,8 +818,11 @@ mod patch_kind_tests {
             ADD_AGENT_TOOL_CALL_R5_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
+            ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
+            ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
+            ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
@@ -740,5 +841,18 @@ mod patch_kind_tests {
                 "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
             );
         }
+    }
+
+    #[test]
+    fn agent_runtime_executor_status_field_kinds_match_sdl() {
+        let fields = field_kinds(ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH);
+        assert_eq!(
+            fields,
+            vec![
+                ("behavior_executor_capacity".to_string(), 5),
+                ("behavior_executor_queue_depth".to_string(), 5),
+                ("behavior_executor_status_json".to_string(), 11),
+            ]
+        );
     }
 }

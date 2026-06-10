@@ -276,16 +276,22 @@ impl DefraSessionHook {
                     } else {
                         self.discard_in_flight_lifecycle(internal_call_id).await;
                     }
-                    return Ok(json_string(json!({
-                        "ok": true,
-                        "child_request_id": child_request_id,
-                        "child_session_id": child_session_id,
-                        "behavior_id": behavior_id,
-                        "await_mode": "foreground",
-                        "status": "completed",
-                        "final_response": final_response,
-                        "error": null
-                    })));
+                    return Ok(json_envelope_with_bounded_result(
+                        json!({
+                            "ok": true,
+                            "child_request_id": child_request_id,
+                            "child_session_id": child_session_id,
+                            "behavior_id": behavior_id,
+                            "await_mode": "foreground",
+                            "status": "completed",
+                            "final_response": serde_json::Value::Null,
+                            "error": null
+                        }),
+                        "final_response",
+                        &final_response,
+                        SPAWN_SUBAGENT_TOOL_NAME,
+                        &self.truncation_limits,
+                    ));
                 }
 
                 if let Some(terminal) = project_child_terminal(&row) {
@@ -566,16 +572,22 @@ impl DefraSessionHook {
                         }
                     }
                     self.discard_in_flight_lifecycle(parent_tool_call_id).await;
-                    return Ok(json_string(json!({
-                        "ok": true,
-                        "child_request_id": child_request_id,
-                        "child_session_id": child_session_id,
-                        "behavior_id": behavior_id,
-                        "await_mode": "foreground",
-                        "status": "completed",
-                        "final_response": final_response,
-                        "error": null
-                    })));
+                    return Ok(json_envelope_with_bounded_result(
+                        json!({
+                            "ok": true,
+                            "child_request_id": child_request_id,
+                            "child_session_id": child_session_id,
+                            "behavior_id": behavior_id,
+                            "await_mode": "foreground",
+                            "status": "completed",
+                            "final_response": serde_json::Value::Null,
+                            "error": null
+                        }),
+                        "final_response",
+                        &final_response,
+                        SPAWN_SUBAGENT_TOOL_NAME,
+                        &self.truncation_limits,
+                    ));
                 }
 
                 if let Some(terminal) = project_child_terminal(&row) {
@@ -694,16 +706,22 @@ impl DefraSessionHook {
     ) -> anyhow::Result<String> {
         let final_response =
             load_tool_call_result(&self.node, session_id, internal_call_id).await?;
-        Ok(json_string(json!({
-            "ok": true,
-            "child_request_id": child_request_id,
-            "child_session_id": child_session_id,
-            "behavior_id": behavior_id,
-            "await_mode": "foreground",
-            "status": "completed",
-            "final_response": final_response,
-            "error": null
-        })))
+        Ok(json_envelope_with_bounded_result(
+            json!({
+                "ok": true,
+                "child_request_id": child_request_id,
+                "child_session_id": child_session_id,
+                "behavior_id": behavior_id,
+                "await_mode": "foreground",
+                "status": "completed",
+                "final_response": serde_json::Value::Null,
+                "error": null
+            }),
+            "final_response",
+            &final_response,
+            SPAWN_SUBAGENT_TOOL_NAME,
+            &self.truncation_limits,
+        ))
     }
 
     pub(super) async fn take_owned_in_flight_lifecycle(
@@ -958,15 +976,23 @@ impl DefraSessionHook {
                 "failure_class": "external"
             })
         };
-        Ok(json_string(json!({
-            "ok": lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed,
-            "tool_call_id": lifecycle.tool_call_id(),
-            "tool_name": lifecycle.tool_name(),
-            "await_mode": "background",
-            "status": status,
-            "result": result,
-            "error": error
-        })))
+        // The embedded result is bounded so the envelope survives the outer
+        // skip bounding as valid JSON; the full output stays on the row.
+        Ok(json_envelope_with_bounded_result(
+            json!({
+                "ok": lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed,
+                "tool_call_id": lifecycle.tool_call_id(),
+                "tool_name": lifecycle.tool_name(),
+                "await_mode": "background",
+                "status": status,
+                "result": serde_json::Value::Null,
+                "error": error
+            }),
+            "result",
+            &result,
+            lifecycle.tool_name(),
+            &self.truncation_limits,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -992,7 +1018,7 @@ impl DefraSessionHook {
             deadline_at,
         );
         lifecycle.spawn_failed(failure_class, &result).await?;
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1019,6 +1045,6 @@ impl DefraSessionHook {
             deadline_at,
         );
         lifecycle.spawn_failed(failure_class, &result).await?;
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(tool_name, result))
     }
 }

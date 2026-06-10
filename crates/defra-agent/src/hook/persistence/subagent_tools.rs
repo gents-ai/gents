@@ -18,20 +18,26 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<WaitSubagentArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                return Ok(self.skip_tool_result(
                     WAIT_SUBAGENT_TOOL_NAME,
-                    "/",
-                    format!("invalid wait_subagent arguments: {error}"),
-                )));
+                    invalid_tool_arguments_payload(
+                        WAIT_SUBAGENT_TOOL_NAME,
+                        "/",
+                        format!("invalid wait_subagent arguments: {error}"),
+                    ),
+                ));
             }
         };
         let child_request_id = parsed.child_request_id.trim();
         if child_request_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 WAIT_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child_request_id is required",
-            )));
+                invalid_tool_arguments_payload(
+                    WAIT_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    "child_request_id is required",
+                ),
+            ));
         }
 
         let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
@@ -39,14 +45,15 @@ impl DefraSessionHook {
             match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
                 Ok(edge) => edge,
                 Err(error) => {
-                    return Ok(ToolCallHookAction::skip(service_unavailable_payload(
+                    let result = service_unavailable_payload(
                         WAIT_SUBAGENT_TOOL_NAME,
                         "/child_request_id",
                         format!(
                         "child subagent request is not available to this parent request: {error}"
                     ),
                         false,
-                    )));
+                    );
+                    return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
                 }
             };
 
@@ -78,7 +85,7 @@ impl DefraSessionHook {
             )
             .await?;
 
-        Ok(ToolCallHookAction::skip(result))
+        Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result))
     }
 
     pub(super) async fn persist_list_subagents_tool_call(
@@ -98,18 +105,21 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<ListSubagentsArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                return Ok(self.skip_tool_result(
                     LIST_SUBAGENTS_TOOL_NAME,
-                    "/",
-                    format!("invalid list_subagents arguments: {error}"),
-                )));
+                    invalid_tool_arguments_payload(
+                        LIST_SUBAGENTS_TOOL_NAME,
+                        "/",
+                        format!("invalid list_subagents arguments: {error}"),
+                    ),
+                ));
             }
         };
         let response =
             handle_list_subagents(&self.node, &request_id, &self.agent_did, parsed).await?;
         let result = serde_json::to_value(response)
             .map_err(|error| anyhow::anyhow!("serialize list_subagents response: {error}"))?;
-        Ok(ToolCallHookAction::skip(json_string(result)))
+        Ok(self.skip_tool_result(LIST_SUBAGENTS_TOOL_NAME, json_string(result)))
     }
 
     pub(super) async fn persist_read_subagent_tool_call(
@@ -129,34 +139,43 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<ReadSubagentArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                return Ok(self.skip_tool_result(
                     READ_SUBAGENT_TOOL_NAME,
-                    "/",
-                    format!("invalid read_subagent arguments: {error}"),
-                )));
+                    invalid_tool_arguments_payload(
+                        READ_SUBAGENT_TOOL_NAME,
+                        "/",
+                        format!("invalid read_subagent arguments: {error}"),
+                    ),
+                ));
             }
         };
         let child_request_id = parsed.child_request_id.trim().to_string();
         if child_request_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 READ_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child_request_id is required",
-            )));
+                invalid_tool_arguments_payload(
+                    READ_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    "child_request_id is required",
+                ),
+            ));
         }
 
         let Some(response) = handle_read_subagent(&self.node, &request_id, parsed).await? else {
-            return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+            return Ok(self.skip_tool_result(
                 READ_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                &child_request_id,
-                "child is not a background subagent owned by this parent request",
-                Vec::new(),
-            )));
+                tool_not_allowed_payload(
+                    READ_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    &child_request_id,
+                    "child is not a background subagent owned by this parent request",
+                    Vec::new(),
+                ),
+            ));
         };
         let result = serde_json::to_value(response)
             .map_err(|error| anyhow::anyhow!("serialize read_subagent response: {error}"))?;
-        Ok(ToolCallHookAction::skip(json_string(result)))
+        Ok(self.skip_tool_result(READ_SUBAGENT_TOOL_NAME, json_string(result)))
     }
 
     pub(super) async fn persist_steer_subagent_tool_call(
@@ -176,28 +195,37 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<SteerSubagentArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                return Ok(self.skip_tool_result(
                     STEER_SUBAGENT_TOOL_NAME,
-                    "/",
-                    format!("invalid steer_subagent arguments: {error}"),
-                )));
+                    invalid_tool_arguments_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/",
+                        format!("invalid steer_subagent arguments: {error}"),
+                    ),
+                ));
             }
         };
         let child_request_id = parsed.child_request_id.trim().to_string();
         if child_request_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 STEER_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child_request_id is required",
-            )));
+                invalid_tool_arguments_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    "child_request_id is required",
+                ),
+            ));
         }
         let message = parsed.message.trim().to_string();
         if message.is_empty() {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 STEER_SUBAGENT_TOOL_NAME,
-                "/message",
-                "message is required",
-            )));
+                invalid_tool_arguments_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/message",
+                    "message is required",
+                ),
+            ));
         }
 
         let edge = match load_steer_subagent_target(&self.node, &request_id, &child_request_id)
@@ -205,29 +233,36 @@ impl DefraSessionHook {
         {
             SteerSubagentTarget::Found(edge) => edge,
             SteerSubagentTarget::NotAuthorized => {
-                return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+                return Ok(self.skip_tool_result(
                     STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    &child_request_id,
-                    "child not owned by this parent request",
-                    Vec::new(),
-                )));
+                    tool_not_allowed_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        &child_request_id,
+                        "child not owned by this parent request",
+                        Vec::new(),
+                    ),
+                ));
             }
             SteerSubagentTarget::NotBackgrounded => {
-                return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+                return Ok(self.skip_tool_result(
                     STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    &child_request_id,
-                    "foreground subagents cannot be steered; call cancel_subagent first",
-                    Vec::new(),
-                )));
+                    tool_not_allowed_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        &child_request_id,
+                        "foreground subagents cannot be steered; call cancel_subagent first",
+                        Vec::new(),
+                    ),
+                ));
             }
             SteerSubagentTarget::Terminal(state) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                let result = invalid_tool_arguments_payload(
                     STEER_SUBAGENT_TOOL_NAME,
                     "/child_request_id",
                     format!("child is in terminal state '{state}'; spawn a new subagent instead"),
-                )));
+                );
+                return Ok(self.skip_tool_result(STEER_SUBAGENT_TOOL_NAME, result));
             }
         };
 
@@ -275,7 +310,7 @@ impl DefraSessionHook {
         .await?;
         let result = serde_json::to_value(response)
             .map_err(|error| anyhow::anyhow!("serialize steer_subagent response: {error}"))?;
-        Ok(ToolCallHookAction::skip(json_string(result)))
+        Ok(self.skip_tool_result(STEER_SUBAGENT_TOOL_NAME, json_string(result)))
     }
 
     pub(super) async fn persist_cancel_subagent_tool_call(
@@ -295,31 +330,40 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<CancelSubagentArgs>(args) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                return Ok(self.skip_tool_result(
                     CANCEL_SUBAGENT_TOOL_NAME,
-                    "/",
-                    format!("invalid cancel_subagent arguments: {error}"),
-                )));
+                    invalid_tool_arguments_payload(
+                        CANCEL_SUBAGENT_TOOL_NAME,
+                        "/",
+                        format!("invalid cancel_subagent arguments: {error}"),
+                    ),
+                ));
             }
         };
         let child_request_id = parsed.child_request_id.trim();
         if child_request_id.is_empty() {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 CANCEL_SUBAGENT_TOOL_NAME,
-                "/child_request_id",
-                "child_request_id is required",
-            )));
+                invalid_tool_arguments_payload(
+                    CANCEL_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    "child_request_id is required",
+                ),
+            ));
         }
         if parsed
             .reason
             .as_deref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
-            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+            return Ok(self.skip_tool_result(
                 CANCEL_SUBAGENT_TOOL_NAME,
-                "/reason",
-                "reason must be omitted or non-empty",
-            )));
+                invalid_tool_arguments_payload(
+                    CANCEL_SUBAGENT_TOOL_NAME,
+                    "/reason",
+                    "reason must be omitted or non-empty",
+                ),
+            ));
         }
 
         let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
@@ -327,14 +371,15 @@ impl DefraSessionHook {
             match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
                 Ok(edge) => edge,
                 Err(error) => {
-                    return Ok(ToolCallHookAction::skip(service_unavailable_payload(
+                    let result = service_unavailable_payload(
                         CANCEL_SUBAGENT_TOOL_NAME,
                         "/child_request_id",
                         format!(
                         "child subagent request is not available to this parent request: {error}"
                     ),
                         false,
-                    )));
+                    );
+                    return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
                 }
             };
 
@@ -371,15 +416,18 @@ impl DefraSessionHook {
         )
         .await?;
 
-        Ok(ToolCallHookAction::skip(json_string(json!({
-            "ok": true,
-            "child_request_id": edge.child_request_id,
-            "child_session_id": edge.child_session_id,
-            "behavior_id": edge.behavior_id,
-            "status": "cancelled",
-            "active_interrupted": active_interrupted,
-            "descendants_cancelled": descendants_cancelled,
-            "queued_drained": queued_drained
-        }))))
+        Ok(self.skip_tool_result(
+            CANCEL_SUBAGENT_TOOL_NAME,
+            json_string(json!({
+                "ok": true,
+                "child_request_id": edge.child_request_id,
+                "child_session_id": edge.child_session_id,
+                "behavior_id": edge.behavior_id,
+                "status": "cancelled",
+                "active_interrupted": active_interrupted,
+                "descendants_cancelled": descendants_cancelled,
+                "queued_drained": queued_drained
+            })),
+        ))
     }
 }

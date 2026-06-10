@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
+use crate::llm::message::Message;
+use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
-use rig::agent::Agent;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
-use rig::completion::Prompt;
-use rig::tool::ToolDyn;
 
 use crate::backend_provider::BackendProviderKind;
-use crate::completion_factory::build_agent;
+use crate::completion_factory::loop_config;
 use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
@@ -52,6 +51,9 @@ pub async fn run_openai_oneshot_with_tools(
 
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
+    // Unwrapped tool surface for the owned loop (#400): the loop applies its own
+    // deadline/cancellation envelope, so these are not RuntimeManagedTool-wrapped.
+    let tools = Arc::new(tools);
     let background_tool_registry = BackgroundToolRegistry::from_tools(
         tool_surface
             .build_tools(&tool_runtime)?
@@ -138,34 +140,46 @@ async fn run_oneshot_with_completion_client<C>(
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     preamble: String,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
     client: C,
 ) -> Result<OneshotRunResult>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
+    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
-    let agent = build_agent(&client, behavior, &preamble, tools);
-    run_oneshot_with_agent(
+    // Drive the owned loop (#400) directly over the model + tool surface rather
+    // than building a rig `Agent`.
+    let model = client.completion_model(&behavior.model_name);
+    let config = loop_config(behavior, preamble, tools.len());
+    run_oneshot_owned(
         node,
         behavior,
         &prompt_builder,
-        &agent,
+        model,
         prompt,
+        tools,
+        config,
         background_tool_registry,
     )
     .await
 }
 
-async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
+#[allow(clippy::too_many_arguments)]
+async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
     behavior: &AgentBehavior,
     prompt_builder: &LayeredPromptBuilder,
-    agent: &Agent<M>,
+    model: M,
     prompt: &str,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    config: crate::agent::loop_stream::LoopConfig,
     background_tool_registry: BackgroundToolRegistry,
-) -> Result<OneshotRunResult> {
+) -> Result<OneshotRunResult>
+where
+    M::StreamingResponse: 'static,
+{
     let hook = DefraSessionHook::with_identity(
         node,
         &behavior.behavior_id,
@@ -175,12 +189,16 @@ async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
     .with_background_tool_registry(background_tool_registry);
     let history = prompt_builder.build(&[], &[]).await?.messages;
 
-    let response = agent
-        .prompt(prompt)
-        .with_history(&history)
-        .with_hook(hook.clone())
-        .await
-        .map_err(|error| anyhow!("agent prompt failed: {error}"));
+    let response = crate::agent::loop_stream::run_loop_to_text(
+        model,
+        Some(hook.clone()),
+        Message::user(prompt),
+        history,
+        tools,
+        config,
+    )
+    .await
+    .map_err(|error| anyhow!("one-shot inference failed: {error}"));
 
     let session_id = hook.session_id().await;
     let close_result = hook.close().await;

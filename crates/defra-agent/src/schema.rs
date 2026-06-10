@@ -6,12 +6,16 @@
 //! and `ensure_runtime_schemas`.
 
 use anyhow::Result;
+#[cfg(feature = "agent-memory")]
+pub use defra_agent_protocol::schemas::AGENT_MEMORY as AGENT_MEMORY_SCHEMA;
+#[cfg(not(feature = "agent-memory"))]
+use defra_agent_protocol::schemas::AGENT_MEMORY;
 pub use defra_agent_protocol::schemas::{
     AGENT_BEHAVIOR as AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION as AGENT_CONVERSATION_SCHEMA,
     AGENT_MESSAGE as AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL as AGENT_PRINCIPAL_SCHEMA,
     AGENT_REQUEST as AGENT_REQUEST_SCHEMA, AGENT_RESPONSE as AGENT_RESPONSE_SCHEMA,
     AGENT_RUNTIME as AGENT_RUNTIME_SCHEMA, AGENT_SESSION as AGENT_SESSION_SCHEMA,
-    AGENT_TOOL_CALL as AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT as AGENT_TOOL_RESULT_SCHEMA, ALL,
+    AGENT_TOOL_CALL as AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT as AGENT_TOOL_RESULT_SCHEMA,
     CODEX_THREAD_PROJECTION as CODEX_THREAD_PROJECTION_SCHEMA,
     COMPACTION_ENTRY as COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND as INFERENCE_BACKEND_SCHEMA,
     INFERENCE_CALL as INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE as INFERENCE_PROFILE_SCHEMA,
@@ -58,6 +62,17 @@ pub async fn ensure_config_bootstrap_schemas(node: &EmbeddedNode) -> Result<()> 
     ensure_schema_set(node, CONFIG_BOOTSTRAP).await
 }
 
+#[cfg(feature = "agent-memory")]
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_schema_set(node, ALL).await
+    ensure_schema_set(node, defra_agent_protocol::schemas::ALL).await
+}
+
+#[cfg(not(feature = "agent-memory"))]
+pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
+    let schemas = defra_agent_protocol::schemas::ALL
+        .iter()
+        .copied()
+        .filter(|schema| *schema != AGENT_MEMORY)
+        .collect::<Vec<_>>();
+    ensure_schema_set(node, &schemas).await
 }

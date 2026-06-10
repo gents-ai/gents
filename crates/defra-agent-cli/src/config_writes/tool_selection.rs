@@ -3,14 +3,34 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::ToolSelectionDocument;
 
 use crate::config_writes::ConfigAccess;
-use crate::{nullable_string_field, optional_bool_field, optional_string_field, string_list_field};
+use crate::{optional_bool_field, optional_string_field, string_list_field};
 
 pub(crate) async fn write_tool_selection_document(
     access: &ConfigAccess,
     selection: &ToolSelectionDocument,
 ) -> Result<String> {
+    write_tool_selection_document_with_clear_fields(access, selection, &[]).await
+}
+
+pub(crate) async fn write_tool_selection_document_with_clear_fields(
+    access: &ConfigAccess,
+    selection: &ToolSelectionDocument,
+    clear_update_fields: &[&str],
+) -> Result<String> {
     let add_fields = tool_selection_fields(selection, true);
-    let update_fields = tool_selection_fields(selection, false);
+    let mut update_fields = tool_selection_fields(selection, false);
+    if !clear_update_fields.is_empty() {
+        if !update_fields.is_empty() {
+            update_fields.push_str(",\n                    ");
+        }
+        update_fields.push_str(
+            &clear_update_fields
+                .iter()
+                .map(|field| format!("{field}: null"))
+                .collect::<Vec<_>>()
+                .join(",\n                    "),
+        );
+    }
     let mutation = format!(
         r#"mutation {{
             upsert_ToolSelection(
@@ -38,7 +58,7 @@ mod tests {
     use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
     use defra_agent::{ensure_runtime_schemas, load_tool_selection};
 
-    /// Round-trip test: write a `ToolSelectionDocument` with all five subagent
+    /// Round-trip test: write a `ToolSelectionDocument` with subagent
     /// enablement fields set, then read it back and assert every field persisted.
     ///
     /// This test will FAIL before the fix because `tool_selection_fields()` does
@@ -69,6 +89,7 @@ mod tests {
             subagent_targets: Some(vec![target.clone()]),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
+            subagent_default_await_mode: Some("background".to_string()),
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
             ..Default::default()
@@ -105,6 +126,11 @@ mod tests {
             loaded.subagent_background_enabled,
             Some(true),
             "subagent_background_enabled must persist"
+        );
+        assert_eq!(
+            loaded.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must persist"
         );
         assert_eq!(
             loaded.subagent_allow_cross_deployment,
@@ -154,6 +180,7 @@ mod tests {
             subagent_spawn_enabled: Some(true),
             subagent_targets: Some(vec![target.clone()]),
             subagent_background_enabled: Some(true),
+            subagent_default_await_mode: Some("background".to_string()),
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(90),
             ..Default::default()
@@ -170,6 +197,7 @@ mod tests {
             subagent_spawn_enabled: None,
             subagent_steering_enabled: None,
             subagent_background_enabled: None,
+            subagent_default_await_mode: None,
             subagent_allow_cross_deployment: None,
             cross_deployment_spawn_timeout_seconds: None,
             ..Default::default()
@@ -207,6 +235,11 @@ mod tests {
             "subagent_background_enabled must NOT be clobbered by a None update"
         );
         assert_eq!(
+            loaded.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must NOT be clobbered by a None update"
+        );
+        assert_eq!(
             loaded.subagent_allow_cross_deployment,
             Some(true),
             "subagent_allow_cross_deployment must NOT be clobbered by a None update"
@@ -216,6 +249,86 @@ mod tests {
             Some(90),
             "cross_deployment_spawn_timeout_seconds must NOT be clobbered by a None update"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_with_clear_fields_nulls_nullable_config() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+
+        let applied = ToolSelectionDocument {
+            selection_id: "test-clear-fields".to_string(),
+            agent_did: "did:test:clear-fields".to_string(),
+            display_name: Some("Original".to_string()),
+            file_tool_root: Some("/tmp/workspace".to_string()),
+            command_execution_policy: Some("read_only".to_string()),
+            command_network_mode: Some("disabled".to_string()),
+            allowed_mcp_service_ids: Some(vec!["observability".to_string()]),
+            backgroundable_tool_names: Some(vec!["bash_unrestricted".to_string()]),
+            cli_tool_names: Some(vec!["rg".to_string()]),
+            defra_query_collections: Some(vec!["AgentRequest".to_string()]),
+            cross_deployment_spawn_timeout_seconds: Some(90),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &applied).await?;
+
+        let clear_update = ToolSelectionDocument {
+            selection_id: "test-clear-fields".to_string(),
+            agent_did: "did:test:clear-fields".to_string(),
+            allowed_mcp_service_ids: Some(Vec::new()),
+            backgroundable_tool_names: Some(Vec::new()),
+            cli_tool_names: Some(Vec::new()),
+            defra_query_collections: Some(Vec::new()),
+            ..Default::default()
+        };
+        write_tool_selection_document_with_clear_fields(
+            &access,
+            &clear_update,
+            &[
+                "display_name",
+                "file_tool_root",
+                "command_execution_policy",
+                "command_network_mode",
+                "cross_deployment_spawn_timeout_seconds",
+            ],
+        )
+        .await?;
+
+        let node = match &access {
+            ConfigAccess::Local(n) => n,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+        let loaded = load_tool_selection(node, "test-clear-fields")
+            .await?
+            .expect("ToolSelection should exist after update");
+
+        assert_eq!(loaded.display_name, None);
+        assert_eq!(loaded.file_tool_root, None);
+        assert_eq!(loaded.command_execution_policy, None);
+        assert_eq!(loaded.command_network_mode, None);
+        assert!(loaded
+            .allowed_mcp_service_ids
+            .unwrap_or_default()
+            .is_empty());
+        assert!(loaded
+            .backgroundable_tool_names
+            .unwrap_or_default()
+            .is_empty());
+        assert!(loaded.cli_tool_names.unwrap_or_default().is_empty());
+        assert!(loaded
+            .defra_query_collections
+            .unwrap_or_default()
+            .is_empty());
+        assert_eq!(loaded.cross_deployment_spawn_timeout_seconds, None);
 
         Ok(())
     }
@@ -238,10 +351,7 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             optional_string_field("display_name", selection.display_name.as_deref()),
             optional_bool_field("enable_file_tools", selection.enable_file_tools),
             optional_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
-            Some(nullable_string_field(
-                "file_tool_root",
-                selection.file_tool_root.as_deref(),
-            )),
+            optional_string_field("file_tool_root", selection.file_tool_root.as_deref()),
             optional_bool_field("enable_bash", selection.enable_bash),
             optional_string_field("bash_mode", selection.bash_mode.as_deref()),
             optional_string_field(
@@ -273,6 +383,11 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .backgroundable_tool_names
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),
+            optional_bool_field("enable_memory", selection.enable_memory),
+            optional_bool_field(
+                "enable_session_history_tool",
+                selection.enable_session_history_tool,
+            ),
             optional_bool_field("enable_defra_query", selection.enable_defra_query),
             selection
                 .defra_query_collections
@@ -291,6 +406,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 "subagent_background_enabled",
                 selection.subagent_background_enabled,
             ),
+            optional_string_field(
+                "subagent_default_await_mode",
+                selection.subagent_default_await_mode.as_deref(),
+            ),
             optional_bool_field(
                 "subagent_allow_cross_deployment",
                 selection.subagent_allow_cross_deployment,
@@ -298,6 +417,9 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             selection
                 .cross_deployment_spawn_timeout_seconds
                 .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+            // NOTE: `write_tools` is deliberately NOT encoded here. The
+            // imperative path always sets `write_tools: None` (it is
+            // apply-managed only), so there is nothing to render.
         ]
         .into_iter()
         .flatten(),

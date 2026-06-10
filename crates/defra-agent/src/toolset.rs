@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::llm::tool::ToolDyn;
 use anyhow::Result;
-use rig::tool::ToolDyn;
 use std::collections::HashMap;
 
 mod args;
@@ -12,6 +12,8 @@ mod cli_tool;
 mod context_budget;
 mod denial;
 mod file_tools;
+#[cfg(feature = "agent-memory")]
+mod memory;
 mod native_runner;
 mod session_history;
 mod shared;
@@ -36,6 +38,8 @@ pub use context_budget::{
     CONTEXT_BUDGET_TOOL_NAME,
 };
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+#[cfg(feature = "agent-memory")]
+pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
     build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
     SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,

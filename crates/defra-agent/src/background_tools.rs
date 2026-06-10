@@ -1,15 +1,16 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
+mod buffer;
 pub(crate) mod r4c_args;
 mod transcript_render;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
-use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -25,6 +26,9 @@ use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
+pub(crate) use self::buffer::{
+    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
+};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
@@ -42,7 +46,7 @@ pub(crate) struct SpawnSubagentArgs {
     pub name: String,
     pub prompt: String,
     #[serde(default)]
-    pub await_mode: AwaitModeArg,
+    pub await_mode: Option<AwaitModeArg>,
     #[serde(default)]
     pub deadline: Option<DateTime<Utc>>,
 }
@@ -120,6 +124,7 @@ pub(crate) struct ParentSubagentContext {
     pub allowed_targets: Vec<SubagentTarget>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
+    pub subagent_default_await_mode: AwaitMode,
     /// When false (default), cross-deployment (remote-DID) subagent spawns are
     /// rejected at runtime. Cross-deployment is deferred pending ACP.
     pub subagent_allow_cross_deployment: bool,
@@ -250,6 +255,7 @@ struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
     subagent_spawn_enabled: Option<bool>,
     subagent_background_enabled: Option<bool>,
+    subagent_default_await_mode: Option<String>,
     #[serde(default)]
     subagent_allow_cross_deployment: Option<bool>,
     cross_deployment_spawn_timeout_seconds: Option<i64>,
@@ -497,6 +503,7 @@ pub(crate) async fn handle_list_background_tools(
     node: &EmbeddedNode,
     caller_request_id: &str,
     local_deployment_id: &str,
+    live_outputs: &LiveToolOutputRegistry,
     args: ListBackgroundToolsArgs,
 ) -> Result<ListBackgroundToolsResponse> {
     let limit = args.validated_limit() as usize;
@@ -549,10 +556,17 @@ pub(crate) async fn handle_list_background_tools(
         let created_at = parse_rfc3339(row.started_at.as_deref())
             .ok_or_else(|| anyhow!("background tool call {tool_call_id} has invalid started_at"))?;
         let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
-        let stdout_bytes = row
-            .result
-            .as_deref()
-            .map_or(0, |result| result.len() as u64);
+        let (stdout_bytes, stderr_bytes) = if status == "running" {
+            live_outputs
+                .snapshot(&tool_call_id)
+                .await
+                .map(|snapshot| (snapshot.stdout_bytes, snapshot.stderr_bytes))
+                .unwrap_or((0, 0))
+        } else {
+            let persisted =
+                persisted_tool_output_streams(&row.tool_name, row.result.as_deref().unwrap_or(""));
+            (persisted.stdout.len() as u64, persisted.stderr.len() as u64)
+        };
 
         entries.push(ListBackgroundToolsEntry {
             tool_call_id,
@@ -563,7 +577,7 @@ pub(crate) async fn handle_list_background_tools(
             created_at,
             last_update,
             stdout_bytes,
-            stderr_bytes: 0,
+            stderr_bytes,
         });
     }
 
@@ -823,6 +837,7 @@ fn tool_result_identities(message: &Message) -> Vec<String> {
 pub(crate) async fn handle_read_tool_output(
     node: &EmbeddedNode,
     caller_request_id: &str,
+    live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
 ) -> Result<ReadToolOutputOutcome> {
     let tool_call_id = args.tool_call_id.trim();
@@ -875,19 +890,27 @@ pub(crate) async fn handle_read_tool_output(
         .to_string();
     let exited = status != "running";
     let max_bytes = args.validated_max_bytes();
-    let result = if exited {
-        row.result.as_deref().unwrap_or_default()
+    let (slice, exit_code) = if exited {
+        let result = row.result.as_deref().unwrap_or_default();
+        let persisted = persisted_tool_output_streams(&row.tool_name, result);
+        // Merge stdout + stderr into a single logical buffer behind one byte cursor.
+        // The capture stores the two streams separately with no preserved interleave
+        // order, so combining them with a stable labeled boundary (stdout first,
+        // then `STDERR_BOUNDARY`, then stderr) is the cleanest honest single-cursor
+        // model: an orchestrator pages through ALL output gap-free from `offset`.
+        let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
+        (
+            read_combined_output_slice(&combined, args.offset, max_bytes),
+            persisted.exit_code,
+        )
     } else {
-        ""
+        let slice = live_outputs
+            .snapshot(&row.tool_call_id)
+            .await
+            .map(|snapshot| read_live_output_slice(snapshot, args.offset, max_bytes))
+            .unwrap_or_else(|| read_combined_output_slice("", args.offset, max_bytes));
+        (slice, None)
     };
-    let persisted = persisted_tool_output_streams(&row.tool_name, result);
-    // Merge stdout + stderr into a single logical buffer behind one byte cursor.
-    // The capture stores the two streams separately with no preserved interleave
-    // order, so combining them with a stable labeled boundary (stdout first,
-    // then `STDERR_BOUNDARY`, then stderr) is the cleanest honest single-cursor
-    // model: an orchestrator pages through ALL output gap-free from `offset`.
-    let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
-    let slice = read_combined_output_slice(&combined, args.offset, max_bytes);
 
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
@@ -895,10 +918,11 @@ pub(crate) async fn handle_read_tool_output(
         status,
         output: slice.output,
         next_offset: slice.next_offset,
+        first_available_offset: slice.first_available_offset,
         total_bytes: slice.total_bytes,
         has_more: slice.has_more,
         exited,
-        exit_code: persisted.exit_code,
+        exit_code,
     }))
 }
 
@@ -922,6 +946,11 @@ fn combine_output_streams(stdout: &str, stderr: &str) -> String {
 struct CombinedOutputSlice {
     output: String,
     next_offset: u64,
+    /// Earliest byte offset still readable. 0 for terminal/persisted output
+    /// (nothing is ever evicted); for a running tool whose live ring buffer
+    /// has overflowed, this is > 0 and a caller can detect that bytes in
+    /// `[requested offset, first_available_offset)` were dropped.
+    first_available_offset: u64,
     total_bytes: u64,
     has_more: bool,
 }
@@ -936,9 +965,36 @@ fn read_combined_output_slice(
     offset: u64,
     max_bytes: usize,
 ) -> CombinedOutputSlice {
+    read_retained_output_slice(combined, 0, combined.len() as u64, offset, max_bytes)
+}
+
+fn read_live_output_slice(
+    snapshot: LiveToolOutputSnapshot,
+    offset: u64,
+    max_bytes: usize,
+) -> CombinedOutputSlice {
+    let retained = String::from_utf8_lossy(&snapshot.combined.bytes).into_owned();
+    read_retained_output_slice(
+        &retained,
+        snapshot.combined.first_offset,
+        snapshot.combined.total_bytes_seen,
+        offset,
+        max_bytes,
+    )
+}
+
+fn read_retained_output_slice(
+    combined: &str,
+    first_offset: u64,
+    total_bytes: u64,
+    offset: u64,
+    max_bytes: usize,
+) -> CombinedOutputSlice {
     let bytes = combined.as_bytes();
-    let total_bytes = bytes.len() as u64;
-    let start = (offset.min(total_bytes)) as usize;
+    let retained_end = first_offset.saturating_add(bytes.len() as u64);
+    let total_bytes = total_bytes.max(retained_end);
+    let start_offset = offset.clamp(first_offset, retained_end);
+    let start = start_offset.saturating_sub(first_offset) as usize;
     let mut start = start;
     // Snap forward to a UTF-8 char boundary so slicing never splits a codepoint.
     while start < bytes.len() && !combined.is_char_boundary(start) {
@@ -960,10 +1016,11 @@ fn read_combined_output_slice(
         }
     }
     let output = combined[start..end].to_string();
-    let next_offset = end as u64;
+    let next_offset = first_offset.saturating_add(end as u64);
     CombinedOutputSlice {
         output,
         next_offset,
+        first_available_offset: first_offset,
         total_bytes,
         has_more: next_offset < total_bytes,
     }
@@ -1338,6 +1395,7 @@ pub(crate) async fn load_parent_subagent_context(
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
         subagent_background_enabled: selection.background_enabled,
+        subagent_default_await_mode: selection.default_await_mode,
         subagent_allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
@@ -1454,6 +1512,7 @@ struct SubagentToolSelection {
     allowed_targets: Vec<SubagentTarget>,
     spawn_enabled: bool,
     background_enabled: bool,
+    default_await_mode: AwaitMode,
     allow_cross_deployment: bool,
     cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
@@ -1518,6 +1577,7 @@ async fn load_subagent_tool_selection(
                 allowed_targets: Vec::new(),
                 spawn_enabled: false,
                 background_enabled: false,
+                default_await_mode: AwaitMode::Foreground,
                 allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
             });
@@ -1534,6 +1594,7 @@ async fn load_subagent_tool_selection(
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_background_enabled
+                subagent_default_await_mode
                 subagent_allow_cross_deployment
                 cross_deployment_spawn_timeout_seconds
             }}
@@ -1553,15 +1614,27 @@ async fn load_subagent_tool_selection(
             allowed_targets: Vec::new(),
             spawn_enabled: false,
             background_enabled: false,
+            default_await_mode: AwaitMode::Foreground,
             allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
         });
     };
 
+    let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
+    let default_await_mode = selection
+        .subagent_default_await_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(AwaitMode::from_persisted)
+        .filter(|mode| background_enabled || *mode != AwaitMode::Background)
+        .unwrap_or(AwaitMode::Foreground);
+
     Ok(SubagentToolSelection {
         allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
-        background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        background_enabled,
+        default_await_mode,
         allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
@@ -2110,8 +2183,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::completion::message::{AssistantContent, Text};
-    use rig::one_or_many::OneOrMany;
+    use crate::llm::message::{AssistantContent, Text};
 
     #[test]
     fn project_child_terminal_maps_child_states() {
@@ -2164,9 +2236,9 @@ mod tests {
     fn render_assistant_message_text_uses_persisted_assistant_message() {
         let message = Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: "child final answer".to_string(),
-            })),
+            })],
         };
         let content = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -2177,9 +2249,9 @@ mod tests {
 
     #[test]
     fn render_assistant_message_text_uses_legacy_assistant_content() {
-        let content = OneOrMany::one(AssistantContent::Text(Text {
+        let content = vec![AssistantContent::Text(Text {
             text: "legacy child final answer".to_string(),
-        }));
+        })];
         let persisted = serde_json::to_string(&content).unwrap();
         assert_eq!(
             render_assistant_message_text(&persisted).unwrap(),
@@ -2206,5 +2278,31 @@ mod tests {
             ]),
             vec!["alpha".to_string(), "beta".to_string()]
         );
+    }
+
+    #[test]
+    fn combined_slice_reports_zero_first_available_offset() {
+        // Terminal/persisted output is never evicted, so the earliest readable
+        // byte is always 0.
+        let slice = read_combined_output_slice("hello world", 0, 1024);
+        assert_eq!(slice.first_available_offset, 0);
+        assert_eq!(slice.output, "hello world");
+        assert_eq!(slice.total_bytes, 11);
+        assert!(!slice.has_more);
+    }
+
+    #[test]
+    fn retained_slice_surfaces_dropped_prefix() {
+        // Simulate a live ring buffer that produced 1000 bytes but retains only
+        // the last 4 (tail): first_offset = 996, total_bytes_seen = 1000.
+        let slice = read_retained_output_slice("tail", 996, 1000, 0, 1024);
+        // A read from offset 0 is clamped forward to the earliest retained
+        // byte; first_available_offset (996) exceeding the requested offset (0)
+        // is how a caller detects bytes [0, 996) were produced then evicted.
+        assert_eq!(slice.first_available_offset, 996);
+        assert_eq!(slice.output, "tail");
+        assert_eq!(slice.next_offset, 1000);
+        assert_eq!(slice.total_bytes, 1000);
+        assert!(!slice.has_more);
     }
 }

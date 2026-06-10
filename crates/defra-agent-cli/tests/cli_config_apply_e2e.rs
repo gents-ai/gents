@@ -586,6 +586,174 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-empty-list-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-empty-list-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+    let behavior = read_json_file(
+        &root
+            .join("agent-behaviors")
+            .join(&behavior_id)
+            .join("object.json"),
+    )?;
+    let selection_id = behavior
+        .get("tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing tool_selection_id after export"))?
+        .to_string();
+    let selection_path = root
+        .join("tool-selections")
+        .join(&selection_id)
+        .join("object.json");
+    let mut selection = read_json_file(&selection_path)?;
+    selection["display_name"] = Value::String("Empty list regression".to_string());
+    for field in [
+        "command_allowed_argv_prefixes",
+        "command_forbidden_argv_prefixes",
+        "cli_tool_names",
+        "allowed_mcp_service_ids",
+        "delegate_to",
+        "backgroundable_tool_names",
+        "subagent_targets",
+        "defra_query_collections",
+    ] {
+        selection[field] = Value::Array(Vec::new());
+    }
+    selection["subagent_spawn_enabled"] = Value::Bool(false);
+    selection["subagent_steering_enabled"] = Value::Bool(false);
+    selection["subagent_background_enabled"] = Value::Bool(false);
+    selection["subagent_allow_cross_deployment"] = Value::Bool(false);
+    selection["cross_deployment_spawn_timeout_seconds"] = Value::Null;
+    write_json_file(&selection_path, &selection)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let validated = run_cli_json(&home_dir, &["config", "validate", "--root", root_str])?;
+    assert_eq!(validated.get("ok").and_then(Value::as_bool), Some(true));
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        applied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let reapplied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        reapplied.get("status").and_then(Value::as_str),
+        Some("noop")
+    );
+    assert_eq!(
+        reapplied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    selection_id
+                    display_name
+                    command_allowed_argv_prefixes
+                    command_forbidden_argv_prefixes
+                    cli_tool_names
+                    allowed_mcp_service_ids
+                    delegate_to
+                    backgroundable_tool_names
+                    subagent_targets
+                    subagent_spawn_enabled
+                    subagent_steering_enabled
+                    subagent_background_enabled
+                    subagent_allow_cross_deployment
+                    cross_deployment_spawn_timeout_seconds
+                    defra_query_collections
+                }}
+            }}"#,
+            escape_graphql_string(&selection_id),
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&response, "ToolSelection")?;
+    assert_eq!(
+        row.get("display_name").and_then(Value::as_str),
+        Some("Empty list regression")
+    );
+    for field in [
+        "command_allowed_argv_prefixes",
+        "command_forbidden_argv_prefixes",
+        "cli_tool_names",
+        "allowed_mcp_service_ids",
+        "delegate_to",
+        "backgroundable_tool_names",
+        "subagent_targets",
+        "defra_query_collections",
+    ] {
+        assert!(
+            row.get(field).is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+            }),
+            "expected {field} to query back as null or empty array, got {row}"
+        );
+    }
+    assert_eq!(
+        row.get("subagent_allow_cross_deployment")
+            .and_then(Value::as_bool),
+        Some(false),
+        "expected subagent_allow_cross_deployment to stay disabled: {row}"
+    );
+    assert!(
+        row.get("cross_deployment_spawn_timeout_seconds")
+            .is_none_or(Value::is_null),
+        "expected cross_deployment_spawn_timeout_seconds to stay null: {row}"
+    );
+
+    Ok(())
+}
+
 /// End-to-end test for the EventTrigger apply path.
 ///
 /// Covers the runtime-ownership contract for `EventTrigger`:
@@ -1192,5 +1360,199 @@ async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result
         applied.pointer("/applied/tasks").and_then(Value::as_u64),
         Some(1)
     );
+    Ok(())
+}
+
+/// End-to-end regression for the `write_tools` config round-trip (Task B5).
+///
+/// A ToolSelection manifest fragment that declares a `write_tools` entry
+/// (a structured `WriteToolDecl` with fields) must:
+///   * apply once (status applied, 1 tool_selection written),
+///   * re-apply as a noop (the decl persisted in storage form matches the
+///     desired manifest → NO drift), and
+///   * `config diff` clean (`ok: true`, the selection counts as unchanged).
+///
+/// This proves the CLI desired-state/diff layer carries `write_tools`
+/// through apply→diff, not just the document encoder (B1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-write-tools-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-write-tools-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+    let behavior = read_json_file(
+        &root
+            .join("agent-behaviors")
+            .join(&behavior_id)
+            .join("object.json"),
+    )?;
+    let selection_id = behavior
+        .get("tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing tool_selection_id after export"))?
+        .to_string();
+    let selection_path = root
+        .join("tool-selections")
+        .join(&selection_id)
+        .join("object.json");
+    let mut selection = read_json_file(&selection_path)?;
+    selection["display_name"] = Value::String("write_tools round-trip".to_string());
+    // A structured WriteToolDecl, authored in the manifest as an object list
+    // (not the storage `[String]` form).
+    selection["write_tools"] = serde_json::json!([
+        {
+            "tool_name": "request_action",
+            "collection": "ActionRequest",
+            "description": "Request a bounded action",
+            "fields": [
+                { "name": "title", "required": true },
+                { "name": "detail", "required": false }
+            ]
+        }
+    ]);
+    write_json_file(&selection_path, &selection)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let validated = run_cli_json(&home_dir, &["config", "validate", "--root", root_str])?;
+    assert_eq!(
+        validated.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "manifest with write_tools must validate: {validated}"
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied"),
+        "first apply must write the selection: {applied}"
+    );
+    assert_eq!(
+        applied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(1),
+        "first apply must touch exactly the one tool selection: {applied}"
+    );
+
+    // The decisive assertion: re-apply must be a noop. If the CLI desired-state
+    // dropped or mis-encoded `write_tools`, the live row would differ from the
+    // desired manifest and apply would report drift / re-write.
+    let reapplied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        reapplied.get("status").and_then(Value::as_str),
+        Some("noop"),
+        "re-apply must be a noop (write_tools persisted and matches): {reapplied}"
+    );
+    assert_eq!(
+        reapplied
+            .pointer("/applied/tool_selections")
+            .and_then(Value::as_u64),
+        Some(0),
+        "re-apply must not re-write the selection: {reapplied}"
+    );
+
+    // And `config diff` must report the selection as unchanged (no drift).
+    let exact = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
+    assert_eq!(
+        exact.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "diff must be clean after write_tools apply: {exact}"
+    );
+    assert_eq!(
+        exact
+            .pointer("/counts/tool_selections/unchanged")
+            .and_then(Value::as_u64),
+        Some(1),
+        "the write_tools selection must count as unchanged: {exact}"
+    );
+    assert_eq!(
+        exact
+            .pointer("/counts/tool_selections/update")
+            .and_then(Value::as_u64),
+        Some(0),
+        "no spurious update for the write_tools selection: {exact}"
+    );
+
+    // The decl persisted to storage form (`[String]` of JSON-encoded decls).
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    selection_id
+                    write_tools
+                }}
+            }}"#,
+            escape_graphql_string(&selection_id),
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&response, "ToolSelection")?;
+    let stored = row
+        .get("write_tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("write_tools did not query back as a list: {row}"))?;
+    assert_eq!(
+        stored.len(),
+        1,
+        "expected one stored write_tools entry: {row}"
+    );
+    let decl: Value = serde_json::from_str(
+        stored[0]
+            .as_str()
+            .ok_or_else(|| anyhow!("stored write_tools entry is not a JSON string: {row}"))?,
+    )
+    .context("stored write_tools entry must be JSON")?;
+    assert_eq!(
+        decl.get("tool_name").and_then(Value::as_str),
+        Some("request_action"),
+        "stored decl tool_name must round-trip: {decl}"
+    );
+    assert_eq!(
+        decl.get("collection").and_then(Value::as_str),
+        Some("ActionRequest"),
+        "stored decl collection must round-trip: {decl}"
+    );
+    assert_eq!(
+        decl.pointer("/fields/0/name").and_then(Value::as_str),
+        Some("title"),
+        "stored decl field must round-trip: {decl}"
+    );
+
     Ok(())
 }

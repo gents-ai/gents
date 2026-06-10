@@ -7,10 +7,12 @@ description = "Reusable DefraDB-backed agent framework extracted from agent-daem
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "rocksdb"]
+agent-memory = []
 rocksdb = ["defra-node/rocksdb"]
 
 [dependencies]
 anyhow.workspace = true
+async-stream = "0.3"
 async-trait = "0.1"
 bytes.workspace = true
 chrono.workspace = true
@@ -30,6 +32,7 @@ hostname.workspace = true
 identity.workspace = true
 libc = "0.2"
 minijinja.workspace = true
+opentelemetry.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,6 +40,7 @@ thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 uuid.workspace = true
 rig-core.workspace = true
 reqwest.workspace = true

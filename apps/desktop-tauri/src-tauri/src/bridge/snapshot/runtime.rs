@@ -141,6 +141,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     max_turns: row.max_turns,
                     temperature: row.temperature,
                     stream_batch_ms: row.stream_batch_ms,
+                    stream_liveness_timeout_secs: row.stream_liveness_timeout_secs,
                     deadline_duration_secs: row.deadline_duration_secs,
                 })
                 .collect::<Vec<_>>();
@@ -177,6 +178,8 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     subagent_allow_cross_deployment: row.subagent_allow_cross_deployment,
                     cross_deployment_spawn_timeout_seconds: row
                         .cross_deployment_spawn_timeout_seconds,
+                    enable_memory: row.enable_memory,
+                    enable_session_history_tool: row.enable_session_history_tool,
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));

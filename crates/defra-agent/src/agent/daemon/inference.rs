@@ -5,12 +5,10 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use rig::streaming::StreamingPrompt;
 use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
-use crate::completion_factory::agent_with_request_sampling;
 use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
@@ -98,7 +96,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         request: &crate::watcher::AgentRequest,
         doc_id: &str,
-        history: &[rig::completion::message::Message],
+        history: &[crate::llm::message::Message],
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
@@ -106,6 +104,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let workspace_cwd = request_workspace_cwd(request);
+        let deadline_at = request
+            .deadline
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let has_deadline = !deadline_at.is_empty();
+        let workspace_cwd_set = workspace_cwd.is_some();
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
@@ -168,18 +175,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
-                let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
+                // Owned completion loop (#400): drive our own multi-turn stream
+                // over the model + tool surface. Per-request sampling is resolved
+                // into the loop config from the behavior + request.
+                let model = (*self.model).clone();
+                let loop_config = crate::completion_factory::loop_config_for_request(
+                    &self.behavior,
+                    self.preamble.clone(),
+                    request,
+                    self.loop_tools.len(),
+                );
+                let loop_prompt = crate::llm::message::Message::user(request.content.clone());
+                let loop_history = history.to_vec();
+                let loop_tools = self.loop_tools.clone();
                 // Keep a per-attempt token for the admission permit and cancel it
                 // explicitly on interrupt before dropping the guarded stream. The
                 // permit's Drop path observes this token to persist the linked
                 // InferenceCall as cancelled rather than a generic stream drop.
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
+                let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
-                let mut stream = admission::scope_call_with_token(
+                let mut stream = admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index as i64,
                     inference_token.clone(),
+                    terminal_failure_reason.clone(),
                     async {
                         tokio::select! {
                             biased;
@@ -199,26 +220,26 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                                 Err(anyhow!("request interrupted during inference"))
                             }
-                            stream = await_with_request_deadline(
-                                request_deadline,
-                                agent
-                                    .stream_prompt(&request.content)
-                                    .with_history(history.to_vec())
-                                    .with_hook(hook),
-                                "starting inference stream",
-                            ) => stream
+                            stream = std::future::ready(Box::pin(crate::agent::loop_stream::run_loop_stream(
+                                model,
+                                Some(hook),
+                                loop_prompt,
+                                loop_history,
+                                loop_tools,
+                                loop_config,
+                            ))) => Ok(stream)
                         }
                     },
                 )
                 .await?;
 
-                admission::scope_call_with_token(
+                admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index as i64,
                     inference_token.clone(),
+                    terminal_failure_reason.clone(),
                     async {
-                        let liveness_timeout =
-                            Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
+                        let liveness_timeout = self.behavior.stream_liveness_timeout;
 
                         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
@@ -256,6 +277,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             session_id = %session_id,
                                             error = %error,
                                             "failed to persist interrupted assistant turn before terminal transition"
+                                        );
+                                    }
+                                    // #442: a tool that completed inline before the
+                                    // interrupt recorded its result on the AgentToolCall
+                                    // row but may not have persisted its result message;
+                                    // backfill so the transcript stays pair-closed.
+                                    if let Err(error) = persistence_hook
+                                        .backfill_completed_tool_results()
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to backfill completed tool-result messages on interrupt"
                                         );
                                     }
                                     return Err(anyhow!("request interrupted during inference"));
@@ -305,11 +341,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to mark in-flight tool calls failed after stream liveness timeout"
                                         );
                                     }
+                                    let timeout_reason = format!(
+                                        "stream liveness timeout: no data received for {}s",
+                                        liveness_timeout.as_secs()
+                                    );
+                                    admission::set_terminal_failure_reason(
+                                        &terminal_failure_reason,
+                                        timeout_reason.clone(),
+                                    );
                                     stream_error = Some(rig::agent::StreamingError::Completion(
-                                        rig::completion::CompletionError::ProviderError(format!(
-                                            "stream liveness timeout: no data received for {}s",
-                                            DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
-                                        )),
+                                        rig::completion::CompletionError::ProviderError(
+                                            timeout_reason,
+                                        ),
                                     ));
                                     break;
                                 }
@@ -341,6 +384,23 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
+                            // #442: a tool that completed inline before the stream
+                            // stalled recorded its result on the AgentToolCall row but
+                            // may not have persisted its result message (the streamed
+                            // ToolResult never arrived); backfill so the transcript
+                            // stays pair-closed and the next request is not sent a
+                            // dangling assistant tool call.
+                            if let Err(error) = persistence_hook
+                                .backfill_completed_tool_results()
+                                .await
+                            {
+                                tracing::warn!(
+                                    request_id = %request_id,
+                                    session_id = %session_id,
+                                    error = %error,
+                                    "failed to backfill completed tool-result messages after stream error"
+                                );
+                            }
 
                             let error_reason = format!("agent stream failed: {}", error);
                             self.stream_writer
@@ -408,10 +468,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 "inference.attempt",
                 request_id = %request_id,
                 session_id = %session_id,
+                agent_did = %request.agent_did,
                 behavior_id = %behavior_id,
                 backend_id = %backend_id,
                 model_name = %model_name,
+                deadline_at = %deadline_at,
+                has_deadline,
+                subagent_depth = request.subagent_depth,
+                is_subagent = request.subagent_depth > 0
+                    || request.caused_by_parent_request_id.is_some()
+                    || request.caused_by_parent_tool_call_id.is_some(),
+                workspace_cwd_set,
                 attempt = attempt_index,
+                retry_attempt = attempt > 0,
                 max_attempts,
             ))
             .await?;

@@ -1,16 +1,26 @@
 //! Deterministic OpenAI-compatible streaming backend for full-daemon tests.
+//!
+//! Built on `axum` (a real async HTTP server) rather than a hand-rolled
+//! nonblocking `TcpListener` accept loop, so it cannot flake the way the
+//! previous server did (its `Err(_) => break` arm killed the listener on any
+//! transient accept error under CI load). The SSE byte format, the
+//! `StreamScript` pause/release semantics, and the chunk-count accounting are
+//! preserved exactly so existing consumers are unchanged.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use axum::extract::State;
+use axum::http::{header, StatusCode};
+use axum::response::sse::{Event, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
 use serde_json::json;
-
-use super::http_mock::{read_http_request, write_http_response};
+use tokio::sync::{oneshot, Notify};
 
 #[derive(Clone, Debug)]
 pub struct StreamScript {
@@ -45,47 +55,48 @@ impl StreamScript {
 
 pub struct MockStreamingBackend {
     endpoint: String,
-    port: u16,
-    stop: Arc<AtomicBool>,
     state: Arc<StreamingState>,
-    handle: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
+    shutdown: Option<oneshot::Sender<()>>,
 }
 
 impl MockStreamingBackend {
     pub fn start(model_name: &str, scripts: Vec<StreamScript>) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(StreamingState::new(
+            model_name.to_string(),
+            scripts,
+            stop.clone(),
+        ));
+        let app = Router::new()
+            .route("/v1/models", get(handle_models))
+            .route("/models", get(handle_models))
+            .route("/v1/chat/completions", post(handle_chat))
+            .route("/chat/completions", post(handle_chat))
+            .fallback(handle_fallback)
+            .with_state(state.clone());
+
+        // Bind synchronously, serve on the ambient tokio runtime (consumers are
+        // `#[tokio::test]`); `from_std` requires the listener be nonblocking.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(StreamingState::new(scripts));
-        let model_name = model_name.to_string();
-        let stop_for_thread = stop.clone();
-        let state_for_thread = state.clone();
-        let handle = thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        let stop = stop_for_thread.clone();
-                        let state = state_for_thread.clone();
-                        let model_name = model_name.clone();
-                        thread::spawn(move || {
-                            let _ = handle_connection(stream, &model_name, state, stop);
-                        });
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(_) => break,
-                }
-            }
+        let listener = tokio::net::TcpListener::from_std(listener)?;
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         Ok(Self {
             endpoint: format!("http://127.0.0.1:{port}/v1"),
-            port,
-            stop,
             state,
-            handle: Some(handle),
+            stop,
+            shutdown: Some(shutdown_tx),
         })
     }
 
@@ -97,37 +108,40 @@ impl MockStreamingBackend {
         self.state.release(marker);
     }
 
+    pub fn observed_chunks(&self, marker: &str) -> usize {
+        self.state.chunk_count(marker)
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let actual = self.state.chunk_count(marker);
-            if actual >= expected {
-                return;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "timed out waiting for {expected} chunk(s) for marker {marker}, observed {actual}"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        let observed = self
+            .state
+            .wait_for_chunk_count(marker, expected, Duration::from_secs(5))
+            .await;
+        assert!(
+            observed >= expected,
+            "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
+        );
     }
 }
 
 impl Drop for MockStreamingBackend {
     fn drop(&mut self) {
+        // Wake any paused stream so in-flight SSE responses can finish, then
+        // stop the server.
         self.stop.store(true, Ordering::Relaxed);
-        self.state.notify_all();
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        self.state.notify.notify_waiters();
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
     }
 }
 
 struct StreamingState {
+    model_name: String,
     scripts: Vec<StreamScript>,
+    stop: Arc<AtomicBool>,
     inner: Mutex<StreamingStateInner>,
-    condvar: Condvar,
+    notify: Notify,
 }
 
 #[derive(Default)]
@@ -137,25 +151,29 @@ struct StreamingStateInner {
 }
 
 impl StreamingState {
-    fn new(scripts: Vec<StreamScript>) -> Self {
+    fn new(model_name: String, scripts: Vec<StreamScript>, stop: Arc<AtomicBool>) -> Self {
         Self {
+            model_name,
             scripts,
+            stop,
             inner: Mutex::new(StreamingStateInner::default()),
-            condvar: Condvar::new(),
+            notify: Notify::new(),
         }
     }
 
-    fn find_script(&self, body: &str) -> Option<StreamScript> {
+    fn find_script(&self, body: &str) -> StreamScript {
         self.scripts
             .iter()
             .find(|script| body.contains(&script.marker))
             .cloned()
+            .unwrap_or_else(|| StreamScript::completes("__default__", ["mock streamed response"]))
     }
 
     fn record_chunk(&self, marker: &str) {
         let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
         *inner.chunk_counts.entry(marker.to_string()).or_default() += 1;
-        self.condvar.notify_all();
+        drop(inner);
+        self.notify.notify_waiters();
     }
 
     fn chunk_count(&self, marker: &str) -> usize {
@@ -168,75 +186,44 @@ impl StreamingState {
             .unwrap_or_default()
     }
 
+    async fn wait_for_chunk_count(
+        &self,
+        marker: &str,
+        expected: usize,
+        timeout: Duration,
+    ) -> usize {
+        let started = Instant::now();
+        loop {
+            let actual = self.chunk_count(marker);
+            if actual >= expected || started.elapsed() >= timeout {
+                return actual;
+            }
+            let _ = tokio::time::timeout(Duration::from_millis(25), self.notify.notified()).await;
+        }
+    }
+
     fn release(&self, marker: &str) {
         self.inner
             .lock()
             .expect("streaming backend mutex poisoned")
             .releases
             .insert(marker.to_string());
-        self.condvar.notify_all();
+        self.notify.notify_waiters();
     }
 
-    fn wait_for_release_or_stop(&self, marker: &str, stop: &AtomicBool) {
-        let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
-        while !stop.load(Ordering::Relaxed) && !inner.releases.contains(marker) {
-            inner = self
-                .condvar
-                .wait_timeout(inner, Duration::from_millis(25))
-                .expect("streaming backend condvar poisoned")
-                .0;
+    fn is_released(&self, marker: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .releases
+            .contains(marker)
+    }
+
+    async fn wait_for_release_or_stop(&self, marker: &str) {
+        while !self.stop.load(Ordering::Relaxed) && !self.is_released(marker) {
+            let _ = tokio::time::timeout(Duration::from_millis(25), self.notify.notified()).await;
         }
     }
-
-    fn notify_all(&self) {
-        self.condvar.notify_all();
-    }
-}
-
-fn handle_connection(
-    mut stream: TcpStream,
-    model_name: &str,
-    state: Arc<StreamingState>,
-    stop: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    let request = match read_http_request(&mut stream) {
-        Ok(request) => request,
-        Err(error) => {
-            let _ = stream.shutdown(Shutdown::Both);
-            return Err(error);
-        }
-    };
-
-    if request.method == "GET" && (request.path == "/v1/models" || request.path == "/models") {
-        let body = format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#);
-        write_http_response(&mut stream, "200 OK", "application/json", &body)?;
-        let _ = stream.shutdown(Shutdown::Both);
-        return Ok(());
-    }
-
-    if request.method == "POST"
-        && (request.path == "/v1/chat/completions" || request.path == "/chat/completions")
-    {
-        if request_is_streaming(&request.body) {
-            let script = state.find_script(&request.body).unwrap_or_else(|| {
-                StreamScript::completes("__default__", ["mock streamed response"])
-            });
-            write_streaming_response(&mut stream, &script, state, stop)?;
-        } else {
-            write_completion_response(&mut stream, model_name)?;
-        }
-        let _ = stream.shutdown(Shutdown::Both);
-        return Ok(());
-    }
-
-    write_http_response(
-        &mut stream,
-        "404 Not Found",
-        "application/json",
-        r#"{"error":"not found"}"#,
-    )?;
-    let _ = stream.shutdown(Shutdown::Both);
-    Ok(())
 }
 
 fn request_is_streaming(body: &str) -> bool {
@@ -246,12 +233,27 @@ fn request_is_streaming(body: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn write_completion_response(stream: &mut TcpStream, model_name: &str) -> anyhow::Result<()> {
-    let body = json!({
+async fn handle_models(State(state): State<Arc<StreamingState>>) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"data":[{{"id":"{}"}}]}}"#, state.model_name),
+    )
+        .into_response()
+}
+
+async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> Response {
+    if request_is_streaming(&body) {
+        let script = state.find_script(&body);
+        return streaming_response(script, state);
+    }
+
+    // Non-streaming completion (title generation and similar).
+    let completion = json!({
         "id": "chatcmpl-title",
         "object": "chat.completion",
-        "created": 1710000000_u64,
-        "model": model_name,
+        "created": 1_710_000_000_u64,
+        "model": state.model_name,
         "choices": [{
             "index": 0,
             "finish_reason": "stop",
@@ -267,45 +269,86 @@ fn write_completion_response(stream: &mut TcpStream, model_name: &str) -> anyhow
             "completion_tokens": 1,
             "total_tokens": 5
         }
-    })
-    .to_string();
-    write_http_response(stream, "200 OK", "application/json", &body)
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        completion.to_string(),
+    )
+        .into_response()
 }
 
-fn write_streaming_response(
-    stream: &mut TcpStream,
-    script: &StreamScript,
-    state: Arc<StreamingState>,
-    stop: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    stream.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
-    )?;
-    stream.flush()?;
-
-    for chunk in &script.chunks {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        write_sse_chunk(stream, chunk)?;
-        state.record_chunk(&script.marker);
-    }
-
-    if script.pause_after_chunks {
-        state.wait_for_release_or_stop(&script.marker, &stop);
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-    }
-
-    write_sse_usage(stream)?;
-    stream.write_all(b"data: [DONE]\n\n")?;
-    stream.flush()?;
-    Ok(())
+async fn handle_fallback() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"not found"}"#,
+    )
+        .into_response()
 }
 
-fn write_sse_chunk(stream: &mut TcpStream, content: &str) -> anyhow::Result<()> {
-    let data = json!({
+/// Drive one scripted SSE response. Mirrors the previous hand-rolled byte
+/// output: one `data: {chunk}` event per scripted chunk, an optional pause
+/// until `release(marker)` (or shutdown), a terminal usage event, and
+/// `data: [DONE]`.
+fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Response {
+    #[derive(Clone, Copy)]
+    enum Phase {
+        Chunk(usize),
+        AwaitRelease,
+        Usage,
+        Done,
+        Finished,
+    }
+
+    let init = (Phase::Chunk(0), script, state);
+    let stream = futures::stream::unfold(init, |(phase, script, state)| async move {
+        let mut phase = phase;
+        loop {
+            match phase {
+                Phase::Chunk(index) => {
+                    if state.stop.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    if index < script.chunks.len() {
+                        let event = Event::default().data(chunk_payload(&script.chunks[index]));
+                        state.record_chunk(&script.marker);
+                        return Some((
+                            Ok::<Event, Infallible>(event),
+                            (Phase::Chunk(index + 1), script, state),
+                        ));
+                    }
+                    phase = if script.pause_after_chunks {
+                        Phase::AwaitRelease
+                    } else {
+                        Phase::Usage
+                    };
+                }
+                Phase::AwaitRelease => {
+                    state.wait_for_release_or_stop(&script.marker).await;
+                    if state.stop.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    phase = Phase::Usage;
+                }
+                Phase::Usage => {
+                    let event = Event::default().data(usage_payload());
+                    return Some((Ok(event), (Phase::Done, script, state)));
+                }
+                Phase::Done => {
+                    let event = Event::default().data("[DONE]");
+                    return Some((Ok(event), (Phase::Finished, script, state)));
+                }
+                Phase::Finished => return None,
+            }
+        }
+    });
+
+    Sse::new(stream).into_response()
+}
+
+fn chunk_payload(content: &str) -> String {
+    json!({
         "choices": [{
             "delta": {
                 "content": content,
@@ -314,22 +357,18 @@ fn write_sse_chunk(stream: &mut TcpStream, content: &str) -> anyhow::Result<()> 
             "finish_reason": null
         }],
         "usage": null
-    });
-    write!(stream, "data: {data}\n\n")?;
-    stream.flush()?;
-    Ok(())
+    })
+    .to_string()
 }
 
-fn write_sse_usage(stream: &mut TcpStream) -> anyhow::Result<()> {
-    let data = json!({
+fn usage_payload() -> String {
+    json!({
         "choices": [],
         "usage": {
             "prompt_tokens": 8,
             "completion_tokens": 3,
             "total_tokens": 11
         }
-    });
-    write!(stream, "data: {data}\n\n")?;
-    stream.flush()?;
-    Ok(())
+    })
+    .to_string()
 }

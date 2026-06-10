@@ -2,13 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::llm::tool::ToolDyn;
+use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use rig::agent::{HookAction, ToolCallHookAction};
-use rig::tool::ToolDyn;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::LiveToolOutputRegistry;
 use crate::session;
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelCause, CascadeDispatch, ChildTerminal, ToolCallLifecycle,
@@ -247,6 +248,17 @@ impl SessionState {
         Ok(self.mark_tool_result_keys_seen(keys))
     }
 
+    /// True once the current turn's assistant message has been persisted
+    /// (`TranscriptTurnState::AssistantPersisted`). Tool-result messages may
+    /// only be persisted after this gate, so the abort-path backfill checks it
+    /// before reconciling completed-but-unmessaged tool calls (#442).
+    fn assistant_turn_persisted(&self) -> bool {
+        matches!(
+            self.transcript_turn,
+            TranscriptTurnState::AssistantPersisted { .. }
+        )
+    }
+
     fn tool_result_dedupe_keys(
         &self,
         internal_call_id: &str,
@@ -310,6 +322,7 @@ pub struct DefraSessionHook {
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
+    background_live_outputs: LiveToolOutputRegistry,
 }
 
 enum PolicyDecision {
@@ -348,6 +361,7 @@ impl DefraSessionHook {
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
+            background_live_outputs: LiveToolOutputRegistry::default(),
         }
     }
 
@@ -385,6 +399,7 @@ impl DefraSessionHook {
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
+            background_live_outputs: LiveToolOutputRegistry::default(),
         })
     }
 

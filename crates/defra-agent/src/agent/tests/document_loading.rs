@@ -97,6 +97,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     ));
     assert_eq!(behavior.compaction_threshold, 0.6);
     assert_eq!(behavior.stream_batch_ms, 500);
+    assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
     assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
 }
 

@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::desired_state;
 
 use crate::cli::args::BackendPresetArg;
-use crate::cli::args::ToolCeilingArg;
+use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
@@ -39,8 +39,12 @@ pub(crate) struct InitSummary {
     pub(crate) default_behavior_id: String,
     pub(crate) tool_selection_id: String,
     pub(crate) inference_profile_id: String,
+    pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
+    pub(crate) enable_memory: bool,
+    pub(crate) enable_defra_query: bool,
+    pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_principal: bool,
     pub(crate) created_default_behavior: bool,
 }
@@ -60,6 +64,8 @@ pub(crate) struct StoredInitConfig {
     pub(crate) keychain_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) secure_enclave_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_package: Option<ToolPackageArg>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
 }
@@ -213,6 +219,22 @@ pub(crate) struct ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
+    pub(crate) fn get(&self, collection: Collection) -> usize {
+        match collection {
+            Collection::AgentPrincipal => self.agent_principal,
+            Collection::AgentBehavior => self.agent_behaviors,
+            Collection::Skill => self.skills,
+            Collection::ToolSelection => self.tool_selections,
+            Collection::InferenceBackend => self.inference_backends,
+            Collection::InferenceProfile => self.inference_profiles,
+            Collection::ToolServiceRegistry => self.tool_service_registries,
+            Collection::ProjectionAcpBinding => self.projection_acp_bindings,
+            Collection::Task => self.tasks,
+            Collection::Schedule => self.schedules,
+            Collection::EventTrigger => self.event_triggers,
+        }
+    }
+
     pub(crate) fn set(&mut self, collection: Collection, count: usize) {
         match collection {
             Collection::AgentPrincipal => self.agent_principal = count,
@@ -245,23 +267,22 @@ impl ConfigApplyCounts {
         }
     }
 
+    pub(crate) fn saturating_sub(&self, other: &Self) -> Self {
+        let mut counts = Self::default();
+        for collection in Collection::ALL {
+            counts.set(
+                collection,
+                self.get(collection).saturating_sub(other.get(collection)),
+            );
+        }
+        counts
+    }
+
     pub(crate) fn changed(&self) -> bool {
-        Collection::ALL.iter().copied().any(|collection| {
-            let count = match collection {
-                Collection::AgentPrincipal => self.agent_principal,
-                Collection::AgentBehavior => self.agent_behaviors,
-                Collection::Skill => self.skills,
-                Collection::ToolSelection => self.tool_selections,
-                Collection::InferenceBackend => self.inference_backends,
-                Collection::InferenceProfile => self.inference_profiles,
-                Collection::ToolServiceRegistry => self.tool_service_registries,
-                Collection::ProjectionAcpBinding => self.projection_acp_bindings,
-                Collection::Task => self.tasks,
-                Collection::Schedule => self.schedules,
-                Collection::EventTrigger => self.event_triggers,
-            };
-            count > 0
-        })
+        Collection::ALL
+            .iter()
+            .copied()
+            .any(|collection| self.get(collection) > 0)
     }
 }
 
@@ -276,5 +297,6 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) agent_did: String,
     pub(crate) planned: desired_state::DesiredStateDiffCollectionsCounts,
     pub(crate) applied: ConfigApplyCounts,
+    pub(crate) pruned: ConfigApplyCounts,
     pub(crate) remaining: desired_state::DesiredStateDiffCollectionsCounts,
 }

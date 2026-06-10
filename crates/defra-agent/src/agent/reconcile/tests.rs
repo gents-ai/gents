@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 use super::*;
+use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgentBehavior;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::AgentBehavior;
@@ -73,6 +74,64 @@ async fn snapshot_for_behaviors(
         HashMap::new(),
     )
     .with_principal(stub_principal())
+}
+
+async fn snapshot_for_behaviors_with_admission(
+    node: &defra_node::EmbeddedNode,
+    default_behavior_id: &str,
+    behaviors: Vec<Arc<AgentBehavior>>,
+    backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
+) -> ResolvedRuntimeSnapshot {
+    let mut tool_surfaces = HashMap::new();
+    for behavior in &behaviors {
+        let tool_surface = behavior.tools.resolve(node).await.unwrap();
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
+    }
+    ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        default_behavior_id.to_string(),
+        behaviors,
+        tool_surfaces,
+        backend_admission_configs,
+        HashMap::new(),
+    )
+    .with_principal(stub_principal())
+}
+
+fn backend_admission_config(
+    backend_id: &str,
+    max_concurrent: usize,
+    max_queue_depth: usize,
+) -> BackendAdmissionConfig {
+    BackendAdmissionConfig {
+        backend_id: backend_id.to_string(),
+        max_concurrent,
+        max_queue_depth,
+        enabled: true,
+        probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_string(),
+        config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
+    }
+}
+
+fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
+    AgentRequest {
+        doc_id: format!("child-doc-{index}"),
+        request_id: format!("child-request-{index}"),
+        agent_did: "did:defra-agent:background-fanout-test".to_string(),
+        behavior_id: Some(behavior_id.to_string()),
+        session_id: format!("child-session-{index}"),
+        content: format!("background child {index}"),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: Some("interactive".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 1,
+        caused_by_parent_request_id: Some("parent-request".to_string()),
+        caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
+    }
 }
 
 #[tokio::test]
@@ -263,6 +322,224 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     restarted
 }
 
+#[tokio::test]
+async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let mut behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("background-fanout"));
+    behavior.backend_id = Some("backend-wide".to_string());
+    let snapshot = snapshot_for_behaviors_with_admission(
+        node.as_ref(),
+        "general",
+        vec![Arc::new(behavior)],
+        HashMap::from([(
+            "backend-wide".to_string(),
+            backend_admission_config("backend-wide", 3, 100),
+        )]),
+    )
+    .await;
+
+    let (started_tx, mut started_rx) = mpsc::channel::<String>(8);
+    let release = Arc::new(Notify::new());
+    let runner = {
+        let release = release.clone();
+        move |_behavior: Arc<AgentBehavior>,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              mut shutdown: watch::Receiver<bool>| {
+            let started_tx = started_tx.clone();
+            let release = release.clone();
+            async move {
+                loop {
+                    let message = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => message,
+                    };
+                    let Some(request) = message else {
+                        return Ok(());
+                    };
+                    started_tx
+                        .send(request.request_id)
+                        .await
+                        .expect("test receiver should stay open");
+                    tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        _ = release.notified() => {}
+                    }
+                }
+            }
+        }
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let slots = spawn_slots(
+        &snapshot,
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 1,
+        },
+        runner,
+        shutdown_rx,
+    );
+    let dispatcher = slots
+        .get("general")
+        .expect("general slot")
+        .dispatcher
+        .clone();
+
+    for index in 0..3 {
+        dispatcher
+            .send(background_child_request(index, "general"))
+            .await
+            .unwrap();
+    }
+
+    let started = tokio::time::timeout(Duration::from_millis(300), async {
+        let mut request_ids = BTreeSet::new();
+        while request_ids.len() < 3 {
+            let request_id = started_rx
+                .recv()
+                .await
+                .expect("runner should report started requests");
+            request_ids.insert(request_id);
+        }
+        request_ids
+    })
+    .await
+    .expect("executor should start all same-behavior background children concurrently");
+
+    assert_eq!(
+        started,
+        BTreeSet::from([
+            "child-request-0".to_string(),
+            "child-request-1".to_string(),
+            "child-request-2".to_string(),
+        ])
+    );
+
+    release.notify_waiters();
+    let _ = shutdown_tx.send(true);
+    for slot in slots.into_values() {
+        retire_slot(slot);
+    }
+}
+
+#[tokio::test]
+async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:defra-agent:reconcile-capacity-test";
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
+
+    let mut behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("capacity-general"));
+    behavior.backend_id = Some("backend-general".to_string());
+    let behavior = Arc::new(behavior);
+    let initial_snapshot = snapshot_for_behaviors_with_admission(
+        node.as_ref(),
+        "general",
+        vec![behavior.clone()],
+        HashMap::from([(
+            "backend-general".to_string(),
+            backend_admission_config("backend-general", 1, 100),
+        )]),
+    )
+    .await;
+    let updated_snapshot = snapshot_for_behaviors_with_admission(
+        node.as_ref(),
+        "general",
+        vec![behavior],
+        HashMap::from([(
+            "backend-general".to_string(),
+            backend_admission_config("backend-general", 3, 100),
+        )]),
+    )
+    .await;
+
+    let runner = move |_behavior: Arc<AgentBehavior>,
+                       _tool_surface: Arc<ToolSurface>,
+                       request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       mut shutdown: watch::Receiver<bool>| async move {
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return Ok(()),
+                message = async {
+                    let mut receiver = request_rx.lock().await;
+                    receiver.recv().await
+                } => {
+                    if message.is_none() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::retry::RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 5,
+            max_delay_ms: 25,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+    )
+    .unwrap();
+    let active_snapshot = supervisor.current_snapshot();
+    let initial_dispatcher = active_snapshot
+        .dispatchers
+        .get("general")
+        .expect("initial general dispatcher")
+        .clone();
+    assert_eq!(
+        active_snapshot
+            .behavior_executor_capacities
+            .get("general")
+            .copied(),
+        Some(1)
+    );
+    let (active_tx, mut active_rx) = watch::channel(active_snapshot);
+    let (proposal_tx, proposal_rx) = mpsc::channel(4);
+
+    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+
+    proposal_tx.send(updated_snapshot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
+        .await
+        .expect("capacity update should publish")
+        .unwrap();
+    let updated_active = active_rx.borrow().clone();
+    let updated_dispatcher = updated_active
+        .dispatchers
+        .get("general")
+        .expect("updated general dispatcher");
+    assert!(!initial_dispatcher.same_channel(updated_dispatcher));
+    assert_eq!(
+        updated_active
+            .behavior_executor_capacities
+            .get("general")
+            .copied(),
+        Some(3)
+    );
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("supervisor should stop on shutdown")
+        .unwrap()
+        .unwrap();
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
     reconcile_phase: String,
@@ -380,6 +657,24 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
 
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if starts
+                .lock()
+                .unwrap()
+                .get("general")
+                .copied()
+                .unwrap_or_default()
+                >= 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial behavior slot should start");
 
     proposal_tx.send(updated_snapshot).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
@@ -570,6 +865,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: crate::config::SamplingConfig::default(),
     });
@@ -598,8 +896,11 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
+                enable_memory: false,
+                enable_session_history_tool: false,
                 enable_defra_query: false,
                 defra_query_collections: Vec::new(),
+                write_tools: Vec::new(),
             },
             &ToolCeiling::readonly(),
             Vec::new(),
@@ -608,6 +909,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: crate::config::SamplingConfig::default(),
     });

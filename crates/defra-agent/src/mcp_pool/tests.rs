@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -158,30 +159,33 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
     let connect_attempts_for_fn = Arc::clone(&connect_attempts);
     let list_calls_for_fn = Arc::clone(&list_calls);
 
-    let pool = McpPool::new_with_connector(move |_service_id, endpoint, agent_did_header| {
-        let connect_attempts = Arc::clone(&connect_attempts_for_fn);
-        let list_calls = Arc::clone(&list_calls_for_fn);
-        async move {
-            let attempt = connect_attempts.fetch_add(1, Ordering::SeqCst) + 1;
-            Ok(McpConnection {
-                endpoint,
-                agent_did_header,
-                list_tools_fn: Box::new(move || {
-                    let list_calls = Arc::clone(&list_calls);
-                    Box::pin(async move {
-                        list_calls.fetch_add(1, Ordering::SeqCst);
-                        if attempt == 1 {
-                            anyhow::bail!("transport dropped while listing tools")
-                        }
-                        Ok(ListToolsResult::default())
-                    })
-                }),
-                call_tool_fn: Box::new(|_params| {
-                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
-                }),
-            })
-        }
-    });
+    let pool = McpPool::new_with_connector(
+        move |_service_id, endpoint, agent_did_header, trace_headers| {
+            let connect_attempts = Arc::clone(&connect_attempts_for_fn);
+            let list_calls = Arc::clone(&list_calls_for_fn);
+            async move {
+                let attempt = connect_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(McpConnection {
+                    endpoint,
+                    agent_did_header,
+                    trace_context_headers: trace_headers,
+                    list_tools_fn: Box::new(move || {
+                        let list_calls = Arc::clone(&list_calls);
+                        Box::pin(async move {
+                            list_calls.fetch_add(1, Ordering::SeqCst);
+                            if attempt == 1 {
+                                anyhow::bail!("transport dropped while listing tools")
+                            }
+                            Ok(ListToolsResult::default())
+                        })
+                    }),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        },
+    );
 
     pool.list_tools("read-service", "http://mcp.test/mcp")
         .await
@@ -219,6 +223,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
             McpConnection {
                 endpoint: endpoint.to_string(),
                 agent_did_header: None,
+                trace_context_headers: HashMap::new(),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(move |_params| {
                     let calls = Arc::clone(&calls_for_fn);
@@ -303,10 +308,48 @@ async fn streamable_http_opt_in_sends_agent_did_header() {
     );
 }
 
+#[tokio::test]
+async fn mcp_pool_reconnects_when_trace_context_changes() {
+    let sequence = Arc::new(AtomicUsize::new(0));
+    let sequence_for_headers = Arc::clone(&sequence);
+    let (endpoint, requests) = spawn_header_capture_mcp_server().await;
+    let pool = McpPool::new().with_trace_context_headers(move || {
+        let sequence = sequence_for_headers.fetch_add(1, Ordering::SeqCst) + 1;
+        HashMap::from([(
+            "traceparent".to_string(),
+            format!("00-{sequence:032x}-00f067aa0ba902b7-01"),
+        )])
+    });
+
+    pool.list_tools("trace-refresh-service", &endpoint)
+        .await
+        .expect("first mock MCP list_tools should succeed");
+    pool.list_tools("trace-refresh-service", &endpoint)
+        .await
+        .expect("second mock MCP list_tools should succeed");
+
+    let requests = requests.lock().expect("captures lock");
+    let traceparents = requests
+        .iter()
+        .filter(|request| request.method == "tools/list")
+        .filter_map(|request| request.traceparent_header.as_deref())
+        .collect::<Vec<_>>();
+
+    assert!(
+        traceparents.len() >= 2,
+        "expected two tools/list requests with trace context, got {requests:?}"
+    );
+    assert_ne!(
+        traceparents[0], traceparents[1],
+        "cached MCP connections must refresh when the propagated trace context changes"
+    );
+}
+
 #[derive(Debug)]
 struct CapturedMcpHttpRequest {
     method: String,
     agent_did_header: Option<String>,
+    traceparent_header: Option<String>,
 }
 
 async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcpHttpRequest>>>) {
@@ -334,6 +377,7 @@ async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcp
                     .push(CapturedMcpHttpRequest {
                         method: request.method,
                         agent_did_header: request.agent_did_header,
+                        traceparent_header: request.traceparent_header,
                     });
                 let _ = stream.write_all(response.as_bytes()).await;
             });
@@ -347,6 +391,7 @@ struct ParsedMcpHttpRequest {
     method: String,
     id: Option<serde_json::Value>,
     agent_did_header: Option<String>,
+    traceparent_header: Option<String>,
 }
 
 async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedMcpHttpRequest> {
@@ -378,6 +423,11 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
         name.eq_ignore_ascii_case(AGENT_DID_HEADER)
             .then(|| value.trim().to_string())
     });
+    let traceparent_header = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("traceparent")
+            .then(|| value.trim().to_string())
+    });
 
     let body_start = header_end + b"\r\n\r\n".len();
     while buf.len() < body_start + content_length {
@@ -401,6 +451,7 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
         method,
         id,
         agent_did_header,
+        traceparent_header,
     })
 }
 
