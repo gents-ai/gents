@@ -1,13 +1,13 @@
 [
   {
-    "backend_id": "workstation-1",
-    "name": "Workstation 1",
+    "backend_id": "local-llama-server",
+    "name": "Local llama-server",
     "provider_kind": "OpenAiCompatible",
-    "endpoint": "http://100.73.235.38:8000/v1",
+    "endpoint": "http://127.0.0.1:8080/v1",
     "api_key": null,
     "api_key_env_var": null,
     "max_concurrent": 2,
     "enabled": true,
-    "models": ["MiniMax-M2.7-NVFP4"]
+    "models": ["google/gemma-4-12B-it-qat-q4_0-gguf"]
   }
 ]
