@@ -1,10 +1,9 @@
-use rig::agent::{Agent, AgentBuilder, PromptHook};
+use crate::llm::ToolChoice;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
-use rig::message::ToolChoice;
-use rig::tool::ToolDyn;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
+use crate::agent::loop_stream::LoopConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, SamplingConfig};
 use crate::watcher::AgentRequest;
@@ -13,115 +12,67 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
-pub(crate) fn build_agent<C>(
-    client: &C,
-    behavior: &AgentBehavior,
-    preamble: &str,
-    tools: Vec<Box<dyn ToolDyn>>,
-) -> Agent<C::CompletionModel>
-where
-    C: CompletionClient,
-{
-    let builder = configure_agent_builder(
-        client
-            .agent(&behavior.model_name)
-            .preamble(preamble)
-            .default_max_turns(behavior.max_turns),
-        behavior,
-        tools.len(),
-    );
-
-    if tools.is_empty() {
-        builder.build()
-    } else {
-        builder.tools(tools).build()
-    }
-}
-
-pub(crate) fn build_admitted_agent<C>(
+/// Build the admission-wrapped completion model for a behavior. The owned loop
+/// (#400) drives this model directly — there is no rig `Agent`; per-request
+/// configuration is produced separately by [`loop_config`] / [`loop_config_for_request`].
+pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
     behavior: &AgentBehavior,
-    preamble: &str,
-    tools: Vec<Box<dyn ToolDyn>>,
-) -> Agent<<AdmittedCompletionClient<C> as CompletionClient>::CompletionModel>
+) -> <AdmittedCompletionClient<C> as CompletionClient>::CompletionModel
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
     <C::CompletionModel as CompletionModel>::Response: 'static,
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
-    let client = AdmittedCompletionClient::new(client, admission);
-    let builder = configure_agent_builder(
-        client
-            .agent(&behavior.model_name)
-            .preamble(preamble)
-            .default_max_turns(behavior.max_turns),
-        behavior,
-        tools.len(),
-    );
-
-    if tools.is_empty() {
-        builder.build()
-    } else {
-        builder.tools(tools).build()
-    }
+    AdmittedCompletionClient::new(client, admission).completion_model(&behavior.model_name)
 }
 
-fn configure_agent_builder<M, P, ToolState>(
-    mut builder: AgentBuilder<M, P, ToolState>,
+/// Build a [`LoopConfig`] from a behavior: tool choice when tools are present,
+/// behavior-level sampling, provider params, and the behavior turn cap. This is
+/// the base config (no per-request overrides).
+pub(crate) fn loop_config(
     behavior: &AgentBehavior,
+    preamble: String,
     tool_count: usize,
-) -> AgentBuilder<M, P, ToolState>
-where
-    M: CompletionModel,
-    P: PromptHook<M>,
-{
-    if tool_count > 0 {
-        builder = builder.tool_choice(ToolChoice::Auto);
+) -> LoopConfig {
+    LoopConfig {
+        preamble: Some(preamble),
+        temperature: behavior.sampling.temperature,
+        max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
+        additional_params: merge_optional_params(
+            provider_additional_params(behavior.backend_provider_kind),
+            behavior.sampling.additional_params(),
+        ),
+        tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
+        max_turns: behavior.max_turns,
     }
-
-    if let Some(temperature) = behavior.sampling.temperature {
-        builder = builder.temperature(temperature);
-    }
-
-    if let Some(max_tokens) =
-        effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens)
-    {
-        builder = builder.max_tokens(max_tokens);
-    }
-
-    if let Some(additional_params) = merge_optional_params(
-        provider_additional_params(behavior.backend_provider_kind),
-        behavior.sampling.additional_params(),
-    ) {
-        builder = builder.additional_params(additional_params);
-    }
-
-    builder
 }
 
-pub(crate) fn agent_with_request_sampling<M>(
-    agent: &Agent<M>,
+/// Base [`loop_config`] with per-request sampling overrides applied — the
+/// owned-loop replacement for the old `agent_with_request_sampling`. Request
+/// temperature/max_tokens replace the defaults; request additional params merge
+/// on top of the behavior/provider params.
+pub(crate) fn loop_config_for_request(
     behavior: &AgentBehavior,
+    preamble: String,
     request: &AgentRequest,
-) -> Agent<M>
-where
-    M: CompletionModel,
-{
+    tool_count: usize,
+) -> LoopConfig {
+    let mut config = loop_config(behavior, preamble, tool_count);
     let sampling = sampling_for_request(behavior.sampling, request);
-    let mut agent = agent.clone();
-    agent.temperature = sampling.temperature;
-    agent.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
+    config.temperature = sampling.temperature;
+    config.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
     let request_additional_params = merge_optional_params(
         sampling.additional_params(),
         request_additional_params(behavior, request),
     );
     if let Some(additional_params) = request_additional_params {
-        agent.additional_params =
-            merge_optional_params(agent.additional_params.take(), Some(additional_params));
+        config.additional_params =
+            merge_optional_params(config.additional_params.take(), Some(additional_params));
     }
-    agent
+    config
 }
 
 fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> SamplingConfig {

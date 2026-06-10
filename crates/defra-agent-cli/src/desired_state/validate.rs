@@ -94,6 +94,26 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
+        if let Some(mode) = selection
+            .subagent_default_await_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            match mode {
+                "foreground" => {}
+                "background" if selection.subagent_background_enabled => {}
+                "background" => errors.push(format!(
+                    "tool selection {} sets subagent_default_await_mode=background but subagent_background_enabled is false",
+                    selection.selection_id
+                )),
+                other => errors.push(format!(
+                    "tool selection {} has invalid subagent_default_await_mode {other:?}; expected foreground or background",
+                    selection.selection_id
+                )),
+            }
+        }
+
         if let Some(mode) = selection.command_execution_policy.as_deref() {
             if let Err(error) = CommandExecutionMode::parse(mode) {
                 errors.push(format!(
@@ -972,6 +992,7 @@ mod live_tests {
                 subagent_spawn_enabled: true,
                 subagent_steering_enabled: false,
                 subagent_background_enabled: false,
+                subagent_default_await_mode: None,
                 subagent_allow_cross_deployment: false,
                 cross_deployment_spawn_timeout_seconds: None,
                 write_tools: Vec::new(),
@@ -1053,17 +1074,17 @@ mod live_tests {
         Ok(())
     }
 
-    /// Apply a tool selection with all five subagent fields set, then:
-    ///   (a) read the ToolSelection back and assert all five persisted, and
+    /// Apply a tool selection with all subagent fields set, then:
+    ///   (a) read the ToolSelection back and assert all persisted, and
     ///   (b) recompute the apply diff and assert it shows UNCHANGED (idempotent).
     ///
     /// Before the fix this test fails because:
     ///  - `DesiredToolSelection` was missing the three new fields → manifest
     ///    deserialization with `deny_unknown_fields` would reject them.
-    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted all five fields → live read
+    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted subagent fields → live read
     ///    always saw them as `None` → diff never converged.
     #[tokio::test]
-    async fn all_five_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
+    async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
         use std::path::PathBuf;
 
         use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
@@ -1093,7 +1114,7 @@ mod live_tests {
                 .await?;
         }
 
-        // Build the desired manifest with all five subagent fields set.
+        // Build the desired manifest with all subagent fields set.
         let desired_manifest = {
             use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
             DesiredStateManifest {
@@ -1137,6 +1158,7 @@ mod live_tests {
                     subagent_spawn_enabled: true,
                     subagent_steering_enabled: true,
                     subagent_background_enabled: true,
+                    subagent_default_await_mode: Some("background".to_string()),
                     subagent_allow_cross_deployment: true,
                     cross_deployment_spawn_timeout_seconds: Some(90),
                     write_tools: Vec::new(),
@@ -1170,7 +1192,7 @@ mod live_tests {
         apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
         txn.commit().await?;
 
-        // ── (a) Read back and assert all five fields persisted ────────────────
+        // ── (a) Read back and assert all subagent fields persisted ────────────
         let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (remaining_principal, remaining_manifest) =
             live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
@@ -1203,6 +1225,11 @@ mod live_tests {
         assert_eq!(
             live_sel.subagent_background_enabled, true,
             "subagent_background_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.subagent_default_await_mode.as_deref(),
+            Some("background"),
+            "subagent_default_await_mode must persist through apply"
         );
         assert_eq!(
             live_sel.subagent_allow_cross_deployment, true,

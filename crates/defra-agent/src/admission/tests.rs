@@ -67,6 +67,25 @@ fn request(request_id: &str) -> AgentRequest {
     }
 }
 
+#[tokio::test]
+async fn current_session_id_reflects_request_scope() {
+    // Outside any admission scope there is no session id to attach.
+    assert_eq!(super::current_session_id(), None);
+
+    let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
+    scope_request(context, async {
+        assert_eq!(
+            super::current_session_id().as_deref(),
+            Some("session-req-x"),
+            "the in-flight request's session id must be visible for x-session-id tagging"
+        );
+    })
+    .await;
+
+    // It is cleared again once the request scope ends.
+    assert_eq!(super::current_session_id(), None);
+}
+
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
     include_str!("controller.rs"),
     include_str!("permit.rs"),

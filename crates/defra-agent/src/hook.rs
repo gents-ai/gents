@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::llm::tool::ToolDyn;
+use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use rig::agent::{HookAction, ToolCallHookAction};
-use rig::tool::ToolDyn;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -246,6 +246,17 @@ impl SessionState {
             );
         }
         Ok(self.mark_tool_result_keys_seen(keys))
+    }
+
+    /// True once the current turn's assistant message has been persisted
+    /// (`TranscriptTurnState::AssistantPersisted`). Tool-result messages may
+    /// only be persisted after this gate, so the abort-path backfill checks it
+    /// before reconciling completed-but-unmessaged tool calls (#442).
+    fn assistant_turn_persisted(&self) -> bool {
+        matches!(
+            self.transcript_turn,
+            TranscriptTurnState::AssistantPersisted { .. }
+        )
     }
 
     fn tool_result_dedupe_keys(

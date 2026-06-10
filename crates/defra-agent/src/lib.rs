@@ -25,10 +25,22 @@ pub mod graphql;
 pub mod health_checker;
 pub mod hook;
 pub mod identity;
+pub mod inference_http;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+
+/// Shared in-crate test utilities.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
+    /// convention in every shape the tests build.
+    pub(crate) fn first_content<T>(items: &[T]) -> &T {
+        items.first().expect("non-empty content")
+    }
+}
 pub mod lifecycle;
+pub mod llm;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;

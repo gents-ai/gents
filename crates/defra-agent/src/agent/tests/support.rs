@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

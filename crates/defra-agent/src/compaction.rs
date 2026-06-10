@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
+use crate::llm::message::Message;
 use anyhow::Result;
-use rig::agent::Agent;
-use rig::completion::message::Message;
-use rig::completion::{CompletionModel, Prompt};
+use rig::completion::CompletionModel;
 
 mod history;
 mod summary;
@@ -72,12 +73,13 @@ pub trait Compactor: Send + Sync {
 
 #[derive(Clone)]
 pub struct DefraCompactor<M: CompletionModel> {
-    agent: Agent<M>,
+    model: Arc<M>,
+    config: crate::agent::loop_stream::LoopConfig,
 }
 
 impl<M: CompletionModel> DefraCompactor<M> {
-    pub fn new(agent: Agent<M>) -> Self {
-        Self { agent }
+    pub(crate) fn new(model: Arc<M>, config: crate::agent::loop_stream::LoopConfig) -> Self {
+        Self { model, config }
     }
 }
 
@@ -134,11 +136,18 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
-        let raw_summary = self
-            .agent
-            .prompt(compaction_prompt())
-            .with_history(&prepared_history)
-            .await?;
+        // Summarize via the owned loop (#400): a non-persisting, tool-free single
+        // completion (no hook, empty tool surface, `max_turns: 0`).
+        let raw_summary = crate::agent::loop_stream::run_loop_to_text(
+            (*self.model).clone(),
+            None,
+            crate::llm::message::Message::user(compaction_prompt()),
+            prepared_history.clone(),
+            std::sync::Arc::new(Vec::new()),
+            self.config.clone(),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
         let parsed_summary = parse_summary_response(&raw_summary)?;
 
         let mut files_read = old_activity.files_read;
@@ -183,6 +192,42 @@ pub fn estimate_message_tokens(messages: &[Message]) -> usize {
 
 pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
     history::strip_tool_results(messages)
+}
+
+/// The full provider-send boundary sanitization for loaded history: drop
+/// orphaned tool results, then drop unpaired tool calls (#445), then
+/// normalize assistant content order. New sanitizers that narrow the
+/// permissive durable transcript to the stricter provider format belong here
+/// (see the `history` components), NOT in the conformance-fenced reducers.
+/// Runs on the loaded transcript AND on the compaction output (the recent
+/// window can begin mid-exchange).
+///
+/// ORDER MATTERS (PromptAssembly model, P1 soundness): orphan-drop must run
+/// FIRST. A result that precedes its call is orphaned; if unpaired-drop ran
+/// first it would keep that call on the strength of the about-to-be-dropped
+/// result, and an unpaired call would reach the provider. In this order,
+/// orphan-drop never removes assistant rows (so its preceding-call scan is
+/// stable) and unpaired-drop only removes calls NO surviving result
+/// references (so it can never create a new orphan).
+pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
+    history::normalize_assistant_content_order(history::drop_unpaired_tool_calls(
+        history::drop_orphaned_tool_results(messages),
+    ))
+}
+
+/// Bound a compaction summary on its way into the prompt. The summary is
+/// model-emitted free text injected into every subsequent request's system
+/// reminder; bounding at the consumption point covers oversized entries
+/// already persisted as well as new ones.
+pub fn bounded_summary(summary: String) -> String {
+    // Head mode: the narrative leads the summary; bulleted file/decision
+    // lists trail and are the right part to lose.
+    let (bounded, _, _) = crate::truncation::truncate_text(
+        &summary,
+        crate::truncation::TruncationMode::Head,
+        &crate::truncation::TruncationLimits::default(),
+    );
+    bounded
 }
 
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {

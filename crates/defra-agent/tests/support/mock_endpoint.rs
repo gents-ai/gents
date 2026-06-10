@@ -189,9 +189,30 @@ async fn handle_chat(
     headers: HeaderMap,
     body: String,
 ) -> Response {
+    // The owned loop (#400) streams (`"stream":true`); other callers send a
+    // non-streaming request. Mirror the real OpenAI API: reply with an SSE chunk
+    // stream when streaming is requested, otherwise the JSON completion below.
+    let streaming = body.contains("\"stream\":true") || body.contains("\"stream\": true");
     record(&state, "POST", uri.path(), &headers, body);
     if !bearer_authorized(&state, &headers) {
         return unauthorized();
+    }
+    if streaming {
+        let delta = format!(
+            r#"{{"id":"chatcmpl-test","provider":"Mock","object":"chat.completion.chunk","model":"{}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"mock response"}},"finish_reason":null}}]}}"#,
+            state.model_name
+        );
+        let finish = format!(
+            r#"{{"id":"chatcmpl-test","object":"chat.completion.chunk","model":"{}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}}}"#,
+            state.model_name
+        );
+        let sse = format!("data: {delta}\n\ndata: {finish}\n\ndata: [DONE]\n\n");
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            sse,
+        )
+            .into_response();
     }
     let completion = json!({
         "id": "chatcmpl-test",
