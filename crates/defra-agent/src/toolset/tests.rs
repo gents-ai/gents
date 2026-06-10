@@ -40,7 +40,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     let context = ToolContext::new(root.clone(), false).unwrap();
 
     let list_tool = ListFilesTool::new(context.clone(), DEFAULT_MAX_LIST_ENTRIES);
-    let list_def = rig::tool::Tool::definition(&list_tool, String::new()).await;
+    let list_def = crate::llm::tool::Tool::definition(&list_tool, String::new()).await;
     assert!(list_def.parameters.get("required").is_none());
     assert_eq!(list_def.parameters["properties"]["path"]["default"], ".");
     assert_eq!(
@@ -59,7 +59,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 
     let read_tool = ReadFileTool::new(context.clone(), DEFAULT_MAX_FILE_CHARS);
-    let read_def = rig::tool::Tool::definition(&read_tool, String::new()).await;
+    let read_def = crate::llm::tool::Tool::definition(&read_tool, String::new()).await;
     assert_eq!(read_def.parameters["required"], serde_json::json!(["path"]));
     assert_eq!(
         read_def.parameters["properties"]["start_line"]["default"],
@@ -71,7 +71,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 
     let write_tool = WriteFileTool::new(context.clone());
-    let write_def = rig::tool::Tool::definition(&write_tool, String::new()).await;
+    let write_def = crate::llm::tool::Tool::definition(&write_tool, String::new()).await;
     assert_eq!(
         write_def.parameters["required"],
         serde_json::json!(["path", "content"])
@@ -85,7 +85,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     );
-    let bash_def = rig::tool::Tool::definition(&bash_tool, String::new()).await;
+    let bash_def = crate::llm::tool::Tool::definition(&bash_tool, String::new()).await;
     assert_eq!(
         bash_def.parameters["required"],
         serde_json::json!(["command"])
@@ -492,7 +492,7 @@ async fn read_file_returns_compact_numbered_contents() {
         DEFAULT_MAX_FILE_CHARS,
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "notes.txt".to_string(),
@@ -523,7 +523,7 @@ async fn read_file_reports_truncation_in_compact_metadata() {
     std::fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let tool = ReadFileTool::new(ToolContext::new(root, false).unwrap(), 12);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "notes.txt".to_string(),
@@ -557,7 +557,7 @@ async fn read_file_rejects_paths_outside_root() {
         DEFAULT_MAX_FILE_CHARS,
     );
 
-    let error = rig::tool::Tool::call(
+    let error = crate::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "../outside.txt".to_string(),
@@ -583,7 +583,7 @@ async fn write_and_edit_file_work_under_root() {
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
 
-    let write_output = rig::tool::Tool::call(
+    let write_output = crate::llm::tool::Tool::call(
         &writer,
         WriteFileArgs {
             path: "nested/file.txt".to_string(),
@@ -600,7 +600,7 @@ async fn write_and_edit_file_work_under_root() {
     assert_eq!(write_meta["created"], true);
     assert!(write_output.contains("write_file: wrote 11 bytes"));
 
-    let edit_output = rig::tool::Tool::call(
+    let edit_output = crate::llm::tool::Tool::call(
         &editor,
         EditFileArgs {
             path: "nested/file.txt".to_string(),
@@ -631,7 +631,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -669,7 +669,7 @@ async fn list_files_skips_permission_denied_subtrees() {
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -701,7 +701,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
     std::fs::write(root.join("target/debug/app"), "compiled").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -733,7 +733,7 @@ async fn glob_returns_compact_matches() {
     std::fs::write(root.join("target/debug/main.rs"), "generated\n").unwrap();
     let tool = GlobTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         GlobArgs {
             pattern: "**/*.rs".to_string(),
@@ -766,7 +766,7 @@ async fn grep_returns_compact_line_numbered_matches() {
     .unwrap();
     let tool = GrepTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         GrepArgs {
             pattern: "println".to_string(),
@@ -798,7 +798,7 @@ async fn compact_list_output_is_smaller_than_representative_pretty_json() {
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root, false).unwrap(), 100);
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -1326,7 +1326,7 @@ async fn unrestricted_bash_runs_shell_command_strings() {
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf OK && printf ERR >&2".to_string(),
@@ -1361,7 +1361,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
         policy,
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf".to_string(),
@@ -1390,7 +1390,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
         vec!["printf".to_string()],
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf".to_string(),
@@ -1419,7 +1419,7 @@ async fn bash_timeout_reports_metadata_instead_of_error() {
         vec!["sleep".to_string()],
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "sleep".to_string(),
@@ -1460,7 +1460,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         outside.display()
     );
 
-    let output = rig::tool::Tool::call(
+    let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: shell,

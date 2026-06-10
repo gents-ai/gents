@@ -27,7 +27,7 @@ pub fn build_meta_tools(
     local_subnet: Option<String>,
     agent_did: String,
     allowed_mcp_service_ids: Vec<String>,
-) -> Vec<Box<dyn rig::tool::ToolDyn>> {
+) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
     let ctx = MetaToolContext {
         node,
         mcp_pool,
