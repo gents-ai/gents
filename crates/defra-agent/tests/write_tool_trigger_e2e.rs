@@ -48,8 +48,8 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::defra_write::BoundedWriteTool;
 use defra_agent::document_config::{WriteToolDecl, WriteToolField};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::tool::Tool;
 use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
-use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::{json, Value};
 

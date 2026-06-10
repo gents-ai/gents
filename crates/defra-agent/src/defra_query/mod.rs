@@ -7,15 +7,15 @@
 //! through [`crate::graphql::escape_graphql_string`].
 //!
 //! The query core ([`query::execute_query`]) is intentionally decoupled from
-//! the [`rig::tool::Tool`] integration so the same logic can later back an
+//! the [`crate::llm::tool::Tool`] integration so the same logic can later back an
 //! external (e.g. MCP/HTTP) management surface.
 
 use std::sync::Arc;
 
+use crate::llm::tool::ToolDefinition;
+use crate::llm::tool::{Tool, ToolDyn};
 use anyhow::anyhow;
 use defra_node::EmbeddedNode;
-use rig::completion::ToolDefinition;
-use rig::tool::{Tool, ToolDyn};
 use serde_json::json;
 
 /// Maximum number of UTF-8 bytes kept per string field value in the query

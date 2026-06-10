@@ -4,13 +4,12 @@ mod support;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
-use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
-use rig::one_or_many::OneOrMany;
 use serde_json::{json, Value};
 
 use support::fixtures::spawn_subagent_source;
@@ -275,7 +274,7 @@ async fn append_assistant_tool_call_message(
 ) {
     let message = Message::Assistant {
         id: None,
-        content: OneOrMany::many(vec![
+        content: vec![
             AssistantContent::Text(Text {
                 text: body.to_string(),
             }),
@@ -289,8 +288,7 @@ async fn append_assistant_tool_call_message(
                 signature: None,
                 additional_params: None,
             }),
-        ])
-        .unwrap(),
+        ],
     };
     append_message(
         node,

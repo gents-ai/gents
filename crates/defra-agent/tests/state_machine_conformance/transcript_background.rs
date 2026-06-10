@@ -10,7 +10,7 @@ impl ToolDyn for PendingTool {
         "slow_tool".to_string()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async {
             ToolDefinition {
                 name: "slow_tool".to_string(),
@@ -20,7 +20,7 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -507,16 +507,16 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 fn transcript_user_message(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
 fn transcript_assistant_tool_call_message(model_call_id: &str) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: model_call_id.to_string(),
             call_id: Some(model_call_id.to_string()),
             function: ToolFunction {
@@ -525,19 +525,19 @@ fn transcript_assistant_tool_call_message(model_call_id: &str) -> Message {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     }
 }
 
 fn transcript_tool_result_message(result_id: &str, text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: result_id.to_string(),
             call_id: Some(result_id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: text.to_string(),
-            })),
-        })),
+            })],
+        })],
     }
 }
 
@@ -579,7 +579,7 @@ fn transcript_tool_result_count(history: &[Message]) -> usize {
             matches!(
                 message,
                 Message::User { content }
-                    if matches!(content.first_ref(), UserContent::ToolResult(_))
+                    if matches!(content.first().expect("non-empty content"), UserContent::ToolResult(_))
             )
         })
         .count()

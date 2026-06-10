@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rig::agent::{HookAction, MultiTurnStreamItem};
-use rig::completion::message::{
+use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::one_or_many::OneOrMany;
+use crate::llm::HookAction;
+use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
@@ -14,13 +14,14 @@ use crate::ensure_schemas;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
+use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
@@ -116,7 +117,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         Message::Assistant { content, .. }
             if content.len() == 2
                 // Order is text, then reasoning (rig's threading/persist order).
-                && matches!(content.first_ref(), AssistantContent::Text(Text { text })
+                && matches!(first_content(&content), AssistantContent::Text(Text { text })
                     if text == "I started by checking the repo layout.")
                 && matches!(content.iter().nth(1), Some(AssistantContent::Reasoning(reasoning))
                     if reasoning.id.as_deref() == Some("rs_partial"))
@@ -231,7 +232,7 @@ async fn load_response_doc(
 
 fn text_item(text: &str) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamAssistantItem(
-        StreamedAssistantContent::Text(Text {
+        StreamedAssistantContent::Text(rig::completion::message::Text {
             text: text.to_string(),
         }),
     ))
@@ -254,10 +255,10 @@ fn tool_call_item_with_ids(
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamAssistantItem(
         StreamedAssistantContent::ToolCall {
-            tool_call: ToolCall {
+            tool_call: rig::completion::message::ToolCall {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
-                function: ToolFunction {
+                function: rig::completion::message::ToolFunction {
                     name: name.to_string(),
                     arguments: serde_json::from_str(args_json).unwrap(),
                 },
@@ -285,12 +286,16 @@ fn tool_result_item_with_call_id(
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamUserItem(
         StreamedUserContent::ToolResult {
-            tool_result: ToolResult {
+            tool_result: rig::completion::message::ToolResult {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
-                    text: result_json.to_string(),
-                })),
+                content: rig::one_or_many::OneOrMany::one(
+                    rig::completion::message::ToolResultContent::Text(
+                        rig::completion::message::Text {
+                            text: result_json.to_string(),
+                        },
+                    ),
+                ),
             },
             internal_call_id: internal_id.to_string(),
         },
@@ -402,7 +407,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             tool_args,
         )
         .await,
-        rig::agent::ToolCallHookAction::Continue
+        crate::llm::ToolCallHookAction::Continue
     ));
     assert!(processor
         .persist_partial_turn("persist streamed assistant tool call")
@@ -436,7 +441,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match content.first_ref() {
+            Message::User { content } => match first_content(&content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result),
                 _ => None,
             },
@@ -452,7 +457,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     assert_eq!(tool_results[0].id, model_result_id);
     assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
     assert!(matches!(
-        tool_results[0].content.first_ref(),
+        first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text }) if text == tool_result
     ));
     assert_eq!(
@@ -571,7 +576,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     assert!(matches!(
         hook.on_tool_call("echo", Some(call_id.to_string()), call_id, tool_args)
             .await,
-        rig::agent::ToolCallHookAction::Continue
+        crate::llm::ToolCallHookAction::Continue
     ));
     assert!(matches!(
         hook.on_tool_result(
@@ -628,7 +633,7 @@ async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id:
         .iter()
         .filter(|message| {
             matches!(message, Message::User { content }
-                if matches!(content.first_ref(), UserContent::ToolResult(_)))
+                if matches!(first_content(&content), UserContent::ToolResult(_)))
         })
         .count()
 }

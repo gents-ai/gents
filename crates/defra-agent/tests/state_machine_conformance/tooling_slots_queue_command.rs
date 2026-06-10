@@ -1225,9 +1225,9 @@ async fn persist_child_completion(
 
     let assistant = Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: final_response.to_string(),
-        })),
+        })],
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);

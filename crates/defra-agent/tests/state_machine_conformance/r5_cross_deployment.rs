@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
