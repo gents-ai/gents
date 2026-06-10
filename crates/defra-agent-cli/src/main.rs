@@ -68,7 +68,9 @@ Inspect the local runtime:
   defra-agent status
   defra-agent show runtime
   defra-agent show response REQUEST_ID
-  defra-agent task run --task-id TASK_ID
+  defra-agent task list
+  defra-agent task show TASK_ID
+  defra-agent task run TASK_ID --wait
   defra-agent background list
   defra-agent mcp probe --all
   defra-agent reset
@@ -209,11 +211,13 @@ Examples:
   defra-agent fleet slots --home /path/to/home
   defra-agent fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TASK_AFTER_HELP: &str = "\
-Creates a pending AgentRequest for a configured Task with manual trigger lineage.
+Inspect configured Task documents and create pending AgentRequests with manual trigger lineage.
 
 Examples:
-  defra-agent task run --task-id host-check
-  defra-agent task run --task-id host-check --args '{\"scope\":\"host\"}'
+  defra-agent task list
+  defra-agent task show host-check
+  defra-agent task run host-check
+  defra-agent task run host-check --args '{\"scope\":\"host\"}' --wait
   defra-agent task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:

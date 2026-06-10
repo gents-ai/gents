@@ -116,6 +116,41 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(1)
     );
 
+    let list = run_cli_json(&home_dir, &["task", "list", "--graphql", &graphql])?;
+    let listed_task = list
+        .get("tasks")
+        .and_then(Value::as_array)
+        .and_then(|tasks| {
+            tasks
+                .iter()
+                .find(|task| task.get("task_id").and_then(Value::as_str) == Some(task_id.as_str()))
+        })
+        .ok_or_else(|| anyhow!("task list output missing {task_id}: {list}"))?;
+    assert_eq!(
+        listed_task.get("runnable").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        listed_task
+            .pointer("/behavior/behavior_id")
+            .and_then(Value::as_str),
+        Some(behavior_id.as_str())
+    );
+
+    let shown = run_cli_json(
+        &home_dir,
+        &["task", "show", &task_id, "--graphql", &graphql],
+    )?;
+    assert_eq!(
+        shown.pointer("/task/task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(shown.get("runnable").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        shown.pointer("/behavior/agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+
     // Fire the manual run via the new CLI subcommand.
     let fire = run_cli_json(
         &home_dir,
