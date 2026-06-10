@@ -1394,6 +1394,20 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(about = "Manage desired out-of-band P2P pairings")]
+    Pairings {
+        #[command(subcommand)]
+        command: P2pPairingsCommand,
+    },
+    #[command(
+        about = "Remove a desired out-of-band P2P pairing",
+        after_help = "\
+Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
+reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
+should change live connectivity immediately, use p2p collections/replicators \
+commands against the running server."
+    )]
+    Unpair(P2pPairingRefArgs),
     #[command(
         about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
         after_help = "\
@@ -1468,6 +1482,57 @@ pub(crate) enum P2pDocumentsCommand {
     Remove(P2pDocumentsMutateArgs),
     #[command(about = "Fetch documents from connected peers")]
     Sync(P2pDocumentsSyncArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum P2pPairingsCommand {
+    #[command(about = "List desired out-of-band P2P pairings")]
+    List(P2pAccessArgs),
+    #[command(
+        about = "Create or update a desired out-of-band P2P pairing",
+        after_help = "\
+Writes PeerPairingDesired for desktop pairing reconcile. Desktop reconcile \
+runs when DEFRA_AGENT_PAIRING_RECONCILE=1 and a saved peer record exists. For \
+headless servers, use `defra-agent p2p pair --peer <multiaddr>` to apply live \
+P2P wiring immediately."
+    )]
+    Set(P2pPairingSetArgs),
+    #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
+    Remove(P2pPairingRefArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingSetArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
+    /// Agent DID expected for the remote peer.
+    #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+    /// Replicator multiaddr to install during reconcile. Repeat for multiple addresses.
+    #[arg(long = "address", value_name = "MULTIADDR")]
+    pub(crate) addresses: Vec<String>,
+    /// Collection name to include in the desired pairing. Repeat or combine with --profile.
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    pub(crate) collections: Vec<String>,
+    /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingRefArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
 }
 
 #[derive(clap::Args)]

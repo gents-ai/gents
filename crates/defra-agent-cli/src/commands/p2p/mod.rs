@@ -4,13 +4,15 @@ mod connect;
 mod documents;
 mod output;
 mod pair;
+mod pairings;
 mod replicators;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pReplicatorsCommand,
+    P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pPairingsCommand,
+    P2pReplicatorsCommand,
 };
 
 pub(crate) use output::{flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status};
@@ -43,6 +45,12 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pDocumentsCommand::Sync(args) => documents::p2p_documents_sync(args).await,
         },
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
+        P2pCommand::Pairings { command } => match command {
+            P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
+            P2pPairingsCommand::Set(args) => pairings::p2p_pairings_set(args).await,
+            P2pPairingsCommand::Remove(args) => pairings::p2p_pairings_remove(args).await,
+        },
+        P2pCommand::Unpair(args) => pairings::p2p_pairings_remove(args).await,
         P2pCommand::Pair(args) => pair::p2p_pair(args).await,
     }
 }
