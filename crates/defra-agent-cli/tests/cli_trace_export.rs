@@ -4,8 +4,7 @@ use support::*;
 use anyhow::{Context, Result};
 use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
 use defra_agent::ensure_runtime_schemas;
-use rig::completion::message::{AssistantContent, Message, ToolCall, ToolFunction};
-use rig::one_or_many::OneOrMany;
+use defra_agent::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -614,7 +613,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
 fn assistant_tool_message(call_id: &str, name: &str, arguments: Value) -> Result<String> {
     serde_json::to_string(&Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
             function: ToolFunction {
@@ -623,7 +622,7 @@ fn assistant_tool_message(call_id: &str, name: &str, arguments: Value) -> Result
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     })
     .context("serializing assistant tool message")
 }

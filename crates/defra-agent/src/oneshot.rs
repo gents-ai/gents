@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use crate::llm::message::Message;
+use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
-use rig::completion::{CompletionModel, Message};
-use rig::tool::ToolDyn;
+use rig::completion::CompletionModel;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::loop_config;

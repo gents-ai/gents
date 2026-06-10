@@ -1,8 +1,7 @@
-use rig::completion::message::{
+use crate::message::{
     AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::one_or_many::OneOrMany;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentedMessageRole {
@@ -44,34 +43,52 @@ pub fn normalize_markdown_text(text: &str) -> String {
     normalized.trim().to_string()
 }
 
+/// Decoded message content must be non-empty: rig's `OneOrMany` rejected
+/// empty arrays at deserialization, so a corrupt `content: []` blob always
+/// fell through to the plain-text fallback (keeping the raw string visible).
+/// `Vec` accepts `[]`, so the guard re-establishes that behavior explicitly.
+fn message_has_content(message: &Message) -> bool {
+    match message {
+        Message::System { .. } => true,
+        Message::User { content } => !content.is_empty(),
+        Message::Assistant { content, .. } => !content.is_empty(),
+    }
+}
+
 pub fn decode_persisted_message(role: &str, content: &str) -> Message {
     if let Ok(message) = serde_json::from_str::<Message>(content) {
-        return message;
+        if message_has_content(&message) {
+            return message;
+        }
     }
 
     if role == "assistant" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<AssistantContent>>(content) {
-            return Message::Assistant { id: None, content };
+        if let Ok(content) = serde_json::from_str::<Vec<AssistantContent>>(content) {
+            if !content.is_empty() {
+                return Message::Assistant { id: None, content };
+            }
         }
     }
 
     if role == "user" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<UserContent>>(content) {
-            return Message::User { content };
+        if let Ok(content) = serde_json::from_str::<Vec<UserContent>>(content) {
+            if !content.is_empty() {
+                return Message::User { content };
+            }
         }
     }
 
     match role {
         "assistant" => Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: content.to_string(),
-            })),
+            })],
         },
         _ => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: content.to_string(),
-            })),
+            })],
         },
     }
 }
@@ -188,7 +205,6 @@ fn render_reasoning_summary(reasoning: &Reasoning) -> String {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
             ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
             ReasoningContent::Redacted { .. } => "[redacted reasoning]",
-            _ => "[opaque reasoning]",
         };
         if !out.is_empty() {
             out.push('\n');
@@ -219,13 +235,13 @@ mod tests {
     #[test]
     fn tool_result_messages_present_as_tool_rows() {
         let tool_result_message = Message::User {
-            content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            content: vec![UserContent::ToolResult(ToolResult {
                 id: "tool-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: "src/app.rs: audit target live".to_string(),
-                })),
-            })),
+                })],
+            })],
         };
 
         let presentation = present_persisted_message(
@@ -242,13 +258,12 @@ mod tests {
     fn assistant_reasoning_is_extracted_from_persisted_messages() {
         let message = Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::Reasoning(Reasoning::new("Need to inspect the CLI flow first")),
                 AssistantContent::Text(Text {
                     text: "I checked the CLI flow.".to_string(),
                 }),
-            ])
-            .expect("assistant content"),
+            ],
         };
 
         let presentation = present_persisted_message(
@@ -292,6 +307,20 @@ mod tests {
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "");
+    }
+
+    #[test]
+    fn empty_content_blob_falls_back_to_plain_text() {
+        // rig-era behavior restored: OneOrMany rejected `[]`, so a corrupt
+        // empty-content blob decoded as plain text rather than an invisible
+        // empty message. Vec accepts `[]`; the explicit guard keeps parity.
+        let decoded = decode_persisted_message("user", r#"{"role":"user","content":[]}"#);
+        assert!(
+            matches!(&decoded, Message::User { content }
+                if matches!(content.first(), Some(UserContent::Text(text))
+                    if text.text.contains("\"content\":[]"))),
+            "empty-content blob must fall back to visible plain text; got {decoded:?}"
+        );
     }
 
     #[test]

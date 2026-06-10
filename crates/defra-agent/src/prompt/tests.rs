@@ -1,5 +1,6 @@
 use super::*;
-use rig::completion::message::AssistantContent;
+use crate::llm::message::AssistantContent;
+use crate::test_support::first_content;
 
 fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_behavior(
@@ -15,18 +16,18 @@ fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilde
 
 fn user_msg(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
 fn assistant_msg(text: &str) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 
@@ -107,7 +108,7 @@ async fn build_with_summaries_prepends() {
     assert_eq!(prompt.messages.len(), 2);
 
     if let Message::User { content } = &prompt.messages[0] {
-        if let UserContent::Text(t) = content.first_ref() {
+        if let UserContent::Text(t) = first_content(&content) {
             assert!(t.text.contains("<system-reminder>"));
             assert!(t.text.contains("project architecture"));
         } else {
@@ -122,7 +123,7 @@ async fn build_with_summaries_prepends() {
 fn system_reminder_format() {
     let msg = LayeredPromptBuilder::system_reminder("The time is 3pm.");
     if let Message::User { content } = &msg {
-        if let UserContent::Text(t) = content.first_ref() {
+        if let UserContent::Text(t) = first_content(&content) {
             assert!(t.text.starts_with("<system-reminder>"));
             assert!(t.text.ends_with("</system-reminder>"));
             assert!(t.text.contains("The time is 3pm."));
