@@ -3,6 +3,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
+use crate::retry::execute_graphql_with_conflict_retry;
 
 use super::serde_helpers::{
     default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
@@ -124,7 +125,7 @@ pub async fn upsert_agent_principal(
         }}"#
     );
 
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(node, &mutation, "upsert AgentPrincipal").await;
     if resp.has_errors() {
         anyhow::bail!("upsert AgentPrincipal failed: {:?}", resp.errors);
     }

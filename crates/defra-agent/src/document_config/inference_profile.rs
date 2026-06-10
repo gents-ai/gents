@@ -9,6 +9,7 @@ use crate::config::{
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::graphql::escape_graphql_string;
+use crate::retry::execute_graphql_with_conflict_retry;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
@@ -212,7 +213,8 @@ pub async fn upsert_inference_profile(
         }}"#
     );
 
-    let resp = node.execute(&mutation).await;
+    let resp =
+        execute_graphql_with_conflict_retry(node, &mutation, "upsert InferenceProfile").await;
     if resp.has_errors() {
         anyhow::bail!("upsert InferenceProfile failed: {:?}", resp.errors);
     }

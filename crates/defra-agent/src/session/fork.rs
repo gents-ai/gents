@@ -5,9 +5,12 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::retry::log_mutation_timing;
-use super::{INITIAL_RETRY_BACKOFF_MS, MAX_MUTATION_RETRIES};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::active_runtime_lifecycle_state_graphql_list;
+use crate::retry::{
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 
 const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
 
@@ -854,11 +857,9 @@ async fn execute_mutation_with_retry(
 ) -> Result<GraphqlExecuteResponse> {
     let mut last_resp = None;
     let mut last_error = None;
-    for attempt in 0..=MAX_MUTATION_RETRIES {
+    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
         if attempt > 0 {
-            let backoff = std::time::Duration::from_millis(
-                INITIAL_RETRY_BACKOFF_MS * (1u64 << (attempt - 1)),
-            );
+            let backoff = defradb_conflict_retry_backoff(attempt - 1);
             tracing::warn!(
                 operation = %operation,
                 attempt = attempt,
@@ -876,6 +877,7 @@ async fn execute_mutation_with_retry(
         match resp {
             Ok(resp) if !resp.has_errors() => return Ok(resp),
             Ok(resp) => {
+                let retryable = is_defradb_transaction_conflict_text(&render_graphql_errors(&resp));
                 tracing::warn!(
                     operation = %operation,
                     attempt = attempt,
@@ -883,7 +885,11 @@ async fn execute_mutation_with_retry(
                     elapsed_ms = elapsed.as_millis() as u64,
                     "mutation failed"
                 );
-                last_resp = Some(resp);
+                if retryable && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
+                    last_resp = Some(resp);
+                    continue;
+                }
+                anyhow::bail!("{operation} failed: {}", render_graphql_errors(&resp));
             }
             Err(error) => {
                 tracing::warn!(
@@ -893,14 +899,18 @@ async fn execute_mutation_with_retry(
                     elapsed_ms = elapsed.as_millis() as u64,
                     "mutation transport failed"
                 );
-                last_error = Some(error);
+                if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
             }
         }
     }
 
     if let Some(resp) = last_resp {
         anyhow::bail!(
-            "{operation} failed after {MAX_MUTATION_RETRIES} retries: {}",
+            "{operation} failed after {DEFRA_DB_CONFLICT_MAX_RETRIES} retries: {}",
             render_graphql_errors(&resp)
         );
     }

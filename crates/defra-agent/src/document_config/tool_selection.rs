@@ -8,6 +8,7 @@ use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
 use crate::meta_tools::META_TOOL_NAMES;
+use crate::retry::execute_graphql_with_conflict_retry;
 use crate::toolset::{
     CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME,
     LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
@@ -862,7 +863,7 @@ pub async fn upsert_tool_selection(
         }}"#
     );
 
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(node, &mutation, "upsert ToolSelection").await;
     if resp.has_errors() {
         anyhow::bail!("upsert ToolSelection failed: {:?}", resp.errors);
     }

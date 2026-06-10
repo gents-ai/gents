@@ -1,4 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
+use defra_agent::retry::{
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 use serde_json::Value;
 
 pub fn escape_graphql_string(value: &str) -> String {
@@ -10,14 +14,8 @@ pub fn escape_graphql_string(value: &str) -> String {
 }
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    // DefraDB surfaces optimistic-transaction races as a retryable
-    // "transaction conflict. Please retry" error. Tests that seed documents
-    // alongside a live runtime (which writes the same AgentRequest/AgentResponse
-    // docs) can hit this transiently, so retry a bounded number of times on that
-    // specific error. Any other GraphQL error fails fast and is not masked.
-    const MAX_ATTEMPTS: usize = 8;
     let client = reqwest::Client::new();
-    for attempt in 1..=MAX_ATTEMPTS {
+    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
         let response = client
             .post(graphql)
             .json(&serde_json::json!({ "query": query }))
@@ -26,9 +24,9 @@ pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
             .with_context(|| format!("posting GraphQL to {graphql}"))?;
         let value: Value = response.json().await.context("decoding GraphQL response")?;
         if let Some(errors) = value.get("errors") {
-            let transient = errors.to_string().contains("transaction conflict");
-            if transient && attempt < MAX_ATTEMPTS {
-                tokio::time::sleep(std::time::Duration::from_millis(50 * attempt as u64)).await;
+            let transient = is_defradb_transaction_conflict_text(&errors.to_string());
+            if transient && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
+                tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
                 continue;
             }
             bail!("graphql returned errors: {errors}");
