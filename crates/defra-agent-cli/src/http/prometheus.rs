@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -63,6 +65,78 @@ pub(crate) struct MetricsBackendRow {
     pub(crate) last_probe: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct InferenceMetricsQueryData {
+    #[serde(rename = "AgentPrincipal", default)]
+    principals: Vec<InferencePrincipalRow>,
+    #[serde(rename = "AgentBehavior", default)]
+    behaviors: Vec<InferenceBehaviorRow>,
+    #[serde(rename = "InferenceCall", default)]
+    calls: Vec<InferenceCallMetricRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferencePrincipalRow {
+    #[serde(default)]
+    agent_did: String,
+    #[serde(default)]
+    display_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceBehaviorRow {
+    #[serde(default)]
+    behavior_id: String,
+    #[serde(default)]
+    agent_did: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    backend_id: String,
+    #[serde(default)]
+    model_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceCallMetricRow {
+    #[serde(default)]
+    agent_did: String,
+    #[serde(default)]
+    behavior_id: String,
+    #[serde(default)]
+    backend_id: String,
+    #[serde(default)]
+    call_state: String,
+    #[serde(default)]
+    prompt_tokens: Option<i64>,
+    #[serde(default)]
+    completion_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct InferenceRequestMetricKey {
+    agent: String,
+    agent_did: String,
+    backend_id: String,
+    model: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct InferenceTokenMetricKey {
+    agent: String,
+    agent_did: String,
+    backend_id: String,
+    model: String,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct InferenceMetricFamilies {
+    request_totals: BTreeMap<InferenceRequestMetricKey, i64>,
+    prompt_token_totals: BTreeMap<InferenceTokenMetricKey, i64>,
+    completion_token_totals: BTreeMap<InferenceTokenMetricKey, i64>,
+}
+
 fn null_string_as_unknown<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -73,6 +147,7 @@ where
 pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
     let data = load_metrics_query_data(graphql).await?;
     let data = with_local_native_executors(data);
+    let inference_metrics = load_inference_metrics_query_data(graphql).await?;
 
     let mut lines = Vec::new();
     push_metric_prelude(
@@ -326,8 +401,197 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
         },
     );
 
+    render_inference_metrics(&mut lines, &inference_metrics);
+
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMetricsQueryData> {
+    let response = post_graphql(graphql, inference_metrics_query()).await?;
+    let data = response
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    serde_json::from_value(data).context("decoding inference metrics query response")
+}
+
+fn inference_metrics_query() -> &'static str {
+    r#"{
+        AgentPrincipal {
+            agent_did
+            display_name
+        }
+        AgentBehavior {
+            behavior_id
+            agent_did
+            display_name
+            backend_id
+            model_name
+        }
+        InferenceCall(filter: {
+            call_kind: { _eq: "inference" },
+            call_state: { _in: ["completed", "failed", "cancelled"] }
+        }) {
+            agent_did
+            behavior_id
+            backend_id
+            call_state
+            prompt_tokens
+            completion_tokens
+        }
+    }"#
+}
+
+fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQueryData) {
+    let families = build_inference_metric_families(data);
+
+    push_metric_counter_prelude(
+        lines,
+        "defra_agent_inference_requests_total",
+        "Cumulative terminal inference calls grouped by agent, backend, model, and terminal status.",
+    );
+    for (key, total) in families.request_totals {
+        push_metric_sample(
+            lines,
+            "defra_agent_inference_requests_total",
+            &[
+                ("agent", key.agent),
+                ("agent_did", key.agent_did),
+                ("backend_id", key.backend_id),
+                ("model", key.model),
+                ("status", key.status),
+            ],
+            total,
+        );
+    }
+
+    push_metric_counter_prelude(
+        lines,
+        "defra_agent_inference_prompt_tokens_total",
+        "Cumulative prompt tokens reported by terminal inference calls.",
+    );
+    for (key, total) in families.prompt_token_totals {
+        push_metric_sample(
+            lines,
+            "defra_agent_inference_prompt_tokens_total",
+            &[
+                ("agent", key.agent),
+                ("agent_did", key.agent_did),
+                ("backend_id", key.backend_id),
+                ("model", key.model),
+            ],
+            total,
+        );
+    }
+
+    push_metric_counter_prelude(
+        lines,
+        "defra_agent_inference_completion_tokens_total",
+        "Cumulative completion tokens reported by terminal inference calls.",
+    );
+    for (key, total) in families.completion_token_totals {
+        push_metric_sample(
+            lines,
+            "defra_agent_inference_completion_tokens_total",
+            &[
+                ("agent", key.agent),
+                ("agent_did", key.agent_did),
+                ("backend_id", key.backend_id),
+                ("model", key.model),
+            ],
+            total,
+        );
+    }
+}
+
+fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> InferenceMetricFamilies {
+    let principals = data
+        .principals
+        .iter()
+        .filter_map(|principal| {
+            let agent_did = clean_metric_label(&principal.agent_did)?;
+            Some((agent_did, clean_metric_label(&principal.display_name)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let behaviors = data
+        .behaviors
+        .iter()
+        .filter_map(|behavior| {
+            let behavior_id = clean_metric_label(&behavior.behavior_id)?;
+            Some((behavior_id, behavior))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut families = InferenceMetricFamilies::default();
+    for call in &data.calls {
+        if !is_terminal_inference_status(&call.call_state) {
+            continue;
+        }
+
+        let behavior = clean_metric_label(&call.behavior_id)
+            .as_deref()
+            .and_then(|behavior_id| behaviors.get(behavior_id).copied());
+        let agent_did = clean_metric_label(&call.agent_did)
+            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.agent_did)))
+            .unwrap_or_else(|| "unknown".to_string());
+        let agent = principals
+            .get(&agent_did)
+            .cloned()
+            .flatten()
+            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.display_name)))
+            .unwrap_or_else(|| agent_did.clone());
+        let backend_id = clean_metric_label(&call.backend_id)
+            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.backend_id)))
+            .unwrap_or_else(|| "unknown".to_string());
+        let model = behavior
+            .and_then(|behavior| clean_metric_label(&behavior.model_name))
+            .unwrap_or_else(|| "unknown".to_string());
+        let status = clean_metric_label(&call.call_state).unwrap_or_else(|| "unknown".to_string());
+
+        let request_key = InferenceRequestMetricKey {
+            agent: agent.clone(),
+            agent_did: agent_did.clone(),
+            backend_id: backend_id.clone(),
+            model: model.clone(),
+            status,
+        };
+        *families.request_totals.entry(request_key).or_default() += 1;
+
+        let token_key = InferenceTokenMetricKey {
+            agent,
+            agent_did,
+            backend_id,
+            model,
+        };
+        if let Some(prompt_tokens) = nonnegative_metric_value(call.prompt_tokens) {
+            *families
+                .prompt_token_totals
+                .entry(token_key.clone())
+                .or_default() += prompt_tokens;
+        }
+        if let Some(completion_tokens) = nonnegative_metric_value(call.completion_tokens) {
+            *families
+                .completion_token_totals
+                .entry(token_key)
+                .or_default() += completion_tokens;
+        }
+    }
+
+    families
+}
+
+fn is_terminal_inference_status(status: &str) -> bool {
+    matches!(status.trim(), "completed" | "failed" | "cancelled")
+}
+
+fn clean_metric_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
+    value.map(|value| value.max(0))
 }
 
 pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQueryData> {
@@ -399,8 +663,16 @@ pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> Metrics
 }
 
 fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
+    push_metric_prelude_with_type(lines, name, help, "gauge");
+}
+
+fn push_metric_counter_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
+    push_metric_prelude_with_type(lines, name, help, "counter");
+}
+
+fn push_metric_prelude_with_type(lines: &mut Vec<String>, name: &str, help: &str, kind: &str) {
     lines.push(format!("# HELP {name} {help}"));
-    lines.push(format!("# TYPE {name} gauge"));
+    lines.push(format!("# TYPE {name} {kind}"));
 }
 
 fn push_metric_sample(
@@ -463,5 +735,117 @@ mod tests {
         .expect("metrics query envelope should decode null probe_status");
 
         assert_eq!(envelope.inference_backends[0].probe_status, "unknown");
+    }
+
+    #[test]
+    fn inference_metrics_group_by_agent_backend_model_and_status() {
+        let data = InferenceMetricsQueryData {
+            principals: vec![InferencePrincipalRow {
+                agent_did: "did:key:zAgent".to_string(),
+                display_name: "observability-steward".to_string(),
+            }],
+            behaviors: vec![InferenceBehaviorRow {
+                behavior_id: "behavior-1".to_string(),
+                agent_did: "did:key:zAgent".to_string(),
+                display_name: "fallback-behavior-name".to_string(),
+                backend_id: "backend-from-behavior".to_string(),
+                model_name: "d4f".to_string(),
+            }],
+            calls: vec![
+                InferenceCallMetricRow {
+                    agent_did: "did:key:zAgent".to_string(),
+                    behavior_id: "behavior-1".to_string(),
+                    backend_id: "backend-1".to_string(),
+                    call_state: "completed".to_string(),
+                    prompt_tokens: Some(10),
+                    completion_tokens: Some(4),
+                },
+                InferenceCallMetricRow {
+                    agent_did: "did:key:zAgent".to_string(),
+                    behavior_id: "behavior-1".to_string(),
+                    backend_id: "backend-1".to_string(),
+                    call_state: "completed".to_string(),
+                    prompt_tokens: Some(7),
+                    completion_tokens: Some(3),
+                },
+                InferenceCallMetricRow {
+                    agent_did: "did:key:zAgent".to_string(),
+                    behavior_id: "behavior-1".to_string(),
+                    backend_id: "backend-1".to_string(),
+                    call_state: "failed".to_string(),
+                    prompt_tokens: Some(5),
+                    completion_tokens: None,
+                },
+                InferenceCallMetricRow {
+                    agent_did: "did:key:zAgent".to_string(),
+                    behavior_id: "behavior-1".to_string(),
+                    backend_id: "backend-1".to_string(),
+                    call_state: "running".to_string(),
+                    prompt_tokens: Some(99),
+                    completion_tokens: Some(99),
+                },
+            ],
+        };
+
+        let families = build_inference_metric_families(&data);
+        let completed_key = InferenceRequestMetricKey {
+            agent: "observability-steward".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            backend_id: "backend-1".to_string(),
+            model: "d4f".to_string(),
+            status: "completed".to_string(),
+        };
+        let failed_key = InferenceRequestMetricKey {
+            status: "failed".to_string(),
+            ..completed_key.clone()
+        };
+        let token_key = InferenceTokenMetricKey {
+            agent: "observability-steward".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            backend_id: "backend-1".to_string(),
+            model: "d4f".to_string(),
+        };
+
+        assert_eq!(families.request_totals.get(&completed_key), Some(&2));
+        assert_eq!(families.request_totals.get(&failed_key), Some(&1));
+        assert_eq!(families.prompt_token_totals.get(&token_key), Some(&22));
+        assert_eq!(families.completion_token_totals.get(&token_key), Some(&7));
+    }
+
+    #[test]
+    fn render_inference_metrics_emits_counter_families() {
+        let data = InferenceMetricsQueryData {
+            principals: vec![],
+            behaviors: vec![InferenceBehaviorRow {
+                behavior_id: "behavior-1".to_string(),
+                agent_did: "did:key:zAgent".to_string(),
+                display_name: "agent \"friendly\"".to_string(),
+                backend_id: "backend-1".to_string(),
+                model_name: "model\none".to_string(),
+            }],
+            calls: vec![InferenceCallMetricRow {
+                agent_did: String::new(),
+                behavior_id: "behavior-1".to_string(),
+                backend_id: String::new(),
+                call_state: "completed".to_string(),
+                prompt_tokens: Some(10),
+                completion_tokens: Some(3),
+            }],
+        };
+
+        let mut lines = Vec::new();
+        render_inference_metrics(&mut lines, &data);
+        let body = lines.join("\n");
+
+        assert!(body.contains("# TYPE defra_agent_inference_requests_total counter"));
+        assert!(body.contains(
+            "defra_agent_inference_requests_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
+        ));
+        assert!(body.contains(
+            "defra_agent_inference_prompt_tokens_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
+        ));
+        assert!(body.contains(
+            "defra_agent_inference_completion_tokens_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
+        ));
     }
 }
