@@ -46,9 +46,6 @@ pub(crate) use sessions::{
     ensure_session_with_behavior_id, max_sequence,
 };
 
-const MAX_MUTATION_RETRIES: u32 = 3;
-const INITIAL_RETRY_BACKOFF_MS: u64 = 100;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionEntry {
     pub session_id: String,

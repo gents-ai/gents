@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use crate::graphql::escape_graphql_string;
+use crate::retry::execute_graphql_with_conflict_retry;
 
 /// Runtime-owned EventTrigger fields the trigger engine writes back after a
 /// fire attempt.
@@ -138,7 +139,9 @@ pub(crate) async fn update_event_trigger_runtime_fields(
         }}"#
     );
 
-    let resp = node.execute(&mutation).await;
+    let resp =
+        execute_graphql_with_conflict_retry(node, &mutation, "update EventTrigger runtime fields")
+            .await;
     if resp.has_errors() {
         anyhow::bail!(
             "update EventTrigger runtime fields for {trigger_id} failed: {:?}",
