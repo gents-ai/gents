@@ -5,15 +5,13 @@ pub(crate) async fn execute_mutation_with_retry(
     mutation: &str,
     operation: &str,
 ) -> Result<QueryResponse> {
-    let mut max_retries = MAX_MUTATION_RETRIES;
-    let mut attempt = 0;
-    loop {
+    let mut last_resp = None;
+    for attempt in 0..=MAX_MUTATION_RETRIES {
         if attempt > 0 {
-            let backoff = mutation_retry_backoff(operation, mutation, attempt);
+            let backoff = Duration::from_millis(INITIAL_RETRY_BACKOFF_MS * (1u64 << (attempt - 1)));
             tracing::warn!(
                 operation = %operation,
                 attempt = attempt,
-                max_retries = max_retries,
                 backoff_ms = backoff.as_millis() as u64,
                 "retrying mutation"
             );
@@ -29,27 +27,21 @@ pub(crate) async fn execute_mutation_with_retry(
             return Ok(resp);
         }
 
-        if response_has_transient_mutation_error(&resp) {
-            max_retries = max_retries.max(MAX_TRANSIENT_MUTATION_RETRIES);
-        }
-
         tracing::warn!(
             operation = %operation,
             attempt = attempt,
-            max_retries = max_retries,
             errors = ?resp.errors,
             elapsed_ms = elapsed.as_millis() as u64,
             "mutation failed"
         );
-
-        if attempt >= max_retries {
-            anyhow::bail!(
-                "{operation} failed after {max_retries} retries: {:?}",
-                resp.errors
-            )
-        }
-        attempt += 1;
+        last_resp = Some(resp);
     }
+
+    let resp = last_resp.expect("retry loop always sets last_resp before failure");
+    anyhow::bail!(
+        "{operation} failed after {MAX_MUTATION_RETRIES} retries: {:?}",
+        resp.errors
+    )
 }
 
 pub(super) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
@@ -103,33 +95,6 @@ pub(super) fn log_mutation_timing(operation: &str, elapsed: Duration) {
     }
 }
 
-fn mutation_retry_backoff(operation: &str, mutation: &str, attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1).min(10);
-    let base_ms = INITIAL_RETRY_BACKOFF_MS
-        .saturating_mul(1u64 << shift)
-        .min(MAX_RETRY_BACKOFF_MS);
-    Duration::from_millis(base_ms + mutation_retry_jitter_ms(operation, mutation, attempt))
-}
-
-fn mutation_retry_jitter_ms(operation: &str, mutation: &str, attempt: u32) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    operation.hash(&mut hasher);
-    mutation.hash(&mut hasher);
-    attempt.hash(&mut hasher);
-    hasher.finish() % (MAX_RETRY_JITTER_MS + 1)
-}
-
-fn response_has_transient_mutation_error(resp: &QueryResponse) -> bool {
-    if resp.errors.is_empty() {
-        return false;
-    }
-    let rendered = format!("{:?}", resp.errors).to_ascii_lowercase();
-    rendered.contains("transaction conflict") || rendered.contains("please retry")
-}
-
 pub(super) async fn execute_query_timed(
     node: &EmbeddedNode,
     query: &str,
@@ -162,38 +127,4 @@ pub async fn count_active_sessions(node: &EmbeddedNode) -> Result<usize> {
         .and_then(|value| value.as_array())
         .map(|rows| rows.len())
         .unwrap_or(0))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_mutation_error_detection_matches_datastore_conflicts() {
-        let resp = QueryResponse::error(
-            "datastore error: storage error: transaction conflict. Please retry",
-        );
-
-        assert!(response_has_transient_mutation_error(&resp));
-    }
-
-    #[test]
-    fn transient_mutation_error_detection_leaves_validation_errors_on_default_budget() {
-        let resp = QueryResponse::error("field `status` is not defined by type AgentResponse");
-
-        assert!(!response_has_transient_mutation_error(&resp));
-    }
-
-    #[test]
-    fn mutation_retry_backoff_is_capped_and_staggered_by_mutation() {
-        let first = mutation_retry_backoff("flush_streaming_response_snapshot", "mutation-a", 1);
-        let second = mutation_retry_backoff("flush_streaming_response_snapshot", "mutation-b", 1);
-        let capped = mutation_retry_backoff("flush_streaming_response_snapshot", "mutation-a", 20);
-
-        assert!(first >= Duration::from_millis(INITIAL_RETRY_BACKOFF_MS));
-        assert!(first <= Duration::from_millis(INITIAL_RETRY_BACKOFF_MS + MAX_RETRY_JITTER_MS));
-        assert_ne!(first, second);
-        assert!(capped >= Duration::from_millis(MAX_RETRY_BACKOFF_MS));
-        assert!(capped <= Duration::from_millis(MAX_RETRY_BACKOFF_MS + MAX_RETRY_JITTER_MS));
-    }
 }

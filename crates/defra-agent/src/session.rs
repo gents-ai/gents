@@ -47,10 +47,7 @@ pub(crate) use sessions::{
 };
 
 const MAX_MUTATION_RETRIES: u32 = 3;
-const MAX_TRANSIENT_MUTATION_RETRIES: u32 = 8;
 const INITIAL_RETRY_BACKOFF_MS: u64 = 100;
-const MAX_RETRY_BACKOFF_MS: u64 = 2_000;
-const MAX_RETRY_JITTER_MS: u64 = 250;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionEntry {
