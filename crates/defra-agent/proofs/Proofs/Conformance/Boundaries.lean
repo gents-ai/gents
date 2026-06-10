@@ -249,6 +249,12 @@ def boundaryCoverageLedgerReviewDisciplineId : String :=
 def boundaryEventDeliveryFairSubstrateId : String :=
   "boundary.event-delivery.fair-substrate"
 
+def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
+  "boundary.streaming-response.idle-timeout-deadline"
+
+def boundaryPromptAssemblyProviderInputSanitizationId : String :=
+  "boundary.prompt-assembly.provider-input-sanitization"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -361,6 +367,18 @@ def boundaries : List Boundary :=
         "is taken as an axiom; the substrate model lives in tla/ReversePairing.tla."
     , acceptedFollowUp :=
         some "Substrate fairness is proved separately in tla/ReversePairing.tla; see also #162."
+    }
+  , { id := boundaryStreamingResponseIdleTimeoutDeadlineId
+    , domain := "StreamingResponse"
+    , subject := "stream idle timeout deadline precondition"
+    , statement :=
+        "StreamingResponse streamIdleTimeout transitions assume the runtime only fires the timeout after the stream idle deadline has elapsed; Rust satisfies this with the configured liveness timeout rather than a persisted response-clock field."
+    }
+  , { id := boundaryPromptAssemblyProviderInputSanitizationId
+    , domain := "PromptAssembly"
+    , subject := "provider input sanitization"
+    , statement :=
+        "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
     }
   ]
 

@@ -12,6 +12,12 @@ pub async fn upsert_inference_profile(
     row: &InferenceProfileRow,
 ) -> Result<()> {
     let profile_id = normalize_required("profile_id", &row.profile_id)?;
+    if row
+        .stream_liveness_timeout_secs
+        .is_some_and(|value| value <= 0)
+    {
+        anyhow::bail!("stream_liveness_timeout_secs must be positive");
+    }
 
     let add_fields = [
         Some(format!(
@@ -37,6 +43,10 @@ pub async fn upsert_inference_profile(
             row.stream_batch_ms,
         )),
         Some(graphql_optional_int_field(
+            "stream_liveness_timeout_secs",
+            row.stream_liveness_timeout_secs,
+        )),
+        Some(graphql_optional_int_field(
             "deadline_duration_secs",
             row.deadline_duration_secs,
         )),
@@ -59,6 +69,10 @@ pub async fn upsert_inference_profile(
         Some(graphql_optional_int_field(
             "stream_batch_ms",
             row.stream_batch_ms,
+        )),
+        Some(graphql_optional_int_field(
+            "stream_liveness_timeout_secs",
+            row.stream_liveness_timeout_secs,
         )),
         Some(graphql_optional_int_field(
             "deadline_duration_secs",

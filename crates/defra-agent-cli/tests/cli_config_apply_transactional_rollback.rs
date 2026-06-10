@@ -19,7 +19,7 @@ const PER_COLLECTION_SLEEP_MS: &str = "200";
 /// `commit` produces no externally-visible mutations. The orphaned handle on
 /// the server is reclaimed via connection drop / per-request HTTP timeout
 /// (not an active idle-GC sweep — see
-/// `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md`).
+/// `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md` (removed from the tree; see git history)).
 /// This test exercises the operationally-meaningful failure mode (Ctrl-C,
 /// OOM, container restart) against a real node, not the recorder.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

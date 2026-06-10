@@ -6,11 +6,11 @@ mod transcript_render;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
-use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -2183,8 +2183,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::completion::message::{AssistantContent, Text};
-    use rig::one_or_many::OneOrMany;
+    use crate::llm::message::{AssistantContent, Text};
 
     #[test]
     fn project_child_terminal_maps_child_states() {
@@ -2237,9 +2236,9 @@ mod tests {
     fn render_assistant_message_text_uses_persisted_assistant_message() {
         let message = Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: "child final answer".to_string(),
-            })),
+            })],
         };
         let content = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -2250,9 +2249,9 @@ mod tests {
 
     #[test]
     fn render_assistant_message_text_uses_legacy_assistant_content() {
-        let content = OneOrMany::one(AssistantContent::Text(Text {
+        let content = vec![AssistantContent::Text(Text {
             text: "legacy child final answer".to_string(),
-        }));
+        })];
         let persisted = serde_json::to_string(&content).unwrap();
         assert_eq!(
             render_assistant_message_text(&persisted).unwrap(),

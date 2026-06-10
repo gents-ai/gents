@@ -188,13 +188,13 @@ impl DefraSessionHook {
         let persisted_result = ToolResult {
             id: tool_result.id.clone(),
             call_id: tool_result.call_id.clone(),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: model_observation,
-            })),
+            })],
         };
 
         let message = Message::User {
-            content: OneOrMany::one(UserContent::ToolResult(persisted_result)),
+            content: vec![UserContent::ToolResult(persisted_result)],
         };
         self.persist_message(&message).await?;
         Ok(())
@@ -289,9 +289,9 @@ impl DefraSessionHook {
             let tool_result = ToolResult {
                 id: result_id,
                 call_id,
-                content: OneOrMany::one(ToolResultContent::Text(Text {
+                content: vec![ToolResultContent::Text(Text {
                     text: String::new(),
-                })),
+                })],
             };
             self.persist_stream_tool_result_message(&tool_result, internal_call_id)
                 .await?;

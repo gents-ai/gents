@@ -12,8 +12,8 @@ use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
-    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
+    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
+    SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
     SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
@@ -60,6 +60,11 @@ pub(crate) enum Command {
     P2p {
         #[command(subcommand)]
         command: P2pCommand,
+    },
+    #[command(about = "Apply app-specific collection schemas", after_help = SCHEMA_AFTER_HELP)]
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommand,
     },
     #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
     Show {
@@ -1200,6 +1205,8 @@ pub(crate) struct InferenceProfileUpsertArgs {
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]
+    pub(crate) stream_liveness_timeout_secs: Option<i64>,
+    #[arg(long)]
     pub(crate) deadline_duration_secs: Option<i64>,
 }
 
@@ -1370,6 +1377,34 @@ pub(crate) enum ManifestAgentDidBindingArg {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum SchemaCommand {
+    #[command(about = "Apply SDL and JSON Patch schema files")]
+    Apply(SchemaApplyArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SchemaApplyArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to apply to instead of local home state"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        value_name = "PATH",
+        help = "Schema file or directory. Directories apply *.graphql/*.gql files, then *.patch.json/*.json-patch files"
+    )]
+    pub(crate) path: PathBuf,
+    #[arg(
+        long = "patch",
+        value_name = "PATCH",
+        help = "Extra JSON Patch file to apply after SDL files. May be repeated"
+    )]
+    pub(crate) patches: Vec<PathBuf>,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum P2pCommand {
     #[command(about = "Show live P2P connectivity for the running runtime")]
     Status(P2pAccessArgs),
@@ -1394,6 +1429,20 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(about = "Manage desired out-of-band P2P pairings")]
+    Pairings {
+        #[command(subcommand)]
+        command: P2pPairingsCommand,
+    },
+    #[command(
+        about = "Remove a desired out-of-band P2P pairing",
+        after_help = "\
+Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
+reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
+should change live connectivity immediately, use p2p collections/replicators \
+commands against the running server."
+    )]
+    Unpair(P2pPairingRefArgs),
     #[command(
         about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
         after_help = "\
@@ -1468,6 +1517,57 @@ pub(crate) enum P2pDocumentsCommand {
     Remove(P2pDocumentsMutateArgs),
     #[command(about = "Fetch documents from connected peers")]
     Sync(P2pDocumentsSyncArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum P2pPairingsCommand {
+    #[command(about = "List desired out-of-band P2P pairings")]
+    List(P2pAccessArgs),
+    #[command(
+        about = "Create or update a desired out-of-band P2P pairing",
+        after_help = "\
+Writes PeerPairingDesired for desktop pairing reconcile. Desktop reconcile \
+runs when DEFRA_AGENT_PAIRING_RECONCILE=1 and a saved peer record exists. For \
+headless servers, use `defra-agent p2p pair --peer <multiaddr>` to apply live \
+P2P wiring immediately."
+    )]
+    Set(P2pPairingSetArgs),
+    #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
+    Remove(P2pPairingRefArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingSetArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
+    /// Agent DID expected for the remote peer.
+    #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+    /// Replicator multiaddr to install during reconcile. Repeat for multiple addresses.
+    #[arg(long = "address", value_name = "MULTIADDR")]
+    pub(crate) addresses: Vec<String>,
+    /// Collection name to include in the desired pairing. Repeat or combine with --profile.
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    pub(crate) collections: Vec<String>,
+    /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingRefArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
+    pub(crate) peer_id: String,
 }
 
 #[derive(clap::Args)]

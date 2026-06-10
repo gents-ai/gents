@@ -426,9 +426,9 @@ fn total_compacted_messages(entries: &[session::CompactionEntry]) -> usize {
 }
 
 fn drop_compacted_prefix(
-    mut history: Vec<rig::completion::message::Message>,
+    mut history: Vec<crate::llm::message::Message>,
     compacted: usize,
-) -> Vec<rig::completion::message::Message> {
+) -> Vec<crate::llm::message::Message> {
     let drain_count = compacted.min(history.len());
     history.drain(..drain_count);
     history

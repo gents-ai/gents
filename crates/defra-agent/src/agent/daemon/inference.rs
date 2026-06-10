@@ -96,7 +96,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         request: &crate::watcher::AgentRequest,
         doc_id: &str,
-        history: &[rig::completion::message::Message],
+        history: &[crate::llm::message::Message],
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
@@ -185,7 +185,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     request,
                     self.loop_tools.len(),
                 );
-                let loop_prompt = rig::completion::Message::user(request.content.clone());
+                let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();
                 // Keep a per-attempt token for the admission permit and cancel it
@@ -239,8 +239,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
                     async {
-                        let liveness_timeout =
-                            Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
+                        let liveness_timeout = self.behavior.stream_liveness_timeout;
 
                         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
@@ -344,7 +343,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     }
                                     let timeout_reason = format!(
                                         "stream liveness timeout: no data received for {}s",
-                                        DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                                        liveness_timeout.as_secs()
                                     );
                                     admission::set_terminal_failure_reason(
                                         &terminal_failure_reason,

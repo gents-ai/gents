@@ -94,6 +94,7 @@ pub(crate) struct InferenceProfileSaveRequest {
     pub max_turns: Option<i64>,
     pub temperature: Option<f64>,
     pub stream_batch_ms: Option<i64>,
+    pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
 }
 
@@ -218,8 +219,12 @@ pub(crate) struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    /// Accepted from the client but not yet consumed: snapshot filtering by
+    /// root request / terminal inclusion is staged (operator-surfaces spec).
+    #[allow(dead_code)]
     pub root_request_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub include_terminal: Option<bool>,
 }
 

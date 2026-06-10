@@ -141,6 +141,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     max_turns: row.max_turns,
                     temperature: row.temperature,
                     stream_batch_ms: row.stream_batch_ms,
+                    stream_liveness_timeout_secs: row.stream_liveness_timeout_secs,
                     deadline_duration_secs: row.deadline_duration_secs,
                 })
                 .collect::<Vec<_>>();

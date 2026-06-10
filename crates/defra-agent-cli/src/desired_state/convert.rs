@@ -195,6 +195,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "max_turns",
                         "temperature",
                         "stream_batch_ms",
+                        "stream_liveness_timeout_secs",
                         "deadline_duration_secs",
                     ],
                 )

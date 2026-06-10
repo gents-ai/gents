@@ -59,7 +59,14 @@ pub(crate) fn compute_preview_signature(input: &PreviewSignatureInput) -> String
 }
 
 // --- Liveness signature ------------------------------------------------
+//
+// Staged for the operations-rail liveness banner (operator-surfaces spec;
+// landed with #310/#311) but not yet wired into the watcher — the emit-floor
+// wiring is expected alongside the stream-liveness work (#437). Tested below;
+// allow(dead_code) rather than deletion so the staged surface and its tests
+// stay reviewable.
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LivenessSignatureInput {
     pub expired_processing_count: i64,
@@ -68,6 +75,7 @@ pub(crate) struct LivenessSignatureInput {
     pub tool_calls: Vec<LivenessSignatureToolCall>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LivenessSignatureRequest {
     pub request_id: String,
@@ -75,6 +83,7 @@ pub(crate) struct LivenessSignatureRequest {
     pub deadline_expired: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LivenessSignatureToolCall {
     pub tool_call_id: String,
@@ -86,6 +95,7 @@ pub(crate) struct LivenessSignatureToolCall {
     pub deadline_expired: bool,
 }
 
+#[allow(dead_code)]
 pub(crate) fn compute_liveness_signature(input: &LivenessSignatureInput) -> String {
     let mut hasher = blake3::Hasher::new();
     // Header: scalar fields.
@@ -128,9 +138,12 @@ pub(crate) fn compute_liveness_signature(input: &LivenessSignatureInput) -> Stri
 
 // --- Emit floor --------------------------------------------------------
 
+#[allow(dead_code)]
 pub(crate) const EMIT_FLOOR_MIN_INTERVAL: Duration = Duration::from_millis(250);
+#[allow(dead_code)]
 pub(crate) const EMIT_FLOOR_MAX_COALESCE: Duration = Duration::from_secs(2);
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EmitDecision {
     /// Emit the new signature now.
@@ -142,6 +155,7 @@ pub(crate) enum EmitDecision {
     Defer { at: Instant },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub(crate) struct LivenessEmitFloor {
     last_emitted_signature: Option<String>,
@@ -149,6 +163,7 @@ pub(crate) struct LivenessEmitFloor {
     pending_change_first_seen_at: Option<Instant>,
 }
 
+#[allow(dead_code)]
 impl LivenessEmitFloor {
     pub(crate) fn new() -> Self {
         Self::default()

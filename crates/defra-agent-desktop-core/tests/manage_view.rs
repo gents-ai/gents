@@ -55,6 +55,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         max_turns: Some(24),
         temperature: Some(0.2),
         stream_batch_ms: Some(50),
+        stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
     })
     .await?;

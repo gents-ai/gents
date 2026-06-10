@@ -9,7 +9,7 @@ use crate::compaction::CompactionStrategy;
 use crate::config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
@@ -270,6 +270,12 @@ pub(crate) fn behavior_config_from_documents(
         .deadline_duration_secs
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS);
+    let stream_liveness_timeout_secs = positive_duration_secs_or_default(
+        inference_profile.stream_liveness_timeout_secs,
+        "stream_liveness_timeout_secs",
+        DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    )?
+    .min(deadline_duration_secs.max(1));
     let profile_max_tokens = inference_profile
         .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
@@ -310,6 +316,7 @@ pub(crate) fn behavior_config_from_documents(
             .unwrap_or(DEFAULT_COMPACTION_THRESHOLD),
         compaction_strategy,
         stream_batch_ms,
+        stream_liveness_timeout: Duration::from_secs(stream_liveness_timeout_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         sampling: SamplingConfig {
             temperature: inference_profile.temperature,
@@ -319,6 +326,19 @@ pub(crate) fn behavior_config_from_documents(
         },
         skills,
     })
+}
+
+fn positive_duration_secs_or_default(
+    value: Option<i64>,
+    field_name: &str,
+    default_secs: u64,
+) -> anyhow::Result<u64> {
+    match value {
+        None => Ok(default_secs),
+        Some(value) if value > 0 => u64::try_from(value)
+            .map_err(|_| anyhow::anyhow!("{field_name} value {value} is out of range")),
+        Some(value) => anyhow::bail!("{field_name} must be positive; got {value}"),
+    }
 }
 
 fn parse_compaction_strategy(value: Option<&str>) -> anyhow::Result<CompactionStrategy> {

@@ -29,7 +29,18 @@ pub mod inference_http;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+
+/// Shared in-crate test utilities.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
+    /// convention in every shape the tests build.
+    pub(crate) fn first_content<T>(items: &[T]) -> &T {
+        items.first().expect("non-empty content")
+    }
+}
 pub mod lifecycle;
+pub mod llm;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
@@ -71,7 +82,7 @@ pub use compaction::CompactionStrategy;
 pub use config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;

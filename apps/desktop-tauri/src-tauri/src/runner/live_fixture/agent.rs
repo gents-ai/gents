@@ -196,6 +196,7 @@ async fn seed_live_behavior_documents(
         max_turns: Some(20),
         temperature: Some(0.0),
         stream_batch_ms: Some(250),
+        stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
     })
     .await?;

@@ -69,3 +69,23 @@ fn delay_has_minimum_floor() {
         assert!(policy.delay_for_attempt(0).as_millis() >= 100);
     }
 }
+
+#[test]
+fn defradb_transaction_conflict_classifier_matches_prescribed_retry_error() {
+    assert!(is_defradb_transaction_conflict_text(
+        "commit error: datastore error: storage error: transaction conflict. Please retry"
+    ));
+    assert!(is_defradb_transaction_conflict_text(
+        "TRANSACTION CONFLICT. PLEASE RETRY"
+    ));
+    assert!(!is_defradb_transaction_conflict_text(
+        "unique constraint violation"
+    ));
+}
+
+#[test]
+fn defradb_conflict_backoff_is_exponential() {
+    assert_eq!(defradb_conflict_retry_backoff(0).as_millis(), 100);
+    assert_eq!(defradb_conflict_retry_backoff(1).as_millis(), 200);
+    assert_eq!(defradb_conflict_retry_backoff(2).as_millis(), 400);
+}

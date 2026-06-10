@@ -159,7 +159,22 @@ Examples:
   defra-agent p2p collections sync-versions --version-id <collection-version-id>
   defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
   defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
+  defra-agent p2p pairings set --peer <peer-id> --did <agent-did> --address <multiaddr> --profile chat-requests
+  defra-agent p2p pairings list
+  defra-agent p2p unpair --peer <peer-id>
+  defra-agent p2p pair --peer <multiaddr> --profile chat-requests
   defra-agent p2p diagnose";
+const SCHEMA_AFTER_HELP: &str = "\
+Apply app-specific DefraDB collection schemas to a running or local store.
+
+Examples:
+  defra-agent schema apply ./app-schemas
+  defra-agent schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
+  defra-agent schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
+
+Directory inputs apply *.graphql and *.gql files, then additive patch files
+named *.patch.json or *.json-patch. Patch files contain a JSON Patch array, or
+an object with Patch/patch.";
 const STATUS_AFTER_HELP: &str = "\
 Status reads the local runtime by default.
 
@@ -323,7 +338,7 @@ pub(crate) const EXPORT_SKILL_FIELDS: &str =
 pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
 pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
-    "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
+    "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs";
 pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did";
 pub(crate) const EXPORT_TASK_FIELDS: &str =
@@ -356,6 +371,7 @@ async fn main() -> Result<()> {
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
+        Command::Schema { command } => commands::schema::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,

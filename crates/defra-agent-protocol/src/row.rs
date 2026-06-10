@@ -627,6 +627,8 @@ pub struct InferenceProfileRow {
     #[serde(default)]
     pub stream_batch_ms: Option<i64>,
     #[serde(default)]
+    pub stream_liveness_timeout_secs: Option<i64>,
+    #[serde(default)]
     pub deadline_duration_secs: Option<i64>,
 }
 

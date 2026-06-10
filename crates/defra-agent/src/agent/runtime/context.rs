@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 use rig::client::CompletionClient;
-use rig::tool::ToolDyn;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 use crate::admission::AdmissionRegistry;
