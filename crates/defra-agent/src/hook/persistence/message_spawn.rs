@@ -44,11 +44,7 @@ impl DefraSessionHook {
                         .insert(key, sequence);
                 }
                 match message {
-                    Message::User { .. } => {
-                        if !is_tool_result_message(message) {
-                            state.reset_after_user_message();
-                        }
-                    }
+                    Message::User { .. } => state.reset_after_user_message(),
                     Message::Assistant { .. } => {
                         state.transcript_turn =
                             TranscriptTurnState::AssistantPersisted { sequence };
@@ -76,9 +72,7 @@ impl DefraSessionHook {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
-                    if !is_tool_result_message(message) {
-                        state.reset_after_user_message();
-                    }
+                    state.reset_after_user_message();
                     if let Some(key) = message_key.as_ref() {
                         state
                             .persisted_tool_result_message_sequences
@@ -87,12 +81,6 @@ impl DefraSessionHook {
                     (session_id, sequence, "user", message_key)
                 }
                 Message::Assistant { .. } => {
-                    if matches!(
-                        state.transcript_turn,
-                        TranscriptTurnState::AssistantPersisted { .. }
-                    ) {
-                        state.begin_or_continue_assistant_turn();
-                    }
                     let sequence = state.persist_assistant_turn()?;
                     (session_id, sequence, "assistant", None)
                 }
@@ -682,11 +670,6 @@ impl DefraSessionHook {
             SubagentTargetHost::Remote
         }
     }
-}
-
-fn is_tool_result_message(message: &Message) -> bool {
-    matches!(message, Message::User { content }
-        if content.iter().any(|item| matches!(item, UserContent::ToolResult(_))))
 }
 
 fn is_missing_tool_call_result(error: &anyhow::Error) -> bool {
