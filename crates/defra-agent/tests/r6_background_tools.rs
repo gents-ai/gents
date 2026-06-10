@@ -4,11 +4,11 @@ mod support;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::tool::BoxFuture;
+use defra_agent::llm::tool::ToolDefinition;
+use defra_agent::llm::tool::{ToolDyn, ToolError};
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use rig::agent::ToolCallHookAction;
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ impl ToolDyn for StaticTool {
         self.name.to_string()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.to_string(),
@@ -34,7 +34,7 @@ impl ToolDyn for StaticTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.result.to_string()) })
     }
 }
@@ -49,7 +49,7 @@ impl ToolDyn for LargeOutputTool {
         self.name.to_string()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.to_string(),
@@ -59,7 +59,7 @@ impl ToolDyn for LargeOutputTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         let output = self.output.clone();
         Box::pin(async move { Ok(output) })
     }
@@ -72,7 +72,7 @@ impl ToolDyn for PendingTool {
         "slow_tool".to_string()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async {
             ToolDefinition {
                 name: "slow_tool".to_string(),
@@ -82,7 +82,7 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }

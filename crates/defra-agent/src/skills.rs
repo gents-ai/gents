@@ -296,14 +296,14 @@ impl LoadSkillTool {
     }
 }
 
-impl rig::tool::Tool for LoadSkillTool {
+impl crate::llm::tool::Tool for LoadSkillTool {
     const NAME: &'static str = "load_skill";
     type Error = LoadSkillError;
     type Args = LoadSkillArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
+    async fn definition(&self, _prompt: String) -> crate::llm::tool::ToolDefinition {
+        crate::llm::tool::ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Load a skill's full instructions by name (or skill_id), then follow \
                 them for the task. Choose a skill from the Skills catalog in your system prompt."
@@ -473,7 +473,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_skill_tool_returns_body_on_demand_and_handles_unknown() {
-        use rig::tool::Tool;
+        use crate::llm::tool::Tool;
         let ceiling = ceiling(&["read"]);
         let skills = vec![skill(
             "research",
@@ -561,7 +561,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_skill_resolves_by_display_name() {
-        use rig::tool::Tool;
+        use crate::llm::tool::Tool;
         let mut s = skill("research", "did:p", SkillScope::Principal, &["read"]);
         s.display_name = Some("Deep Research".to_string());
         let tool = LoadSkillTool::new(vec![s], ceiling(&["read"]));

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::llm::message::Message;
 use anyhow::Result;
-use rig::completion::message::Message;
 use rig::completion::CompletionModel;
 
 mod history;
@@ -141,7 +141,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let raw_summary = crate::agent::loop_stream::run_loop_to_text(
             (*self.model).clone(),
             None,
-            rig::completion::Message::user(compaction_prompt()),
+            crate::llm::message::Message::user(compaction_prompt()),
             prepared_history.clone(),
             std::sync::Arc::new(Vec::new()),
             self.config.clone(),

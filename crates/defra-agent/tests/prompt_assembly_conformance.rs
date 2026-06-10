@@ -13,11 +13,10 @@
 //! staying within the modeled fragment.
 
 use defra_agent::compaction::sanitize_history_for_provider;
-use rig::completion::message::{
+use defra_agent::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::one_or_many::OneOrMany;
 
 fn call(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
@@ -35,27 +34,27 @@ fn call(id: &str) -> AssistantContent {
 fn assistant_calls(ids: &[&str]) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::many(ids.iter().map(|id| call(id)).collect::<Vec<_>>()).unwrap(),
+        content: ids.iter().map(|id| call(id)).collect::<Vec<_>>(),
     }
 }
 
 fn result(id: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: id.to_string(),
             call_id: Some(id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: format!("{id}-result"),
-            })),
-        })),
+            })],
+        })],
     }
 }
 
 fn user(text: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::Text(Text {
+        content: vec![UserContent::Text(Text {
             text: text.to_string(),
-        })),
+        })],
     }
 }
 

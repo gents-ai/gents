@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rig::tool::Tool;
+use crate::llm::tool::Tool;
 use serde_json::json;
 
 use super::*;

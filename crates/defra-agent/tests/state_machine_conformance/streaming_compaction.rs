@@ -1220,15 +1220,15 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
 fn compaction_text_message(role: &str, text: &str) -> Message {
     match role {
         "user" => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
+            content: vec![UserContent::Text(Text {
                 text: text.to_string(),
-            })),
+            })],
         },
         "assistant" => Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
+            content: vec![AssistantContent::Text(Text {
                 text: text.to_string(),
-            })),
+            })],
         },
         other => panic!("unsupported compaction text role {other:?}"),
     }
@@ -1237,7 +1237,7 @@ fn compaction_text_message(role: &str, text: &str) -> Message {
 fn compaction_tool_call_message(call_id: &str) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+        content: vec![AssistantContent::ToolCall(ToolCall {
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
             function: ToolFunction {
@@ -1246,19 +1246,19 @@ fn compaction_tool_call_message(call_id: &str) -> Message {
             },
             signature: None,
             additional_params: None,
-        })),
+        })],
     }
 }
 
 fn compaction_tool_result_message(call_id: &str, payload: &str) -> Message {
     Message::User {
-        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+        content: vec![UserContent::ToolResult(ToolResult {
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
-            content: OneOrMany::one(ToolResultContent::Text(Text {
+            content: vec![ToolResultContent::Text(Text {
                 text: payload.to_string(),
-            })),
-        })),
+            })],
+        })],
     }
 }
 

@@ -112,7 +112,7 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
                 crate::agent::loop_stream::run_loop_to_text(
                     model,
                     None,
-                    rig::completion::Message::user(prompt),
+                    crate::llm::message::Message::user(prompt),
                     Vec::new(),
                     std::sync::Arc::new(Vec::new()),
                     loop_config,

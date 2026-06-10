@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::llm::tool::Tool;
 use defra_node::EmbeddedNode;
-use rig::tool::Tool;
 use serde_json::json;
 
 use super::BoundedWriteTool;

@@ -6,6 +6,11 @@ use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::llm::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
+use defra_agent::llm::ToolCallHookAction;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelCause, CancelPolicy, CascadeDispatch,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
@@ -15,12 +20,6 @@ use defra_agent::{
     upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
     ToolSelectionDocument,
 };
-use rig::agent::ToolCallHookAction;
-use rig::completion::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
-use rig::one_or_many::OneOrMany;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -544,9 +543,9 @@ async fn persist_child_completion(
 
     let assistant = Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text {
+        content: vec![AssistantContent::Text(Text {
             text: final_response.to_string(),
-        })),
+        })],
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
