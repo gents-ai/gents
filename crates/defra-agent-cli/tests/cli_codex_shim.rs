@@ -27,6 +27,52 @@ fn default_backend_id(agent_did: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-shim-degrade-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-shim-degrade-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    // Hold the shim port so the bind fails; the server must degrade, not die.
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").context("occupying a port")?;
+    let shim_port = occupied.local_addr()?.port();
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (_stdout, stderr) = serve.captured_output()?;
+    assert!(
+        stderr.contains("Codex endpoint disabled"),
+        "server should report the degraded Codex endpoint; stderr:\n{stderr}"
+    );
+    drop(occupied);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

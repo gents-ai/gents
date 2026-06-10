@@ -41,6 +41,7 @@ const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
+const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
@@ -612,6 +613,17 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn default_codex_remote_matches_shim_port() {
+        // serve.rs decides whether to print a --remote hint by comparing the
+        // formatted shim URL against DEFAULT_CODEX_REMOTE; the two constants
+        // must agree byte-for-byte.
+        assert_eq!(
+            DEFAULT_CODEX_REMOTE,
+            format!("ws://127.0.0.1:{DEFAULT_CODEX_SHIM_PORT}/")
+        );
+    }
 
     #[test]
     fn sanitize_inference_backend_drops_deprecated_capability_fields() {

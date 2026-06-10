@@ -429,7 +429,7 @@ async fn initialize_runtime_home(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let model_name = args.model_name.trim();
+    let model_name = args.resolved_model_name().trim();
     if model_name.is_empty() {
         anyhow::bail!("--model-name must not be empty");
     }
@@ -664,14 +664,11 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_meta_tools: true,
             enable_defra_query: true,
         },
+        // Yolo's tool surface IS the write surface; only the execution policy
+        // (default_command_execution_policy_for_init) differs.
         ToolPackageArg::Yolo => ToolPackageProfile {
             display_name: "Unrestricted Write Tools (YOLO)",
-            enable_file_tools: true,
-            file_tools_mode: "ReadWrite",
-            enable_bash: true,
-            bash_mode: "Unrestricted",
-            enable_meta_tools: true,
-            enable_defra_query: true,
+            ..tool_package_profile(ToolPackageArg::Write)
         },
     }
 }
@@ -846,7 +843,7 @@ mod tests {
             provider_kind: None,
             api_key: None,
             api_key_env_var: None,
-            model_name: "test-model".to_string(),
+            model_name: Some("test-model".to_string()),
             max_concurrent: 2,
             max_queue_depth: 16,
             write_tools: false,

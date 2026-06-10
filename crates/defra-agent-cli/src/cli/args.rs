@@ -275,7 +275,7 @@ pub(crate) struct InitArgs {
         long = "inference-url",
         alias = "inference-endpoint",
         value_name = "INFERENCE_URL",
-        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then local Ollama."
+        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then the local llama-server default."
     )]
     pub(crate) inference_endpoint: Option<String>,
     #[arg(value_name = "INFERENCE_URL", hide = true)]
@@ -307,10 +307,9 @@ pub(crate) struct InitArgs {
     pub(crate) api_key_env_var: Option<String>,
     #[arg(
         long,
-        default_value = crate::DEFAULT_INIT_MODEL_NAME,
-        help = "Model id to bind to the default behavior"
+        help = "Model id to bind to the default behavior. Defaults to the backend preset's model"
     )]
-    pub(crate) model_name: String,
+    pub(crate) model_name: Option<String>,
     #[arg(long, default_value_t = 2)]
     pub(crate) max_concurrent: i64,
     #[arg(long, default_value_t = default_backend_max_queue_depth())]
@@ -364,6 +363,16 @@ impl InitArgs {
         self.inference_endpoint
             .as_deref()
             .or(self.inference_endpoint_legacy.as_deref())
+    }
+
+    pub(crate) fn resolved_model_name(&self) -> &str {
+        match self.model_name.as_deref() {
+            Some(explicit) => explicit,
+            None => self
+                .backend_preset
+                .and_then(BackendPresetArg::default_model_name)
+                .unwrap_or(crate::DEFAULT_INIT_MODEL_NAME),
+        }
     }
 }
 
@@ -730,6 +739,22 @@ impl BackendPresetArg {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
+        }
+    }
+
+    /// Default model for presets whose endpoint implies a model source. The
+    /// shared DEFAULT_INIT_MODEL_NAME is an HF GGUF repo path: valid for
+    /// llama-server (`-hf`) but not an Ollama tag, so the ollama preset pulls
+    /// the same model through Ollama's `hf.co/` form instead.
+    pub(crate) fn default_model_name(self) -> Option<&'static str> {
+        match self {
+            Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
+            Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
+            Self::GenericOpenAiCompatible
+            | Self::OpenAi
+            | Self::OpenRouter
+            | Self::ChatGptCodex
+            | Self::Vllm => None,
         }
     }
 
