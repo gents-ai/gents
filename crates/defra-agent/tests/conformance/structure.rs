@@ -31,31 +31,32 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
     use Home::*;
     BTreeMap::from([
         ("ApplyReconcile", Module("conformance/apply_reconcile.rs")),
-        ("Background", Module("conformance/transcript_background.rs")),
+        ("Background", Module("conformance/background.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",
             Boundary("projection theorems; desktop rendering is runtime-observed"),
         ),
         ("CodexShim", Module("conformance/codex_shim.rs")),
-        (
-            "CommandPolicy",
-            Module("conformance/tooling_slots_queue_command.rs"),
-        ),
+        ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         ("CrossMachineComposed", Module("conformance/r5_cross_deployment.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
-        ("Fleet", Module("conformance/tooling_slots_queue_command.rs")),
+        ("Fleet", Module("conformance/fleet.rs")),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
         ("ManagedExec", Module("conformance/managed_exec.rs")),
-        ("MCPHealth", Module("conformance/tooling_slots_queue_command.rs")),
+        ("MCPHealth", Module("conformance/mcp_health.rs")),
+        // PairingReconcile and ReversePairingHandlers deliberately share one
+        // home: both models are exercised by the same two-node scenario
+        // harness (tests/support/pairing_conformance/), where the handlers
+        // are the reconcile loop's transition functions.
         ("PairingReconcile", Module("conformance/pairing_reconcile.rs")),
         (
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
         ),
-        ("Process", Module("conformance/request_lifecycle.rs")),
+        ("Process", Module("conformance/process.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),
         ("Request", Module("conformance/request_lifecycle.rs")),
@@ -72,7 +73,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // became configurable in #450.
         ("StreamingResponse", Module("conformance/streaming_compaction.rs")),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
-        ("Transcript", Module("conformance/transcript_background.rs")),
+        ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
         (
             "ReversePairingHandlers",

@@ -49,7 +49,8 @@ use lean_vocab_test::{
     lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
+    lean_process_transition_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
+    lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
     lean_session_recovery_case,
     lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_tool_preflight_case,
@@ -72,20 +73,30 @@ use support::{
     AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
+#[path = "conformance/background.rs"]
+mod background;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
+#[path = "conformance/command_policy.rs"]
+mod command_policy;
 #[path = "conformance/codex_shim.rs"]
 mod codex_shim;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
+#[path = "conformance/fleet.rs"]
+mod fleet;
 #[path = "conformance/inference_call.rs"]
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
 #[path = "conformance/managed_exec.rs"]
 mod managed_exec;
+#[path = "conformance/mcp_health.rs"]
+mod mcp_health;
+#[path = "conformance/process.rs"]
+mod process;
 #[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
 #[path = "conformance/recovery_sweeps.rs"]
@@ -98,10 +109,8 @@ mod session_recovery;
 mod streaming_compaction;
 #[path = "conformance/tool_call.rs"]
 mod tool_call;
-#[path = "conformance/tooling_slots_queue_command.rs"]
-mod tooling_slots_queue_command;
-#[path = "conformance/transcript_background.rs"]
-mod transcript_background;
+#[path = "conformance/transcript.rs"]
+mod transcript;
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
@@ -125,24 +134,24 @@ async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero()
 
 #[test]
 fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
-    transcript_background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
+    background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
 }
 
 #[tokio::test]
 async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
-    transcript_background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant()
+    background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant()
         .await;
 }
 
 #[tokio::test]
 async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
-    transcript_background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
+    background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
         .await;
 }
 
 #[test]
 fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
-    transcript_background::generated_subagent_delegation_graph_cases_pin_gap2_contract();
+    background::generated_subagent_delegation_graph_cases_pin_gap2_contract();
 }
 
 #[tokio::test]
@@ -152,7 +161,7 @@ async fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
 
 #[test]
 fn generated_r4c_background_work_cases_pin_observable_shapes() {
-    transcript_background::generated_r4c_background_work_cases_pin_observable_shapes();
+    background::generated_r4c_background_work_cases_pin_observable_shapes();
 }
 
 #[test]
@@ -162,7 +171,7 @@ fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
 
 #[tokio::test]
 async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
-    transcript_background::generated_transcript_cases_drive_agent_message_ordering_contract().await;
+    transcript::generated_transcript_cases_drive_agent_message_ordering_contract().await;
 }
 
 #[tokio::test]
@@ -194,13 +203,23 @@ async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
 
 #[test]
 fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
-    tooling_slots_queue_command::generated_tool_execution_cases_cover_preflight_and_retry_contracts(
+    tool_execution::generated_tool_execution_cases_cover_preflight_and_retry_contracts(
     );
 }
 
 #[test]
 fn managed_exec_liveness_cases_pin_native_process_boundary() {
     managed_exec::managed_exec_liveness_cases_pin_native_process_boundary();
+}
+
+#[test]
+fn generated_mcp_health_cases_pin_threshold_projection_shape() {
+    mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
+}
+
+#[test]
+fn generated_process_transition_cases_cover_runtime_status_policy_shape() {
+    process::generated_process_transition_cases_cover_runtime_status_policy_shape();
 }
 
 #[tokio::test]
@@ -231,13 +250,13 @@ fn lean_tool_call_cancel_actions_name_cancel_cause() {
 
 #[test]
 fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
-    tooling_slots_queue_command::generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
+    fleet::generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
     );
 }
 
 #[tokio::test]
 async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
-    tooling_slots_queue_command::generated_queue_deadline_cases_pin_r4a_contract_rows().await;
+    request_lifecycle::generated_queue_deadline_cases_pin_r4a_contract_rows().await;
 }
 
 #[tokio::test]

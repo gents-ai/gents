@@ -10,6 +10,8 @@ use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::test_db;
 use defra_agent::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
 
+use crate::lean_vocab_test::{lean_tool_preflight_case, lean_tool_retry_case};
+
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)
 }
@@ -354,3 +356,46 @@ async fn lifecycle_cancel_before_dispatch_persists_cancel_cause() {
     assert_eq!(snapshots[0].lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("interrupted"));
 }
+
+// --- Moved from tooling_slots_queue_command.rs (#446 mirror split): the
+// preflight/retry contract is ToolExecution's surface (MCP list/call retry
+// evidence + preflight gating).
+pub(super) fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
+    let unreachable =
+        lean_tool_preflight_case("preflight_unreachable_valid_blocks_serviceUnavailable");
+    assert_eq!(unreachable.decision, "block");
+    assert_eq!(
+        unreachable.failure_class.as_deref(),
+        Some("serviceUnavailable")
+    );
+
+    let invalid = lean_tool_preflight_case("preflight_healthy_invalid_blocks_argumentInvalid");
+    assert_eq!(invalid.decision, "block");
+    assert_eq!(invalid.failure_class.as_deref(), Some("argumentInvalid"));
+
+    for name in [
+        "preflight_healthy_valid_dispatch",
+        "preflight_stale_valid_dispatch",
+    ] {
+        let case = lean_tool_preflight_case(name);
+        assert_eq!(case.decision, "dispatch", "{name}");
+        assert_eq!(case.failure_class, None, "{name}");
+    }
+
+    let safe_read = lean_tool_retry_case("retry_mcpListTools_unknown_transport_retrySafeRead");
+    assert_eq!(safe_read.disposition, "retrySafeRead");
+
+    let idempotent =
+        lean_tool_retry_case("retry_mcpCall_idempotent_transport_retryIdempotentToolCall");
+    assert_eq!(idempotent.disposition, "retryIdempotentToolCall");
+
+    for name in [
+        "retry_mcpCall_unknown_transport_doNotRetry",
+        "retry_mcpCall_nonIdempotent_transport_doNotRetry",
+        "retry_nativeCommand_idempotent_transport_doNotRetry",
+    ] {
+        let case = lean_tool_retry_case(name);
+        assert_eq!(case.disposition, "doNotRetry", "{name}");
+    }
+}
+

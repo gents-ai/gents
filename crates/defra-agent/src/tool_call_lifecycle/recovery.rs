@@ -82,6 +82,8 @@ struct ParentRequestRow {
 struct ChildRequestLivenessRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    #[serde(default)]
+    request_id: String,
     agent_did: String,
     #[serde(default)]
     status: Option<String>,
@@ -177,16 +179,25 @@ impl super::ToolCallLifecycle {
     ) -> Result<SubagentLivenessReport> {
         let mut report = SubagentLivenessReport::default();
 
-        for row in load_running_subagent_bridge_rows(node).await? {
-            if child_request_id(&row).is_none() {
+        let bridge_rows = load_running_subagent_bridge_rows(node).await?;
+        // One batched liveness read for every bridge's child, instead of a
+        // per-bridge query on the 5s tick.
+        let child_ids = bridge_rows
+            .iter()
+            .filter_map(child_request_id)
+            .collect::<Vec<_>>();
+        let children = load_child_liveness_rows(node, &child_ids).await?;
+
+        for row in &bridge_rows {
+            let Some(child) = child_request_id(row).and_then(|id| children.get(id)) else {
                 continue;
-            }
-            if !terminalize_expired_local_child_request(node, agent_did, &row).await? {
+            };
+            if !terminalize_expired_child_with_row(node, agent_did, row, child).await? {
                 continue;
             }
             report.expired_children_terminalized += 1;
-            if is_background_subagent_tool(&row)
-                && recover_bridge_terminal_child(node, agent_did, &row).await?
+            if is_background_subagent_tool(row)
+                && recover_bridge_terminal_child(node, agent_did, row).await?
             {
                 report.bridges_projected += 1;
             }
@@ -926,6 +937,20 @@ async fn terminalize_expired_local_child_request(
     let Some(child) = load_child_liveness_row(node, child_request_id).await? else {
         return Ok(false);
     };
+    terminalize_expired_child_with_row(node, agent_did, row, &child).await
+}
+
+/// `terminalize_expired_local_child_request` over a preloaded child liveness
+/// row, so the periodic sweep can batch the reads.
+async fn terminalize_expired_child_with_row(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    row: &RunningToolCallRow,
+    child: &ChildRequestLivenessRow,
+) -> Result<bool> {
+    let Some(child_request_id) = child_request_id(row) else {
+        return Ok(false);
+    };
     if child.agent_did != agent_did {
         return Ok(false);
     }
@@ -946,7 +971,7 @@ async fn terminalize_expired_local_child_request(
         "child request deadline exceeded at {} before terminal response",
         deadline_at.to_rfc3339()
     );
-    if !mark_child_request_dead(node, &child, &reason).await? {
+    if !mark_child_request_dead(node, child, &reason).await? {
         return Ok(false);
     }
     finalize_streaming_child_response(node, child_request_id, &reason).await?;
@@ -974,6 +999,7 @@ async fn load_child_liveness_row(
                 limit: 1
             ) {{
                 _docID
+                request_id
                 agent_did
                 status
                 lifecycle_state
@@ -996,6 +1022,53 @@ async fn load_child_liveness_row(
             serde_json::from_value::<Vec<ChildRequestLivenessRow>>(value.clone()).ok()
         })
         .and_then(|mut rows| rows.pop()))
+}
+
+/// Batched form of `load_child_liveness_row`: one `_in` query for every
+/// bridge's child on the periodic tick, keyed by `request_id`.
+async fn load_child_liveness_rows(
+    node: &EmbeddedNode,
+    child_request_ids: &[&str],
+) -> Result<std::collections::HashMap<String, ChildRequestLivenessRow>> {
+    if child_request_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let id_list = child_request_ids
+        .iter()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _in: [{id_list}] }} }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                status
+                lifecycle_state
+                deadline
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "batched child AgentRequest liveness query failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<ChildRequestLivenessRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.request_id.clone(), row))
+        .collect())
 }
 
 async fn mark_child_request_dead(
