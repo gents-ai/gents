@@ -460,29 +460,15 @@ fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Mess
 /// still sees. Built-in Defra tools ignore it; this preserves parity for custom
 /// or embedding tools.
 fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) -> String {
-    if let Some(text) = message_user_text(prompt) {
+    if let Some(text) = prompt.rag_text() {
         return text;
     }
     history
         .iter()
         .chain(prior.iter())
         .rev()
-        .find_map(message_user_text)
+        .find_map(Message::rag_text)
         .unwrap_or_default()
-}
-
-/// First text block of a user message, mirroring rig's `Message::rag_text`
-/// (`pub(crate)` there). `None` for non-user messages and text-free prompts
-/// (e.g. tool-result turns).
-fn message_user_text(message: &Message) -> Option<String> {
-    if let Message::User { content } = message {
-        for item in content.iter() {
-            if let UserContent::Text(text) = item {
-                return Some(text.text.clone());
-            }
-        }
-    }
-    None
 }
 
 /// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):
@@ -554,18 +540,20 @@ async fn build_request<M: CompletionModel>(
         tool_defs.push(crate::llm::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let chat_history: Vec<Message> = config
+    // Convert straight from the native borrows: building a native Vec first
+    // and then converting would clone every message twice per turn.
+    let chat_history: Vec<rig::completion::Message> = config
         .preamble
         .as_ref()
-        .map(|preamble| Message::system(preamble.clone()))
+        .map(|preamble| rig::completion::Message::system(preamble.clone()))
         .into_iter()
-        .chain(history.iter().cloned())
-        .chain(prior.iter().cloned())
+        .chain(history.iter().map(rig_compat::to_rig_message))
+        .chain(prior.iter().map(rig_compat::to_rig_message))
         .collect();
 
     let mut builder = model
         .completion_request(rig_compat::to_rig_message(&prompt))
-        .messages(rig_compat::to_rig_messages(&chat_history))
+        .messages(chat_history)
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
         .additional_params_opt(config.additional_params.clone())

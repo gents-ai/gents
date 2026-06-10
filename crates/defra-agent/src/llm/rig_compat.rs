@@ -325,9 +325,15 @@ pub(crate) fn from_rig_reasoning(
                 rig::completion::message::ReasoningContent::Summary(text) => {
                     message::ReasoningContent::Summary(text.clone())
                 }
-                other => message::ReasoningContent::Summary(format!(
-                    "[unsupported reasoning content: {other:?}]"
-                )),
+                other => {
+                    tracing::warn!(
+                        ?other,
+                        "unsupported rig reasoning content stubbed at the inbound seam"
+                    );
+                    message::ReasoningContent::Summary(format!(
+                        "[unsupported reasoning content: {other:?}]"
+                    ))
+                }
             })
             .collect(),
     }
@@ -432,9 +438,18 @@ pub(crate) fn from_rig_user_content(
         // upstream produces them on the consume seam today, and the native
         // variants exist for outbound fidelity. Extend when a provider sends
         // them.
-        R::Audio(_) => message::UserContent::Audio(message::Audio::default()),
-        R::Video(_) => message::UserContent::Video(message::Video::default()),
-        R::Document(_) => message::UserContent::Document(message::Document::default()),
+        R::Audio(_) => {
+            tracing::warn!("audio content discarded at the inbound rig seam (lossy stub)");
+            message::UserContent::Audio(message::Audio::default())
+        }
+        R::Video(_) => {
+            tracing::warn!("video content discarded at the inbound rig seam (lossy stub)");
+            message::UserContent::Video(message::Video::default())
+        }
+        R::Document(_) => {
+            tracing::warn!("document content discarded at the inbound rig seam (lossy stub)");
+            message::UserContent::Document(message::Document::default())
+        }
     }
 }
 

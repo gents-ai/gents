@@ -136,6 +136,8 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                         _ => true,
                     })
                     .collect();
+                // Content is non-empty by convention (was `OneOrMany`); an
+                // emptied message is dropped rather than sent hollow.
                 if !kept.is_empty() {
                     kept_messages.push(Message::User { content: kept });
                 }

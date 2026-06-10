@@ -13,12 +13,7 @@ use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
 };
-
-/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
-/// convention in every shape these tests build.
-fn first_content<T>(items: &[T]) -> &T {
-    items.first().expect("non-empty content")
-}
+use crate::test_support::first_content;
 
 fn user_text_message(text: &str) -> Message {
     Message::User {

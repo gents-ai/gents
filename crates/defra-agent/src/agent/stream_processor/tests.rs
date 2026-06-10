@@ -14,13 +14,8 @@ use crate::ensure_schemas;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
+use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
-
-/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
-/// convention in every shape these tests build.
-fn first_content<T>(items: &[T]) -> &T {
-    items.first().expect("non-empty content")
-}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {

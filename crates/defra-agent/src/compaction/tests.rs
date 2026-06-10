@@ -12,12 +12,7 @@ use super::*;
 use crate::ensure_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::session;
-
-/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
-/// convention in every shape these tests build.
-fn first_content<T>(items: &[T]) -> &T {
-    items.first().expect("non-empty content")
-}
+use crate::test_support::first_content;
 
 fn text_msg(role: &str, text: &str) -> Message {
     match role {

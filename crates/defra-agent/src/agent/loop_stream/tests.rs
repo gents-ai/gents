@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use super::*;
 use crate::ensure_schemas;
 use crate::hook::{DefraSessionHook, FailurePolicy};
+use crate::test_support::first_content;
 
 /// A `CompletionModel` whose `stream` replays one scripted turn per call: each
 /// `stream()` pops the next `Vec<RawStreamingChoice>` from the queue, letting a
@@ -1039,7 +1040,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
         history.iter().any(|message| matches!(message,
             Message::User { content }
                 if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
-                    if result.content.first().is_some_and(|c| tool_result_text(c) == "ECHOED"))))),
+                    if tool_result_text(first_content(&result.content)) == "ECHOED")))),
         "tool-using one-shot must persist the tool-result message; history: {history:?}"
     );
     assert!(

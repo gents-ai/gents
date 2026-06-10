@@ -1,11 +1,6 @@
 use super::*;
 use crate::llm::message::AssistantContent;
-
-/// `OneOrMany::first_ref` replacement for native `Vec` content: non-empty by
-/// convention in every shape these tests build.
-fn first_content<T>(items: &[T]) -> &T {
-    items.first().expect("non-empty content")
-}
+use crate::test_support::first_content;
 
 fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_behavior(

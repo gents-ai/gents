@@ -43,20 +43,38 @@ pub fn normalize_markdown_text(text: &str) -> String {
     normalized.trim().to_string()
 }
 
+/// Decoded message content must be non-empty: rig's `OneOrMany` rejected
+/// empty arrays at deserialization, so a corrupt `content: []` blob always
+/// fell through to the plain-text fallback (keeping the raw string visible).
+/// `Vec` accepts `[]`, so the guard re-establishes that behavior explicitly.
+fn message_has_content(message: &Message) -> bool {
+    match message {
+        Message::System { .. } => true,
+        Message::User { content } => !content.is_empty(),
+        Message::Assistant { content, .. } => !content.is_empty(),
+    }
+}
+
 pub fn decode_persisted_message(role: &str, content: &str) -> Message {
     if let Ok(message) = serde_json::from_str::<Message>(content) {
-        return message;
+        if message_has_content(&message) {
+            return message;
+        }
     }
 
     if role == "assistant" {
         if let Ok(content) = serde_json::from_str::<Vec<AssistantContent>>(content) {
-            return Message::Assistant { id: None, content };
+            if !content.is_empty() {
+                return Message::Assistant { id: None, content };
+            }
         }
     }
 
     if role == "user" {
         if let Ok(content) = serde_json::from_str::<Vec<UserContent>>(content) {
-            return Message::User { content };
+            if !content.is_empty() {
+                return Message::User { content };
+            }
         }
     }
 
@@ -289,6 +307,20 @@ mod tests {
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "");
+    }
+
+    #[test]
+    fn empty_content_blob_falls_back_to_plain_text() {
+        // rig-era behavior restored: OneOrMany rejected `[]`, so a corrupt
+        // empty-content blob decoded as plain text rather than an invisible
+        // empty message. Vec accepts `[]`; the explicit guard keeps parity.
+        let decoded = decode_persisted_message("user", r#"{"role":"user","content":[]}"#);
+        assert!(
+            matches!(&decoded, Message::User { content }
+                if matches!(content.first(), Some(UserContent::Text(text))
+                    if text.text.contains("\"content\":[]"))),
+            "empty-content blob must fall back to visible plain text; got {decoded:?}"
+        );
     }
 
     #[test]
