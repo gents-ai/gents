@@ -462,14 +462,6 @@ async fn create_response(node: &EmbeddedNode, row: &TimelineResponseRow) -> Resu
     .await
 }
 
-async fn exec(node: &EmbeddedNode, query: &str) -> Result<()> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
 fn trace_project(
     cwd: &Path,
     home: &str,
@@ -523,7 +515,7 @@ fn validate_cli_exports(
     }
 
     let jsonl_schema = adapter_projection_jsonl_record_schema(kind);
-    let jsonl_records = parse_jsonl(jsonl_output, path, "JSONL")?;
+    let jsonl_records = parse_jsonl(jsonl_output, &format!("{} JSONL", path.display()))?;
     anyhow::ensure!(
         !jsonl_records.is_empty(),
         "{} produced no JSONL records",
@@ -538,7 +530,7 @@ fn validate_cli_exports(
     }
 
     let eval_schema = adapter_projection_eval_jsonl_record_schema(kind);
-    let eval_records = parse_jsonl(eval_jsonl_output, path, "eval JSONL")?;
+    let eval_records = parse_jsonl(eval_jsonl_output, &format!("{} eval JSONL", path.display()))?;
     anyhow::ensure!(
         !eval_records.is_empty(),
         "{} produced no eval JSONL records",
@@ -551,32 +543,6 @@ fn validate_cli_exports(
             &format!("{} eval JSONL record", path.display()),
         )?;
     }
-    Ok(())
-}
-
-fn parse_jsonl(output: &str, path: &Path, label: &str) -> Result<Vec<Value>> {
-    output
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .with_context(|| format!("parsing {label} line for {}", path.display()))
-        })
-        .collect()
-}
-
-fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
-    let validator =
-        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
-    let errors = validator
-        .iter_errors(instance)
-        .map(|error| format!("{}: {error}", error.instance_path()))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        errors.is_empty(),
-        "{label} failed JSON Schema validation:\n{}",
-        errors.join("\n")
-    );
     Ok(())
 }
 

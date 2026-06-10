@@ -12,40 +12,10 @@ use defra_agent::llm::message::{AssistantContent, Message, ToolCall, ToolFunctio
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-fn workspace_root() -> Result<std::path::PathBuf> {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| anyhow::anyhow!("unable to resolve workspace root"))
-}
-
-fn read_schema_snapshot(relative_path: &str) -> Result<Value> {
-    let path = workspace_root()?.join(relative_path);
-    let raw =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str::<Value>(&raw).with_context(|| format!("parsing {}", path.display()))
-}
-
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
-    read_schema_snapshot(&format!(
+    read_workspace_json(&format!(
         "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.{suffix}.json"
     ))
-}
-
-fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
-    let validator =
-        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
-    let errors = validator
-        .iter_errors(instance)
-        .map(|error| format!("{}: {error}", error.instance_path()))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        errors.is_empty(),
-        "{label} failed JSON Schema validation:\n{}",
-        errors.join("\n")
-    );
-    Ok(())
 }
 
 fn assert_projection_json_matches_schema(snapshot_name: &str, projection: &Value) -> Result<()> {
@@ -319,7 +289,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         )?;
         let json_schema =
             serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
-        let expected_json_schema = read_schema_snapshot(&format!(
+        let expected_json_schema = read_workspace_json(&format!(
             "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.schema.json"
         ))?;
         assert_eq!(
@@ -340,7 +310,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         )?;
         let jsonl_schema =
             serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
-        let expected_jsonl_schema = read_schema_snapshot(&format!(
+        let expected_jsonl_schema = read_workspace_json(&format!(
             "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.jsonl-record.schema.json"
         ))?;
         assert_eq!(
@@ -361,7 +331,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         )?;
         let eval_jsonl_schema = serde_json::from_str::<Value>(&eval_jsonl_schema_output)
             .context("parsing eval JSONL schema")?;
-        let expected_eval_jsonl_schema = read_schema_snapshot(&format!(
+        let expected_eval_jsonl_schema = read_workspace_json(&format!(
             "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.eval-jsonl-record.schema.json"
         ))?;
         assert_eq!(
@@ -1428,14 +1398,6 @@ fn assistant_tool_message(call_id: &str, name: &str, arguments: Value) -> Result
         })],
     })
     .context("serializing assistant tool message")
-}
-
-async fn exec(node: &EmbeddedNode, query: &str) -> Result<()> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
-    }
-    Ok(())
 }
 
 struct ProjectionGraphqlAcpMock {

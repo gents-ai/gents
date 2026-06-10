@@ -76,11 +76,10 @@ pub use collection::Collection;
 pub use adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, adapter_projection_schema_index, build_adapter_projection,
+    adapter_projection_jsonl_records, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
-    AdapterProjectionKind, LangGraphStateHistoryProjection, MultiAgentTaskProjection,
-    OpenAiCodexRunTraceProjection, ProjectionContext, ProjectionRedactionMode,
+    AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
 };
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};

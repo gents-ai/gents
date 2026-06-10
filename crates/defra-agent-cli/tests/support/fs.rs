@@ -541,3 +541,44 @@ pub async fn assert_runtime_init_state(
 
     Ok(())
 }
+
+/// Workspace root resolved from this crate's manifest directory.
+pub fn workspace_root() -> Result<std::path::PathBuf> {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| anyhow!("unable to resolve workspace root"))
+}
+
+/// Read and decode a JSON file addressed relative to the workspace root.
+pub fn read_workspace_json(relative_path: &str) -> Result<Value> {
+    read_json_file(&workspace_root()?.join(relative_path))
+}
+
+/// Parse newline-delimited JSON, skipping blank lines.
+pub fn parse_jsonl(output: &str, label: &str) -> Result<Vec<Value>> {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).with_context(|| format!("parsing {label} line"))
+        })
+        .collect()
+}
+
+/// Validate `instance` against a JSON Schema, reporting every violation.
+pub fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
+    let validator =
+        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
+    let errors = validator
+        .iter_errors(instance)
+        .map(|error| format!("{}: {error}", error.instance_path()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        errors.is_empty(),
+        "{label} failed JSON Schema validation:\n{}",
+        errors.join("\n")
+    );
+    Ok(())
+}

@@ -513,6 +513,11 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
     }));
 }
 
+/// Fallback inference for rows persisted before `AgentMessage.request_id`
+/// existed (added alongside this projection work). New writes carry the field
+/// explicitly; once pre-field data is no longer projected, these heuristics
+/// (materialized-sequence match, single-request session) can be deleted and
+/// the explicit field made authoritative.
 fn infer_request_id_for_message<'a>(
     message: &TimelineMessageRow,
     responses: &'a [TimelineResponseRow],
@@ -540,6 +545,8 @@ fn infer_request_id_for_message<'a>(
         })
 }
 
+/// Same legacy-data fallback chain as [`infer_request_id_for_message`]; the
+/// explicit `request_id` short-circuit is the steady-state path.
 fn infer_request_id_for_tool_call(
     tool_call: &TimelineToolCallRow,
     requests: &[TimelineRequestRow],
