@@ -159,6 +159,10 @@ Examples:
   defra-agent p2p collections sync-versions --version-id <collection-version-id>
   defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
   defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
+  defra-agent p2p pairings set --peer <peer-id> --did <agent-did> --address <multiaddr> --profile chat-requests
+  defra-agent p2p pairings list
+  defra-agent p2p unpair --peer <peer-id>
+  defra-agent p2p pair --peer <multiaddr> --profile chat-requests
   defra-agent p2p diagnose";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
