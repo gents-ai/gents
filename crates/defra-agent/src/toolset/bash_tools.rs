@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
 use anyhow::Result;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
 
 use super::args::BashArgs;
 use super::shared::{

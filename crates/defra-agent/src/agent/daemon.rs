@@ -35,7 +35,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     /// Unwrapped tool surface for the owned completion loop (issue #400). Shared
     /// across requests; the loop applies its own deadline/cancellation envelope,
     /// so these are NOT wrapped in `RuntimeManagedTool`.
-    loop_tools: Arc<Vec<Box<dyn rig::tool::ToolDyn>>>,
+    loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
     compactor: DefraCompactor<M>,
@@ -59,7 +59,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         behavior: Arc<AgentBehavior>,
         model: Arc<M>,
         preamble: String,
-        loop_tools: Arc<Vec<Box<dyn rig::tool::ToolDyn>>>,
+        loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,

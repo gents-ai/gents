@@ -387,13 +387,13 @@ impl DefraSessionHook {
                 let model_observation =
                     model_observation_for_tool_result(tool_name, &truncated.text);
                 let tool_result_message = Message::User {
-                    content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+                    content: vec![UserContent::ToolResult(ToolResult {
                         id: persisted_result_id,
                         call_id: persisted_call_id,
-                        content: OneOrMany::one(ToolResultContent::Text(Text {
+                        content: vec![ToolResultContent::Text(Text {
                             text: model_observation,
-                        })),
-                    })),
+                        })],
+                    })],
                 };
                 self.persist_message(&tool_result_message).await?;
             }

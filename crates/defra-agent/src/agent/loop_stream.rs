@@ -25,17 +25,17 @@
 
 use std::sync::Arc;
 
+use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
+use crate::llm::rig_compat;
+use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
-use rig::agent::{HookAction, MultiTurnStreamItem, StreamingError, ToolCallHookAction};
-use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
-use rig::completion::{
-    CompletionModel, CompletionRequest, GetTokenUsage, Message, PromptError, Usage,
-};
-use rig::message::ToolChoice;
-use rig::one_or_many::OneOrMany;
+use rig::agent::{MultiTurnStreamItem, StreamingError};
+use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
+
+use crate::llm::tool::ToolDyn;
+use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
-use rig::tool::ToolDyn;
 
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
@@ -112,12 +112,14 @@ where
                     .last()
                     .cloned()
                     .expect("new_messages always retains at least the initial prompt");
-                let chat_history =
-                    error_chat_history(&history, &new_messages[..new_messages.len() - 1]);
+                let chat_history = rig_compat::to_rig_messages(&error_chat_history(
+                    &history,
+                    &new_messages[..new_messages.len() - 1],
+                ));
                 Err(StreamingError::Prompt(Box::new(PromptError::MaxTurnsError {
                     max_turns: config.max_turns,
                     chat_history: Box::new(chat_history),
-                    prompt: Box::new(prompt),
+                    prompt: Box::new(rig_compat::to_rig_message(&prompt)),
                 })))?;
             }
             current_turn += 1;
@@ -139,7 +141,10 @@ where
                     hook.on_completion_call(&current_prompt, &history_snapshot).await
                 {
                     Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
-                        chat_history: error_chat_history(&history, &new_messages),
+                        chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                            &history,
+                            &new_messages,
+                        )),
                         reason,
                     })))?;
                 }
@@ -171,7 +176,7 @@ where
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(reasoning.clone());
+                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
@@ -179,7 +184,7 @@ where
                         yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
-                        accumulator.push_tool_call(tool_call.clone());
+                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                         // Yield the tool call first (so the consumer registers its
                         // stream-call identity), then execute it immediately — rig
                         // runs each tool the moment its ToolCall arrives. Executing
@@ -221,7 +226,10 @@ where
                             ToolCallHookAction::Terminate { reason } => {
                                 Err(StreamingError::Prompt(Box::new(
                                     PromptError::PromptCancelled {
-                                        chat_history: error_chat_history(&history, &new_messages),
+                                        chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                                            &history,
+                                            &new_messages,
+                                        )),
                                         reason,
                                     },
                                 )))?;
@@ -264,10 +272,10 @@ where
                                     if let HookAction::Terminate { reason } = result_action {
                                         Err(StreamingError::Prompt(Box::new(
                                             PromptError::PromptCancelled {
-                                                chat_history: error_chat_history(
+                                                chat_history: rig_compat::to_rig_messages(&error_chat_history(
                                                     &history,
                                                     &new_messages,
-                                                ),
+                                                )),
                                                 reason,
                                             },
                                         )))?;
@@ -277,7 +285,7 @@ where
                             }
                         };
 
-                        pending_results.push((tool_call, internal_call_id, bounded_result));
+                        pending_results.push((rig_compat::from_rig_tool_call(&tool_call), internal_call_id, bounded_result));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                         // Informational only; the full `ToolCall` is emitted
@@ -324,7 +332,7 @@ where
                     None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
                 };
                 new_messages.push(Message::User {
-                    content: OneOrMany::one(user_content),
+                    content: vec![user_content],
                 });
 
                 let tool_result = ToolResult {
@@ -333,7 +341,7 @@ where
                     content,
                 };
                 yield MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                    tool_result,
+                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
                     internal_call_id,
                 });
             }
@@ -376,7 +384,7 @@ where
             MultiTurnStreamItem::StreamAssistantItem(content) => match content {
                 StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
                 StreamedAssistantContent::Reasoning(reasoning) => {
-                    accumulator.push_reasoning(reasoning)
+                    accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
                 }
                 StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                     accumulator.push_reasoning_delta(id, &reasoning)
@@ -393,7 +401,7 @@ where
                         )
                         .await;
                     }
-                    accumulator.push_tool_call(tool_call);
+                    accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                 }
                 _ => {}
             },
@@ -409,8 +417,11 @@ where
                         )?;
                     }
                     hook.apply_persistence_policy(
-                        hook.persist_stream_tool_result_message(&tool_result, &internal_call_id)
-                            .await,
+                        hook.persist_stream_tool_result_message(
+                            &rig_compat::from_rig_tool_result(&tool_result),
+                            &internal_call_id,
+                        )
+                        .await,
                         "persist one-shot tool result",
                     )?;
                 }
@@ -449,29 +460,15 @@ fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Mess
 /// still sees. Built-in Defra tools ignore it; this preserves parity for custom
 /// or embedding tools.
 fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) -> String {
-    if let Some(text) = message_user_text(prompt) {
+    if let Some(text) = prompt.rag_text() {
         return text;
     }
     history
         .iter()
         .chain(prior.iter())
         .rev()
-        .find_map(message_user_text)
+        .find_map(Message::rag_text)
         .unwrap_or_default()
-}
-
-/// First text block of a user message, mirroring rig's `Message::rag_text`
-/// (`pub(crate)` there). `None` for non-user messages and text-free prompts
-/// (e.g. tool-result turns).
-fn message_user_text(message: &Message) -> Option<String> {
-    if let Message::User { content } = message {
-        for item in content.iter() {
-            if let UserContent::Text(text) = item {
-                return Some(text.text.clone());
-            }
-        }
-    }
-    None
 }
 
 /// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):
@@ -534,23 +531,28 @@ async fn build_request<M: CompletionModel>(
     // The current prompt's rag text (with rig's history fallback) is handed to
     // each tool's `definition` so prompt-aware (dynamic) tools can tailor their
     // schema. Built-in tools ignore it; this preserves parity for custom tools.
+    // Definitions are native; converted to rig's at the provider boundary
+    // (Layer A) for the outgoing request.
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {
-        tool_defs.push(tool.definition(rag_text.clone()).await);
+        let native = tool.definition(rag_text.clone()).await;
+        tool_defs.push(crate::llm::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let chat_history: Vec<Message> = config
+    // Convert straight from the native borrows: building a native Vec first
+    // and then converting would clone every message twice per turn.
+    let chat_history: Vec<rig::completion::Message> = config
         .preamble
         .as_ref()
-        .map(|preamble| Message::system(preamble.clone()))
+        .map(|preamble| rig::completion::Message::system(preamble.clone()))
         .into_iter()
-        .chain(history.iter().cloned())
-        .chain(prior.iter().cloned())
+        .chain(history.iter().map(rig_compat::to_rig_message))
+        .chain(prior.iter().map(rig_compat::to_rig_message))
         .collect();
 
     let mut builder = model
-        .completion_request(prompt)
+        .completion_request(rig_compat::to_rig_message(&prompt))
         .messages(chat_history)
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
@@ -558,7 +560,7 @@ async fn build_request<M: CompletionModel>(
         .tools(tool_defs);
 
     if let Some(tool_choice) = &config.tool_choice {
-        builder = builder.tool_choice(tool_choice.clone());
+        builder = builder.tool_choice(crate::llm::rig_compat::to_rig_tool_choice(tool_choice));
     }
 
     Ok(builder.build())
