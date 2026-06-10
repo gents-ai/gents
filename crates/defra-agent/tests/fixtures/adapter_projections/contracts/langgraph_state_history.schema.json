@@ -1,0 +1,244 @@
+{
+  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/langgraph_state_history/v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "output": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "const": "langgraph_state_history"
+        },
+        "projection": {
+          "additionalProperties": false,
+          "properties": {
+            "checkpoint_id": {
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "nodes": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "root_request_id": {
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "child_request_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "thread_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "values": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "checkpoint_id",
+            "root_request_id",
+            "values",
+            "nodes",
+            "edges",
+            "tasks"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "adapter",
+        "projection"
+      ],
+      "type": "object"
+    },
+    "projection_id": {
+      "const": "langgraph_state_history"
+    },
+    "projection_version": {
+      "const": "v1"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_did": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime": {
+          "const": "defra-agent"
+        },
+        "source_projection_id": {
+          "const": "run_timeline"
+        },
+        "source_projection_version": {
+          "const": "v1"
+        }
+      },
+      "required": [
+        "runtime",
+        "source_projection_id",
+        "source_projection_version"
+      ],
+      "type": "object"
+    },
+    "redaction_mode": {
+      "enum": [
+        "full",
+        "training_safe",
+        "public"
+      ]
+    },
+    "source_agent_did": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_behavior_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_request_id": {
+      "type": "string"
+    },
+    "source_session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "projection_id",
+    "projection_version",
+    "source_request_id",
+    "redaction_mode",
+    "provenance",
+    "output"
+  ],
+  "title": "LangGraph State History Projection",
+  "type": "object"
+}

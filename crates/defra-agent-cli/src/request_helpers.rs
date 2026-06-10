@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent::graphql::escape_graphql_string;
+use defra_agent::{
+    graphql::escape_graphql_string, skills::selected_skill_ids_from_prompt_slash_commands,
+};
 use defra_agent_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -201,6 +203,8 @@ pub(crate) async fn create_agent_request(
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
+    let request_metadata =
+        metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = session_id
         .map(ToOwned::to_owned)
@@ -228,8 +232,7 @@ pub(crate) async fn create_agent_request(
         optional_f64_field("top_p", options.top_p),
         optional_i64_field("top_k", options.top_k),
         optional_i64_field("max_tokens", options.max_tokens),
-        options
-            .metadata
+        request_metadata
             .as_ref()
             .map(|metadata| format!(r#"metadata: "{}""#, escape_graphql_string(metadata))),
         valid_until_literal,
@@ -300,8 +303,48 @@ pub(crate) async fn create_agent_request(
         top_p: options.top_p,
         top_k: options.top_k,
         max_tokens: options.max_tokens,
-        metadata: options.metadata,
+        metadata: request_metadata,
     })
+}
+
+pub(crate) fn metadata_with_prompt_selected_skill_ids(
+    metadata: Option<&str>,
+    content: &str,
+) -> Option<String> {
+    let selected = selected_skill_ids_from_prompt_slash_commands(content);
+    if selected.is_empty() {
+        return metadata.map(ToOwned::to_owned);
+    }
+
+    let mut value = match metadata.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => match serde_json::from_str::<Value>(raw) {
+            Ok(value) if value.is_object() => value,
+            _ => return metadata.map(ToOwned::to_owned),
+        },
+        None => serde_json::json!({}),
+    };
+
+    let Some(object) = value.as_object_mut() else {
+        return metadata.map(ToOwned::to_owned);
+    };
+    let entry = object
+        .entry("selected_skill_ids".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if !entry.is_array() {
+        return metadata.map(ToOwned::to_owned);
+    }
+    let Some(ids) = entry.as_array_mut() else {
+        return metadata.map(ToOwned::to_owned);
+    };
+    for id in selected {
+        let already_present = ids
+            .iter()
+            .any(|existing| existing.as_str() == Some(id.as_str()));
+        if !already_present {
+            ids.push(Value::String(id));
+        }
+    }
+    Some(value.to_string())
 }
 
 /// Poll both `AgentRequest.lifecycle_state` and the latest `AgentResponse`
@@ -613,4 +656,38 @@ pub(crate) async fn fetch_request_view(
         max_tokens: as_optional_i64("max_tokens"),
         metadata: as_optional("metadata"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::metadata_with_prompt_selected_skill_ids;
+
+    #[test]
+    fn slash_prompt_adds_selected_skill_ids_metadata() {
+        let metadata = metadata_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
+        assert_eq!(
+            metadata.as_deref(),
+            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
+        );
+    }
+
+    #[test]
+    fn slash_prompt_merges_existing_selected_skill_ids() {
+        let metadata = metadata_with_prompt_selected_skill_ids(
+            Some(r#"{"codex_shim":{},"selected_skill_ids":["triage"]}"#),
+            "/vuln-scan /work",
+        )
+        .expect("metadata");
+        assert!(metadata.contains(r#""codex_shim":{}"#));
+        assert!(metadata.contains(r#""triage""#));
+        assert!(metadata.contains(r#""vuln-scan""#));
+    }
+
+    #[test]
+    fn invalid_existing_metadata_is_preserved() {
+        assert_eq!(
+            metadata_with_prompt_selected_skill_ids(Some("not json"), "/vuln-scan"),
+            Some("not json".to_string())
+        );
+    }
 }

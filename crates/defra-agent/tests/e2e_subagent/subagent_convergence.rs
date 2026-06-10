@@ -79,8 +79,6 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     {
         Some(b) => b,
         None => AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: behavior_id.clone(),
             agent_did: agent_did.clone(),
             display_name: Some(behavior_id.clone()),
@@ -93,6 +91,8 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-12T00:00:00Z".to_string()),
         },

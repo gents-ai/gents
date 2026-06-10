@@ -1,4 +1,4 @@
-// Soft-cap justified: 2 live-network tests with long conversational assertions. Fragmentation doesn't help readability.
+// Soft-cap justified: 3 live-network tests with long conversational assertions. Fragmentation doesn't help readability.
 mod support;
 use support::*;
 
@@ -313,6 +313,363 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
+async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let files_dir = home_dir.join("live-projection-files");
+    fs::create_dir_all(&files_dir)?;
+    let token = format!("LIVE_PROJECTION_{}", Uuid::new_v4().simple());
+    let relative_fixture = "live-projection-files/source.txt";
+    fs::write(home_dir.join(relative_fixture), format!("{token}\n"))?;
+
+    let system_prompt = tempdir.path().join("projection_system_prompt.txt");
+    fs::write(
+        &system_prompt,
+        "When the user asks about local files, use read_file before answering. Keep final answers to the requested file contents only.",
+    )?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-live-projection-{}", Uuid::new_v4().simple());
+    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let mut init_args = vec![
+        "--agent-name".to_string(),
+        agent_name,
+        "--model-name".to_string(),
+        model_name.clone(),
+        "--max-concurrent".to_string(),
+        "1".to_string(),
+        "--max-queue-depth".to_string(),
+        "2".to_string(),
+    ];
+    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+        init_args.push("--api-key-env-var".to_string());
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+    }
+    init_args.push(model_endpoint);
+    let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let agent_did = agent_did_from_init(&init)?;
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let behavior_id = init
+        .pointer("/init/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .to_string();
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let inference_profile_id = init
+        .pointer("/init/inference_profile_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
+        .to_string();
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--selection-id",
+            &selection_id,
+            "--display-name",
+            "Live Projection File Tools",
+            "--enable-file-tools",
+            "--file-tools-mode",
+            "ReadOnly",
+            "--file-tool-root",
+            home_dir
+                .to_str()
+                .ok_or_else(|| anyhow!("home path is not UTF-8"))?,
+        ],
+    )?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "behavior",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--behavior-id",
+            &behavior_id,
+            "--display-name",
+            "Live Projection",
+            "--system-prompt-file",
+            system_prompt
+                .to_str()
+                .context("system prompt path is not UTF-8")?,
+            "--backend-id",
+            &backend_id,
+            "--model-name",
+            &model_name,
+            "--tool-selection-id",
+            &selection_id,
+            "--inference-profile-id",
+            &inference_profile_id,
+        ],
+    )?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+
+    let session_id = format!("live-projection-session-{}", Uuid::new_v4().simple());
+    let prompt = format!(
+        "Use read_file to read `{relative_fixture}`, then reply with exactly the file contents and no extra words."
+    );
+    let result = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--session-id",
+            &session_id,
+            "--behavior-id",
+            &behavior_id,
+            "--content",
+            &prompt,
+            "--timeout-secs",
+            "240",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+    let request_id = result
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("live request result missing request_id: {result}"))?
+        .to_string();
+    assert_eq!(
+        result.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let response = result
+        .pointer("/response/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("live request result missing response content: {result}"))?;
+    assert!(
+        response.contains(&token),
+        "expected live response to contain {token}, got {response:?}; full output={result}"
+    );
+    let read_calls = wait_for_completed_tool_calls(&graphql, &session_id, "read_file", 1).await?;
+    let tool_results = read_calls
+        .iter()
+        .filter_map(|row| row.get("result").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        tool_results.contains(&token),
+        "expected persisted read_file result to contain {token}: {tool_results}"
+    );
+
+    let openai = trace_project_json(
+        &home_dir,
+        &graphql,
+        &request_id,
+        "openai-codex",
+        "training-safe",
+    )?;
+    assert_eq!(
+        openai.get("projection_id").and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+    assert_eq!(
+        openai.get("source_request_id").and_then(Value::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        openai.get("source_session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    assert_eq!(
+        openai.pointer("/output/adapter").and_then(Value::as_str),
+        Some("openai_codex_run_trace")
+    );
+    assert_eq!(
+        openai
+            .pointer("/output/projection/run_id")
+            .and_then(Value::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        openai
+            .pointer("/output/projection/thread_id")
+            .and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let items = openai
+        .pointer("/output/projection/items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("openai-codex projection missing items: {openai}"))?;
+    assert!(
+        items.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("request")
+                && item.get("id").and_then(Value::as_str) == Some(request_id.as_str())
+        }),
+        "live openai-codex projection missing root request item: {openai:#}"
+    );
+    assert!(
+        items.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("tool_call")
+                && item.get("name").and_then(Value::as_str) == Some("read_file")
+                && item.get("status").and_then(Value::as_str) == Some("completed")
+        }),
+        "live openai-codex projection missing completed read_file tool item: {openai:#}"
+    );
+    assert!(
+        items.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("response")
+                && item.get("id").and_then(Value::as_str) == Some(request_id.as_str())
+        }),
+        "live openai-codex projection missing response item: {openai:#}"
+    );
+    let serialized_openai = serde_json::to_string(&openai)?;
+    assert!(
+        serialized_openai.contains("[training_safe_redacted]"),
+        "training-safe live projection should redact content-bearing fields: {openai:#}"
+    );
+    assert!(
+        !serialized_openai.contains(&token) && !serialized_openai.contains(&prompt),
+        "training-safe live projection leaked prompt or model output: {openai:#}"
+    );
+
+    let openai_jsonl = trace_project_jsonl_lines(
+        &home_dir,
+        &graphql,
+        &request_id,
+        "openai-codex",
+        "training-safe",
+        "jsonl",
+    )?;
+    assert_projection_records(
+        &openai_jsonl,
+        "openai_codex_run_trace",
+        &request_id,
+        &session_id,
+    );
+    assert!(
+        openai_jsonl.iter().any(|record| {
+            record.get("record_kind").and_then(Value::as_str) == Some("openai_codex_trace_item")
+                && record
+                    .get("value")
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("tool_call")
+                && record
+                    .get("value")
+                    .and_then(|value| value.get("name"))
+                    .and_then(Value::as_str)
+                    == Some("read_file")
+        }),
+        "live openai-codex JSONL missing read_file record: {openai_jsonl:#?}"
+    );
+
+    let openai_eval_jsonl = trace_project_jsonl_lines(
+        &home_dir,
+        &graphql,
+        &request_id,
+        "openai-codex",
+        "training-safe",
+        "eval-jsonl",
+    )?;
+    assert_projection_records(
+        &openai_eval_jsonl,
+        "openai_codex_run_trace",
+        &request_id,
+        &session_id,
+    );
+    assert!(
+        openai_eval_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
+                && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
+        }),
+        "live openai-codex eval JSONL missing read_file sample: {openai_eval_jsonl:#?}"
+    );
+
+    let langgraph_eval_jsonl = trace_project_jsonl_lines(
+        &home_dir,
+        &graphql,
+        &request_id,
+        "langgraph",
+        "training-safe",
+        "eval-jsonl",
+    )?;
+    assert_projection_records(
+        &langgraph_eval_jsonl,
+        "langgraph_state_history",
+        &request_id,
+        &session_id,
+    );
+    assert!(
+        langgraph_eval_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("task")
+                && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
+        }),
+        "live LangGraph eval JSONL missing read_file task: {langgraph_eval_jsonl:#?}"
+    );
+
+    let multi_agent_eval_jsonl = trace_project_jsonl_lines(
+        &home_dir,
+        &graphql,
+        &request_id,
+        "multi-agent",
+        "training-safe",
+        "eval-jsonl",
+    )?;
+    assert_projection_records(
+        &multi_agent_eval_jsonl,
+        "multi_agent_task",
+        &request_id,
+        &session_id,
+    );
+    assert!(
+        multi_agent_eval_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("participant")
+                && record
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("agent_did"))
+                    .and_then(Value::as_str)
+                    == Some(agent_did.as_str())
+        }),
+        "live multi-agent eval JSONL missing owner participant: {multi_agent_eval_jsonl:#?}"
+    );
+    assert!(
+        multi_agent_eval_jsonl.iter().any(|record| {
+            record.get("sample_kind").and_then(Value::as_str) == Some("tool_call")
+                && record.get("tool_name").and_then(Value::as_str) == Some("read_file")
+        }),
+        "live multi-agent eval JSONL missing read_file tool sample: {multi_agent_eval_jsonl:#?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -560,4 +917,87 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+fn trace_project_json(
+    home_dir: &std::path::Path,
+    graphql: &str,
+    request_id: &str,
+    projection: &str,
+    redaction: &str,
+) -> Result<Value> {
+    let output = run_cli_text(
+        home_dir,
+        &[
+            "trace",
+            "project",
+            "--graphql",
+            graphql,
+            "--request-id",
+            request_id,
+            "--projection",
+            projection,
+            "--redaction",
+            redaction,
+            "--actor-did",
+            "did:defra-agent:live-projection-test",
+        ],
+    )?;
+    serde_json::from_str::<Value>(&output).context("parsing live adapter projection JSON")
+}
+
+fn trace_project_jsonl_lines(
+    home_dir: &std::path::Path,
+    graphql: &str,
+    request_id: &str,
+    projection: &str,
+    redaction: &str,
+    format: &str,
+) -> Result<Vec<Value>> {
+    let output = run_cli_text(
+        home_dir,
+        &[
+            "trace",
+            "project",
+            "--graphql",
+            graphql,
+            "--request-id",
+            request_id,
+            "--projection",
+            projection,
+            "--redaction",
+            redaction,
+            "--format",
+            format,
+            "--actor-did",
+            "did:defra-agent:live-projection-test",
+        ],
+    )?;
+    output
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).context("parsing live adapter projection JSONL")
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+fn assert_projection_records(
+    records: &[Value],
+    projection_id: &str,
+    request_id: &str,
+    session_id: &str,
+) {
+    assert!(
+        !records.is_empty(),
+        "expected {projection_id} records for live request {request_id}"
+    );
+    assert!(
+        records.iter().all(|record| {
+            record.get("projection_id").and_then(Value::as_str) == Some(projection_id)
+                && record.get("source_request_id").and_then(Value::as_str) == Some(request_id)
+                && record.get("source_session_id").and_then(Value::as_str) == Some(session_id)
+                && record.get("redaction_mode").and_then(Value::as_str) == Some("training_safe")
+        }),
+        "live {projection_id} records did not carry consistent provenance/redaction: {records:#?}"
+    );
 }

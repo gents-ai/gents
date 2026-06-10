@@ -64,6 +64,20 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
     let escaped_created_at = escape_graphql_string(&now);
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
+    let selected_skill_ids = crate::skills::selected_skill_ids_from_prompt_slash_commands(content);
+    let metadata_field = if selected_skill_ids.is_empty() {
+        String::new()
+    } else {
+        let metadata = serde_json::json!({
+            "selected_skill_ids": selected_skill_ids,
+        })
+        .to_string();
+        format!(
+            r#"
+                metadata: "{}","#,
+            escape_graphql_string(&metadata)
+        )
+    };
     let conversation_title = conversation_title.and_then(|title| {
         let title = title.trim();
         (!title.is_empty()).then(|| title.to_string())
@@ -79,7 +93,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
-                content: "{escaped_content}",
+                content: "{escaped_content}",{metadata_field}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",

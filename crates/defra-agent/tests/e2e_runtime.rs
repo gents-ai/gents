@@ -5,6 +5,8 @@
 
 mod support;
 
+#[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]
+mod adapter_projection_external_fixtures;
 #[path = "e2e_runtime/agent_behavior_migration.rs"]
 mod agent_behavior_migration;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
@@ -15,6 +17,8 @@ mod event_source_subscription_factory_smoke;
 mod fork_invariants;
 #[path = "e2e_runtime/peer_pairing_desired_query.rs"]
 mod peer_pairing_desired_query;
+#[path = "e2e_runtime/projection_acp_policy_lifecycle.rs"]
+mod projection_acp_policy_lifecycle;
 #[path = "e2e_runtime/runtime_observability.rs"]
 mod runtime_observability;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]

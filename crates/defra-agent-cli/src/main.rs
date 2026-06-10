@@ -221,7 +221,13 @@ state.
 Examples:
   defra-agent trace export --home /path/to/home
   defra-agent trace export --graphql http://127.0.0.1:9191/api/v0/graphql
-  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl";
+  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
+  defra-agent trace timeline --request-id REQUEST_ID --home /path/to/home
+  defra-agent trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
+  defra-agent trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
+  defra-agent trace project --projection multi-agent --request-id REQUEST_ID --scope-agent-did DID --home /path/to/home
+  defra-agent trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
+  defra-agent trace project-schema --projection multi-agent --format eval-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default
@@ -318,6 +324,7 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentToolCall", "tool_call_key"),
     ("CompactionEntry", "compaction_key"),
     ("CodexThreadProjection", "session_id"),
+    ("ProjectionAcpBinding", "binding_id"),
     ("Task", "task_id"),
     ("Schedule", "schedule_id"),
     ("ToolServiceRegistry", "service_id"),
@@ -341,6 +348,8 @@ pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs";
 pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did";
+pub(crate) const EXPORT_PROJECTION_ACP_BINDING_FIELDS: &str =
+    "binding_id agent_did behavior_id projection_id policy_id staged_policy_id previous_policy_id resource_map_json publication_status published_at enabled created_at updated_at";
 pub(crate) const EXPORT_TASK_FIELDS: &str =
     "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
 pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =

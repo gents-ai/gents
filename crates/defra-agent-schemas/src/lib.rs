@@ -31,6 +31,9 @@ pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_ent
 pub const CODEX_THREAD_PROJECTION_NAME: &str = "CodexThreadProjection";
 pub const CODEX_THREAD_PROJECTION: &str =
     include_str!("../schemas/agent/codex_thread_projection.graphql");
+pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
+pub const PROJECTION_ACP_BINDING: &str =
+    include_str!("../schemas/agent/projection_acp_binding.graphql");
 pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const SKILL_NAME: &str = "Skill";
@@ -62,6 +65,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
     CODEX_THREAD_PROJECTION,
+    PROJECTION_ACP_BINDING,
     TASK,
     SCHEDULE,
     EVENT_TRIGGER,
@@ -85,6 +89,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
     CODEX_THREAD_PROJECTION_NAME,
+    PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,

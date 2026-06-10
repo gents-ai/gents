@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
+use crate::request_helpers::metadata_with_prompt_selected_skill_ids;
 use crate::{print_json, resolve_config_access};
 
 /// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
@@ -141,12 +142,14 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     //    `write_manual_agent_request`: same field set, same lineage.
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
+    let metadata = metadata_with_prompt_selected_skill_ids(None, &content);
     let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
         request_id: &request_id,
         session_id: &session_id,
         agent_did: &agent_did,
         behavior_id: &behavior_id,
         content: &content,
+        metadata: metadata.as_deref(),
         created_at: &now,
     });
     let response = access.execute(&mutation).await?;
@@ -182,6 +185,7 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
         "request_id": request_id,
         "session_id": session_id,
         "request_doc_id": doc_id,
+        "metadata": metadata,
         "status": "pending",
     }))?;
     Ok(())
@@ -193,12 +197,25 @@ struct CreateManualRequestInput<'a> {
     agent_did: &'a str,
     behavior_id: &'a str,
     content: &'a str,
+    metadata: Option<&'a str>,
     created_at: &'a str,
 }
 
 fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> String {
     // `caused_by_trigger_id` is intentionally omitted so it stays null in the
     // persisted document — manual runs have no trigger id to reference.
+    let metadata_field = input
+        .metadata
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|metadata| {
+            format!(
+                r#"
+                metadata: "{}","#,
+                escape_graphql_string(metadata)
+            )
+        })
+        .unwrap_or_default();
     format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -209,7 +226,7 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
-                content: "{content}",
+                content: "{content}",{metadata_field}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -226,6 +243,7 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
         behavior_id = escape_graphql_string(input.behavior_id),
         session_id = escape_graphql_string(input.session_id),
         content = escape_graphql_string(input.content),
+        metadata_field = metadata_field,
         created_at = escape_graphql_string(input.created_at),
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     )
@@ -304,6 +322,7 @@ mod tests {
             agent_did: "did:defra-agent:test",
             behavior_id: "behavior-1",
             content: "hello Amy",
+            metadata: None,
             created_at: "2026-04-21T00:00:00Z",
         });
         assert!(mutation.contains("caused_by_trigger_kind: \"manual\""));
@@ -315,6 +334,22 @@ mod tests {
         assert!(mutation.contains("lifecycle_state: \"pending\""));
         assert!(mutation.contains("status: \"pending\""));
         assert!(mutation.contains("content: \"hello Amy\""));
+    }
+
+    #[test]
+    fn build_mutation_includes_selected_skill_metadata_when_present() {
+        let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
+            request_id: "req-1",
+            session_id: "sess-1",
+            agent_did: "did:defra-agent:test",
+            behavior_id: "behavior-1",
+            content: "/vuln-scan /work",
+            metadata: Some(r#"{"selected_skill_ids":["vuln-scan"]}"#),
+            created_at: "2026-04-21T00:00:00Z",
+        });
+
+        assert!(mutation.contains("metadata:"));
+        assert!(mutation.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));
     }
 
     #[test]

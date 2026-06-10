@@ -1,0 +1,2 @@
+agent-framework-core==1.8.0
+agent-framework-orchestrations==1.0.0rc3

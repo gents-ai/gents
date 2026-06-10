@@ -22,6 +22,7 @@ inductive Collection where
   | inferenceBackend
   | inferenceProfile
   | toolServiceRegistry
+  | projectionAcpBinding
   | task
   | schedule
   | eventTrigger
@@ -36,6 +37,7 @@ def Collection.applyOrder : Collection → Nat
   | .toolServiceRegistry   => 0
   | .skill                 => 0
   | .agentBehavior         => 1
+  | .projectionAcpBinding  => 2
   | .task                  => 2
   | .schedule              => 2
   | .agentPrincipal        => 3
@@ -90,6 +92,7 @@ example (c : Collection) : Nat :=
   | .inferenceBackend     => 0
   | .inferenceProfile     => 0
   | .toolServiceRegistry  => 0
+  | .projectionAcpBinding => 2
   | .task                 => 2
   | .schedule             => 2
   | .eventTrigger         => 3
@@ -105,6 +108,7 @@ theorem applyOrder_matches_parity_contract : ∀ c : Collection,
        | .inferenceBackend     => 0
        | .inferenceProfile     => 0
        | .toolServiceRegistry  => 0
+       | .projectionAcpBinding => 2
        | .task                 => 2
        | .schedule             => 2
        | .eventTrigger         => 3) := by

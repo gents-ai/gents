@@ -9,7 +9,6 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
-use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
 use crate::streaming::{StreamStatus, StreamWriter};

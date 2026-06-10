@@ -193,8 +193,6 @@ async fn setup_background_spawn_fixture(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R6 theorem parent".to_string()),
@@ -207,6 +205,8 @@ async fn setup_background_spawn_fixture(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-19T00:00:00Z".to_string()),
         },
@@ -216,8 +216,6 @@ async fn setup_background_spawn_fixture(
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R6 theorem child".to_string()),
@@ -230,6 +228,8 @@ async fn setup_background_spawn_fixture(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-05-19T00:00:01Z".to_string()),
         },

@@ -3,6 +3,7 @@
 //! This crate preserves the current agent runtime pieces while
 //! `agent-daemon` remains the first consumer during the extraction phase.
 
+pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
 pub mod apply_model;
@@ -21,6 +22,7 @@ pub mod desired_fields;
 pub mod document_config;
 pub mod error;
 pub mod event_delivery_contract;
+pub mod external_adapter_capture;
 pub mod graphql;
 pub mod health_checker;
 pub mod hook;
@@ -50,6 +52,7 @@ pub mod oneshot;
 pub mod prompt;
 pub(crate) mod registry;
 pub mod retry;
+pub mod run_timeline;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
@@ -70,6 +73,14 @@ pub mod watcher;
 
 pub use collection::Collection;
 
+pub use adapter_projection::{
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
+    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
+    adapter_projection_jsonl_records, build_adapter_projection,
+    validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
+    AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
+    AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
+};
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
@@ -96,6 +107,10 @@ pub use document_config::{
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
+pub use external_adapter_capture::{
+    import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
+    ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
+};
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
     HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
@@ -118,6 +133,11 @@ pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
+pub use run_timeline::{
+    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
+    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
+    TimelineToolCallRow,
+};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
     ResolvedTask, ScheduleCadence,

@@ -184,6 +184,7 @@ async fn create_subagent_request_inner(
     let escaped_created_at = escape_graphql_string(&now);
     let escaped_parent_request_id = escape_graphql_string(&parent_request_id);
     let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
+    let metadata_field = selected_skill_metadata_field(&prompt);
 
     let deadline_field = deadline
         .map(|d| {
@@ -208,7 +209,7 @@ async fn create_subagent_request_inner(
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
-                content: "{escaped_prompt}",
+                content: "{escaped_prompt}",{metadata_field}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -230,6 +231,23 @@ async fn create_subagent_request_inner(
     execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;
 
     Ok(request_id)
+}
+
+fn selected_skill_metadata_field(prompt: &str) -> String {
+    let selected_skill_ids = crate::skills::selected_skill_ids_from_prompt_slash_commands(prompt);
+    if selected_skill_ids.is_empty() {
+        return String::new();
+    }
+
+    let metadata = serde_json::json!({
+        "selected_skill_ids": selected_skill_ids,
+    })
+    .to_string();
+    format!(
+        r#"
+                metadata: "{}","#,
+        escape_graphql_string(&metadata)
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,5 +319,21 @@ mod tests {
         for parent_depth in 3..=10 {
             assert!(parent_depth + 1 > MAX_SUBAGENT_DEPTH);
         }
+    }
+
+    #[test]
+    fn subagent_prompt_slash_command_adds_selected_skill_metadata() {
+        let field = selected_skill_metadata_field("/vuln-scan /work");
+
+        assert!(field.contains("metadata:"));
+        assert!(field.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));
+    }
+
+    #[test]
+    fn subagent_prompt_without_leading_slash_keeps_metadata_absent() {
+        assert_eq!(
+            selected_skill_metadata_field("Review /vuln-scan mention"),
+            ""
+        );
     }
 }

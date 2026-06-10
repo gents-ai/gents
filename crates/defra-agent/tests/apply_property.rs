@@ -16,6 +16,7 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
         Just(Collection::InferenceBackend),
         Just(Collection::InferenceProfile),
         Just(Collection::ToolServiceRegistry),
+        Just(Collection::ProjectionAcpBinding),
         Just(Collection::Task),
         Just(Collection::Schedule),
         Just(Collection::EventTrigger),

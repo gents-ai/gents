@@ -606,8 +606,6 @@ async fn configure_behavior(
         .await
         .expect("load behavior")
         .unwrap_or_else(|| AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),
@@ -620,6 +618,8 @@ async fn configure_behavior(
             inference_profile_id: None,
             compaction_strategy: None,
             compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             enabled: true,
             created_at: Some("2026-06-02T00:00:00Z".to_string()),
         });

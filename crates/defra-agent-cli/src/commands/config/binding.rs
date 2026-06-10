@@ -203,6 +203,7 @@ fn counts_for_manifest(manifest: &DesiredStateManifest) -> DesiredStateCounts {
         inference_backends: manifest.inference_backends.len(),
         inference_profiles: manifest.inference_profiles.len(),
         tool_service_registries: manifest.tool_service_registries.len(),
+        projection_acp_bindings: manifest.projection_acp_bindings.len(),
         tasks: manifest.tasks.len(),
         schedules: manifest.schedules.len(),
         event_triggers: manifest.event_triggers.len(),

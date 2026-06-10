@@ -36,6 +36,10 @@ pub(crate) fn diff_manifests(
             &desired.tool_service_registries,
             &live.tool_service_registries,
         ),
+        projection_acp_bindings: diff_manifest_collection(
+            &desired.projection_acp_bindings,
+            &live.projection_acp_bindings,
+        ),
         tasks: diff_manifest_collection(&desired.tasks, &live.tasks),
         schedules: diff_manifest_collection(&desired.schedules, &live.schedules),
         event_triggers: diff_manifest_collection(&desired.event_triggers, &live.event_triggers),
