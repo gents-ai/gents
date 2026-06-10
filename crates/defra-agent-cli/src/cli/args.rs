@@ -14,7 +14,7 @@ use crate::{
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
     REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
     SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
-    SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
+    SUBAGENT_LIST_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -100,6 +100,14 @@ pub(crate) enum Command {
     Fleet {
         #[command(subcommand)]
         command: FleetCommand,
+    },
+    #[command(
+        about = "Trigger configured Task documents on demand",
+        after_help = TASK_AFTER_HELP
+    )]
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
@@ -1287,6 +1295,16 @@ pub(crate) enum ConfigTaskCommand {
     Run(ConfigTaskRunArgs),
 }
 
+#[derive(Subcommand)]
+pub(crate) enum TaskCommand {
+    #[command(
+        name = "run",
+        about = "Run a configured Task once, now",
+        visible_alias = "trigger"
+    )]
+    Run(ConfigTaskRunArgs),
+}
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct ConfigTaskRunArgs {
     /// The task_id of the task to run.
@@ -2152,6 +2170,16 @@ mod tests {
         }
     }
 
+    fn assert_task_run_args(args: ConfigTaskRunArgs) {
+        assert_eq!(args.task_id, "host-check");
+        assert_eq!(args.args, r#"{"scope":"host"}"#);
+        assert_eq!(
+            args.graphql.as_deref(),
+            Some("http://127.0.0.1:9191/api/v0/graphql")
+        );
+        assert!(args.home.is_none());
+    }
+
     #[test]
     fn enable_defra_query_flag_accepts_false_true_and_omission() {
         // Omitted -> None, so an unrelated `config tools set` preserves the
@@ -2272,5 +2300,55 @@ mod tests {
         assert_eq!(explicit.enable_file_tools, Some(false));
         assert_eq!(explicit.enable_bash, Some(false));
         assert_eq!(explicit.enable_meta_tools, Some(false));
+    }
+
+    #[test]
+    fn top_level_task_run_parses_operator_affordance() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "task",
+            "run",
+            "--task-id",
+            "host-check",
+            "--args",
+            r#"{"scope":"host"}"#,
+            "--graphql",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        ])
+        .expect("task run should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Run(args),
+            } => assert_task_run_args(args),
+            _ => panic!("expected `task run`"),
+        }
+    }
+
+    #[test]
+    fn config_task_run_remains_available_as_compatibility_path() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "config",
+            "task",
+            "run",
+            "--task-id",
+            "host-check",
+            "--args",
+            r#"{"scope":"host"}"#,
+            "--graphql",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        ])
+        .expect("config task run should parse");
+
+        match cli.command {
+            Command::Config {
+                command:
+                    ConfigCommand::Task {
+                        command: ConfigTaskCommand::Run(args),
+                    },
+            } => assert_task_run_args(args),
+            _ => panic!("expected `config task run`"),
+        }
     }
 }

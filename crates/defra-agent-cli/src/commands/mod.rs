@@ -21,5 +21,6 @@ pub(crate) mod session;
 pub(crate) mod show;
 pub(crate) mod status;
 pub(crate) mod subagent;
+pub(crate) mod task;
 pub(crate) mod tools;
 pub(crate) mod trace;

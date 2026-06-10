@@ -30,7 +30,7 @@ use crate::{print_json, resolve_config_access};
 /// re-exported.
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
-pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
+pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     // 1. Parse --args as a JSON object.
     let args_value: Value =
         serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;

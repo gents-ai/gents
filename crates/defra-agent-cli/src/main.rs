@@ -68,6 +68,7 @@ Inspect the local runtime:
   defra-agent status
   defra-agent show runtime
   defra-agent show response REQUEST_ID
+  defra-agent task run --task-id TASK_ID
   defra-agent background list
   defra-agent mcp probe --all
   defra-agent reset
@@ -207,6 +208,13 @@ Examples:
   defra-agent fleet slots
   defra-agent fleet slots --home /path/to/home
   defra-agent fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
+const TASK_AFTER_HELP: &str = "\
+Creates a pending AgentRequest for a configured Task with manual trigger lineage.
+
+Examples:
+  defra-agent task run --task-id host-check
+  defra-agent task run --task-id host-check --args '{\"scope\":\"host\"}'
+  defra-agent task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
   defra-agent show runtime
@@ -388,6 +396,7 @@ async fn main() -> Result<()> {
         Command::Background { command } => commands::background::dispatch(command).await,
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
+        Command::Task { command } => commands::task::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
