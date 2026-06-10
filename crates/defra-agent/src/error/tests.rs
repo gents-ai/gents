@@ -72,6 +72,99 @@ fn openai_compatible_404_is_permanent_backend_configuration() {
 }
 
 #[test]
+fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Http client error: error sending request for url \
+             (http://127.0.0.1:4000/v1/chat/completions)"
+                .into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(
+        classified.is_retryable(),
+        "transport send failures should retry even when the URL contains 400-like digits"
+    );
+}
+
+#[test]
+fn provider_transport_connection_reset_is_retryable_even_with_auth_like_url_digits() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Http client error: connection reset by peer while sending request to \
+             http://127.0.0.1:4010/v1/chat/completions"
+                .into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(
+        classified.is_retryable(),
+        "connection resets should retry even when the URL contains 401-like digits"
+    );
+}
+
+#[test]
+fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "InvalidStatusCodeWithMessage(400, \"duplicate field `max_tokens`\")".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "precise provider 400 statuses are still permanent request-shape failures"
+    );
+}
+
+#[test]
+fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "upstream worker closed after writing 400 bytes".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(
+        classified.is_retryable(),
+        "plain numeric substrings must not be treated as HTTP status codes"
+    );
+}
+
+#[test]
+fn provider_error_precise_429_is_rate_limited() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Invalid status code 429: too many requests".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(classified, InferenceError::RateLimited { .. }));
+    assert!(classified.is_retryable());
+}
+
+#[test]
 fn openai_compatible_http_400_is_permanent_bad_request() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
