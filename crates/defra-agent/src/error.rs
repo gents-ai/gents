@@ -151,28 +151,37 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     }
                 }
                 rig::completion::CompletionError::ProviderError(provider_msg) => {
-                    if provider_msg.contains("rate_limit") || provider_msg.contains("429") {
+                    let provider_msg_lower = provider_msg.to_ascii_lowercase();
+                    if provider_msg_lower.contains("rate_limit")
+                        || provider_msg_lower.contains("rate limit")
+                        || error_message_has_status(provider_msg, 429)
+                    {
                         InferenceError::RateLimited {
                             retry_after_secs: 60,
                         }
-                    } else if error_message_has_status(provider_msg, 404) {
+                    } else if provider_message_has_any_status(
+                        provider_msg,
+                        &[400, 401, 403, 404, 422],
+                    ) {
                         InferenceError::PermanentFailure { reason }
-                    } else if provider_msg.contains("401")
-                        || provider_msg.contains("invalid_api_key")
-                        || provider_msg.contains("authentication")
-                        || provider_msg.contains("unauthorized")
+                    } else if provider_msg_lower.contains("invalid_api_key")
+                        || provider_msg_lower.contains("invalid api key")
+                        || provider_msg_lower.contains("authentication")
+                        || provider_msg_lower.contains("unauthorized")
                     {
                         // Auth errors are permanent — retrying won't help.
                         InferenceError::PermanentFailure { reason }
-                    } else if provider_msg.contains("400")
-                        || provider_msg.contains("invalid_request")
+                    } else if provider_msg_lower.contains("invalid_request")
+                        || provider_msg_lower.contains("invalid request")
                     {
                         // Bad request errors are permanent.
                         InferenceError::PermanentFailure { reason }
-                    } else if provider_msg.contains("500")
-                        || provider_msg.contains("502")
-                        || provider_msg.contains("503")
-                        || provider_msg.contains("overloaded")
+                    } else if provider_message_has_any_status(
+                        provider_msg,
+                        &[408, 500, 502, 503, 504],
+                    ) || provider_message_is_transport_failure(&provider_msg_lower)
+                        || provider_msg_lower.contains("overloaded")
+                        || provider_msg_lower.contains("temporarily unavailable")
                     {
                         // Server errors are transient.
                         InferenceError::TransientFailure { reason }
@@ -201,6 +210,31 @@ fn error_message_has_status(message: &str, status: u16) -> bool {
         || message.contains(&format!("Invalid status code: {status}"))
         || message.contains(&format!("status code {status}"))
         || message.contains(&format!("HTTP status {status}"))
+}
+
+fn provider_message_has_any_status(message: &str, statuses: &[u16]) -> bool {
+    statuses
+        .iter()
+        .any(|status| error_message_has_status(message, *status))
+}
+
+fn provider_message_is_transport_failure(message_lower: &str) -> bool {
+    [
+        "error sending request",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "operation timed out",
+        "request timed out",
+        "timed out",
+        "timeout",
+        "deadline has elapsed",
+        "temporary failure in name resolution",
+        "dns error",
+    ]
+    .iter()
+    .any(|needle| message_lower.contains(needle))
 }
 
 #[cfg(test)]
