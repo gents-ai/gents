@@ -1,10 +1,8 @@
-mod support;
-
 use std::path::PathBuf;
 
-use support::r5_conformance::invariants;
-use support::r5_conformance::runner::Observation;
-use support::r5_conformance::{Harness, Scenario};
+use crate::support::r5_conformance::invariants;
+use crate::support::r5_conformance::runner::Observation;
+use crate::support::r5_conformance::{Harness, Scenario};
 
 async fn run_scenario(filename: &str) -> Vec<Observation> {
     let path: PathBuf = ["tests", "fixtures", "r5_scenarios", filename]

@@ -70,31 +70,31 @@ use support::{
     AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
-#[path = "state_machine_conformance/client_runtime.rs"]
+#[path = "conformance/client_runtime.rs"]
 mod client_runtime;
-#[path = "state_machine_conformance/codex_shim.rs"]
+#[path = "conformance/codex_shim.rs"]
 mod codex_shim;
-#[path = "state_machine_conformance/coverage.rs"]
+#[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "state_machine_conformance/event_delivery.rs"]
+#[path = "conformance/event_delivery.rs"]
 mod event_delivery;
-#[path = "state_machine_conformance/interrupts_manual.rs"]
+#[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
-#[path = "state_machine_conformance/r5_cross_deployment.rs"]
+#[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
-#[path = "state_machine_conformance/recovery_sweeps.rs"]
+#[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
-#[path = "state_machine_conformance/request_lifecycle.rs"]
+#[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
-#[path = "state_machine_conformance/session_recovery.rs"]
+#[path = "conformance/session_recovery.rs"]
 mod session_recovery;
-#[path = "state_machine_conformance/streaming_compaction.rs"]
+#[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
-#[path = "state_machine_conformance/tool_call.rs"]
+#[path = "conformance/tool_call.rs"]
 mod tool_call;
-#[path = "state_machine_conformance/tooling_slots_queue_command.rs"]
+#[path = "conformance/tooling_slots_queue_command.rs"]
 mod tooling_slots_queue_command;
-#[path = "state_machine_conformance/transcript_background.rs"]
+#[path = "conformance/transcript_background.rs"]
 mod transcript_background;
 
 #[test]
@@ -298,3 +298,35 @@ fn event_delivery_source_instances_match_runtime() {
 async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
 }
+
+// ===== Absorbed standalone conformance binaries (one binary, mirrors Proofs/) =====
+#[path = "conformance/apply_reconcile.rs"]
+mod apply_reconcile;
+#[path = "conformance/docs.rs"]
+mod docs;
+#[path = "conformance/identity.rs"]
+mod identity;
+#[path = "conformance/identity_proptest.rs"]
+mod identity_proptest;
+#[path = "conformance/live_overlay.rs"]
+mod live_overlay;
+#[path = "conformance/manual_run.rs"]
+mod manual_run;
+#[path = "conformance/pairing_reconcile.rs"]
+mod pairing_reconcile;
+#[path = "conformance/prompt_assembly.rs"]
+mod prompt_assembly;
+#[path = "conformance/r5_scenarios.rs"]
+mod r5_scenarios;
+#[path = "conformance/scheduling.rs"]
+mod scheduling;
+#[path = "conformance/structure.rs"]
+mod structure;
+#[path = "conformance/subagent_source.rs"]
+mod subagent_source;
+#[path = "conformance/tool_execution.rs"]
+mod tool_execution;
+#[path = "conformance/tool_execution_subagent.rs"]
+mod tool_execution_subagent;
+#[path = "conformance/triggers.rs"]
+mod triggers;

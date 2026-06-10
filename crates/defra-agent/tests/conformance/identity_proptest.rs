@@ -19,7 +19,7 @@ use proptest::prelude::*;
 use defra_agent::__test_internals::{assemble_principal_and_behaviors, BehaviorBuildError};
 use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
 
-#[path = "support/identity_stubs.rs"]
+#[path = "../support/identity_stubs.rs"]
 mod identity_stubs;
 use identity_stubs::StubAgentIdentity;
 

@@ -13,10 +13,7 @@ use defra_agent::apply_model::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-#[path = "../src/lean_vocab_test.rs"]
-mod lean_vocab_test;
-
-use lean_vocab_test::{
+use crate::lean_vocab_test::{
     lean_apply_reconcile_cases, LeanApplyDesiredDoc, LeanApplyDocRef, LeanApplyLiveDoc,
     LeanApplyStep,
 };

@@ -6,11 +6,9 @@
 //! `ToolCallState` is `pub(crate)` so the load-reconstruction test asserts
 //! via snapshot fields rather than the internal accessor.
 
-mod support;
-
+use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
+use crate::support::test_db;
 use defra_agent::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
-use support::snapshots::fetch_tool_call_snapshots_for_session;
-use support::test_db;
 
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)

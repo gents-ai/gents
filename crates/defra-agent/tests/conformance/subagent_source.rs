@@ -1,7 +1,5 @@
 //! Bucket 3 runtime conformance for R3 SubagentSource.
 
-mod support;
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,10 +17,10 @@ use defra_agent::{
 };
 use serde::Deserialize;
 
-use support::fixtures::{bind_default_behavior_backend, test_identity};
-use support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use support::mock_endpoint::MockModelEndpoint;
-use support::{first_optional_row, first_row, test_db};
+use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::{first_optional_row, first_row, test_db};
 
 struct RunningAgent {
     booted: BootedAgent,
@@ -30,12 +28,12 @@ struct RunningAgent {
     behavior_id: String,
 }
 
-async fn boot_agent(db: &support::TestDb, test_name: &str) -> RunningAgent {
+async fn boot_agent(db: &crate::support::TestDb, test_name: &str) -> RunningAgent {
     boot_agent_with_policy(db, test_name, None, true, true).await
 }
 
 async fn boot_agent_with_targets(
-    db: &support::TestDb,
+    db: &crate::support::TestDb,
     test_name: &str,
     subagent_targets: Vec<String>,
 ) -> RunningAgent {
@@ -43,7 +41,7 @@ async fn boot_agent_with_targets(
 }
 
 async fn boot_agent_with_policy(
-    db: &support::TestDb,
+    db: &crate::support::TestDb,
     test_name: &str,
     subagent_targets: Option<Vec<String>>,
     spawn_enabled: bool,
@@ -604,7 +602,7 @@ async fn create_subagent_request_rejects_nonexistent_parent_request() {
         "missing-parent-request".to_string(),
         "r3-tc-missing-parent".to_string(),
         0,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "test".to_string(),
         "prompt".to_string(),
         None,
@@ -623,7 +621,7 @@ async fn create_subagent_request_rejects_nonexistent_parent_request() {
 #[tokio::test]
 async fn create_subagent_request_enforces_depth_boundary() {
     let db = test_db("r3-subagent-source-depth").await;
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         "r3-parent-depth",
         "r3-session-depth",
@@ -638,7 +636,7 @@ async fn create_subagent_request_enforces_depth_boundary() {
         "r3-parent-depth".to_string(),
         "r3-tc-depth-max".to_string(),
         MAX_SUBAGENT_DEPTH - 1,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "test".to_string(),
         "prompt".to_string(),
         None,
@@ -666,7 +664,7 @@ async fn create_subagent_request_enforces_depth_boundary() {
         "r3-parent-depth".to_string(),
         "r3-tc-depth-over".to_string(),
         MAX_SUBAGENT_DEPTH,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "test".to_string(),
         "prompt".to_string(),
         None,
@@ -984,7 +982,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     // before subscription would be missed).
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1046,7 +1044,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     // Spawn the source FIRST so its subscription is open before the bridge write.
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1086,12 +1084,12 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     let remote_target_did = "did:key:zRemoteTargetForRecovery";
 
     // Authorize a target owned by a REMOTE DID with cross-deployment OFF.
-    let selection_id = format!("{}-orphan-xdep-tools", support::AGENT_NAME);
+    let selection_id = format!("{}-orphan-xdep-tools", crate::support::AGENT_NAME);
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
-            agent_did: support::AGENT_DID.to_string(),
+            agent_did: crate::support::AGENT_DID.to_string(),
             subagent_targets: Some(vec![defra_agent::subagent_target_entry(
                 "remote-recovery-target",
                 remote_target_did,
@@ -1106,7 +1104,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     )
     .await
     .unwrap();
-    let mut behavior = match load_agent_behavior(db.node.as_ref(), support::AGENT_NAME)
+    let mut behavior = match load_agent_behavior(db.node.as_ref(), crate::support::AGENT_NAME)
         .await
         .unwrap()
     {
@@ -1114,9 +1112,9 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
         None => AgentBehaviorDocument {
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
-            behavior_id: support::AGENT_NAME.to_string(),
-            agent_did: support::AGENT_DID.to_string(),
-            display_name: Some(support::AGENT_NAME.to_string()),
+            behavior_id: crate::support::AGENT_NAME.to_string(),
+            agent_did: crate::support::AGENT_DID.to_string(),
+            display_name: Some(crate::support::AGENT_NAME.to_string()),
             description: None,
             summary: None,
             system_prompt: None,
@@ -1135,7 +1133,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
         .await
         .unwrap();
 
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1155,7 +1153,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);
@@ -1437,14 +1435,14 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
     let child_request_id = "child-orphan-1";
     ensure_parent_subagent_authorization(
         db.node.as_ref(),
-        support::AGENT_DID,
-        support::AGENT_NAME,
-        vec![support::AGENT_NAME.to_string()],
+        crate::support::AGENT_DID,
+        crate::support::AGENT_NAME,
+        vec![crate::support::AGENT_NAME.to_string()],
         true,
         true,
     )
     .await;
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1461,7 +1459,7 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -1471,7 +1469,7 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.behavior_id, support::AGENT_NAME);
+    assert_eq!(child.behavior_id, crate::support::AGENT_NAME);
     assert_eq!(child.content, "orphan child prompt");
     assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
     assert_eq!(child.subagent_depth, Some(1));
@@ -1499,14 +1497,14 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
     let child_request_id = "child-orphan-denied";
     ensure_parent_subagent_authorization(
         db.node.as_ref(),
-        support::AGENT_DID,
-        support::AGENT_NAME,
+        crate::support::AGENT_DID,
+        crate::support::AGENT_NAME,
         Vec::new(),
         true,
         true,
     )
     .await;
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1523,7 +1521,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);
@@ -1535,7 +1533,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
     .await;
 
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
-    assert_tool_call_not_allowed(&tool, "/name", support::AGENT_NAME);
+    assert_tool_call_not_allowed(&tool, "/name", crate::support::AGENT_NAME);
 }
 
 #[tokio::test]
@@ -1547,14 +1545,14 @@ async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target
     let child_request_id = "child-orphan-spawn-disabled";
     ensure_parent_subagent_authorization(
         db.node.as_ref(),
-        support::AGENT_DID,
-        support::AGENT_NAME,
-        vec![support::AGENT_NAME.to_string()],
+        crate::support::AGENT_DID,
+        crate::support::AGENT_NAME,
+        vec![crate::support::AGENT_NAME.to_string()],
         false,
         true,
     )
     .await;
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1571,7 +1569,7 @@ async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);
@@ -1594,14 +1592,14 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
     let child_request_id = "child-orphan-background-disabled";
     ensure_parent_subagent_authorization(
         db.node.as_ref(),
-        support::AGENT_DID,
-        support::AGENT_NAME,
-        vec![support::AGENT_NAME.to_string()],
+        crate::support::AGENT_DID,
+        crate::support::AGENT_NAME,
+        vec![crate::support::AGENT_NAME.to_string()],
         true,
         false,
     )
     .await;
-    support::create_request(
+    crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1619,7 +1617,7 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);
@@ -1970,7 +1968,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
-        "behavior_id": support::AGENT_NAME,
+        "behavior_id": crate::support::AGENT_NAME,
         "prompt": "orphan child prompt"
     })
     .to_string();

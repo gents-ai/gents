@@ -6,12 +6,9 @@
 //! matches `expectOverlay` from the Lean case table emitted by
 //! `Proofs.Conformance.Contracts`.
 
-#[path = "../src/lean_vocab_test.rs"]
-mod lean_vocab_test;
-
 use defra_agent_protocol::client_protocol::ClientTurnState;
 
-use lean_vocab_test::{lean_live_overlay_cases, LeanLiveOverlayCase};
+use crate::lean_vocab_test::{lean_live_overlay_cases, LeanLiveOverlayCase};
 
 fn parse_turn(label: &str) -> Option<ClientTurnState> {
     match label {

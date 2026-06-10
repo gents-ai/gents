@@ -1,23 +1,20 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[path = "../src/lean_vocab_test.rs"]
-mod lean_vocab_test;
-
-use acp::{
-    AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
-    RelationTuple, READER_RELATION,
-};
-use lean_vocab_test::{
+use crate::lean_vocab_test::{
     lean_identity_contracts, lean_identity_permission_cases, lean_identity_structural_cases,
     LeanIdentityBehavior, LeanIdentityContract, LeanIdentityDeployment, LeanIdentityPermissionCase,
     LeanIdentityStructuralCase,
+};
+use acp::{
+    AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
+    RelationTuple, READER_RELATION,
 };
 
 use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
 use identity::Did;
 
-#[path = "support/identity_stubs.rs"]
+#[path = "../support/identity_stubs.rs"]
 mod identity_stubs;
 use identity_stubs::StubAgentIdentity;
 

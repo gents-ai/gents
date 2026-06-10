@@ -65,12 +65,10 @@ use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
 use serde_json::Value;
 
-mod support;
-
-use support::fixtures::{bind_default_behavior_backend, test_identity};
-use support::mock_endpoint::MockModelEndpoint;
-use support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
+use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 
 // -----------------------------------------------------------------------------
 // Shared DB helpers
@@ -528,7 +526,7 @@ impl BootedAgent {
     }
 }
 
-async fn boot_agent(db: &support::TestDb, test_name: &str, backend_id: &str) -> BootedAgent {
+async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &str) -> BootedAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
@@ -661,7 +659,7 @@ async fn wait_for_last_status(
 // Task 30 cases
 // -----------------------------------------------------------------------------
 
-#[path = "trigger_conformance/concurrency_persistence.rs"]
+#[path = "triggers_cases/concurrency_persistence.rs"]
 mod concurrency_persistence;
-#[path = "trigger_conformance/event_source_cases.rs"]
+#[path = "triggers_cases/event_source_cases.rs"]
 mod event_source_cases;

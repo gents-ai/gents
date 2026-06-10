@@ -1,0 +1,166 @@
+//! Structure fence: every Lean model has a declared conformance home.
+//!
+//! The conformance tree mirrors `proofs/Proofs/` so coverage gaps are
+//! STRUCTURAL: adding a Lean model without declaring where its Rust fence
+//! lives fails this test. A declaration is one of:
+//!
+//! - a module in this binary (`conformance/<file>.rs`) — possibly shared by
+//!   closely-coupled models until the bundled files are split;
+//! - `Boundary` — the model is intentionally documented-only (see
+//!   `Proofs/Conformance/Boundaries.lean`);
+//! - `Gap` — known-missing, with the tracking issue. Gaps are allowed but
+//!   loud: they are printed on every run.
+//!
+//! When you add a model to `Proofs/`, this test fails until you either fence
+//! it or declare the gap. That is the point.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+enum Home {
+    /// Fenced by a module of this binary (path relative to tests/).
+    Module(&'static str),
+    /// Intentionally documented-only (Boundaries.lean).
+    Boundary(&'static str),
+    /// Known gap, tracked by an issue.
+    Gap(&'static str),
+}
+
+/// Lean model directory/barrel name → its conformance home.
+fn model_homes() -> BTreeMap<&'static str, Home> {
+    use Home::*;
+    BTreeMap::from([
+        ("ApplyReconcile", Module("conformance/apply_reconcile.rs")),
+        ("Background", Module("conformance/transcript_background.rs")),
+        ("Client", Module("conformance/client_runtime.rs")),
+        (
+            "ClientShell",
+            Boundary("projection theorems; desktop rendering is runtime-observed"),
+        ),
+        ("CodexShim", Module("conformance/codex_shim.rs")),
+        (
+            "CommandPolicy",
+            Module("conformance/tooling_slots_queue_command.rs"),
+        ),
+        ("Compaction", Module("conformance/streaming_compaction.rs")),
+        ("CrossMachineComposed", Module("conformance/r5_cross_deployment.rs")),
+        ("EventDelivery", Module("conformance/event_delivery.rs")),
+        ("Fleet", Module("conformance/tooling_slots_queue_command.rs")),
+        ("Identity", Module("conformance/identity.rs")),
+        (
+            "InferenceCall",
+            Gap("#446 — vocabulary fenced in lean_vocab_test; FSM contract lives in admission unit tests, not integration"),
+        ),
+        (
+            "ManagedExec",
+            Gap("#446 — vocabulary fenced; state machine witnessed in managed_exec unit tests only"),
+        ),
+        ("MCPHealth", Module("conformance/tooling_slots_queue_command.rs")),
+        ("PairingReconcile", Module("conformance/pairing_reconcile.rs")),
+        (
+            "Persistence",
+            Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
+        ),
+        ("Process", Module("conformance/request_lifecycle.rs")),
+        ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
+        ("Recovery", Module("conformance/recovery_sweeps.rs")),
+        ("Request", Module("conformance/request_lifecycle.rs")),
+        (
+            "RuntimeReconcile",
+            Gap("#446 — contract driven in runtime_status unit tests, not integration"),
+        ),
+        ("Scheduling", Module("conformance/scheduling.rs")),
+        ("SessionRecovery", Module("conformance/session_recovery.rs")),
+        ("Skills", Gap("#460 — implementation slices unshipped; fence lands with them")),
+        (
+            "StorageObservation",
+            Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),
+        ),
+        (
+            "StreamingResponse",
+            Gap("#446 — idle-deadline precondition is a boundary pending #437 configurability"),
+        ),
+        ("ToolExecution", Module("conformance/tool_execution.rs")),
+        ("Transcript", Module("conformance/transcript_background.rs")),
+        ("Triggers", Module("conformance/triggers.rs")),
+        (
+            "ReversePairingHandlers",
+            Module("conformance/pairing_reconcile.rs"),
+        ),
+    ])
+}
+
+fn proofs_models(root: &Path) -> Vec<String> {
+    let proofs = root.join("crates/defra-agent/proofs/Proofs");
+    let mut models = Vec::new();
+    for entry in std::fs::read_dir(&proofs).expect("read Proofs/").flatten() {
+        let path = entry.path();
+        // A model is a top-level barrel: <Name>.lean (dirs are its submodules).
+        if path.extension().is_some_and(|ext| ext == "lean") {
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            // Infrastructure, not models.
+            if matches!(name.as_str(), "Basic" | "Conformance") {
+                continue;
+            }
+            models.push(name);
+        }
+    }
+    models.sort();
+    models
+}
+
+#[test]
+fn every_lean_model_has_a_declared_conformance_home() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .to_path_buf();
+
+    let homes = model_homes();
+    let models = proofs_models(&root);
+
+    let mut undeclared = Vec::new();
+    let mut dangling: Vec<&str> = homes.keys().copied().collect();
+    let mut gaps = Vec::new();
+
+    for model in &models {
+        match homes.get(model.as_str()) {
+            None => undeclared.push(model.clone()),
+            Some(home) => {
+                dangling.retain(|name| name != model);
+                match home {
+                    Home::Module(path) => {
+                        assert!(
+                            root.join("crates/defra-agent/tests").join(path).exists(),
+                            "{model}: declared conformance module {path} does not exist"
+                        );
+                    }
+                    Home::Boundary(_) => {}
+                    Home::Gap(issue) => gaps.push(format!("{model}: {issue}")),
+                }
+            }
+        }
+    }
+
+    // Declared gaps are allowed but loud.
+    if !gaps.is_empty() {
+        eprintln!("declared conformance gaps ({}):", gaps.len());
+        for gap in &gaps {
+            eprintln!("  GAP {gap}");
+        }
+    }
+
+    assert!(
+        undeclared.is_empty(),
+        "Lean models with NO declared conformance home (fence them, declare a \
+         boundary, or declare a tracked gap in conformance/structure.rs):\n{}",
+        undeclared.join("\n")
+    );
+    assert!(
+        dangling.is_empty(),
+        "conformance homes declared for Lean models that no longer exist \
+         (remove from conformance/structure.rs):\n{}",
+        dangling.join("\n")
+    );
+}

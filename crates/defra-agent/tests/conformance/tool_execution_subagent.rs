@@ -9,17 +9,15 @@
 //!   - `make_terminal_request`: same but for any non-completed terminal state
 //!     ("failed", "dead", "interrupted", "superseded").
 
-mod support;
-
 // These imports are used by the helpers defined here and by the integration
 // tests that Tasks 22-26 add to this file. Allow unused-import lint until the
 // remainder of Bucket 3 is filled in.
+use crate::support::test_db;
 #[allow(unused_imports)]
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request, AwaitMode, CancelCause, CancelPolicy, CascadeIntent, ChildTerminal,
     FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use support::test_db;
 
 // ---------------------------------------------------------------------------
 // Internal test helpers
@@ -34,7 +32,7 @@ fn test_deadline() -> chrono::DateTime<chrono::Utc> {
 /// Used by bridge_complete tests to set up "the child has finished" state
 /// without R3's SubagentSource.
 ///
-/// Uses the same full required-field set as `support::create_request` so
+/// Uses the same full required-field set as `crate::support::create_request` so
 /// that DefraDB schema validation passes. Parent linkage fields are only
 /// written when `Some`.
 async fn make_completed_request(
@@ -85,7 +83,7 @@ async fn make_completed_request(
                 {ptc}
             }}) {{ _docID }}
         }}"#,
-        agent_did = support::AGENT_DID,
+        agent_did = crate::support::AGENT_DID,
         max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
@@ -160,7 +158,7 @@ async fn make_terminal_request(
                 {ptc}
             }}) {{ _docID }}
         }}"#,
-        agent_did = support::AGENT_DID,
+        agent_did = crate::support::AGENT_DID,
         max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
@@ -1188,7 +1186,7 @@ async fn integration_v3_schema_defaults_populate_correctly() {
 #[tokio::test]
 async fn integration_create_subagent_request_at_max_depth_succeeds() {
     let db = test_db("tc-sa-csr-1").await;
-    support::create_request(
+    crate::support::create_request(
         &db.node,
         "parent-req-csr-1",
         "parent-sess-csr-1",
@@ -1202,7 +1200,7 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
         "parent-req-csr-1".to_string(),
         "parent-tc-csr-1".to_string(),
         MAX_SUBAGENT_DEPTH - 1,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "behavior-csr-1".to_string(),
         "csr test prompt".to_string(),
         None,
@@ -1262,7 +1260,7 @@ async fn integration_create_subagent_request_above_max_depth_fails() {
         "parent-req-csr-2".to_string(),
         "parent-tc-csr-2".to_string(),
         MAX_SUBAGENT_DEPTH,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "behavior-csr-2".to_string(),
         "csr test prompt".to_string(),
         None,
@@ -1288,7 +1286,7 @@ async fn integration_create_subagent_request_empty_parent_fields_fails() {
         "".to_string(),
         "parent-tc".to_string(),
         0,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "behavior".to_string(),
         "prompt".to_string(),
         None,
@@ -1309,7 +1307,7 @@ async fn integration_create_subagent_request_empty_parent_fields_fails() {
         "parent-req".to_string(),
         "".to_string(),
         0,
-        support::AGENT_DID.to_string(),
+        crate::support::AGENT_DID.to_string(),
         "behavior".to_string(),
         "prompt".to_string(),
         None,

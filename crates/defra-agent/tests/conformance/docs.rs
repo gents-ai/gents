@@ -154,7 +154,7 @@ fn rig_vocabulary_confined_to_the_seam() {
         // The seam itself.
         "crates/defra-agent/src/llm/rig_compat.rs",
         // This fence (the marker strings below would self-match).
-        "crates/defra-agent/tests/docs_conformance.rs",
+        "crates/defra-agent/tests/conformance/docs.rs",
         // Stream consumers: yield/accept rig items by design (D3).
         "crates/defra-agent/src/agent/loop_stream.rs",
         "crates/defra-agent/src/agent/stream_processor.rs",

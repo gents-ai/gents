@@ -40,9 +40,7 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::write_manual_agent_request;
 use serde_json::Value;
 
-mod support;
-
-use support::{test_db, AGENT_DID, AGENT_NAME};
+use crate::support::{test_db, AGENT_DID, AGENT_NAME};
 
 /// Fetch the full row shape the helper writes so tests can inspect lineage,
 /// execution origin, lifecycle state, and the rendered content without

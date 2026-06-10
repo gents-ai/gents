@@ -1,12 +1,12 @@
 //! Entry test for the pairing reconcile conformance harness.
 
-mod support;
-
 use std::path::PathBuf;
 
-use support::pairing_conformance::invariants::{check_liveness, check_safety, ObservedSnapshot};
-use support::pairing_conformance::runner::Harness;
-use support::pairing_conformance::scenario::Scenario;
+use crate::support::pairing_conformance::invariants::{
+    check_liveness, check_safety, ObservedSnapshot,
+};
+use crate::support::pairing_conformance::runner::Harness;
+use crate::support::pairing_conformance::scenario::Scenario;
 
 #[tokio::test]
 async fn install_teardown_happy_path_satisfies_safety_and_liveness() {

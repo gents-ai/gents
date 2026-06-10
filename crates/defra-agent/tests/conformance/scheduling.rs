@@ -64,12 +64,10 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
 
-mod support;
-
-use support::fixtures::bind_default_behavior_backend;
-use support::mock_endpoint::MockModelEndpoint;
-use support::snapshots::fetch_runtime_snapshot;
-use support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
+use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::snapshots::fetch_runtime_snapshot;
+use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
@@ -533,7 +531,7 @@ impl BootedAgent {
     }
 }
 
-async fn boot_agent(db: &support::TestDb, test_name: &str, backend_id: &str) -> BootedAgent {
+async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &str) -> BootedAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
