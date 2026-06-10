@@ -6,7 +6,7 @@ use super::graphql_fields;
 use super::serde_helpers;
 use crate::config::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::graphql::escape_graphql_string;
 use crate::retry::execute_graphql_with_conflict_retry;
@@ -20,6 +20,7 @@ pub struct InferenceProfile {
     pub max_turns: Option<i64>,
     pub temperature: Option<f64>,
     pub stream_batch_ms: Option<i64>,
+    pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
 }
 
@@ -38,6 +39,7 @@ pub(super) fn default_inference_profile_for_behavior(behavior_id: &str) -> Infer
         max_turns: Some(DEFAULT_MAX_TURNS as i64),
         temperature: Some(0.0),
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
+        stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
     }
 }
@@ -79,6 +81,7 @@ pub(crate) async fn load_inference_profile_record(
                 max_turns
                 temperature
                 stream_batch_ms
+                stream_liveness_timeout_secs
                 deadline_duration_secs
             }}
         }}"#
@@ -114,6 +117,7 @@ pub(crate) async fn load_inference_profile_by_doc_id(
                 max_turns
                 temperature
                 stream_batch_ms
+                stream_liveness_timeout_secs
                 deadline_duration_secs
             }}
         }}"#
@@ -143,6 +147,7 @@ pub async fn list_inference_profile_records(
                 max_turns
                 temperature
                 stream_batch_ms
+                stream_liveness_timeout_secs
                 deadline_duration_secs
             }
         }"#;
@@ -173,6 +178,10 @@ pub async fn upsert_inference_profile(
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
         graphql_fields::graphql_optional_int_field(
+            "stream_liveness_timeout_secs",
+            profile.stream_liveness_timeout_secs,
+        ),
+        graphql_fields::graphql_optional_int_field(
             "deadline_duration_secs",
             profile.deadline_duration_secs,
         ),
@@ -189,6 +198,10 @@ pub async fn upsert_inference_profile(
         graphql_fields::graphql_optional_int_field("max_turns", profile.max_turns),
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
+        graphql_fields::graphql_optional_int_field(
+            "stream_liveness_timeout_secs",
+            profile.stream_liveness_timeout_secs,
+        ),
         graphql_fields::graphql_optional_int_field(
             "deadline_duration_secs",
             profile.deadline_duration_secs,

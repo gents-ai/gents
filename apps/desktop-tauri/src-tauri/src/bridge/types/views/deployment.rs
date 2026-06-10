@@ -77,6 +77,7 @@ pub(crate) struct InferenceProfileView {
     pub max_turns: Option<i64>,
     pub temperature: Option<f64>,
     pub stream_batch_ms: Option<i64>,
+    pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
 }
 

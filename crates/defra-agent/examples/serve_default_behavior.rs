@@ -161,6 +161,7 @@ async fn seed_demo_documents(
             max_turns: Some(50),
             temperature: None,
             stream_batch_ms: Some(1_000),
+            stream_liveness_timeout_secs: None,
             deadline_duration_secs: Some(deadline_secs as i64),
         },
     )

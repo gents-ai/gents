@@ -154,6 +154,9 @@ pub fn test_behavior(
         compaction_threshold: defra_agent::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: defra_agent::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: defra_agent::config::SamplingConfig::default(),
     }
@@ -187,6 +190,9 @@ pub fn test_behavior_for_principal(
         compaction_threshold: defra_agent::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: defra_agent::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
         deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
         sampling: defra_agent::config::SamplingConfig::default(),
     }

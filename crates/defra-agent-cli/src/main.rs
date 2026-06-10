@@ -334,7 +334,7 @@ pub(crate) const EXPORT_SKILL_FIELDS: &str =
 pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
 pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
-    "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
+    "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs";
 pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did";
 pub(crate) const EXPORT_TASK_FIELDS: &str =

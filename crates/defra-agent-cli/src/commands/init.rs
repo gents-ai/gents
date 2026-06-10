@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_agent::config::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -731,6 +731,7 @@ fn standard_inference_profile(profile_id: &str) -> InferenceProfile {
         max_turns: Some(DEFAULT_MAX_TURNS as i64),
         temperature: Some(0.0),
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
+        stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
     }
 }

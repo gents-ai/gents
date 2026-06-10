@@ -53,6 +53,7 @@ export type InferenceProfileView = {
   maxTurns?: number | null;
   temperature?: number | null;
   streamBatchMs?: number | null;
+  streamLivenessTimeoutSecs?: number | null;
   deadlineDurationSecs?: number | null;
 };
 

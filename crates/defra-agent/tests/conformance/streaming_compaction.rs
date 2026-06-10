@@ -21,7 +21,7 @@ const IDLE_TIMEOUT_MODEL: &str = "default";
 const IDLE_TIMEOUT_BACKEND_ID: &str = "backend-streaming-response-idle-timeout";
 const IDLE_TIMEOUT_MARKER: &str = "streaming-response-idle-timeout";
 const IDLE_TIMEOUT_PARTIAL: &str = "partial before idle timeout ";
-const IDLE_TIMEOUT_ERROR_NEEDLE: &str = "stream liveness timeout";
+const IDLE_TIMEOUT_CONFIGURED_SECS: u64 = 5;
 
 #[derive(Debug, Deserialize)]
 struct StreamingResponseRow {
@@ -158,10 +158,7 @@ async fn drive_streaming_response_idle_timeout_case(
     assert!(!inference_call_state_is_terminal(&pre_call.call_state));
 
     for _ in 0..2 {
-        tokio::time::advance(Duration::from_secs(
-            DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS + 1,
-        ))
-        .await;
+        tokio::time::advance(Duration::from_secs(IDLE_TIMEOUT_CONFIGURED_SECS + 1)).await;
         tokio::task::yield_now().await;
         if load_streaming_response_row(&db.node, &response_doc_id)
             .await
@@ -181,7 +178,9 @@ async fn drive_streaming_response_idle_timeout_case(
         post_response
             .error_message
             .as_deref()
-            .is_some_and(|message| message.contains(IDLE_TIMEOUT_ERROR_NEEDLE)),
+            .is_some_and(|message| message.contains(&format!(
+                "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
+            ))),
         "{}: response error should preserve stream liveness timeout reason; actual={:?}",
         case.name,
         post_response.error_message
@@ -203,9 +202,9 @@ async fn drive_streaming_response_idle_timeout_case(
     assert_eq!(post_request.backend_id, IDLE_TIMEOUT_BACKEND_ID);
     assert!(request_state_is_terminal(&post_request.lifecycle_state));
     assert!(
-        post_request
-            .failure_reason
-            .contains(IDLE_TIMEOUT_ERROR_NEEDLE),
+        post_request.failure_reason.contains(&format!(
+            "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
+        )),
         "{}: request failure should preserve stream liveness timeout reason; actual={:?}",
         case.name,
         post_request.failure_reason
@@ -219,7 +218,9 @@ async fn drive_streaming_response_idle_timeout_case(
         post_call
             .failure_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains(IDLE_TIMEOUT_ERROR_NEEDLE)),
+            .is_some_and(|reason| reason.contains(&format!(
+                "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
+            ))),
         "{}: inference call failure should preserve stream liveness timeout reason; actual={:?}",
         case.name,
         post_call.failure_reason
@@ -965,6 +966,7 @@ async fn boot_streaming_idle_timeout_agent(
         .backend_id(IDLE_TIMEOUT_BACKEND_ID)
         .model_name(IDLE_TIMEOUT_MODEL)
         .stream_batch_ms(0)
+        .stream_liveness_timeout_secs(IDLE_TIMEOUT_CONFIGURED_SECS)
         .deadline_duration_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS * 4)
         .done()
         .build()

@@ -220,6 +220,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "max_turns",
                 "temperature",
                 "stream_batch_ms",
+                "stream_liveness_timeout_secs",
                 "deadline_duration_secs",
             ],
         )?;
@@ -371,6 +372,7 @@ pub async fn assert_runtime_init_state(
                 max_turns
                 temperature
                 stream_batch_ms
+                stream_liveness_timeout_secs
                 deadline_duration_secs
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
