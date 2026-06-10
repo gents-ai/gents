@@ -29,7 +29,7 @@ fn read_schema_snapshot(relative_path: &str) -> Result<Value> {
 
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
     read_schema_snapshot(&format!(
-        "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.{suffix}.json"
+        "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.{suffix}.json"
     ))
 }
 
@@ -320,7 +320,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let json_schema =
             serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
         let expected_json_schema = read_schema_snapshot(&format!(
-            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.schema.json"
+            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.schema.json"
         ))?;
         assert_eq!(
             json_schema, expected_json_schema,
@@ -341,7 +341,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let jsonl_schema =
             serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
         let expected_jsonl_schema = read_schema_snapshot(&format!(
-            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.jsonl-record.schema.json"
+            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.jsonl-record.schema.json"
         ))?;
         assert_eq!(
             jsonl_schema, expected_jsonl_schema,
@@ -362,7 +362,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let eval_jsonl_schema = serde_json::from_str::<Value>(&eval_jsonl_schema_output)
             .context("parsing eval JSONL schema")?;
         let expected_eval_jsonl_schema = read_schema_snapshot(&format!(
-            "docs/superpowers/contracts/adapter-projections/v1/{snapshot_name}.eval-jsonl-record.schema.json"
+            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.eval-jsonl-record.schema.json"
         ))?;
         assert_eq!(
             eval_jsonl_schema, expected_eval_jsonl_schema,

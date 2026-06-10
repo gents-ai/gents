@@ -17,7 +17,7 @@ Build and run it from the repository root:
 ```sh
 docker build \
   -t defra-agent-autogen-fixture \
-  docs/superpowers/fixtures/adapter-projections/generators/autogen
+  scripts/adapter-interop/generators/autogen
 
 rm -rf /tmp/defra-agent-autogen-fixtures
 mkdir -p /tmp/defra-agent-autogen-fixtures

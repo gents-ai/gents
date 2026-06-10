@@ -1965,7 +1965,7 @@ mod tests {
 
     fn read_adapter_projection_fixture(fixture_name: &str) -> (AdapterProjectionEnvelope, Value) {
         let path = workspace_root().join(format!(
-            "docs/superpowers/fixtures/adapter-projections/v1/{fixture_name}.envelope.json"
+            "crates/defra-agent/tests/fixtures/adapter_projections/envelopes/{fixture_name}.envelope.json"
         ));
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));

@@ -4,8 +4,8 @@ Date: 2026-06-05
 Status: strategy note
 Tracking issue: https://github.com/sourcenetwork/defra-agent/issues/407
 Verified: 2026-06-05 against local Defra Agent code/schemas and current
-upstream protocol/framework docs or repositories. See
-`docs/superpowers/competitive-positioning/protocol-product-positioning-verification.md`.
+upstream protocol/framework docs or repositories. Audit evidence:
+https://github.com/sourcenetwork/defra-agent/issues/407#issuecomment-4672217843
 Updated: 2026-06-08 to clarify which capabilities are already Defra-native
 documents/projections rather than new core product areas.
 
@@ -109,9 +109,9 @@ Local anchors:
 - MCP services: `crates/defra-agent-protocol/schemas/services/tool_service_registry.graphql`
   defines service identity, network address, MCP path/port, `send_agent_did`,
   and online status.
-- Permission stance: `docs/superpowers/specs/2026-05-19-identity-permission-runtime-design.md`
-  records the design decision that DefraDB ACP is the production permission
-  decider and that runtime routing signs DB work with the behavior principal.
+- Permission stance: DefraDB ACP is the production permission decider, and
+  runtime routing signs DB work with the behavior principal (design recorded
+  in the 2026-05-19 identity-permission spec, now in git history).
 - Proof-first runtime contracts: `CLAUDE.md` requires Lean models,
   conformance tests, and Rust implementation to move together for state
   machine behavior.

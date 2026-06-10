@@ -28,7 +28,7 @@ DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/path/to/generated/fixtures \
 The same harness can be pointed at the checked-in fixtures:
 
 ```sh
-DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=docs/superpowers/fixtures/adapter-projections/v1 \
+DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=scripts/adapter-interop/v1 \
   cargo test -p defra-agent --test adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
@@ -129,7 +129,7 @@ To run every Dockerized generator and validate the combined output with the
 Rust harness:
 
 ```sh
-docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh
+scripts/adapter-interop/run_docker_interop.sh
 ```
 
 The script writes to `/tmp/defra-agent-adapter-interop-fixtures` by default.

@@ -122,7 +122,7 @@ jobs:
           if [[ "${{ inputs.keep_output || false }}" == "true" ]]; then
             export DEFRA_AGENT_DOCKER_INTEROP_KEEP=1
           fi
-          docs/superpowers/fixtures/adapter-projections/run_docker_interop.sh \
+          scripts/adapter-interop/run_docker_interop.sh \
             "${DEFRA_AGENT_DOCKER_INTEROP_OUT}"
 
       - name: Upload generated fixtures

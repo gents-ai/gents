@@ -18,7 +18,7 @@ Build and run it from the repository root:
 ```sh
 docker build \
   -t defra-agent-msaf-fixture \
-  docs/superpowers/fixtures/adapter-projections/generators/microsoft-agent-framework
+  scripts/adapter-interop/generators/microsoft-agent-framework
 
 rm -rf /tmp/defra-agent-msaf-fixtures
 mkdir -p /tmp/defra-agent-msaf-fixtures

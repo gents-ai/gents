@@ -20,7 +20,7 @@ Build and run it from the repository root:
 ```sh
 docker build \
   -t defra-agent-langgraph-fixture \
-  docs/superpowers/fixtures/adapter-projections/generators/langgraph
+  scripts/adapter-interop/generators/langgraph
 
 rm -rf /tmp/defra-agent-langgraph-fixtures
 mkdir -p /tmp/defra-agent-langgraph-fixtures

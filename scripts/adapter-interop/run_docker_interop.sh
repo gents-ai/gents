@@ -55,23 +55,23 @@ expected_fixtures=(
 run_generator \
   "langgraph" \
   "defra-agent-langgraph-fixture" \
-  "docs/superpowers/fixtures/adapter-projections/generators/langgraph" \
+  "scripts/adapter-interop/generators/langgraph" \
   "${langgraph_env[@]}"
 
 run_generator \
   "autogen" \
   "defra-agent-autogen-fixture" \
-  "docs/superpowers/fixtures/adapter-projections/generators/autogen"
+  "scripts/adapter-interop/generators/autogen"
 
 run_generator \
   "crewai" \
   "defra-agent-crewai-fixture" \
-  "docs/superpowers/fixtures/adapter-projections/generators/crewai"
+  "scripts/adapter-interop/generators/crewai"
 
 run_generator \
   "microsoft-agent-framework" \
   "defra-agent-msaf-fixture" \
-  "docs/superpowers/fixtures/adapter-projections/generators/microsoft-agent-framework"
+  "scripts/adapter-interop/generators/microsoft-agent-framework"
 
 fixture_count="$(find "${out_dir}" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d '[:space:]')"
 if [[ "${fixture_count}" -ne "${#expected_fixtures[@]}" ]]; then

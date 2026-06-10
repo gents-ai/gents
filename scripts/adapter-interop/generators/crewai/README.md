@@ -21,7 +21,7 @@ Build and run it from the repository root:
 ```sh
 docker build \
   -t defra-agent-crewai-fixture \
-  docs/superpowers/fixtures/adapter-projections/generators/crewai
+  scripts/adapter-interop/generators/crewai
 
 rm -rf /tmp/defra-agent-crewai-fixtures
 mkdir -p /tmp/defra-agent-crewai-fixtures
