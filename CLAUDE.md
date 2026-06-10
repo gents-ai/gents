@@ -1,91 +1,44 @@
 # CLAUDE.md
 
-## What This Is
+## What this is
 
-defra-agent is a Rust agent runtime backed by DefraDB. It leverages DefraDB's identity/access control (DID-based cryptographic identity) and P2P replication to give agents properties you can't get from a normal database: verifiable identity, document-level permissions, and gossip-based event propagation across nodes.
+defra-agent is a Rust agent runtime where the database is the control plane. It is built on DefraDB, and it leans on what DefraDB uniquely provides — DID-based cryptographic identity, document-level access control, and P2P replication — to give agents properties a normal stack can't: verifiable identity, least-privilege permission boundaries, and gossip-based event propagation across nodes.
 
-The entire control plane is document-driven. Configuration, requests, responses, sessions, tool calls -- everything is a DefraDB document. The agent watches for new request documents, processes them, and writes response documents back. This deep integration means the data store *is* the control plane: you configure agents by writing documents, trigger work by writing documents, and debug by reading documents.
+Everything is a document. Configuration, requests, responses, sessions, tool calls, triggers, schedules — all DefraDB documents. You configure an agent by writing documents, trigger work by writing documents, and debug by reading documents. The runtime watches for request documents, drives them through a formally specified lifecycle, and writes response documents back.
 
-Extracted from a larger project called Amygdala. This repo is intentionally narrow -- just the runtime framework and its formal specification.
+**The `defra-agent` runtime crate is the core of this repository.** The CLI, the desktop app, the protocol crate, the schemas — all of it exists to operate, observe, or share the vocabulary of that runtime. When you are deciding where logic belongs or what matters in a tradeoff, the runtime's integrity wins.
 
-## Development Flow
+## How we build: the foundation flow
 
-**The Lean proofs are the source of truth for all state machine behavior.**
+This project is built upward from a formal foundation, and every substantive change follows the same flow:
 
-When making changes that affect state transitions, lifecycle rules, or scheduling behavior:
+**Lean models → conformance tests → implementation.**
 
-1. **Start in the Lean spec** (`crates/defra-agent/proofs/`). Understand the current model. Make the change there first. Verify that the change doesn't violate safety/liveness properties you want to keep.
-2. **Update conformance tests** (`tests/state_machine_conformance.rs`, `tests/lifecycle_regression.rs`). The spec change should drive what the tests expect.
-3. **Update the Rust implementation** to satisfy the new tests and match the updated spec.
+1. **Start in the Lean spec** (`crates/defra-agent/proofs/`). Understand the current model. Make the change there first, and prove it doesn't break the safety/liveness properties you care about. Zero `sorry`s is the standard.
+2. **Drive the conformance tests from the spec.** The spec change defines what the tests expect; the tests are the fence between the model and the code.
+3. **Make the Rust satisfy the tests.** Then make it clean — the code on top of this foundation is meant to read as well as it verifies.
 
-Not every code change touches the formal spec -- plumbing, tooling, and infrastructure changes don't. But anything that changes *what transitions are legal* or *what invariants hold* starts in Lean.
+Not every change touches the spec — plumbing, tooling, and infrastructure don't. But anything that changes *what transitions are legal*, *what invariants hold*, or *what the model feeds the provider* starts in Lean. When a proof obligation is hard to discharge, treat that as information: sketching the soundness argument has caught real bugs here before the code existed.
 
-## Identity Model (Evolving)
+The proven core (see `crates/defra-agent/proofs/README.md` for the full map): request/process/persistence lifecycles, tool-call and subagent lifecycles, scheduler and fleet slot accounting, recovery convergence, trigger dispatch, transcript reduction and compaction, and provider-input assembly (sanitization soundness, idempotence, split-stability).
 
-The current code uses `AgentProfile` as the main runtime object, but this conflates two things that need to be separate (see sourcenetwork/defra-agent#9):
+## The system, held in your head
 
-- **AgentPrincipal** -- the DID-backed identity. The permission and audit boundary. The thing that signs documents and is recognized by the wider system.
-- **AgentBehavior** -- prompt, tools, model, backend policy. Multiple behaviors can exist for one principal.
-- **AgentDeployment** -- where a principal runs (host/service). References the principal.
+The shape that should ground any work here:
 
-This distinction matters: `amy-general` and `amy-code` should be two behaviors of the same principal (shared permissions, shared audit trail), while `amy-rumination` should be a separate principal with narrower permissions. Principals are least-privilege boundaries; behaviors are reusable interfaces.
+- **Request flow:** a watcher claims request documents → the request lifecycle (Pending → Claimed → Processing → terminal states, all Lean-fenced) → the **owned completion loop** (`agent/loop_stream.rs`) drives model turns and tool execution → the hook persists every observable step as documents → a stream processor materializes the live response.
+- **Provider-input correctness is a property, not a discipline.** Every completion request in the system is born in the owned loop, which sanitizes loaded history at entry (the PromptAssembly model proves this sound). The durable transcript is deliberately permissive; the provider boundary narrows it.
+- **Identity is layered:** a *principal* (DID) is the permission and audit boundary; *behaviors* (prompt/tools/model) are reusable interfaces on a principal; *deployments* place principals on hosts. Each `(did, behavior)` runs on exactly one deployment.
+- **Tools are documents too:** tool selections, MCP services, subagent targets, and skills are all configured as documents and resolved into a per-behavior tool surface at reconcile time. Subagents are first-class: children are requests, bridged back to the parent's tool call.
+- **Automation is document-driven:** Tasks, Schedules, and EventTriggers fire requests through the trigger engine, with lineage stamped on every request.
+- **External code is held at arm's length:** rig-core is the provider/streaming client only ("Layer A"); rig types cross into the runtime through one converter seam (`llm::rig_compat`). The message family is native and byte-compatible with what's persisted (`defra-agent-protocol::message`). Full rig removal is staged (#438/#439). DefraDB itself comes from `sourcenetwork/defradb.rs` (private), pinned in the workspace `Cargo.toml` — look there when node, schema, or identity behavior is in question.
 
-## Architecture
+## Sharp edges
 
-### State Machines
+The few things you can't discover until they bite:
 
-Core formal state machines modeled in Lean 4 and implemented in Rust:
-
-1. **Process Lifecycle** (5 states): `Uninitialized -> Recovering -> Ready -> ShuttingDown -> Shutdown`
-2. **Request Lifecycle** (9 states): `Pending -> Claimed -> Processing -> {Completed, Failed, Superseded, Dead, Interrupted}` (plus `InputRequired`)
-3. **Persistence Lifecycle** (4 states): DB commit tracking
-
-Key proven properties: terminal irreversibility (S1), monotonic progress (S3), deadline bounding (S4), recovery exclusivity (S5), persistence before completion (S6), bounded termination (L1), recovery convergence (L3).
-
-Additional Lean models cover scheduler/fleet slot accounting, session retry/reissue, runtime reconcile, desired-state apply ordering, trigger dispatch, client turn projection, and the desktop shell workflow. See `crates/defra-agent/proofs/README.md`.
-
-### Document-Driven Control Plane
-
-All state lives in DefraDB as GraphQL collections (schemas in `crates/defra-agent-protocol/schemas/`). The runtime reads configuration from documents and writes results back to documents. A CLI can validate, diff, and apply manifests from checked-in files into the DB (see sourcenetwork/defra-agent#8).
-
-Field ownership matters: the apply path owns desired-state fields (config, prompts, backend references), while the runtime owns live-state fields (probe_status, run counts, lifecycle state). Neither clobbers the other.
-
-### Event-Driven Tasks
-
-Automated work is split into three document-backed paths: `Task` (a reusable unit of work — prompt template, target behavior, output schema), `Schedule` (a cron-style trigger that references a Task), and `EventTrigger` (a source-document trigger that references a Task). These replace the legacy `ScheduledTask` collection. The `TriggerEngine` runtime subsystem dispatches fires produced by pluggable `TriggerSource` implementations: `ScheduleSource`, `EventSource`, and `ManualSource`. Every materialized `AgentRequest` carries `caused_by_trigger_id` + `caused_by_trigger_kind` so lineage and concurrency queries can tuple-match against the originating trigger.
-
-The `EventTrigger` collection contains operator-authored triggers that fire tasks on DefraDB document-create events in a watched collection. `EventSource` implements `TriggerSource` — it holds a single global `EventName::Update` subscription, filters incoming events by the operator-declared `source_collection`, probes the operator's filter via a `limit:1` query, hydrates `doc.*` scope through cached GraphQL schema introspection, and dispatches through the existing `TriggerEngine` concurrency modes. Apply-time validation covers both filter syntax (via a live DefraDB probe) and `doc.*` field resolution against the source collection's GraphQL schema.
-
-Manual runs are operator initiated. `ManualSource` accepts in-process `FireIntent`s via `ManualTriggerHandle::run_task_now`, while the CLI's `config task run --task-id --args` command writes `AgentRequest`s directly with `caused_by_trigger_kind = "manual"` and no trigger id. The `args.*` template scope is active at runtime for manual fires; apply-time validation already rejects it for Schedule/EventTrigger. Desktop surfaces lineage badges on chat/history and a per-Task aggregated "recent runs" view.
-
-`Triggers.lean` has zero `sorry`s. `dispatch` is operationally defined; T1 (enabled gate), T2 (serial at-most-one, including the pre-trace `SeriallyReachable` form), T3 (latest_only convergence), and T4 (lineage completeness) are all closed.
-
-## Key External Dependencies
-
-- **defradb.rs** (`sourcenetwork/defradb.rs`, private, via SSH git): The core database. Provides `defra-node` (embedded node), `crypto`, `identity`, and `events` crates. Pinned by git rev in workspace `Cargo.toml`. When working on features that touch the node, schema behavior, or identity, look at this repo for context.
-- **rig-core**: provider/streaming client only ("Layer A"): the `CompletionModel` trait, provider clients (OpenAI-compatible, OpenRouter, ChatGPT-Codex), and SSE streaming decode. The agent loop (#400/#426), tool trait (#424), hook callbacks, and `Message` family (#425, native types live in `defra-agent-protocol::message` with byte-compatible persistence) are all owned in-tree; rig types cross into the runtime only through `llm::rig_compat` at the request-build/stream-consume seam. Full removal is iceboxed as #457.
-- **rmcp**: MCP protocol client for connecting to external tool services.
-
-## Build & Test
-
-```bash
-cargo check                          # Fast compilation check
-cargo build                          # Debug build
-cargo build --release                # Release (LTO, stripped)
-cargo test                           # All tests
-cargo test -p defra-agent            # Library tests only
-cargo test -p defra-agent -- <name>  # Specific test
-
-# Lean proofs (requires Lean 4 / Lake)
-cd crates/defra-agent/proofs && lake build
-```
-
-## Code Conventions
-
-- Workspace-level dependency management in root `Cargo.toml`
-- Tracing for all logging (`tracing::{debug, info, warn, error}`), not `println`
-- GraphQL queries are constructed inline (not code-generated) -- always use `graphql::escape_graphql_string()` for interpolated content
-- DefraDB schemas are `include_str!` compiled into the binary from `schemas/`
-- Error types carry retry classification (`is_retryable()`) for inference failures
-- Trait-based extensibility for core interfaces: `Watcher`, `StreamWriter`, `PromptBuilder`, `Compactor`, `Truncator`, `AgentIdentity`
-- Unit tests in `<module>/tests.rs` submodules; integration tests in `tests/` (require a running DefraDB node)
+- **Always `graphql::escape_graphql_string()`** for anything interpolated into a GraphQL string. Queries are built inline by convention.
+- **Never emit `[]` in a DefraDB mutation** — an empty list literal types as `JsonArray` and corrupts nillable array columns. Emit `null`.
+- **Gate with the full package suite** (`cargo test -p defra-agent`), not `--lib` — integration tests are separate compile units and `--lib` will happily pass while they don't build.
+- **Flaky tests are defects.** The formal-verification investment exists to eliminate that class; capture, file, and fix — never shrug.
+- `tracing`, never `println`.

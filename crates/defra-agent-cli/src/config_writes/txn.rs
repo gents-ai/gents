@@ -15,7 +15,7 @@
 //!   committed effect: a transaction that never sees a `commit` yields no
 //!   externally-visible mutations. The orphaned handle is bounded by
 //!   DefraDB's per-request HTTP timeout (30s default), not an active idle-GC
-//!   sweep — see `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md`.
+//!   sweep — see `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md` (removed from the tree; see git history).
 //!
 //! Both return `Result<()>` so callers can log discrepancies, but neither
 //! changes operator-facing behavior on failure: the apply error is what
