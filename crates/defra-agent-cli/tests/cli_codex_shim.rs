@@ -2192,18 +2192,16 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     let expected_shim_home = home_dir.join(".defra-agent").join("codex-ui");
     let (_stdout, stderr) = serve.captured_output()?;
     assert!(
-        stderr.contains(&format!(
-            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{shim_port}/"
-        )),
-        "server guidance should use --remote without requiring CODEX_HOME; stderr:\n{stderr}"
+        stderr.contains("Chat from another terminal with: defra-agent codex"),
+        "server guidance should point at the embedded codex subcommand; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("--remote ws://127.0.0.1:{shim_port}/")),
+        "non-default shim addresses should include the --remote hint; stderr:\n{stderr}"
     );
     assert!(
         !stderr.contains("CODEX_HOME="),
         "server guidance should not instruct users to replace their existing Codex home; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("No CODEX_HOME override is required"),
-        "server guidance should explain the client/server home split; stderr:\n{stderr}"
     );
     assert!(
         stderr.contains(&expected_shim_home.to_string_lossy().to_string()),
