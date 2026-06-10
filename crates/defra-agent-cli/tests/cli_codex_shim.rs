@@ -3451,7 +3451,7 @@ fn server_notification_from_jsonrpc(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<()> {
+async fn codex_shim_disables_itself_when_bound_behavior_is_missing() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -3459,9 +3459,10 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
     let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
-    let _init = run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -3471,14 +3472,13 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    // Point the shim at a behavior_id that doesn't exist. The startup
-    // precondition should reject it before opening the WebSocket listener.
-    // Watch the child directly rather than wait_for_port — under parallel
-    // execution another test could already be listening on the same port,
-    // which would mask the expected exit.
+    // Point the shim at a behavior_id that doesn't exist. The shim runs by
+    // default, so its startup precondition must not take the runtime down:
+    // the endpoint is disabled with guidance and the server keeps serving.
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
@@ -3491,29 +3491,21 @@ async fn codex_shim_refuses_to_start_when_bound_behavior_is_missing() -> Result<
         ],
         &[],
     )?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let status = loop {
-        if let Some(status) = serve.child.try_wait().context("waiting for serve child")? {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = serve.child.kill();
-            bail!("server did not exit within 30s after misconfigured shim startup");
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert!(
-        !status.success(),
-        "expected server to exit non-zero with misconfigured shim, got {status}"
-    );
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
     let (_stdout, stderr) = serve.captured_output()?;
+    assert!(
+        stderr.contains("Codex endpoint disabled"),
+        "expected the shim to degrade rather than kill the server; got:\n{stderr}"
+    );
     assert!(
         stderr.contains("behavior-that-does-not-exist"),
         "expected stderr to name the missing behavior id; got:\n{stderr}"
     );
     assert!(
-        stderr.contains("AgentBehavior") || stderr.contains("behavior"),
-        "expected stderr to mention AgentBehavior; got:\n{stderr}"
+        std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
+        "shim port should not be listening after a failed bind precondition"
     );
     Ok(())
 }
