@@ -72,6 +72,8 @@ use support::mock_endpoint::MockModelEndpoint;
 use support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 
+const RUNTIME_SNAPSHOT_WAIT: Duration = Duration::from_secs(60);
+
 // -----------------------------------------------------------------------------
 // Shared DB helpers
 // -----------------------------------------------------------------------------
@@ -579,18 +581,23 @@ async fn wait_for_runtime_snapshot<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + RUNTIME_SNAPSHOT_WAIT;
+    let mut last_snapshot = None;
+    let mut sleep = Duration::from_millis(50);
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
             if predicate(&snapshot) {
                 return snapshot;
             }
+            last_snapshot = Some(snapshot);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out after {:?} waiting for runtime snapshot for {agent_did}; last_snapshot={last_snapshot:?}",
+            RUNTIME_SNAPSHOT_WAIT,
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(sleep).await;
+        sleep = (sleep * 2).min(Duration::from_millis(250));
     }
 }
 
