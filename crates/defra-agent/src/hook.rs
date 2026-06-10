@@ -141,6 +141,12 @@ struct SessionState {
 }
 
 impl SessionState {
+    /// Reset on a genuine user message only. Tool-result messages must NOT
+    /// reset the turn state: with several parallel tool calls accumulated in
+    /// one persisted assistant turn, the first streamed result's user message
+    /// would otherwise revoke the persisted-turn gate the remaining results
+    /// still need (Lean: `Transcript.parallel_results_complete_independently`;
+    /// `completeToolWithResult` never removes a persisted reservation).
     fn reset_after_user_message(&mut self) {
         self.transcript_turn = TranscriptTurnState::Idle;
     }
@@ -157,19 +163,20 @@ impl SessionState {
         }
     }
 
-    fn persist_assistant_turn(&mut self) -> anyhow::Result<u32> {
+    fn persist_assistant_turn(&mut self) -> u32 {
         let sequence = match self.transcript_turn {
             TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            TranscriptTurnState::Idle => {
+            // `AssistantPersisted` means the PREVIOUS turn closed (tool-result
+            // messages keep it, see `reset_after_user_message`); persisting an
+            // assistant message from here starts a new turn, exactly like Idle
+            // (e.g. a text-only final turn after tool results).
+            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
                 self.sequence += 1;
                 self.sequence
             }
-            TranscriptTurnState::AssistantPersisted { sequence } => {
-                anyhow::bail!("assistant turn for sequence {sequence} already persisted");
-            }
         };
         self.transcript_turn = TranscriptTurnState::AssistantPersisted { sequence };
-        Ok(sequence)
+        sequence
     }
 
     fn register_tool_result_identity(

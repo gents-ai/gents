@@ -38,13 +38,17 @@ impl DefraSessionHook {
             let mut state = self.state.lock().await;
             if state.session_id.as_deref() == Some(session_id.as_str()) {
                 state.sequence = state.sequence.max(sequence);
+                let is_tool_result_message = message_key.is_some();
                 if let Some(key) = message_key {
                     state
                         .persisted_tool_result_message_sequences
                         .insert(key, sequence);
                 }
                 match message {
-                    Message::User { .. } => state.reset_after_user_message(),
+                    Message::User { .. } if !is_tool_result_message => {
+                        state.reset_after_user_message()
+                    }
+                    Message::User { .. } => {}
                     Message::Assistant { .. } => {
                         state.transcript_turn =
                             TranscriptTurnState::AssistantPersisted { sequence };
@@ -72,7 +76,9 @@ impl DefraSessionHook {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
-                    state.reset_after_user_message();
+                    if message_key.is_none() {
+                        state.reset_after_user_message();
+                    }
                     if let Some(key) = message_key.as_ref() {
                         state
                             .persisted_tool_result_message_sequences
@@ -81,7 +87,7 @@ impl DefraSessionHook {
                     (session_id, sequence, "user", message_key)
                 }
                 Message::Assistant { .. } => {
-                    let sequence = state.persist_assistant_turn()?;
+                    let sequence = state.persist_assistant_turn();
                     (session_id, sequence, "assistant", None)
                 }
                 Message::System { .. } => {
