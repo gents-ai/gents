@@ -260,6 +260,54 @@ pub fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
         })
 }
 
+/// Extract skill ids named by leading slash commands in a prompt.
+///
+/// This is intentionally only a reference extractor. It does not resolve the
+/// skill or edit the prompt text; the runtime later resolves each id against
+/// the behavior's effective skill set before injecting any skill body. Keeping
+/// the prompt unchanged avoids corrupting legitimate prompts that happen to
+/// start with an absolute path.
+pub fn selected_skill_ids_from_prompt_slash_commands(prompt: &str) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut saw_command = false;
+
+    for line in prompt.lines() {
+        if line.trim().is_empty() && !saw_command {
+            continue;
+        }
+        let Some(skill_id) = leading_slash_skill_id(line) else {
+            break;
+        };
+        if !selected.iter().any(|existing| existing == &skill_id) {
+            selected.push(skill_id);
+        }
+        saw_command = true;
+    }
+
+    selected
+}
+
+fn leading_slash_skill_id(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix('/')?;
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
+        .unwrap_or(rest.len());
+    let skill_id = &rest[..end];
+    if skill_id.is_empty() {
+        return None;
+    }
+
+    // Treat `/work/file.rs` and similar as a path, not a slash command. If this
+    // rejects a path-shaped skill id, the model can still load it through the
+    // normal catalog-driven `load_skill` tool.
+    if rest[end..].starts_with('/') {
+        return None;
+    }
+
+    Some(skill_id.to_string())
+}
+
 /// Error type for [`LoadSkillTool`]. A missing skill is returned as readable
 /// `Ok` text (so the model can recover), not an error.
 #[derive(Debug)]
@@ -574,6 +622,23 @@ mod tests {
             .await
             .expect("load by display_name");
         assert!(body.contains("research-instructions"));
+    }
+
+    #[test]
+    fn leading_slash_commands_select_skills_without_rewriting_prompt() {
+        let ids = selected_skill_ids_from_prompt_slash_commands(
+            "\n/vuln-scan /work --focus parser\n/triage\nRun the task.",
+        );
+        assert_eq!(ids, vec!["vuln-scan", "triage"]);
+
+        assert!(
+            selected_skill_ids_from_prompt_slash_commands("Run /vuln-scan as plain text",)
+                .is_empty()
+        );
+        assert!(
+            selected_skill_ids_from_prompt_slash_commands("/work/entry.c is an absolute path",)
+                .is_empty()
+        );
     }
 
     #[test]

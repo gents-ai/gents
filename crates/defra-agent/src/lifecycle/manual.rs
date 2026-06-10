@@ -140,6 +140,7 @@ mod tests {
                     execution_origin
                     lifecycle_state
                     status
+                    metadata
                 }}
             }}"#
         );
@@ -170,6 +171,51 @@ mod tests {
         assert_eq!(row["execution_origin"].as_str(), Some("interactive"));
         assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
         assert_eq!(row["status"].as_str(), Some("pending"));
+        assert!(row["metadata"].is_null());
+    }
+
+    #[tokio::test]
+    async fn writes_manual_request_with_slash_selected_skill_metadata() {
+        let node = test_node().await;
+
+        let doc_id = write_manual_agent_request(
+            node.as_ref(),
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            "behavior-1",
+            "task-1",
+            "/vuln-scan /work",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    content
+                    metadata
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query failed: {:?}",
+            response.errors
+        );
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .expect("expected request row");
+
+        assert_eq!(row["content"].as_str(), Some("/vuln-scan /work"));
+        assert_eq!(
+            row["metadata"].as_str(),
+            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
+        );
     }
 
     #[tokio::test]
