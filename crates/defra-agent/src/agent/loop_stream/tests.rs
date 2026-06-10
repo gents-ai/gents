@@ -1,23 +1,22 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, StreamExt};
-use rig::completion::message::{AssistantContent, ToolResultContent, UserContent};
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message,
-    ToolDefinition,
-};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+
+use crate::llm::message::Message;
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
     StreamingCompletionResponse,
 };
-use rig::tool::{ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
 use tokio::sync::Mutex;
 
 use super::*;
 use crate::ensure_schemas;
 use crate::hook::{DefraSessionHook, FailurePolicy};
+use crate::test_support::first_content;
 
 /// A `CompletionModel` whose `stream` replays one scripted turn per call: each
 /// `stream()` pops the next `Vec<RawStreamingChoice>` from the queue, letting a
@@ -26,9 +25,10 @@ use crate::hook::{DefraSessionHook, FailurePolicy};
 #[derive(Clone)]
 struct ScriptedModel {
     turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<()>>>>>,
-    /// `chat_history` of every request the loop sent, in order — lets a test
-    /// assert how the loop threaded prior turns back to the provider.
-    seen_histories: Arc<Mutex<Vec<OneOrMany<Message>>>>,
+    /// `chat_history` of every request the loop sent, in order (converted to
+    /// native at the capture boundary) — lets a test assert how the loop
+    /// threaded prior turns back to the provider.
+    seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
     /// Advertised tool names (`request.tools`) of every request the loop sent,
     /// in order — lets a test assert the toolset is attached on every turn.
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
@@ -58,7 +58,7 @@ impl ScriptedModel {
         model
     }
 
-    async fn seen_histories(&self) -> Vec<OneOrMany<Message>> {
+    async fn seen_histories(&self) -> Vec<Vec<Message>> {
         self.seen_histories.lock().await.clone()
     }
 
@@ -90,10 +90,13 @@ impl CompletionModel for ScriptedModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.seen_histories
-            .lock()
-            .await
-            .push(_request.chat_history.clone());
+        self.seen_histories.lock().await.push(
+            _request
+                .chat_history
+                .iter()
+                .map(crate::llm::rig_compat::from_rig_message)
+                .collect(),
+        );
         self.seen_tools.lock().await.push(
             _request
                 .tools
@@ -129,7 +132,7 @@ impl ToolDyn for EchoTool {
         self.name.clone()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.clone(),
@@ -139,7 +142,7 @@ impl ToolDyn for EchoTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }
@@ -156,7 +159,7 @@ impl ToolDyn for FixedTool {
         self.name.clone()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async move {
             ToolDefinition {
                 name: self.name.clone(),
@@ -166,7 +169,7 @@ impl ToolDyn for FixedTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }
@@ -181,7 +184,7 @@ impl ToolDyn for RecordingDefinitionTool {
         "record".to_string()
     }
 
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         let seen = self.seen_prompt.clone();
         Box::pin(async move {
             *seen.lock().await = Some(prompt);
@@ -193,7 +196,7 @@ impl ToolDyn for RecordingDefinitionTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok("ok".to_string()) })
     }
 }
@@ -345,7 +348,12 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
                 tool_result,
                 ..
             }) => {
-                tool_results.push(tool_result_text(&tool_result.content.first()).to_string());
+                tool_results.push(
+                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                        &tool_result.content.first(),
+                    ))
+                    .to_string(),
+                );
             }
             MultiTurnStreamItem::FinalResponse(final_response) => {
                 final_text = Some(final_response.response().to_string());
@@ -691,9 +699,9 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
 /// provider-side contract that `sanitize_history_for_provider` enforces for
 /// loaded history — the loop must satisfy it by construction for the messages
 /// it threads itself.
-fn assert_provider_request_invariants(turn: usize, history: &OneOrMany<Message>) {
+fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
     let mut pending_call_keys: Vec<String> = Vec::new();
-    for message in history.iter() {
+    for message in history {
         match message {
             Message::Assistant { content, .. } => {
                 assert!(
@@ -811,20 +819,20 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let (_node, hook) = test_hook().await;
     ready_hook_for(&hook).await;
 
-    let unpaired_call = rig::completion::message::ToolCall {
+    let unpaired_call = crate::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
-        function: rig::completion::message::ToolFunction {
+        function: crate::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
         signature: None,
         additional_params: None,
     };
-    let paired_call = rig::completion::message::ToolCall {
+    let paired_call = crate::llm::message::ToolCall {
         id: "call-paired".to_string(),
         call_id: Some("call-paired".to_string()),
-        function: rig::completion::message::ToolFunction {
+        function: crate::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -834,30 +842,27 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let dirty_history = vec![
         // Orphaned result: its call was compacted away.
         Message::User {
-            content: OneOrMany::one(UserContent::tool_result(
+            content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                OneOrMany::one(rig::completion::message::ToolResultContent::text(
-                    "orphaned",
-                )),
-            )),
+                vec![crate::llm::message::ToolResultContent::text("orphaned")],
+            )],
         },
         // Misordered assistant turn (text AFTER calls) with one unpaired call.
         Message::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
-                AssistantContent::Text(rig::completion::message::Text {
+                AssistantContent::Text(crate::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
-            ])
-            .unwrap(),
+            ],
         },
         Message::User {
-            content: OneOrMany::one(UserContent::tool_result(
+            content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                OneOrMany::one(rig::completion::message::ToolResultContent::text("ok")),
-            )),
+                vec![crate::llm::message::ToolResultContent::text("ok")],
+            )],
         },
     ];
 
@@ -947,7 +952,12 @@ async fn oversized_tool_result_is_bounded_before_threading() {
             ..
         }) = item.expect("loop item should be Ok")
         {
-            bounded_len = Some(tool_result_text(&tool_result.content.first()).len());
+            bounded_len = Some(
+                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                    &tool_result.content.first(),
+                ))
+                .len(),
+            );
         }
     }
 
@@ -1030,7 +1040,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
         history.iter().any(|message| matches!(message,
             Message::User { content }
                 if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
-                    if tool_result_text(&result.content.first()) == "ECHOED")))),
+                    if tool_result_text(first_content(&result.content)) == "ECHOED")))),
         "tool-using one-shot must persist the tool-result message; history: {history:?}"
     );
     assert!(

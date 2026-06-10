@@ -6,9 +6,9 @@ See `../README.md` for how this fits the broader formal-verification model.
 
 ## Specs
 
-- `ReversePairing` — control-plane convergence of subscription/replicator reverse-pairing between two peers. Spec design: `../../../../docs/superpowers/specs/2026-05-08-reverse-pairing-tla-design.md`. Implementation plan: `../../../../docs/superpowers/plans/2026-05-08-reverse-pairing-tla-spec.md`.
-- `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B. Spec design: `../../../../docs/superpowers/specs/2026-05-12-subagent-completion-cross-deployment-tla-design.md`. Implementation plan: `../../../../docs/superpowers/plans/2026-05-12-subagent-completion-cross-deployment-tla-spec.md`.
-- `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `../../../../docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md`. Implementation plan: `../../../../docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md`.
+- `ReversePairing` — control-plane convergence of subscription/replicator reverse-pairing between two peers. Spec design: `docs/superpowers/specs/2026-05-08-reverse-pairing-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-08-reverse-pairing-tla-spec.md` (removed from the tree; see git history).
+- `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B. Spec design: `docs/superpowers/specs/2026-05-12-subagent-completion-cross-deployment-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-12-subagent-completion-cross-deployment-tla-spec.md` (removed from the tree; see git history).
+- `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md` (removed from the tree; see git history).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup

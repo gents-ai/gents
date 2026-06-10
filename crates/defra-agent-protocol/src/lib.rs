@@ -4,6 +4,7 @@
 
 pub mod client_protocol;
 pub mod graphql;
+pub mod message;
 pub mod row;
 pub mod schemas;
 pub mod transcript;

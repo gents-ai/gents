@@ -1,5 +1,5 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use crate::llm::tool::Tool;
+use crate::llm::tool::ToolDefinition;
 use rmcp::model::{ListToolsResult, Tool as McpTool};
 use serde::Deserialize;
 use serde_json::{Map, Value};

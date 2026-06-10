@@ -333,7 +333,7 @@ pub(super) fn tool_result_message_key(
     if content.len() != 1 {
         return Ok(None);
     }
-    let UserContent::ToolResult(tool_result) = content.first_ref() else {
+    let Some(UserContent::ToolResult(tool_result)) = content.first() else {
         return Ok(None);
     };
 
