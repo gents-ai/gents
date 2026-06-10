@@ -728,10 +728,31 @@ async fn interrupt_queued_descendants_of_terminal_parents(
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
 
+    let candidates = rows
+        .iter()
+        .filter(|row| {
+            row.caused_by_parent_request_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+                && row
+                    .caused_by_parent_tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty())
+        })
+        .collect::<Vec<_>>();
+    let bridged_children = load_bridged_child_ids(
+        node,
+        &candidates
+            .iter()
+            .map(|row| row.request_id.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
     let mut parent_terminal_cache: std::collections::HashMap<String, bool> =
         std::collections::HashMap::new();
     let mut interrupted = 0usize;
-    for row in rows {
+    for row in candidates {
         let Some(parent_request_id) = row
             .caused_by_parent_request_id
             .as_deref()
@@ -739,13 +760,6 @@ async fn interrupt_queued_descendants_of_terminal_parents(
         else {
             continue;
         };
-        if row
-            .caused_by_parent_tool_call_id
-            .as_deref()
-            .is_none_or(str::is_empty)
-        {
-            continue;
-        }
 
         let parent_terminal = match parent_terminal_cache.get(parent_request_id) {
             Some(&terminal) => terminal,
@@ -753,7 +767,7 @@ async fn interrupt_queued_descendants_of_terminal_parents(
                 // By request_id alone: the parent of a cross-deployment spawn
                 // carries a remote agent_did, and its replicated terminal row
                 // must still release the queued child here.
-                let terminal = load_child_liveness_row(node, parent_request_id)
+                let terminal = load_request_liveness_row(node, parent_request_id)
                     .await?
                     .is_some_and(|parent| {
                         request_status_or_lifecycle_is_terminal(
@@ -768,7 +782,7 @@ async fn interrupt_queued_descendants_of_terminal_parents(
         if !parent_terminal {
             continue;
         }
-        if !bridge_exists_for_child(node, &row.request_id).await? {
+        if !bridged_children.contains(&row.request_id) {
             continue;
         }
 
@@ -785,29 +799,47 @@ async fn interrupt_queued_descendants_of_terminal_parents(
     Ok(interrupted)
 }
 
-async fn bridge_exists_for_child(node: &EmbeddedNode, child_request_id: &str) -> Result<bool> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+/// One `_in` query for the bridge-existence scope guard: which of these
+/// pending request ids are referenced by an `AgentToolCall` bridge as its
+/// child (`child_request_id == request_id`)?
+async fn load_bridged_child_ids(
+    node: &EmbeddedNode,
+    child_request_ids: &[&str],
+) -> Result<std::collections::HashSet<String>> {
+    if child_request_ids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let id_list = child_request_ids
+        .iter()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ child_request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                limit: 1
-            ) {{ _docID }}
+                filter: {{ child_request_id: {{ _in: [{id_list}] }} }}
+            ) {{ child_request_id }}
         }}"#
     );
     let resp = node.execute(&query).await;
     if resp.has_errors() {
-        anyhow::bail!(
-            "querying bridge for child request {child_request_id}: {:?}",
-            resp.errors
-        );
+        anyhow::bail!("querying bridges for pending children: {:?}", resp.errors);
     }
-    Ok(resp
+    #[derive(Debug, Deserialize)]
+    struct BridgeChildRow {
+        #[serde(default)]
+        child_request_id: Option<String>,
+    }
+    let rows: Vec<BridgeChildRow> = resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .is_some_and(|rows| !rows.is_empty()))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.child_request_id)
+        .collect())
 }
 
 async fn interrupt_pending_descendant_row(
@@ -934,7 +966,7 @@ async fn terminalize_expired_local_child_request(
     let Some(child_request_id) = child_request_id(row) else {
         return Ok(false);
     };
-    let Some(child) = load_child_liveness_row(node, child_request_id).await? else {
+    let Some(child) = load_request_liveness_row(node, child_request_id).await? else {
         return Ok(false);
     };
     terminalize_expired_child_with_row(node, agent_did, row, &child).await
@@ -987,15 +1019,15 @@ async fn terminalize_expired_child_with_row(
     Ok(true)
 }
 
-async fn load_child_liveness_row(
+async fn load_request_liveness_row(
     node: &EmbeddedNode,
-    child_request_id: &str,
+    request_id: &str,
 ) -> Result<Option<ChildRequestLivenessRow>> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 limit: 1
             ) {{
                 _docID
@@ -1010,7 +1042,7 @@ async fn load_child_liveness_row(
     let response = node.execute(&query).await;
     if response.has_errors() {
         anyhow::bail!(
-            "query child AgentRequest liveness for {child_request_id} failed: {:?}",
+            "query AgentRequest liveness for {request_id} failed: {:?}",
             response.errors
         );
     }

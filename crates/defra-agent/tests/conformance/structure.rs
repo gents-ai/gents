@@ -4,8 +4,9 @@
 //! STRUCTURAL: adding a Lean model without declaring where its Rust fence
 //! lives fails this test. A declaration is one of:
 //!
-//! - a module in this binary (`conformance/<file>.rs`) — possibly shared by
-//!   closely-coupled models until the bundled files are split;
+//! - a module in this binary (`conformance/<file>.rs`) — one model per
+//!   module, except where two models are genuinely exercised by one harness
+//!   (the sharing is then documented inline at the table entry);
 //! - `Boundary` — the model is intentionally documented-only (see
 //!   `Proofs/Conformance/Boundaries.lean`);
 //! - `Gap` — known-missing, with the tracking issue. Gaps are allowed but

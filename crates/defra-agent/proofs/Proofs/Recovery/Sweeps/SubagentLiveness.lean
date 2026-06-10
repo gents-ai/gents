@@ -107,7 +107,9 @@ structure QueuedDescendantRow where
   parentTerminal : Bool
   /-- True iff an `AgentToolCall` bridge references this row as its child
   (`child_request_id == request_id`). Lineage-only queue rows (wake
-  notifications, steering messages) are NOT bridge-linked and never stale. -/
+  notifications, steering messages) are NOT bridge-linked and never stale.
+  Rust derives this predicate at sweep time via a bridge-existence query
+  (`load_bridged_child_ids`); it is not a persisted column. -/
   bridgeLinked : Bool
   deriving Repr
 

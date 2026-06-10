@@ -11,6 +11,7 @@ use super::*;
 
 #[derive(Debug, Deserialize)]
 struct PersistedSlotRow {
+    call_id: String,
     backend_id: String,
     call_state: String,
 }
@@ -23,6 +24,10 @@ pub(super) async fn generated_inference_slot_accounting_cases_drive_db_backed_re
         "Lean should emit the finite InferenceCall slot-accounting cases"
     );
 
+    // One node for all cases; rows are namespaced by case via the call_id
+    // prefix so each case reconstructs over exactly its own seeded rows.
+    let db = test_db("inference-slot-accounting").await;
+
     for case in cases {
         assert_eq!(
             case.row_backend_ids.len(),
@@ -31,7 +36,6 @@ pub(super) async fn generated_inference_slot_accounting_cases_drive_db_backed_re
             case.name
         );
 
-        let db = test_db(&format!("inference-slot-{}", case.name)).await;
         for (index, (backend_id, state)) in case
             .row_backend_ids
             .iter()
@@ -41,7 +45,7 @@ pub(super) async fn generated_inference_slot_accounting_cases_drive_db_backed_re
             insert_inference_call_row(&db.node, &case.name, index, backend_id, state).await;
         }
 
-        let rows = fetch_persisted_slot_rows(&db.node).await;
+        let rows = fetch_persisted_slot_rows_for_case(&db.node, &case.name).await;
         assert_eq!(
             rows.len(),
             case.row_states.len(),
@@ -80,6 +84,10 @@ pub(super) async fn generated_inference_slot_accounting_cases_drive_db_backed_re
     }
 }
 
+fn case_call_id(case_name: &str, index: usize) -> String {
+    format!("{case_name}::call-{index}")
+}
+
 async fn insert_inference_call_row(
     node: &EmbeddedNode,
     case_name: &str,
@@ -87,8 +95,8 @@ async fn insert_inference_call_row(
     backend_id: &str,
     call_state: &str,
 ) {
-    let call_id = format!("{case_name}-call-{index}");
-    let request_id = format!("{case_name}-request-{index}");
+    let call_id = case_call_id(case_name, index);
+    let request_id = format!("{case_name}::request-{index}");
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -125,9 +133,13 @@ async fn insert_inference_call_row(
     );
 }
 
-async fn fetch_persisted_slot_rows(node: &EmbeddedNode) -> Vec<PersistedSlotRow> {
+async fn fetch_persisted_slot_rows_for_case(
+    node: &EmbeddedNode,
+    case_name: &str,
+) -> Vec<PersistedSlotRow> {
     let query = r#"{
         InferenceCall {
+            call_id
             backend_id
             call_state
         }
@@ -138,10 +150,14 @@ async fn fetch_persisted_slot_rows(node: &EmbeddedNode) -> Vec<PersistedSlotRow>
         "query InferenceCall slot rows failed: {:?}",
         response.errors
     );
+    let prefix = format!("{case_name}::call-");
     response
         .data
         .as_ref()
         .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .and_then(|value| serde_json::from_value::<Vec<PersistedSlotRow>>(value.clone()).ok())
         .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.call_id.starts_with(&prefix))
+        .collect()
 }

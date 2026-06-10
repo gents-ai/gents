@@ -53,8 +53,8 @@ use lean_vocab_test::{
     lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
     lean_session_recovery_case,
-    lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_tool_preflight_case,
-    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_transcript_case,
+    lean_transcript_cases, lean_vocabulary_values,
     LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
