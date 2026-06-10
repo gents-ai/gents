@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
-    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP,
-    FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
-    REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
-    SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
+    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP,
+    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
+    RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP,
+    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
     SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
@@ -474,7 +474,10 @@ pub(crate) struct CodexArgs {
         help = "Run inline, preserving terminal scrollback, instead of the alternate screen"
     )]
     pub(crate) no_alt_screen: bool,
-    #[arg(value_name = "PROMPT", help = "Optional prompt to start the session with")]
+    #[arg(
+        value_name = "PROMPT",
+        help = "Optional prompt to start the session with"
+    )]
     pub(crate) prompt: Option<String>,
 }
 

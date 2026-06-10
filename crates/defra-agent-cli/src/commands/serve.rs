@@ -287,7 +287,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         eprintln!("Codex shim event log: {}", bound.trace_path().display());
         eprintln!("Chat from another terminal with: defra-agent codex");
         if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
-            eprintln!("  (this shim is not on the default address; pass --remote {codex_shim_url})");
+            eprintln!(
+                "  (this shim is not on the default address; pass --remote {codex_shim_url})"
+            );
         }
         if args.codex_shim_bind_addr.is_loopback() {
             eprintln!(

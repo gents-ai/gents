@@ -11,7 +11,7 @@
 use std::io::IsTerminal;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_tui::{Cli as CodexTuiCli, ExitReason, RemoteAppServerEndpoint};
@@ -113,10 +113,17 @@ mod tests {
     #[test]
     fn default_remote_resolves_to_loopback_websocket() {
         let endpoint = resolve_endpoint(crate::DEFAULT_CODEX_REMOTE).expect("resolves");
-        let RemoteAppServerEndpoint::WebSocket { websocket_url, auth_token } = endpoint else {
+        let RemoteAppServerEndpoint::WebSocket {
+            websocket_url,
+            auth_token,
+        } = endpoint
+        else {
             panic!("expected websocket endpoint");
         };
-        assert!(websocket_url.starts_with("ws://127.0.0.1:9292"), "{websocket_url}");
+        assert!(
+            websocket_url.starts_with("ws://127.0.0.1:9292"),
+            "{websocket_url}"
+        );
         assert_eq!(auth_token, None);
     }
 
@@ -139,7 +146,10 @@ mod tests {
     #[test]
     fn probe_authority_extracts_host_port() {
         let endpoint = resolve_endpoint("ws://127.0.0.1:9292/").expect("resolves");
-        assert_eq!(probe_authority(&endpoint).as_deref(), Some("127.0.0.1:9292"));
+        assert_eq!(
+            probe_authority(&endpoint).as_deref(),
+            Some("127.0.0.1:9292")
+        );
     }
 
     #[test]
