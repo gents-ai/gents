@@ -160,6 +160,17 @@ Examples:
   defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
   defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
   defra-agent p2p diagnose";
+const SCHEMA_AFTER_HELP: &str = "\
+Apply app-specific DefraDB collection schemas to a running or local store.
+
+Examples:
+  defra-agent schema apply ./app-schemas
+  defra-agent schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
+  defra-agent schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
+
+Directory inputs apply *.graphql and *.gql files, then additive patch files
+named *.patch.json or *.json-patch. Patch files contain a JSON Patch array, or
+an object with Patch/patch.";
 const STATUS_AFTER_HELP: &str = "\
 Status reads the local runtime by default.
 
@@ -356,6 +367,7 @@ async fn main() -> Result<()> {
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
+        Command::Schema { command } => commands::schema::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,

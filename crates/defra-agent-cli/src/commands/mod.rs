@@ -15,6 +15,7 @@ pub(crate) mod query;
 pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;
+pub(crate) mod schema;
 pub(crate) mod serve;
 pub(crate) mod session;
 pub(crate) mod show;
