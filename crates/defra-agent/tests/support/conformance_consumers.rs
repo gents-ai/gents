@@ -63,18 +63,18 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
-            id: "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic",
-            package: "defra-agent",
-            source_path: "crates/defra-agent/src/admission/tests.rs",
-            module_path: "admission::tests",
-            function: "generated_inference_slot_accounting_cases_match_admission_reconstruction_logic",
-        },
-        ConformanceConsumer::RustTest {
             id: "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/admission/tests.rs",
             module_path: "admission::tests",
             function: "generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_inference_slot_accounting_cases_drive_db_backed_reconstruction",
         },
         ConformanceConsumer::RustTest {
             id: "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",

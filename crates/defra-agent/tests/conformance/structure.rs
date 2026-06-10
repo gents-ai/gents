@@ -47,14 +47,8 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/tooling_slots_queue_command.rs")),
         ("Identity", Module("conformance/identity.rs")),
-        (
-            "InferenceCall",
-            Gap("#446 — vocabulary fenced in lean_vocab_test; FSM contract lives in admission unit tests, not integration"),
-        ),
-        (
-            "ManagedExec",
-            Gap("#446 — vocabulary fenced; state machine witnessed in managed_exec unit tests only"),
-        ),
+        ("InferenceCall", Module("conformance/inference_call.rs")),
+        ("ManagedExec", Module("conformance/managed_exec.rs")),
         ("MCPHealth", Module("conformance/tooling_slots_queue_command.rs")),
         ("PairingReconcile", Module("conformance/pairing_reconcile.rs")),
         (
@@ -65,10 +59,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),
         ("Request", Module("conformance/request_lifecycle.rs")),
-        (
-            "RuntimeReconcile",
-            Gap("#446 — contract driven in runtime_status unit tests, not integration"),
-        ),
+        ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),
         ("SessionRecovery", Module("conformance/session_recovery.rs")),
         ("Skills", Gap("#460 — implementation slices unshipped; fence lands with them")),
@@ -76,10 +67,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "StorageObservation",
             Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),
         ),
-        (
-            "StreamingResponse",
-            Gap("#446 — idle-deadline precondition is a boundary pending #437 configurability"),
-        ),
+        // Idle-deadline precondition is additionally a registered boundary
+        // (boundary.streaming-response.idle-timeout-deadline); the timeout
+        // became configurable in #450.
+        ("StreamingResponse", Module("conformance/streaming_compaction.rs")),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
         ("Transcript", Module("conformance/transcript_background.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
