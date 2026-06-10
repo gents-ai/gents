@@ -136,7 +136,9 @@ fn every_lean_model_has_a_declared_conformance_home() {
                             "{model}: declared conformance module {path} does not exist"
                         );
                     }
-                    Home::Boundary(_) => {}
+                    Home::Boundary(rationale) => {
+                        eprintln!("  BOUNDARY {model}: {rationale}");
+                    }
                     Home::Gap(issue) => gaps.push(format!("{model}: {issue}")),
                 }
             }

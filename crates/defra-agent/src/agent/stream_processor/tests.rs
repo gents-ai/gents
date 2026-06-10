@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::llm::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
-    ToolResultContent, UserContent,
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
+    UserContent,
 };
 use crate::llm::HookAction;
 use rig::agent::MultiTurnStreamItem;
