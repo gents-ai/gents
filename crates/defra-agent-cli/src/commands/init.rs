@@ -55,10 +55,18 @@ You have write-capable local tools. When the user asks you to make a change, you
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
+const YOLO_WARNING: &str = "\
+WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
+and write any file your user account can reach — no sandbox, no containment.\n\
+Use --write for sandboxed writes scoped to the tool root.";
+
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let tool_package = resolve_init_tool_package(args.write_tools, args.tool_package)?;
+    let tool_package = resolve_init_tool_package(args.write_tools, args.yolo, args.tool_package)?;
     validate_init_tool_flags(&args, tool_package)?;
+    if matches!(tool_package, ToolPackageArg::Yolo) {
+        eprintln!("{YOLO_WARNING}");
+    }
     if args.dangerously_overwrite {
         dangerously_overwrite_home(&home_dir)?;
     }
@@ -593,14 +601,14 @@ fn tool_selection_for_package(
 fn default_command_execution_policy_for_init(tool_package: ToolPackageArg) -> Option<String> {
     match tool_package {
         ToolPackageArg::Write if cfg!(target_os = "macos") => Some("workspace_write".to_string()),
-        ToolPackageArg::Write => Some("unrestricted".to_string()),
+        ToolPackageArg::Write | ToolPackageArg::Yolo => Some("unrestricted".to_string()),
         ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => None,
     }
 }
 
 fn default_backgroundable_tool_names(tool_package: ToolPackageArg) -> Vec<String> {
     match tool_package {
-        ToolPackageArg::Write => vec!["bash_unrestricted".to_string()],
+        ToolPackageArg::Write | ToolPackageArg::Yolo => vec!["bash_unrestricted".to_string()],
         ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => {
             Vec::new()
         }
@@ -656,17 +664,36 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_meta_tools: true,
             enable_defra_query: true,
         },
+        ToolPackageArg::Yolo => ToolPackageProfile {
+            display_name: "Unrestricted Write Tools (YOLO)",
+            enable_file_tools: true,
+            file_tools_mode: "ReadWrite",
+            enable_bash: true,
+            bash_mode: "Unrestricted",
+            enable_meta_tools: true,
+            enable_defra_query: true,
+        },
     }
 }
 
 fn resolve_init_tool_package(
     write_tools: bool,
+    yolo: bool,
     explicit: Option<ToolPackageArg>,
 ) -> Result<ToolPackageArg> {
+    if yolo {
+        return match explicit {
+            Some(ToolPackageArg::Yolo) | None => Ok(ToolPackageArg::Yolo),
+            Some(other) => anyhow::bail!(
+                "--yolo is shorthand for --tool-package yolo; remove --yolo or choose --tool-package {}",
+                format_tool_package(other)
+            ),
+        };
+    }
     match (write_tools, explicit) {
         (true, Some(ToolPackageArg::Write)) | (true, None) => Ok(ToolPackageArg::Write),
         (true, Some(other)) => anyhow::bail!(
-            "--write-tools is a compatibility alias for --tool-package write; remove --write-tools or choose --tool-package {}",
+            "--write is shorthand for --tool-package write; remove --write or choose --tool-package {}",
             format_tool_package(other)
         ),
         (false, Some(package)) => Ok(package),
@@ -703,7 +730,7 @@ fn tool_ceiling_for_package(tool_package: ToolPackageArg) -> ToolCeilingArg {
     match tool_package {
         ToolPackageArg::Minimal | ToolPackageArg::Introspection => ToolCeilingArg::MetaOnly,
         ToolPackageArg::Readonly => ToolCeilingArg::Readonly,
-        ToolPackageArg::Write => ToolCeilingArg::Readwrite,
+        ToolPackageArg::Write | ToolPackageArg::Yolo => ToolCeilingArg::Readwrite,
     }
 }
 
@@ -713,7 +740,7 @@ fn resolve_tool_root_for_package(
 ) -> Result<Option<PathBuf>> {
     let needs_root = matches!(
         tool_package,
-        ToolPackageArg::Readonly | ToolPackageArg::Write
+        ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo
     );
     if needs_root || explicit.is_some() {
         Ok(Some(resolve_default_tool_root(explicit)?))
@@ -742,7 +769,7 @@ fn default_backend_id_for_agent(agent_did: &str) -> String {
 
 fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
     match tool_package {
-        ToolPackageArg::Write => STANDARD_READWRITE_SYSTEM_PROMPT,
+        ToolPackageArg::Write | ToolPackageArg::Yolo => STANDARD_READWRITE_SYSTEM_PROMPT,
         ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => {
             STANDARD_READONLY_SYSTEM_PROMPT
         }
@@ -753,9 +780,11 @@ fn init_next_steps(summary: &InitSummary) -> Vec<String> {
     let mut steps = Vec::new();
     if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
+    } else if is_probably_llama_server_endpoint(&summary.endpoint) {
+        steps.push(format!("llama-server -hf {}", summary.model_name));
     }
     steps.push("defra-agent server".to_string());
-    steps.push("defra-agent chat".to_string());
+    steps.push("defra-agent codex".to_string());
     steps.push(format!(
         "defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
         summary.backend_id, summary.backend_name, summary.max_concurrent
@@ -765,6 +794,10 @@ fn init_next_steps(summary: &InitSummary) -> Vec<String> {
 
 fn is_probably_ollama_endpoint(endpoint: &str) -> bool {
     endpoint.contains("localhost:11434") || endpoint.contains("127.0.0.1:11434")
+}
+
+fn is_probably_llama_server_endpoint(endpoint: &str) -> bool {
+    endpoint.contains("localhost:8080") || endpoint.contains("127.0.0.1:8080")
 }
 
 fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
@@ -817,6 +850,7 @@ mod tests {
             max_concurrent: 2,
             max_queue_depth: 16,
             write_tools: false,
+            yolo: false,
             tool_package: None,
             tool_root: None,
             enable_memory: false,
@@ -972,22 +1006,36 @@ mod tests {
     #[test]
     fn init_tool_package_aliases_and_defra_query_scope_validation_match_seeded_docs() {
         assert_eq!(
-            resolve_init_tool_package(false, None).unwrap(),
+            resolve_init_tool_package(false, false, None).unwrap(),
             ToolPackageArg::Readonly
         );
         assert_eq!(
-            resolve_init_tool_package(true, None).unwrap(),
+            resolve_init_tool_package(true, false, None).unwrap(),
             ToolPackageArg::Write
         );
         assert_eq!(
-            resolve_init_tool_package(true, Some(ToolPackageArg::Write)).unwrap(),
+            resolve_init_tool_package(true, false, Some(ToolPackageArg::Write)).unwrap(),
             ToolPackageArg::Write
         );
         assert!(
-            resolve_init_tool_package(true, Some(ToolPackageArg::Readonly))
+            resolve_init_tool_package(true, false, Some(ToolPackageArg::Readonly))
                 .unwrap_err()
                 .to_string()
-                .contains("--write-tools")
+                .contains("--write")
+        );
+        assert_eq!(
+            resolve_init_tool_package(false, true, None).unwrap(),
+            ToolPackageArg::Yolo
+        );
+        assert_eq!(
+            resolve_init_tool_package(false, true, Some(ToolPackageArg::Yolo)).unwrap(),
+            ToolPackageArg::Yolo
+        );
+        assert!(
+            resolve_init_tool_package(false, true, Some(ToolPackageArg::Readonly))
+                .unwrap_err()
+                .to_string()
+                .contains("--yolo")
         );
 
         let mut scoped_introspection = init_args();
@@ -1008,6 +1056,48 @@ mod tests {
         assert_eq!(
             selection.defra_query_collections,
             Some(vec!["AgentRequest".to_string()])
+        );
+    }
+
+    #[test]
+    fn yolo_package_seeds_unrestricted_write_documents() {
+        let selection = tool_selection_for_package(
+            "did:key:z-init",
+            "default-tools",
+            ToolPackageArg::Yolo,
+            false,
+            init_enable_defra_query(ToolPackageArg::Yolo, false),
+            Vec::new(),
+        );
+        assert_eq!(selection.enable_file_tools, Some(true));
+        assert_eq!(selection.file_tools_mode.as_deref(), Some("ReadWrite"));
+        assert_eq!(selection.enable_bash, Some(true));
+        assert_eq!(selection.bash_mode.as_deref(), Some("Unrestricted"));
+        assert_eq!(
+            selection.command_execution_policy.as_deref(),
+            Some("unrestricted")
+        );
+        assert_eq!(
+            selection.backgroundable_tool_names,
+            Some(vec!["bash_unrestricted".to_string()])
+        );
+
+        // --write keeps containment on macOS; --yolo never does.
+        assert_eq!(
+            default_command_execution_policy_for_init(ToolPackageArg::Write).as_deref(),
+            if cfg!(target_os = "macos") {
+                Some("workspace_write")
+            } else {
+                Some("unrestricted")
+            }
+        );
+        assert_eq!(
+            standard_system_prompt(ToolPackageArg::Yolo),
+            STANDARD_READWRITE_SYSTEM_PROMPT
+        );
+        assert_eq!(
+            tool_ceiling_for_package(ToolPackageArg::Yolo),
+            ToolCeilingArg::Readwrite
         );
     }
 

@@ -9,8 +9,8 @@ use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP,
-    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP,
+    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
+    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP,
     FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
     REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP,
     SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
@@ -52,6 +52,11 @@ pub(crate) enum Command {
     Server(ServeArgs),
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
+    #[command(
+        about = "Open the Codex terminal UI against the local agent",
+        after_help = CODEX_AFTER_HELP
+    )]
+    Codex(CodexArgs),
     #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
@@ -311,15 +316,23 @@ pub(crate) struct InitArgs {
     #[arg(long, default_value_t = default_backend_max_queue_depth())]
     pub(crate) max_queue_depth: i64,
     #[arg(
-        long,
+        long = "write",
+        alias = "write-tools",
         default_value_t = false,
-        help = "Bootstrap write-capable tools instead of the safe read-only default"
+        help = "Bootstrap write-capable tools, sandboxed and scoped to the tool root, instead of the safe read-only default"
     )]
     pub(crate) write_tools: bool,
     #[arg(
         long,
+        default_value_t = false,
+        conflicts_with = "write_tools",
+        help = "Bootstrap write-capable tools with UNRESTRICTED bash: no sandbox, full host access as your user"
+    )]
+    pub(crate) yolo: bool,
+    #[arg(
+        long,
         value_enum,
-        help = "Bootstrap a named tool package. Defaults to readonly; --write-tools is a compatibility alias for --tool-package write"
+        help = "Bootstrap a named tool package. Defaults to readonly; --write and --yolo are shorthands for the write and yolo packages"
     )]
     pub(crate) tool_package: Option<ToolPackageArg>,
     #[arg(
@@ -400,10 +413,18 @@ pub(crate) struct ServeArgs {
     pub(crate) tool_root: Option<PathBuf>,
     #[arg(
         long,
+        hide = true,
         default_value_t = false,
-        help = "Also run the experimental Codex TUI compatibility endpoint"
+        conflicts_with = "no_codex_shim",
+        help = "Deprecated no-op: the Codex endpoint now runs by default"
     )]
     pub(crate) codex_shim: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable the Codex TUI endpoint (`defra-agent codex` needs it)"
+    )]
+    pub(crate) no_codex_shim: bool,
     #[arg(
         long,
         default_value = "127.0.0.1",
@@ -428,6 +449,24 @@ pub(crate) struct ServeArgs {
     pub(crate) p2p_relay_mode: P2pRelayModeArg,
     #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::Disabled)]
     pub(crate) p2p_discovery: P2pDiscoveryArg,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexArgs {
+    #[arg(
+        long,
+        default_value = crate::DEFAULT_CODEX_REMOTE,
+        help = "Codex shim endpoint (ws://HOST:PORT, wss://HOST:PORT, or unix://PATH)"
+    )]
+    pub(crate) remote: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run inline, preserving terminal scrollback, instead of the alternate screen"
+    )]
+    pub(crate) no_alt_screen: bool,
+    #[arg(value_name = "PROMPT", help = "Optional prompt to start the session with")]
+    pub(crate) prompt: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -688,7 +727,7 @@ impl BackendPresetArg {
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(defra_agent::chatgpt_codex::default_backend_endpoint()),
-            Self::Ollama => Some(DEFAULT_INIT_ENDPOINT),
+            Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
         }
@@ -938,6 +977,7 @@ pub(crate) enum ToolPackageArg {
     Introspection,
     Readonly,
     Write,
+    Yolo,
 }
 
 #[derive(Subcommand)]
@@ -2216,6 +2256,22 @@ mod tests {
         assert_eq!(
             scoped.defra_query_collections,
             vec!["AgentRequest".to_string(), "AgentResponse".to_string()]
+        );
+    }
+
+    #[test]
+    fn init_write_and_yolo_flags_parse() {
+        assert!(parse_init(&["--write"]).write_tools);
+        // Compatibility alias for the old flag name.
+        assert!(parse_init(&["--write-tools"]).write_tools);
+        let yolo = parse_init(&["--yolo"]);
+        assert!(yolo.yolo);
+        assert!(!yolo.write_tools);
+        assert!(!parse_init(&[]).write_tools);
+        assert!(!parse_init(&[]).yolo);
+        assert!(
+            Cli::try_parse_from(["defra-agent", "init", "--write", "--yolo"]).is_err(),
+            "--write and --yolo conflict"
         );
     }
 

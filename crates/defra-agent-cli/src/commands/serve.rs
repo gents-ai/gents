@@ -242,7 +242,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     )?;
 
     let mut codex_shim_output = None;
-    let mut codex_shim_handle = if args.codex_shim {
+    let mut codex_shim_handle = if !args.no_codex_shim {
         let bound = bind_codex_shim(CodexShimBindArgs {
             home: home_dir.clone(),
             fs_root: effective_tool_root.clone(),
@@ -267,12 +267,10 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             bound.codex_home().display(),
         );
         eprintln!("Codex shim event log: {}", bound.trace_path().display());
-        eprintln!(
-            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}",
-        );
-        eprintln!(
-            "No CODEX_HOME override is required; Codex keeps using its normal local config while Defra handles the remote runtime."
-        );
+        eprintln!("Chat from another terminal with: defra-agent codex");
+        if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
+            eprintln!("  (this shim is not on the default address; pass --remote {codex_shim_url})");
+        }
         if args.codex_shim_bind_addr.is_loopback() {
             eprintln!(
                 "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
@@ -284,9 +282,11 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         }
         codex_shim_output = Some(json!({
             "websocket": codex_shim_url,
-            "launch_command": format!(
-                "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}"
-            ),
+            "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
+                "defra-agent codex".to_string()
+            } else {
+                format!("defra-agent codex --remote {codex_shim_url}")
+            },
             "shim_home": bound.codex_home().to_path_buf(),
             "codex_home": bound.codex_home().to_path_buf(),
             "event_log": bound.trace_path().to_path_buf(),
