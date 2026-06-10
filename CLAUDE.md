@@ -63,7 +63,7 @@ Manual runs are operator initiated. `ManualSource` accepts in-process `FireInten
 ## Key External Dependencies
 
 - **defradb.rs** (`sourcenetwork/defradb.rs`, private, via SSH git): The core database. Provides `defra-node` (embedded node), `crypto`, `identity`, and `events` crates. Pinned by git rev in workspace `Cargo.toml`. When working on features that touch the node, schema behavior, or identity, look at this repo for context.
-- **rig-core**: LLM agent framework. Provides the completion model trait, tool trait, and hook system that defra-agent integrates with.
+- **rig-core**: provider/streaming client only ("Layer A"): the `CompletionModel` trait, provider clients (OpenAI-compatible, OpenRouter, ChatGPT-Codex), and SSE streaming decode. The agent loop (#400/#426), tool trait (#424), hook callbacks, and `Message` family (#425, native types live in `defra-agent-protocol::message` with byte-compatible persistence) are all owned in-tree; rig types cross into the runtime only through `llm::rig_compat` at the request-build/stream-consume seam. Full removal is iceboxed as #457.
 - **rmcp**: MCP protocol client for connecting to external tool services.
 
 ## Build & Test
