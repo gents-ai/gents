@@ -7,7 +7,9 @@ use serde::de::DeserializeOwned;
 pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
 pub const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
 
-const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts";
+// Build only the module artifact needed by `lake env lean --run`; the broader
+// target can pull package extra artifacts such as ProofWidgets' widget bundle.
+const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
 const CONTRACT_RUN_FILE: &str = "Proofs/Conformance/Contracts.lean";
 
 pub fn load_contract_snapshot<T>() -> Result<T>
