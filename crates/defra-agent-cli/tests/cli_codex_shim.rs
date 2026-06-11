@@ -2543,14 +2543,22 @@ async fn start_live_codex_shim_with_write_tools(
     let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-live-{}", Uuid::new_v4().simple());
     let tool_root_string = tool_root.map(|root| root.to_string_lossy().to_string());
+    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
         "--agent-name",
         &agent_name,
         "--model-name",
-        DEFAULT_MODEL_NAME,
+        model_name.as_str(),
         "--inference-url",
-        DEFAULT_MODEL_ENDPOINT,
+        model_endpoint.as_str(),
     ];
+    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+        init_args.push("--api-key-env-var");
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY");
+    }
     if write_tools {
         init_args.push("--write-tools");
     }

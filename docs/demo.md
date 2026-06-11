@@ -227,10 +227,17 @@ There is also an ignored live smoke test against a real inference endpoint:
 ```bash
 export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://127.0.0.1:8080/v1
 export DEFRA_AGENT_CLI_E2E_MODEL_NAME=google/gemma-4-12B-it-qat-q4_0-gguf
+# Optional for hosted OpenAI-compatible endpoints:
+# export DEFRA_AGENT_CLI_E2E_API_KEY="$OPENAI_API_KEY"
 
 cargo test -p defra-agent-cli \
   --test cli_live \
   cli_flow_runs_real_tool_loop_against_live_endpoint \
+  -- --ignored --nocapture --test-threads=1
+
+cargo test -p defra-agent-cli \
+  --test cli_codex_shim \
+  codex_shim_live_protocol_uses_real_backend \
   -- --ignored --nocapture --test-threads=1
 ```
 
