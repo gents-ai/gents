@@ -133,6 +133,71 @@ fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
 }
 
 #[test]
+fn vllm_tool_call_json_parse_400_is_retryable() {
+    // vLLM's tool-call parser fails to json.loads the model's streamed tool arguments
+    // (here a missing delimiter deep in an array-typed argument) and returns 400. This
+    // is intermittent/sampling-dependent, so it should retry rather than fail fast.
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
+             \"Expecting ',' delimiter: line 8 column 61 (char 4982)\",\"type\":\
+             \"BadRequestError\",\"param\":null,\"code\":400}}"
+                .into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(
+        classified.is_retryable(),
+        "intermittent vLLM tool-call JSON parse 400s should retry on a fresh generation"
+    );
+}
+
+#[test]
+fn vllm_tool_call_invalid_escape_400_is_retryable() {
+    // The `Invalid \escape` variant — the wire body double-escapes the backslash, which
+    // is why the matcher keys off the line/column/(char ...) signature, not the phrase.
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
+             \"Invalid \\\\escape: line 1 column 34 (char 33)\",\"type\":\"BadRequestError\"}}"
+                .into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(classified.is_retryable());
+}
+
+#[test]
+fn provider_400_without_json_decode_signature_stays_permanent() {
+    // Regression guard: a genuine request-shape 400 lacks the JSONDecodeError signature
+    // and must remain a permanent failure, unaffected by the tool-parse retry carve-out.
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
+             \"duplicate field `max_tokens`\",\"type\":\"BadRequestError\"}}"
+                .into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(!classified.is_retryable());
+}
+
+#[test]
 fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
