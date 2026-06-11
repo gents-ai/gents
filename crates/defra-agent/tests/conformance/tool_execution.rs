@@ -398,4 +398,3 @@ pub(super) fn generated_tool_execution_cases_cover_preflight_and_retry_contracts
         assert_eq!(case.disposition, "doNotRetry", "{name}");
     }
 }
-
