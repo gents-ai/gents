@@ -471,6 +471,282 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 }
 
 #[tokio::test]
+async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_completion() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-stream-processor-inline-tool-result-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("read the source"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "read the source".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    processor
+        .process_item(tool_call_item_with_ids(
+            "read_file",
+            r#"{"path":"/work/entry.c"}"#,
+            "result-1",
+            "internal-1",
+            Some("call-1"),
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        hook.on_tool_call(
+            "read_file",
+            Some("call-1".to_string()),
+            "internal-1",
+            r#"{"path":"/work/entry.c"}"#,
+        )
+        .await,
+        crate::llm::ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "read_file",
+            Some("call-1".to_string()),
+            "internal-1",
+            r#"{"path":"/work/entry.c"}"#,
+            "source bytes",
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    processor
+        .process_item(tool_result_item_with_call_id(
+            "result-1",
+            Some("call-1"),
+            "source bytes",
+            "internal-1",
+        ))
+        .await
+        .unwrap();
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(matches!(&history[1], Message::Assistant { content, .. }
+        if matches!(content.first(), Some(AssistantContent::ToolCall(tool_call))
+            if tool_call.call_id.as_deref() == Some("call-1"))));
+    assert!(matches!(&history[2], Message::User { content }
+        if matches!(content.first(), Some(UserContent::ToolResult(tool_result))
+            if tool_result.call_id.as_deref() == Some("call-1"))));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+/// Three parallel tool calls accumulate in ONE assistant turn; persisting that
+/// turn on the first streamed result keeps the gate open for the remaining
+/// results (Lean: `Transcript.parallel_results_complete_independently`). The
+/// historical bug: the first result's user message reset the turn state to
+/// Idle, so the second streamed result tripped the "cannot persist streamed
+/// tool result before its assistant turn is persisted" guard.
+#[tokio::test]
+async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-stream-processor-multi-inline-tool-result-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("read several files"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "read several files".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    for index in 1..=3 {
+        let result_id = format!("result-{index}");
+        let internal_id = format!("internal-{index}");
+        let call_id = format!("call-{index}");
+        let args = format!(r#"{{"path":"/work/file-{index}.c"}}"#);
+        processor
+            .process_item(tool_call_item_with_ids(
+                "read_file",
+                &args,
+                &result_id,
+                &internal_id,
+                Some(&call_id),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            hook.on_tool_call("read_file", Some(call_id.clone()), &internal_id, &args,)
+                .await,
+            crate::llm::ToolCallHookAction::Continue
+        ));
+        assert!(matches!(
+            hook.on_tool_result(
+                "read_file",
+                Some(call_id),
+                &internal_id,
+                &args,
+                &format!("source bytes {index}"),
+            )
+            .await,
+            HookAction::Continue
+        ));
+    }
+
+    for index in 1..=3 {
+        processor
+            .process_item(tool_result_item_with_call_id(
+                &format!("result-{index}"),
+                Some(&format!("call-{index}")),
+                &format!("source bytes {index}"),
+                &format!("internal-{index}"),
+            ))
+            .await
+            .unwrap();
+    }
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 5);
+    assert!(matches!(&history[1], Message::Assistant { content, .. }
+        if content.iter().filter(|item| matches!(item, AssistantContent::ToolCall(_))).count() == 3));
+    let result_count = history
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::User { content }
+            if matches!(content.first(), Some(UserContent::ToolResult(_))))
+        })
+        .count();
+    assert_eq!(result_count, 3);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     // #442 regression. Owned-loop order on a provider stall: the tool runs
     // inline (on_tool_result marks the AgentToolCall row .completed and records

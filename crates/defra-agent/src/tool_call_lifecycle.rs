@@ -262,7 +262,7 @@ pub(crate) mod runtime;
 pub mod subagent_request;
 mod transition;
 
-pub use recovery::ToolCallRecoveryReport;
+pub use recovery::{SubagentLivenessReport, ToolCallRecoveryReport};
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,

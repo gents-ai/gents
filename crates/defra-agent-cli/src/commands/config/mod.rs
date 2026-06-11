@@ -34,6 +34,8 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
         },
         ConfigCommand::Task { command } => match command {
+            ConfigTaskCommand::List(args) => crate::commands::task::task_list(args).await,
+            ConfigTaskCommand::Show(args) => crate::commands::task::task_show(args).await,
             ConfigTaskCommand::Run(args) => task_run::config_task_run(args).await,
         },
         ConfigCommand::Skill { command } => match command {

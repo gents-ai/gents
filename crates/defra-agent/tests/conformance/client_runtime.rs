@@ -136,4 +136,42 @@ fn generated_runtime_reconcile_cases_pin_generation_and_admission_contract() {
         retire.pre_ready_generation_count - 1,
         retire.post_ready_generation_count
     );
+
+    let finish = lean_runtime_reconcile_case("finish_request_releases_generation");
+    assert!(finish.legal);
+    assert_eq!(finish.action.as_str(), "finishRequest");
+    assert_eq!(finish.pre_in_flight_count, finish.post_in_flight_count + 1);
+    assert_eq!(finish.tracked_request_id, 500);
+    assert_eq!(finish.pre_active_generation, finish.post_active_generation);
+
+    let apply_failed = lean_runtime_reconcile_case("apply_failed_clears_pending");
+    assert!(apply_failed.legal);
+    assert_eq!(apply_failed.action.as_str(), "applyFailed");
+    assert_eq!(apply_failed.pre_phase.as_str(), "applying");
+    assert_eq!(apply_failed.post_phase.as_str(), "idle");
+    assert_eq!(
+        apply_failed.pre_active_generation,
+        apply_failed.post_active_generation
+    );
+
+    // Completeness pin: every emitted runtime-reconcile case is asserted
+    // above; a new Lean case fails here until this consumer covers it.
+    let covered = [
+        "publish_changed_snapshot",
+        "router_observe_published_generation",
+        "accept_request_after_router_observe",
+        "retire_unobserved_generation",
+        "finish_request_releases_generation",
+        "apply_failed_clears_pending",
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    let emitted = lean_runtime_reconcile_cases()
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        emitted, covered,
+        "runtime-reconcile case set drifted from this consumer's coverage"
+    );
 }

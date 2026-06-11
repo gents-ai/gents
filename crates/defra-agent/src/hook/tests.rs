@@ -59,7 +59,7 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
 
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn().unwrap(), 1);
+    assert_eq!(state.persist_assistant_turn(), 1);
     assert!(state
         .mark_stream_tool_result_seen("call-1", "call-1", None)
         .unwrap());
@@ -69,7 +69,7 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
 
     state.reset_after_user_message();
     assert_eq!(state.begin_or_continue_assistant_turn(), 2);
-    assert_eq!(state.persist_assistant_turn().unwrap(), 2);
+    assert_eq!(state.persist_assistant_turn(), 2);
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
     assert!(state
         .mark_stream_tool_result_seen("call-1", "call-1", None)
         .is_err());
-    assert_eq!(state.persist_assistant_turn().unwrap(), 1);
+    assert_eq!(state.persist_assistant_turn(), 1);
     assert!(state
         .mark_stream_tool_result_seen("call-1", "call-1", None)
         .unwrap());
@@ -94,13 +94,35 @@ fn transcript_turn_state_preserves_distinct_tool_results() {
     let mut state = session_state_for_test();
 
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn().unwrap(), 1);
+    assert_eq!(state.persist_assistant_turn(), 1);
     assert!(state
         .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
         .unwrap());
     assert!(state
         .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
         .unwrap());
+}
+
+#[test]
+fn transcript_turn_state_keeps_persisted_turn_across_parallel_results() {
+    let mut state = session_state_for_test();
+
+    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
+    assert_eq!(state.persist_assistant_turn(), 1);
+    // Every parallel result of the once-persisted turn passes the stream gate
+    // (Lean: Transcript.parallel_results_complete_independently).
+    assert!(state
+        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
+        .unwrap());
+    assert!(state
+        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
+        .unwrap());
+    assert!(state
+        .mark_stream_tool_result_seen("internal-3", "result-3", Some("call-3"))
+        .unwrap());
+    // A persisted prior turn starts a NEW turn on the next assistant persist
+    // (text-only final turn after tool results).
+    assert_eq!(state.persist_assistant_turn(), 2);
 }
 
 #[test]

@@ -294,6 +294,10 @@ pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransiti
     &lean_contract_snapshot().process_transition_cases
 }
 
+pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
+    &lean_contract_snapshot().runtime_reconcile_cases
+}
+
 pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
     lean_contract_snapshot()
         .runtime_reconcile_cases

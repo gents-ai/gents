@@ -17,11 +17,13 @@
 use anyhow::{anyhow, Result};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::template::{render_template, TemplateScope};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access};
+use crate::request_helpers::{metadata_with_prompt_selected_skill_ids, wait_for_terminal_response};
+use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
 /// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
 /// `write_manual_agent_request`. Kept inline here so the CLI mutation is a
@@ -29,7 +31,49 @@ use crate::{print_json, resolve_config_access};
 /// re-exported.
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
-pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
+pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
+    let output = enqueue_task_run(&args).await?;
+    let mut value = serde_json::to_value(&output)?;
+    if args.wait {
+        let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+        let response = wait_for_terminal_response(
+            &graphql,
+            &output.request_id,
+            args.timeout_secs,
+            args.poll_secs,
+        )
+        .await?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "wait".to_string(),
+                serde_json::json!({
+                    "timeout_secs": args.timeout_secs,
+                    "poll_secs": args.poll_secs,
+                    "response": response,
+                }),
+            );
+        }
+    }
+    print_json(&value)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TaskRunOutput {
+    pub(crate) task_id: String,
+    pub(crate) behavior_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) request_id: String,
+    pub(crate) session_id: String,
+    pub(crate) request_doc_id: String,
+    pub(crate) metadata: Option<String>,
+    pub(crate) status: &'static str,
+}
+
+pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRunOutput> {
+    let task_id =
+        resolve_task_id_for("run", args.task_id.as_deref(), args.task_id_flag.as_deref())?;
+
     // 1. Parse --args as a JSON object.
     let args_value: Value =
         serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
@@ -57,7 +101,7 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
                 enabled
             }}
         }}"#,
-        id = escape_graphql_string(&args.task_id),
+        id = escape_graphql_string(&task_id),
     );
     let task_response = access.execute(&task_query).await?;
     let task_row = task_response
@@ -65,12 +109,12 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
         .and_then(|d| d.get("Task"))
         .and_then(|arr| arr.as_array())
         .and_then(|arr| arr.first())
-        .ok_or_else(|| anyhow!("no Task with task_id = {}", args.task_id))?;
+        .ok_or_else(|| anyhow!("no Task with task_id = {}", task_id))?;
     let behavior_id = task_row
         .get("behavior_id")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("Task {} has no behavior_id", args.task_id))?
+        .ok_or_else(|| anyhow!("Task {} has no behavior_id", task_id))?
         .to_string();
     let prompt_template = task_row
         .get("prompt_template")
@@ -82,7 +126,7 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if !enabled {
-        anyhow::bail!("Task {} is disabled; cannot run", args.task_id);
+        anyhow::bail!("Task {} is disabled; cannot run", task_id);
     }
 
     // 4. Fetch the AgentBehavior to get agent_did and confirm it's enabled.
@@ -105,7 +149,7 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
             anyhow!(
                 "no AgentBehavior with behavior_id = {} (referenced by task {})",
                 behavior_id,
-                args.task_id
+                task_id
             )
         })?;
     let agent_did = behavior_row
@@ -135,18 +179,20 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
         args: Some(args_value),
     };
     let content = render_template(&prompt_template, &scope)
-        .map_err(|e| anyhow!("render manual template for task {}: {e}", args.task_id))?;
+        .map_err(|e| anyhow!("render manual template for task {}: {e}", task_id))?;
 
     // 6. Issue the same create_AgentRequest mutation as
     //    `write_manual_agent_request`: same field set, same lineage.
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
+    let metadata = metadata_with_prompt_selected_skill_ids(None, &content);
     let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
         request_id: &request_id,
         session_id: &session_id,
         agent_did: &agent_did,
         behavior_id: &behavior_id,
         content: &content,
+        metadata: metadata.as_deref(),
         created_at: &now,
     });
     let response = access.execute(&mutation).await?;
@@ -169,22 +215,43 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
             .ok_or_else(|| {
                 anyhow!(
                     "manual AgentRequest for task {} persisted but _docID lookup by request_id returned nothing",
-                    args.task_id
+                    task_id
                 )
             })?,
     };
 
-    // 7. Print the structured result.
-    print_json(&serde_json::json!({
-        "task_id": args.task_id,
-        "behavior_id": behavior_id,
-        "agent_did": agent_did,
-        "request_id": request_id,
-        "session_id": session_id,
-        "request_doc_id": doc_id,
-        "status": "pending",
-    }))?;
-    Ok(())
+    Ok(TaskRunOutput {
+        task_id,
+        behavior_id,
+        agent_did,
+        request_id,
+        session_id,
+        request_doc_id: doc_id,
+        metadata,
+        status: "pending",
+    })
+}
+
+pub(crate) fn resolve_task_id_for(
+    command: &str,
+    positional: Option<&str>,
+    flag: Option<&str>,
+) -> Result<String> {
+    let positional = positional.map(str::trim).filter(|value| !value.is_empty());
+    let flag = flag.map(str::trim).filter(|value| !value.is_empty());
+    match (positional, flag) {
+        (Some(positional), Some(flag)) if positional != flag => {
+            anyhow::bail!(
+                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `defra-agent task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
+                positional,
+                flag
+            );
+        }
+        (Some(task_id), _) | (_, Some(task_id)) => Ok(task_id.to_string()),
+        (None, None) => anyhow::bail!(
+            "missing task id\nNext:\n  1. Pass it positionally: `defra-agent task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
+        ),
+    }
 }
 
 struct CreateManualRequestInput<'a> {
@@ -193,12 +260,25 @@ struct CreateManualRequestInput<'a> {
     agent_did: &'a str,
     behavior_id: &'a str,
     content: &'a str,
+    metadata: Option<&'a str>,
     created_at: &'a str,
 }
 
 fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> String {
     // `caused_by_trigger_id` is intentionally omitted so it stays null in the
     // persisted document — manual runs have no trigger id to reference.
+    let metadata_field = input
+        .metadata
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|metadata| {
+            format!(
+                r#"
+                metadata: "{}","#,
+                escape_graphql_string(metadata)
+            )
+        })
+        .unwrap_or_default();
     format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -209,7 +289,7 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
-                content: "{content}",
+                content: "{content}",{metadata_field}
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -226,6 +306,7 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
         behavior_id = escape_graphql_string(input.behavior_id),
         session_id = escape_graphql_string(input.session_id),
         content = escape_graphql_string(input.content),
+        metadata_field = metadata_field,
         created_at = escape_graphql_string(input.created_at),
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     )
@@ -304,6 +385,7 @@ mod tests {
             agent_did: "did:defra-agent:test",
             behavior_id: "behavior-1",
             content: "hello Amy",
+            metadata: None,
             created_at: "2026-04-21T00:00:00Z",
         });
         assert!(mutation.contains("caused_by_trigger_kind: \"manual\""));
@@ -315,6 +397,22 @@ mod tests {
         assert!(mutation.contains("lifecycle_state: \"pending\""));
         assert!(mutation.contains("status: \"pending\""));
         assert!(mutation.contains("content: \"hello Amy\""));
+    }
+
+    #[test]
+    fn build_mutation_includes_selected_skill_metadata_when_present() {
+        let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
+            request_id: "req-1",
+            session_id: "sess-1",
+            agent_did: "did:defra-agent:test",
+            behavior_id: "behavior-1",
+            content: "/vuln-scan /work",
+            metadata: Some(r#"{"selected_skill_ids":["vuln-scan"]}"#),
+            created_at: "2026-04-21T00:00:00Z",
+        });
+
+        assert!(mutation.contains("metadata:"));
+        assert!(mutation.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));
     }
 
     #[test]
@@ -368,5 +466,23 @@ mod tests {
             "data": { "add_AgentRequest": [ { "_docID": "doc-4" } ] }
         });
         assert_eq!(extract_doc_id(&add_array), Some("doc-4".to_string()));
+    }
+
+    #[test]
+    fn resolve_task_id_accepts_positional_or_flag_and_rejects_conflict() {
+        assert_eq!(
+            resolve_task_id_for("run", Some("host-check"), None).unwrap(),
+            "host-check"
+        );
+        assert_eq!(
+            resolve_task_id_for("run", None, Some("host-check")).unwrap(),
+            "host-check"
+        );
+        assert_eq!(
+            resolve_task_id_for("run", Some("host-check"), Some("host-check")).unwrap(),
+            "host-check"
+        );
+        assert!(resolve_task_id_for("run", Some("host-check"), Some("other")).is_err());
+        assert!(resolve_task_id_for("run", None, None).is_err());
     }
 }

@@ -14,7 +14,7 @@ use crate::{
     INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
     RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP,
     SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
-    SUBAGENT_LIST_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
+    SUBAGENT_LIST_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -105,6 +105,14 @@ pub(crate) enum Command {
     Fleet {
         #[command(subcommand)]
         command: FleetCommand,
+    },
+    #[command(
+        about = "Trigger configured Task documents on demand",
+        after_help = TASK_AFTER_HELP
+    )]
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
@@ -1351,15 +1359,69 @@ pub(crate) enum InferenceProfileCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigTaskCommand {
+    #[command(name = "list", about = "List configured Task documents")]
+    List(TaskListArgs),
+    #[command(name = "show", about = "Show a configured Task document")]
+    Show(TaskShowArgs),
     #[command(name = "run", about = "Run a configured Task once, now")]
     Run(ConfigTaskRunArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TaskCommand {
+    #[command(name = "list", about = "List configured Task documents")]
+    List(TaskListArgs),
+    #[command(name = "show", about = "Show a configured Task document")]
+    Show(TaskShowArgs),
+    #[command(
+        name = "run",
+        about = "Run a configured Task once, now",
+        visible_alias = "trigger"
+    )]
+    Run(ConfigTaskRunArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct TaskListArgs {
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct TaskShowArgs {
+    /// The task_id of the task to show.
+    #[arg(long = "task-id")]
+    pub(crate) task_id_flag: Option<String>,
+
+    /// The task_id of the task to show.
+    #[arg(value_name = "TASK_ID")]
+    pub(crate) task_id: Option<String>,
+
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ConfigTaskRunArgs {
     /// The task_id of the task to run.
-    #[arg(long)]
-    pub(crate) task_id: String,
+    #[arg(long = "task-id")]
+    pub(crate) task_id_flag: Option<String>,
+
+    /// The task_id of the task to run.
+    #[arg(value_name = "TASK_ID")]
+    pub(crate) task_id: Option<String>,
 
     /// JSON object of arguments bound as the `args.*` template scope.
     /// Example: `--args '{"name": "Amy"}'`.
@@ -1374,6 +1436,18 @@ pub(crate) struct ConfigTaskRunArgs {
     /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
+
+    /// Wait for the created AgentRequest to reach a terminal response.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+
+    /// Idle timeout while waiting for a terminal response.
+    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
+    pub(crate) timeout_secs: u64,
+
+    /// Poll interval while waiting for a terminal response.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) poll_secs: u64,
 }
 
 #[derive(clap::Args)]
@@ -2220,6 +2294,23 @@ mod tests {
         }
     }
 
+    fn assert_task_run_args(args: ConfigTaskRunArgs) {
+        assert_eq!(args.task_id.as_deref(), None);
+        assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
+        assert_eq!(args.args, r#"{"scope":"host"}"#);
+        assert_eq!(
+            args.graphql.as_deref(),
+            Some("http://127.0.0.1:9191/api/v0/graphql")
+        );
+        assert!(args.home.is_none());
+        assert!(!args.wait);
+        assert_eq!(
+            args.timeout_secs,
+            crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS
+        );
+        assert_eq!(args.poll_secs, 1);
+    }
+
     #[test]
     fn enable_defra_query_flag_accepts_false_true_and_omission() {
         // Omitted -> None, so an unrelated `config tools set` preserves the
@@ -2356,5 +2447,157 @@ mod tests {
         assert_eq!(explicit.enable_file_tools, Some(false));
         assert_eq!(explicit.enable_bash, Some(false));
         assert_eq!(explicit.enable_meta_tools, Some(false));
+    }
+
+    #[test]
+    fn top_level_task_run_parses_operator_affordance() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "task",
+            "run",
+            "--task-id",
+            "host-check",
+            "--args",
+            r#"{"scope":"host"}"#,
+            "--graphql",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        ])
+        .expect("task run should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Run(args),
+            } => assert_task_run_args(args),
+            _ => panic!("expected `task run`"),
+        }
+    }
+
+    #[test]
+    fn top_level_task_run_accepts_positional_task_id_and_wait() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "task",
+            "run",
+            "host-check",
+            "--args",
+            r#"{"scope":"host"}"#,
+            "--wait",
+            "--timeout-secs",
+            "60",
+            "--poll-secs",
+            "2",
+        ])
+        .expect("task run positional form should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Run(args),
+            } => {
+                assert_eq!(args.task_id.as_deref(), Some("host-check"));
+                assert_eq!(args.task_id_flag, None);
+                assert_eq!(args.args, r#"{"scope":"host"}"#);
+                assert!(args.wait);
+                assert_eq!(args.timeout_secs, 60);
+                assert_eq!(args.poll_secs, 2);
+            }
+            _ => panic!("expected `task run`"),
+        }
+    }
+
+    #[test]
+    fn top_level_task_list_and_show_parse() {
+        let list = Cli::try_parse_from([
+            "defra-agent",
+            "task",
+            "list",
+            "--graphql",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        ])
+        .expect("task list should parse");
+        match list.command {
+            Command::Task {
+                command: TaskCommand::List(args),
+            } => assert_eq!(
+                args.graphql.as_deref(),
+                Some("http://127.0.0.1:9191/api/v0/graphql")
+            ),
+            _ => panic!("expected `task list`"),
+        }
+
+        let show = Cli::try_parse_from(["defra-agent", "task", "show", "host-check"])
+            .expect("task show should parse");
+        match show.command {
+            Command::Task {
+                command: TaskCommand::Show(args),
+            } => {
+                assert_eq!(args.task_id.as_deref(), Some("host-check"));
+                assert_eq!(args.task_id_flag, None);
+            }
+            _ => panic!("expected `task show`"),
+        }
+    }
+
+    #[test]
+    fn config_task_run_remains_available_as_compatibility_path() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "config",
+            "task",
+            "run",
+            "--task-id",
+            "host-check",
+            "--args",
+            r#"{"scope":"host"}"#,
+            "--graphql",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        ])
+        .expect("config task run should parse");
+
+        match cli.command {
+            Command::Config {
+                command:
+                    ConfigCommand::Task {
+                        command: ConfigTaskCommand::Run(args),
+                    },
+            } => assert_task_run_args(args),
+            _ => panic!("expected `config task run`"),
+        }
+    }
+
+    #[test]
+    fn config_task_list_and_show_remain_available() {
+        let list = Cli::try_parse_from(["defra-agent", "config", "task", "list"])
+            .expect("config task list should parse");
+        match list.command {
+            Command::Config {
+                command:
+                    ConfigCommand::Task {
+                        command: ConfigTaskCommand::List(_),
+                    },
+            } => {}
+            _ => panic!("expected `config task list`"),
+        }
+
+        let show = Cli::try_parse_from([
+            "defra-agent",
+            "config",
+            "task",
+            "show",
+            "--task-id",
+            "host-check",
+        ])
+        .expect("config task show should parse");
+        match show.command {
+            Command::Config {
+                command:
+                    ConfigCommand::Task {
+                        command: ConfigTaskCommand::Show(args),
+                    },
+            } => {
+                assert_eq!(args.task_id, None);
+                assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
+            }
+            _ => panic!("expected `config task show`"),
+        }
     }
 }

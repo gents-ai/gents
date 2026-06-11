@@ -2,6 +2,7 @@ import Proofs.Recovery.Sweeps.RequestResponse
 import Proofs.Recovery.Sweeps.ToolCalls
 import Proofs.Recovery.Sweeps.DetachedBridge
 import Proofs.Recovery.Sweeps.Inference
+import Proofs.Recovery.Sweeps.SubagentLiveness
 
 /-! Registry and persisted-collection coverage theorem for recovery sweeps. -/
 
@@ -13,6 +14,8 @@ def registeredRecoverySweeps : List RecoverySweep :=
   , toolCallRecoverySweep
   , detachedBridgeRecoverySweep
   , inferenceCallRecoverySweep
+  , expiredSubagentChildSweep
+  , queuedDescendantSweep
   ]
 
 def registeredRecoverySweepIds : List String :=

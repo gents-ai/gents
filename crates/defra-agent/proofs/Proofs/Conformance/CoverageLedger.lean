@@ -447,7 +447,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "slot_cases"
       "InferenceCallSlotAccounting"
-      "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic")
+      "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "fleet_cases"
