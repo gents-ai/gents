@@ -44,18 +44,16 @@ use lean_vocab_test::{
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
     lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
-    lean_managed_exec_liveness_cases, lean_mcp_health_cases,
+    lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_process_transition_cases,
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
     lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
-    lean_process_transition_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
-    lean_response_interrupt_flow_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
-    lean_session_recovery_case,
-    lean_state_machine_contract, lean_subagent_delegation_graph_cases, lean_transcript_case,
-    lean_transcript_cases, lean_vocabulary_values,
-    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_session_recovery_case, lean_state_machine_contract, lean_subagent_delegation_graph_cases,
+    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -77,10 +75,10 @@ use support::{
 mod background;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
-#[path = "conformance/command_policy.rs"]
-mod command_policy;
 #[path = "conformance/codex_shim.rs"]
 mod codex_shim;
+#[path = "conformance/command_policy.rs"]
+mod command_policy;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/event_delivery.rs"]
@@ -139,14 +137,12 @@ fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
 
 #[tokio::test]
 async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
-    background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant()
-        .await;
+    background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant().await;
 }
 
 #[tokio::test]
 async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
-    background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace()
-        .await;
+    background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace().await;
 }
 
 #[test]
@@ -203,8 +199,7 @@ async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
 
 #[test]
 fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
-    tool_execution::generated_tool_execution_cases_cover_preflight_and_retry_contracts(
-    );
+    tool_execution::generated_tool_execution_cases_cover_preflight_and_retry_contracts();
 }
 
 #[test]
@@ -250,8 +245,7 @@ fn lean_tool_call_cancel_actions_name_cancel_cause() {
 
 #[test]
 fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
-    fleet::generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
-    );
+    fleet::generated_slot_accounting_cases_pin_inference_and_fleet_contracts();
 }
 
 #[tokio::test]

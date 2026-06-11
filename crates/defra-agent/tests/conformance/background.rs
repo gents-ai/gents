@@ -1082,4 +1082,3 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         other => panic!("unexpected R4c witness variant: {other:?}"),
     }
 }
-

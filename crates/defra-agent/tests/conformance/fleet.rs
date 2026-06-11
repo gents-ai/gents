@@ -228,4 +228,3 @@ pub(super) fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
     assert_eq!(fleet_bound.max_concurrent, 2);
     assert!(fleet_bound.bounded_by_max_concurrent);
 }
-

@@ -2376,4 +2376,3 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
     );
     support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")
 }
-
