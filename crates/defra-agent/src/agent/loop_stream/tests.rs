@@ -729,6 +729,13 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
                 }
             }
             Message::User { content } => {
+                let has_tool_results = content
+                    .iter()
+                    .any(|item| matches!(item, UserContent::ToolResult(_)));
+                assert!(
+                    has_tool_results || pending_call_keys.is_empty(),
+                    "turn {turn}: ordinary user content before prior tool calls were resolved"
+                );
                 for item in content.iter() {
                     if let UserContent::ToolResult(tool_result) = item {
                         let key = tool_result
@@ -744,7 +751,10 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
                     }
                 }
             }
-            Message::System { .. } => {}
+            Message::System { .. } => assert!(
+                pending_call_keys.is_empty(),
+                "turn {turn}: system message before prior tool calls were resolved"
+            ),
         }
     }
     assert!(

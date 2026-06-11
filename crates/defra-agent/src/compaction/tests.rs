@@ -313,6 +313,54 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
 }
 
 #[test]
+fn drop_orphaned_tool_results_removes_results_after_conversation_resumes() {
+    // OpenAI chat-completions accepts tool results only while they are closing
+    // the active assistant tool-call turn. A matching call somewhere earlier in
+    // the transcript is not enough once normal conversation has resumed.
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![tool_call_content("call-A")],
+        },
+        text_msg("assistant", "I moved on without the tool result."),
+        tool_result_msg("call-A", "late result"),
+    ];
+
+    let out = super::history::drop_orphaned_tool_results(messages);
+
+    assert_eq!(
+        out.len(),
+        2,
+        "late tool result must be dropped after assistant conversation resumes; got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|message| matches!(message,
+            Message::User { content }
+                if content.iter().any(|item| matches!(item, UserContent::ToolResult(_))))),
+        "no tool result should survive after the active tool-call turn closed"
+    );
+}
+
+#[test]
+fn sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call() {
+    let messages = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![tool_call_content("call-A")],
+        },
+        text_msg("assistant", "No tool result arrived."),
+        tool_result_msg("call-A", "late result"),
+    ];
+
+    let out = super::sanitize_history_for_provider(messages);
+    assert_eq!(
+        out,
+        vec![text_msg("assistant", "No tool result arrived.")],
+        "the stale result is orphaned, then the now-unpaired tool call is dropped"
+    );
+}
+
+#[test]
 fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
     // Unpaired call AND orphaned result in one history: both removed, the
     // paired exchange survives.

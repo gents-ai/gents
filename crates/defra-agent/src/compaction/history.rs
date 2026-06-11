@@ -103,46 +103,60 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     kept_messages
 }
 
-/// Drop tool-result user content whose assistant tool-call does not PRECEDE it
-/// in the message list, at the provider-send boundary.
+/// Drop tool-result user content whose assistant tool-call turn is not actively
+/// awaiting it at the provider-send boundary.
 ///
 /// The inverse of [`drop_unpaired_tool_calls`]: a compaction split
 /// (`split_messages_for_summary`) or compacted-prefix drop can place an
 /// assistant tool-call in the compacted-away window while its result message
-/// survives in the recent window. Providers reject a tool-result message with
-/// no preceding assistant tool call, so the orphan is dropped (its information
-/// lives on in the compaction summary and the durable AgentToolCall row). A
-/// user message left with no content is dropped entirely.
+/// survives in the recent window. Providers also reject a tool-result message
+/// after normal conversation has resumed, even if a matching call appears
+/// somewhere earlier in the transcript. Track only the currently open
+/// assistant tool-call turn: matching results close pending calls; any ordinary
+/// message or new assistant turn clears the old pending set. Orphan/stale
+/// results are dropped (their information lives on in the compaction summary
+/// and the durable AgentToolCall row). A user message left with no content is
+/// dropped entirely.
 pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
-    let mut seen_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut kept_messages = Vec::with_capacity(messages.len());
     for message in messages {
         match message {
             Message::Assistant { id, content } => {
+                pending_calls.clear();
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
-                        seen_calls.insert(tool_call_key(tool_call));
+                        pending_calls.insert(tool_call_key(tool_call));
                     }
                 }
                 kept_messages.push(Message::Assistant { id, content });
             }
             Message::User { content } => {
+                let has_plain_content = content
+                    .iter()
+                    .any(|item| !matches!(item, UserContent::ToolResult(_)));
                 let kept: Vec<UserContent> = content
                     .into_iter()
                     .filter(|item| match item {
                         UserContent::ToolResult(tool_result) => {
-                            seen_calls.contains(&tool_result_key(tool_result))
+                            pending_calls.remove(&tool_result_key(tool_result))
                         }
                         _ => true,
                     })
                     .collect();
+                if has_plain_content {
+                    pending_calls.clear();
+                }
                 // Content is non-empty by convention (was `OneOrMany`); an
                 // emptied message is dropped rather than sent hollow.
                 if !kept.is_empty() {
                     kept_messages.push(Message::User { content: kept });
                 }
             }
-            other => kept_messages.push(other),
+            other => {
+                pending_calls.clear();
+                kept_messages.push(other);
+            }
         }
     }
     kept_messages

@@ -1,10 +1,12 @@
 //! PromptAssembly conformance (issue #448).
 //!
-//! Mirrors the Lean model in `proofs/Proofs/PromptAssembly/` against the Rust
-//! provider-input boundary `compaction::sanitize_history_for_provider`. Each
-//! test names the theorem it fences; the vectors are the same shapes the Lean
-//! `Executable` definitions compute over (row-granular: one assistant
-//! tool-call message models one `assistantToolCalls` row).
+//! Mirrors the Lean PromptAssembly provider-input boundary against the Rust
+//! implementation in `compaction::sanitize_history_for_provider`. Each test
+//! names the theorem it fences; the vectors are the same row-granular shapes
+//! the Lean `Executable` definitions compute over, with the Rust assertions
+//! additionally enforcing the stricter provider shape that tool results must
+//! close the active assistant tool-call block before normal conversation
+//! resumes.
 //!
 //! Content-order normalization (`normalize_assistant_content_order`) is part
 //! of the Rust sanitizer but NOT yet part of the Lean model (deferred to the
@@ -58,43 +60,62 @@ fn user(text: &str) -> Message {
     }
 }
 
-/// The Lean `ProviderValid` predicate at row granularity: every tool result
-/// is preceded by its announcing call (`ResultsFollowCallsFrom`) and every
-/// announced call is resolved by a LATER result (`CallsFollowedByResults`).
+/// Provider-valid history at row granularity: every assistant tool-call row
+/// opens a pending result block, only matching tool results may appear while
+/// that block is open, and ordinary conversation may resume only after the
+/// pending block is closed.
 fn assert_provider_valid(msgs: &[Message]) {
-    let mut announced: Vec<String> = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     for message in msgs {
         match message {
             Message::Assistant { content, .. } => {
+                assert!(
+                    pending.is_empty(),
+                    "assistant turn arrived before prior tool calls were resolved: {pending:?}"
+                );
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
-                        announced.push(tool_call.id.clone());
                         pending.push(tool_call.id.clone());
                     }
                 }
             }
             Message::User { content } => {
+                let has_tool_results = content
+                    .iter()
+                    .any(|item| matches!(item, UserContent::ToolResult(_)));
+                if !has_tool_results {
+                    assert!(
+                        pending.is_empty(),
+                        "ordinary user content arrived before tool calls were resolved: {pending:?}"
+                    );
+                    continue;
+                }
                 for item in content.iter() {
                     if let UserContent::ToolResult(tool_result) = item {
                         let key = tool_result
                             .call_id
                             .clone()
                             .unwrap_or_else(|| tool_result.id.clone());
+                        let position = pending.iter().position(|call| call == &key);
                         assert!(
-                            announced.contains(&key),
-                            "ResultsFollowCalls violated: result '{key}' has no preceding call"
+                            position.is_some(),
+                            "tool result '{key}' is not closing the active tool-call turn"
                         );
-                        pending.retain(|c| c != &key);
+                        pending.remove(position.unwrap());
                     }
                 }
             }
-            Message::System { .. } => {}
+            Message::System { .. } => {
+                assert!(
+                    pending.is_empty(),
+                    "system content arrived before tool calls were resolved: {pending:?}"
+                );
+            }
         }
     }
     assert!(
         pending.is_empty(),
-        "CallsFollowedByResults violated: unpaired calls {pending:?}"
+        "provider history ended with unpaired calls {pending:?}"
     );
 }
 
@@ -125,6 +146,20 @@ fn t1_sanitize_is_sound_on_dirty_input() {
 fn t1_composition_order_result_before_call_sanitizes_to_empty() {
     let out = sanitize_history_for_provider(vec![result("call-a"), assistant_calls(&["call-a"])]);
     assert!(out.is_empty(), "expected empty, got {out:?}");
+}
+
+/// T1 active-turn direction: a result that matches an earlier call is still
+/// stale if normal conversation resumed first. The result must drop, and then
+/// the now-unpaired assistant call drops too.
+#[test]
+fn t1_result_after_conversation_resumes_sanitizes_to_plain_history() {
+    let out = sanitize_history_for_provider(vec![
+        assistant_calls(&["call-a"]),
+        user("already moved on"),
+        result("call-a"),
+    ]);
+    assert_eq!(out, vec![user("already moved on")]);
+    assert_provider_valid(&out);
 }
 
 /// T2 (`sanitize_fixpoint`): provider-valid history passes through
