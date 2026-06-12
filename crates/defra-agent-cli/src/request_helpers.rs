@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent::{
-    graphql::escape_graphql_string, skills::selected_skill_ids_from_prompt_slash_commands,
-};
+use defra_agent::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
 use defra_agent_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -203,8 +201,8 @@ pub(crate) async fn create_agent_request(
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
-    let request_metadata =
-        metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
+    let (request_content, request_metadata) =
+        content_and_metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = session_id
         .map(ToOwned::to_owned)
@@ -286,7 +284,7 @@ pub(crate) async fn create_agent_request(
         session_id = escape_graphql_string(&session_id),
         retry_parent = escape_graphql_string(retry_parent_value),
         retry_root = escape_graphql_string(&retry_root_value),
-        content = escape_graphql_string(content),
+        content = escape_graphql_string(&request_content),
         request_override_fields = request_override_fields,
     );
     post_graphql(graphql, &mutation).await?;
@@ -307,44 +305,55 @@ pub(crate) async fn create_agent_request(
     })
 }
 
-pub(crate) fn metadata_with_prompt_selected_skill_ids(
+pub(crate) fn content_and_metadata_with_prompt_selected_skill_ids(
     metadata: Option<&str>,
     content: &str,
-) -> Option<String> {
-    let selected = selected_skill_ids_from_prompt_slash_commands(content);
+) -> (String, Option<String>) {
+    let selection = prompt_slash_skill_selection(content);
+    let Some(metadata) = metadata_with_selected_skill_ids(metadata, &selection.selected_skill_ids)
+    else {
+        return (content.to_string(), metadata.map(ToOwned::to_owned));
+    };
+    (selection.prompt, metadata)
+}
+
+fn metadata_with_selected_skill_ids(
+    metadata: Option<&str>,
+    selected: &[String],
+) -> Option<Option<String>> {
     if selected.is_empty() {
-        return metadata.map(ToOwned::to_owned);
+        return Some(metadata.map(ToOwned::to_owned));
     }
 
     let mut value = match metadata.map(str::trim).filter(|value| !value.is_empty()) {
         Some(raw) => match serde_json::from_str::<Value>(raw) {
             Ok(value) if value.is_object() => value,
-            _ => return metadata.map(ToOwned::to_owned),
+            _ => return None,
         },
         None => serde_json::json!({}),
     };
 
     let Some(object) = value.as_object_mut() else {
-        return metadata.map(ToOwned::to_owned);
+        return None;
     };
     let entry = object
         .entry("selected_skill_ids".to_string())
         .or_insert_with(|| serde_json::json!([]));
     if !entry.is_array() {
-        return metadata.map(ToOwned::to_owned);
+        return None;
     }
     let Some(ids) = entry.as_array_mut() else {
-        return metadata.map(ToOwned::to_owned);
+        return None;
     };
     for id in selected {
         let already_present = ids
             .iter()
             .any(|existing| existing.as_str() == Some(id.as_str()));
         if !already_present {
-            ids.push(Value::String(id));
+            ids.push(Value::String(id.clone()));
         }
     }
-    Some(value.to_string())
+    Some(Some(value.to_string()))
 }
 
 /// Poll both `AgentRequest.lifecycle_state` and the latest `AgentResponse`
@@ -660,11 +669,12 @@ pub(crate) async fn fetch_request_view(
 
 #[cfg(test)]
 mod tests {
-    use super::metadata_with_prompt_selected_skill_ids;
+    use super::content_and_metadata_with_prompt_selected_skill_ids;
 
     #[test]
     fn slash_prompt_adds_selected_skill_ids_metadata() {
-        let metadata = metadata_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
+        let (_content, metadata) =
+            content_and_metadata_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
         assert_eq!(
             metadata.as_deref(),
             Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
@@ -673,11 +683,11 @@ mod tests {
 
     #[test]
     fn slash_prompt_merges_existing_selected_skill_ids() {
-        let metadata = metadata_with_prompt_selected_skill_ids(
+        let (_content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(
             Some(r#"{"codex_shim":{},"selected_skill_ids":["triage"]}"#),
             "/vuln-scan /work",
-        )
-        .expect("metadata");
+        );
+        let metadata = metadata.expect("metadata");
         assert!(metadata.contains(r#""codex_shim":{}"#));
         assert!(metadata.contains(r#""triage""#));
         assert!(metadata.contains(r#""vuln-scan""#));
@@ -685,9 +695,21 @@ mod tests {
 
     #[test]
     fn invalid_existing_metadata_is_preserved() {
+        let (content, metadata) =
+            content_and_metadata_with_prompt_selected_skill_ids(Some("not json"), "/vuln-scan");
+        assert_eq!(content, "/vuln-scan");
+        assert_eq!(metadata, Some("not json".to_string()));
+    }
+
+    #[test]
+    fn slash_prompt_strips_control_syntax_from_request_content() {
+        let (content, metadata) =
+            content_and_metadata_with_prompt_selected_skill_ids(None, "/vuln-scan\nReview /work");
+
+        assert_eq!(content, "Review /work");
         assert_eq!(
-            metadata_with_prompt_selected_skill_ids(Some("not json"), "/vuln-scan"),
-            Some("not json".to_string())
+            metadata.as_deref(),
+            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
         );
     }
 }

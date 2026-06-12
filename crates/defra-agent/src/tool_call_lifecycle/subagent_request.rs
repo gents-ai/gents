@@ -180,11 +180,13 @@ async fn create_subagent_request_inner(
     let escaped_agent_did = escape_graphql_string(&agent_did);
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
     let escaped_session_id = escape_graphql_string(&new_session_id);
+    let prompt_selection = crate::skills::prompt_slash_skill_selection(&prompt);
+    let prompt = prompt_selection.prompt;
     let escaped_prompt = escape_graphql_string(&prompt);
     let escaped_created_at = escape_graphql_string(&now);
     let escaped_parent_request_id = escape_graphql_string(&parent_request_id);
     let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
-    let metadata_field = selected_skill_metadata_field(&prompt);
+    let metadata_field = selected_skill_metadata_field(&prompt_selection.selected_skill_ids);
 
     let deadline_field = deadline
         .map(|d| {
@@ -233,8 +235,7 @@ async fn create_subagent_request_inner(
     Ok(request_id)
 }
 
-fn selected_skill_metadata_field(prompt: &str) -> String {
-    let selected_skill_ids = crate::skills::selected_skill_ids_from_prompt_slash_commands(prompt);
+fn selected_skill_metadata_field(selected_skill_ids: &[String]) -> String {
     if selected_skill_ids.is_empty() {
         return String::new();
     }
@@ -323,7 +324,8 @@ mod tests {
 
     #[test]
     fn subagent_prompt_slash_command_adds_selected_skill_metadata() {
-        let field = selected_skill_metadata_field("/vuln-scan /work");
+        let selected = vec!["vuln-scan".to_string()];
+        let field = selected_skill_metadata_field(&selected);
 
         assert!(field.contains("metadata:"));
         assert!(field.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));
@@ -331,9 +333,6 @@ mod tests {
 
     #[test]
     fn subagent_prompt_without_leading_slash_keeps_metadata_absent() {
-        assert_eq!(
-            selected_skill_metadata_field("Review /vuln-scan mention"),
-            ""
-        );
+        assert_eq!(selected_skill_metadata_field(&[]), "");
     }
 }
