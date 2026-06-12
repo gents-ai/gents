@@ -42,7 +42,7 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     assert!(set
         .get("note")
         .and_then(Value::as_str)
-        .is_some_and(|note| note.contains("Headless defra-agent server")));
+        .is_some_and(|note| note.contains("running defra-agent runtime")));
 
     let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));

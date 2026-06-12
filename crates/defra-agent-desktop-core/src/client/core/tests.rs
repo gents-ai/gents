@@ -8,7 +8,6 @@ use defra_p2p_adapter::{
     ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest, ReplicatorInfo,
 };
 
-use super::bootstrap::{select_local_runtime_pairing_addr, select_runtime_pairing_addr};
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer, saved_peer_needs_repair,
 };
@@ -243,43 +242,6 @@ impl P2POps for RecordingP2P {
     }
 }
 
-#[test]
-fn select_local_runtime_pairing_addr_prefers_loopback() {
-    let selected = select_local_runtime_pairing_addr(&[
-        "100.111.156.102:56000/p2p/peer-alpha".to_string(),
-        "127.0.0.1:56000/p2p/peer-alpha".to_string(),
-        "peer-alpha".to_string(),
-    ]);
-
-    assert_eq!(selected.as_deref(), Some("127.0.0.1:56000/p2p/peer-alpha"));
-}
-
-#[test]
-fn select_local_runtime_pairing_addr_falls_back_to_first_nonempty() {
-    let selected = select_local_runtime_pairing_addr(&[
-        "endpointabc123".to_string(),
-        "peer-alpha".to_string(),
-    ]);
-
-    assert_eq!(selected.as_deref(), Some("endpointabc123"));
-}
-
-#[test]
-fn select_runtime_pairing_addr_avoids_loopback_for_remote_graphql() {
-    let selected = select_runtime_pairing_addr(
-        &[
-            "127.0.0.1:56000/p2p/peer-alpha".to_string(),
-            "100.73.235.38:56000/p2p/peer-alpha".to_string(),
-        ],
-        "http://100.73.235.38:9181/api/v0/graphql",
-    );
-
-    assert_eq!(
-        selected.as_deref(),
-        Some("100.73.235.38:56000/p2p/peer-alpha")
-    );
-}
-
 #[tokio::test]
 async fn repair_saved_peer_refreshes_network_before_redial() {
     let recording = Arc::new(RecordingP2P::default());
@@ -304,7 +266,6 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
         }),
         false,
         false,
-        None,
     )
     .await;
 
@@ -339,7 +300,6 @@ async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
         }),
         true,
         true,
-        None,
     )
     .await;
 

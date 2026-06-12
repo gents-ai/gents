@@ -10,8 +10,6 @@ use crate::support::pairing_conformance::scenario::Scenario;
 
 #[tokio::test]
 async fn pairing_reconcile_scenarios_satisfy_safety_and_liveness() {
-    std::env::set_var("DEFRA_AGENT_PAIRING_RECONCILE", "1");
-
     for fixture in [
         "install_teardown_happy_path.json",
         "replicator_install_teardown.json",

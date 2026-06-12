@@ -12,7 +12,7 @@ use crate::{
 
 use super::collections::expand_p2p_collection_args;
 
-const PAIRINGS_RECONCILE_NOTE: &str = "Desired pairing rows are reconciled by the desktop supervisor when DEFRA_AGENT_PAIRING_RECONCILE=1 and the peer is saved. Headless defra-agent server does not run desktop pairing reconcile; use `defra-agent p2p pair --peer <multiaddr>` or the p2p collections/replicators commands for immediate live headless wiring.";
+const PAIRINGS_RECONCILE_NOTE: &str = "Desired pairing rows are reconciled by the running defra-agent runtime. The reconciler only removes wiring it previously applied; use `defra-agent p2p pair --peer <multiaddr>` or the p2p collections/replicators commands for immediate manual live wiring.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingDesiredRow {

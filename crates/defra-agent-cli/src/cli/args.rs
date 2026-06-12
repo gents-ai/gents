@@ -1777,10 +1777,10 @@ pub(crate) enum P2pCommand {
         about = "Remove a desired out-of-band P2P pairing",
         hide = true,
         after_help = "\
-Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
-reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
-should change live connectivity immediately, use p2p collections/replicators \
-commands against the running server."
+Removes the PeerPairingDesired row for --peer. The runtime reconciler tears \
+down only wiring it previously applied for that pairing. For immediate manual \
+live wiring changes, use p2p collections/replicators commands against the \
+running server."
     )]
     Unpair(P2pPairingRefArgs),
     #[command(
@@ -1866,10 +1866,10 @@ pub(crate) enum P2pPairingsCommand {
     #[command(
         about = "Create or update a desired out-of-band P2P pairing",
         after_help = "\
-Writes PeerPairingDesired for desktop pairing reconcile. Desktop reconcile \
-runs when DEFRA_AGENT_PAIRING_RECONCILE=1 and a saved peer record exists. For \
-headless servers, use `defra-agent p2p pair --peer <multiaddr>` to apply live \
-P2P wiring immediately."
+Writes PeerPairingDesired for runtime pairing reconcile. A running \
+defra-agent runtime applies desired rows on its pairing sweep. Use \
+`defra-agent p2p pair --peer <multiaddr>` to apply live P2P wiring \
+immediately."
     )]
     Set(P2pPairingSetArgs),
     #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
