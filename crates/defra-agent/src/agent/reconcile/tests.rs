@@ -28,6 +28,9 @@ struct PairingReconcileRuntimeProbes {
     operator_write_diverges: bool,
     install_converges: bool,
     teardown_converges: bool,
+    replicator_install_converges: bool,
+    replicator_teardown_converges: bool,
+    dial_converges: bool,
     crash_restarts_slot: bool,
 }
 
@@ -144,6 +147,9 @@ async fn pairing_reconcile_state_machine_contract_is_complete() {
         operator_write_diverges: operator_write_changes_snapshot_fingerprint(node.as_ref()).await,
         install_converges: reconcile_install_applies_added_behavior(node.as_ref()).await,
         teardown_converges: reconcile_teardown_applies_removed_behavior(node.as_ref()).await,
+        replicator_install_converges: pairing_replicator_install_diff_converges(),
+        replicator_teardown_converges: pairing_replicator_teardown_diff_converges(),
+        dial_converges: pairing_dial_is_available_for_desired_addresses(),
         crash_restarts_slot: slot_panic_restarts_behavior(node.as_ref()).await,
     };
 
@@ -183,14 +189,68 @@ fn rust_pairing_reconcile_step(
     probes: &PairingReconcileRuntimeProbes,
 ) -> Option<&'static str> {
     match (phase, action) {
-        ("idle" | "converged" | "crashed", "operatorWrite") if probes.operator_write_diverges => {
+        ("idle" | "converged" | "crashed", "operatorWrite" | "operatorDelete")
+            if probes.operator_write_diverges =>
+        {
             Some("diverged")
         }
+        ("idle", "readFailure") => Some("idle"),
+        ("converged", "readFailure") => Some("converged"),
+        ("diverged", "readFailure") => Some("diverged"),
+        ("crashed", "readFailure") => Some("crashed"),
+        ("diverged", "dial") if probes.dial_converges => Some("converged"),
+        ("converged" | "diverged", "peerDisconnected") => Some("diverged"),
         ("diverged", "reconcileInstall") if probes.install_converges => Some("converged"),
         ("diverged", "reconcileTeardown") if probes.teardown_converges => Some("converged"),
+        ("diverged", "reconcileInstallReplicator") if probes.replicator_install_converges => {
+            Some("converged")
+        }
+        ("diverged", "reconcileTeardownReplicator") if probes.replicator_teardown_converges => {
+            Some("converged")
+        }
         (_, "crash") if probes.crash_restarts_slot => Some("crashed"),
         _ => None,
     }
+}
+
+fn pairing_replicator_install_diff_converges() -> bool {
+    use crate::agent::p2p_reconcile::{
+        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
+    };
+    let desired = PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    };
+    let actual = PairingActual::default();
+    let applied = PairingApplied::default();
+    compute_owned_pairing_diff(&desired, &actual, &applied)
+        == vec![DiffOp::InstallReplicator("addr1".into())]
+}
+
+fn pairing_replicator_teardown_diff_converges() -> bool {
+    use crate::agent::p2p_reconcile::{
+        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
+    };
+    let desired = PairingDesired::default();
+    let actual = PairingActual {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    };
+    let applied = PairingApplied {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    };
+    compute_owned_pairing_diff(&desired, &actual, &applied)
+        == vec![DiffOp::TeardownReplicator("addr1".into())]
+}
+
+fn pairing_dial_is_available_for_desired_addresses() -> bool {
+    use crate::agent::p2p_reconcile::PairingDesired;
+    PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    }
+    .has_wiring()
 }
 
 async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {

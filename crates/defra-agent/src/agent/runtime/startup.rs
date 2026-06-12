@@ -32,6 +32,7 @@ enum BackgroundTaskResult {
     Control(Result<()>),
     SubagentCompletion(Result<()>),
     CrossDeploymentCancelMirror(Result<()>),
+    PairingReconcile(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -296,6 +297,14 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let pairing_node = agent.node.clone();
+    let pairing_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::PairingReconcile(
+            crate::agent::p2p_reconcile::run_pairing_reconciler(pairing_node, pairing_cancel).await,
+        )
+    });
+
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
@@ -389,6 +398,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
             Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
+            Ok(BackgroundTaskResult::PairingReconcile(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),
