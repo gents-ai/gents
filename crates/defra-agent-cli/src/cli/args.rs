@@ -72,7 +72,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SchemaCommand,
     },
-    #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
+    #[command(
+        about = "Show stored runtime, request, or response state",
+        after_help = SHOW_AFTER_HELP,
+        hide = true
+    )]
     Show {
         #[command(subcommand)]
         command: ShowCommand,
@@ -962,10 +966,10 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
-    #[command(about = "Inspect and fire configured Task documents")]
+    #[command(about = "Inspect and fire configured Task documents", hide = true)]
     Task {
         #[command(subcommand)]
-        command: ConfigTaskCommand,
+        command: TaskCommand,
     },
     #[command(about = "Create, list, show, delete, enable, or disable Skill documents")]
     Skill {
@@ -1336,16 +1340,6 @@ pub(crate) enum InferenceProfileCommand {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ConfigTaskCommand {
-    #[command(name = "list", about = "List configured Task documents")]
-    List(TaskListArgs),
-    #[command(name = "show", about = "Show a configured Task document")]
-    Show(TaskShowArgs),
-    #[command(name = "run", about = "Run a configured Task once, now")]
-    Run(ConfigTaskRunArgs),
-}
-
-#[derive(Subcommand)]
 pub(crate) enum TaskCommand {
     #[command(name = "list", about = "List configured Task documents")]
     List(TaskListArgs),
@@ -1678,6 +1672,7 @@ pub(crate) enum P2pCommand {
     },
     #[command(
         about = "Remove a desired out-of-band P2P pairing",
+        hide = true,
         after_help = "\
 Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
 reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
@@ -2510,7 +2505,7 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::Run(args),
+                        command: TaskCommand::Run(args),
                     },
             } => assert_task_run_args(args),
             _ => panic!("expected `config task run`"),
@@ -2525,7 +2520,7 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::List(_),
+                        command: TaskCommand::List(_),
                     },
             } => {}
             _ => panic!("expected `config task list`"),
@@ -2544,13 +2539,24 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::Show(args),
+                        command: TaskCommand::Show(args),
                     },
             } => {
                 assert_eq!(args.task_id, None);
                 assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
             }
             _ => panic!("expected `config task show`"),
+        }
+    }
+
+    #[test]
+    fn deprecated_spellings_still_parse() {
+        for argv in [
+            vec!["defra-agent", "config", "task", "list"],
+            vec!["defra-agent", "p2p", "unpair", "--peer", "p1"],
+            vec!["defra-agent", "show", "request", "req-1"],
+        ] {
+            Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
         }
     }
 }
