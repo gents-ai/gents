@@ -23,9 +23,9 @@ peer directory. To seed a remote or deployed runtime from its operations API,
 pass its GraphQL or status endpoint:
 
 ```bash
-defra-agent-desktop init --graphql http://agent-host:9181/api/v0/graphql
+defra-agent-desktop init --graphql http://agent-host:9191/api/v0/graphql
 # or:
-defra-agent-desktop init --status-endpoint http://agent-host:9181/status
+defra-agent-desktop init --status-endpoint http://agent-host:9191/status
 ```
 
 The discovery URL is used to read connection metadata; the saved deployment

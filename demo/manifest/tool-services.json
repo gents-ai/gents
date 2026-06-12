@@ -1,12 +1,1 @@
-[
-  {
-    "service_id": "observability-mcp",
-    "display_name": "Observability MCP",
-    "description": "Fleet metrics, logs, anomaly detection, and ops reporting.",
-    "hostname": "studio-1",
-    "tailscale_ip": "100.69.4.79",
-    "lan_ip": null,
-    "mcp_port": 9201,
-    "mcp_path": "/mcp"
-  }
-]
+[]

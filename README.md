@@ -26,7 +26,7 @@ Want the agent to actually change things? Re-run `defra-agent init --write`
 `init` defaults to llama.cpp's server (`http://127.0.0.1:8080/v1`). Point it
 at anything OpenAI-compatible: `defra-agent init --inference-url
 http://HOST:PORT/v1 --model-name MODEL`, or use a preset
-(`--backend-preset ollama|openai|openrouter|chatgpt-codex|vllm`).
+(`--backend-preset ollama|llama-cpp|openai|openrouter|chatgpt-codex|vllm`).
 
 The full walkthrough, what each permission preset guarantees, and the fallback
 `chat` REPL: **[docs/demo.md](docs/demo.md)**. Desktop app, fleet bring-up,

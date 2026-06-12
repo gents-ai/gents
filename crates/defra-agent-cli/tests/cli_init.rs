@@ -274,6 +274,31 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn init_hosted_preset_without_default_requires_model_name() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let output = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("init")
+        .arg("--backend-preset")
+        .arg("openai")
+        .output()
+        .context("running defra-agent init with hosted preset and no model")?;
+
+    assert!(!output.status.success(), "init should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--model-name is required for --backend-preset openai"),
+        "expected missing model error, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

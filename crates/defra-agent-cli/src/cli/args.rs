@@ -315,7 +315,7 @@ pub(crate) struct InitArgs {
     pub(crate) api_key_env_var: Option<String>,
     #[arg(
         long,
-        help = "Model id to bind to the default behavior. Defaults to the backend preset's model"
+        help = "Model id to bind to the default behavior. Required for presets without a local default model"
     )]
     pub(crate) model_name: Option<String>,
     #[arg(long, default_value_t = 2)]
@@ -373,14 +373,9 @@ impl InitArgs {
             .or(self.inference_endpoint_legacy.as_deref())
     }
 
-    pub(crate) fn resolved_model_name(&self) -> &str {
-        match self.model_name.as_deref() {
-            Some(explicit) => explicit,
-            None => self
-                .backend_preset
-                .and_then(BackendPresetArg::default_model_name)
-                .unwrap_or(crate::DEFAULT_INIT_MODEL_NAME),
-        }
+    pub(crate) fn preset_default_model_name(&self) -> Option<&'static str> {
+        self.backend_preset
+            .and_then(BackendPresetArg::default_model_name)
     }
 }
 

@@ -154,15 +154,15 @@ you can audit afterwards (`defra-agent show response <request-id>`, or
 
 ```bash
 defra-agent init --backend-preset ollama --model-name MODEL
-defra-agent init --backend-preset openai --model-name gpt-5.2
+defra-agent init --backend-preset openai --model-name MODEL
 defra-agent init --backend-preset openrouter --model-name MODEL
-defra-agent init --backend-preset chatgpt-codex   # uses your ~/.codex OAuth
+defra-agent init --backend-preset chatgpt-codex --model-name MODEL   # uses your ~/.codex OAuth
 defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
 ```
 
 If the endpoint needs auth, pass `--api-key` or `--api-key-env-var NAME`.
-Hosted presets default to their standard env vars (`OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`).
+OpenAI and OpenRouter presets default to their standard env vars
+(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
 
 ## Off the happy path
 

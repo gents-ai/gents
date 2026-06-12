@@ -429,10 +429,7 @@ async fn initialize_runtime_home(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let model_name = args.resolved_model_name().trim();
-    if model_name.is_empty() {
-        anyhow::bail!("--model-name must not be empty");
-    }
+    let model_name = resolve_init_model_name(args)?;
     let backend = resolve_init_backend_config(args)?;
     let backend_id_was_generated = explicit_backend_id.is_none();
     let backend_id = explicit_backend_id
@@ -806,6 +803,29 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
         args.api_key_env_var.as_deref(),
         BackendResolutionMode::Init,
     )
+}
+
+fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
+    if let Some(explicit) = args.model_name.as_deref() {
+        let model_name = explicit.trim();
+        if model_name.is_empty() {
+            anyhow::bail!("--model-name must not be empty");
+        }
+        return Ok(model_name);
+    }
+
+    if let Some(default) = args.preset_default_model_name() {
+        return Ok(default);
+    }
+
+    if let Some(preset) = args.backend_preset {
+        anyhow::bail!(
+            "--model-name is required for --backend-preset {} because that preset has no safe default model",
+            preset.as_str()
+        );
+    }
+
+    Ok(crate::DEFAULT_INIT_MODEL_NAME)
 }
 
 fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
