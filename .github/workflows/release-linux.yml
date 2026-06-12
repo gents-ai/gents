@@ -17,6 +17,12 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # The workspace release profile uses fat LTO + one codegen unit. That has
+  # repeatedly OOM-killed the self-hosted Linux release runners during the final
+  # link, especially on spark. Keep Linux artifacts optimized, but use the same
+  # lower-memory ThinLTO shape as the local install profile.
+  CARGO_PROFILE_RELEASE_LTO: "thin"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
   RUST_BACKTRACE: "1"
 
 jobs:
