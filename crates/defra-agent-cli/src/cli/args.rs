@@ -1004,18 +1004,48 @@ pub(crate) enum BackendCommand {
     Set(BackendUpsertArgs),
     #[command(name = "discover-models")]
     DiscoverModels(BackendDiscoverModelsArgs),
+    #[command(name = "list", about = "List InferenceBackend documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an InferenceBackend document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an InferenceBackend document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
 pub(crate) enum BehaviorCommand {
     #[command(name = "set")]
     Set(BehaviorUpsertArgs),
+    #[command(name = "list", about = "List AgentBehavior documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an AgentBehavior document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an AgentBehavior document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ToolSelectionCommand {
     #[command(name = "set")]
     Set(ToolSelectionUpsertArgs),
+    #[command(name = "list", about = "List ToolSelection documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a ToolSelection document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete a ToolSelection document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
@@ -1153,6 +1183,30 @@ pub(crate) struct SkillRefArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ConfigListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ConfigShowArgs {
+    #[arg(long = "id", value_name = "ID")]
+    pub(crate) id_flag: Option<String>,
+    #[arg(value_name = "ID")]
+    pub(crate) id: Option<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -1337,6 +1391,16 @@ pub(crate) struct ToolSelectionUpsertArgs {
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
     Set(InferenceProfileUpsertArgs),
+    #[command(name = "list", about = "List InferenceProfile documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an InferenceProfile document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an InferenceProfile document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
