@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::client::PrincipalIdentity;
-
-use super::trait_def::{
+use defra_agent::agent::p2p_reconcile::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
+
+use crate::client::PrincipalIdentity;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTOR_DID_HEADER: &str = "x-defra-actor-did";
