@@ -13,17 +13,20 @@ namespace PairingReconcile
 
 open ReconcileState
 
-/-- Symmetric difference size between desired and actual collections. -/
+/-- Symmetric difference size between desired and actual managed wiring. -/
 def disagreementCount (s : ReconcileState) : Nat :=
   (s.desired.collections \ s.actual.collections).card +
-    (s.actual.collections \ s.desired.collections).card
+    (s.actual.collections \ s.desired.collections).card +
+    (s.desired.replicators \ s.actual.replicators).card +
+    (s.actual.replicators \ s.desired.replicators).card
 
 theorem converged_disagreementCount_zero
     {s : ReconcileState}
     (h : s.converged) :
     disagreementCount s = 0 := by
   unfold disagreementCount ReconcileState.converged at *
-  rw [h]
+  rcases h with ⟨h_collections, h_replicators⟩
+  rw [h_collections, h_replicators]
   simp
 
 theorem convergedState_has_zero_disagreement (s : ReconcileState) :

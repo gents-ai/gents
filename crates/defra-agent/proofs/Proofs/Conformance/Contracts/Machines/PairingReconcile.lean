@@ -17,6 +17,8 @@ def pairingReconcileActions : List (String × PairingReconcile.TransitionKind) :
   [ ("operatorWrite", .operatorWrite)
   , ("reconcileInstall", .reconcileInstall)
   , ("reconcileTeardown", .reconcileTeardown)
+  , ("reconcileInstallReplicator", .reconcileInstallReplicator)
+  , ("reconcileTeardownReplicator", .reconcileTeardownReplicator)
   , ("crash", .crash)
   ]
 

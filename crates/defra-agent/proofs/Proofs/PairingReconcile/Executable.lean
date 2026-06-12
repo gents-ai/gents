@@ -44,6 +44,8 @@ inductive TransitionKind where
   | operatorWrite
   | reconcileInstall
   | reconcileTeardown
+  | reconcileInstallReplicator
+  | reconcileTeardownReplicator
   | crash
   deriving DecidableEq, Repr
 
@@ -53,6 +55,8 @@ def fromString? : String → Option TransitionKind
   | "operatorWrite" => some .operatorWrite
   | "reconcileInstall" => some .reconcileInstall
   | "reconcileTeardown" => some .reconcileTeardown
+  | "reconcileInstallReplicator" => some .reconcileInstallReplicator
+  | "reconcileTeardownReplicator" => some .reconcileTeardownReplicator
   | "crash" => some .crash
   | _ => none
 
@@ -60,6 +64,8 @@ def toString : TransitionKind → String
   | .operatorWrite => "operatorWrite"
   | .reconcileInstall => "reconcileInstall"
   | .reconcileTeardown => "reconcileTeardown"
+  | .reconcileInstallReplicator => "reconcileInstallReplicator"
+  | .reconcileTeardownReplicator => "reconcileTeardownReplicator"
   | .crash => "crash"
 
 theorem fromString_toString (k : TransitionKind) :
@@ -75,6 +81,8 @@ def step? : PairingPhase → TransitionKind → Option PairingPhase
   | .crashed, .operatorWrite => some .diverged
   | .diverged, .reconcileInstall => some .converged
   | .diverged, .reconcileTeardown => some .converged
+  | .diverged, .reconcileInstallReplicator => some .converged
+  | .diverged, .reconcileTeardownReplicator => some .converged
   | _, .crash => some .crashed
   | _, _ => none
 
