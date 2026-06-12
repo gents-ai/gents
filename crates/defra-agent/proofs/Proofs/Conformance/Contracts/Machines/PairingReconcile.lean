@@ -15,6 +15,8 @@ def pairingReconcileStateNames : List String :=
 
 def pairingReconcileActions : List (String × PairingReconcile.TransitionKind) :=
   [ ("operatorWrite", .operatorWrite)
+  , ("operatorDelete", .operatorDelete)
+  , ("readFailure", .readFailure)
   , ("reconcileInstall", .reconcileInstall)
   , ("reconcileTeardown", .reconcileTeardown)
   , ("reconcileInstallReplicator", .reconcileInstallReplicator)

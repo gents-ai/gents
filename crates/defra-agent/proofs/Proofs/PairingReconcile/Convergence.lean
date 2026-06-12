@@ -1,5 +1,6 @@
 import Proofs.PairingReconcile.State
 import Proofs.PairingReconcile.Transition
+import Mathlib.Data.Finset.SDiff
 
 /-!
 # Pairing Reconcile Convergence
@@ -15,19 +16,32 @@ open ReconcileState
 
 /-- Symmetric difference size between desired and actual managed wiring. -/
 def disagreementCount (s : ReconcileState) : Nat :=
-  (s.desired.collections \ s.actual.collections).card +
-    (s.actual.collections \ s.desired.collections).card +
-    (s.desired.replicators \ s.actual.replicators).card +
-    (s.actual.replicators \ s.desired.replicators).card
+  match s.desired with
+  | none => 0
+  | some desired =>
+      (desired.collections \ s.actual.collections).card +
+      (desired.replicators \ s.actual.replicators).card +
+      (s.applied.collections \ desired.collections).card +
+      (s.applied.replicators \ desired.replicators).card
 
 theorem converged_disagreementCount_zero
     {s : ReconcileState}
     (h : s.converged) :
     disagreementCount s = 0 := by
-  unfold disagreementCount ReconcileState.converged at *
-  rcases h with ⟨h_collections, h_replicators⟩
-  rw [h_collections, h_replicators]
-  simp
+  unfold ReconcileState.converged at h
+  cases h_desired : s.desired with
+  | none =>
+      simp [disagreementCount, h_desired]
+  | some desired =>
+    simp [h_desired] at h
+    rcases h with ⟨h_desired_collections, h_desired_replicators,
+      h_applied_collections, h_applied_replicators⟩
+    simp [disagreementCount, h_desired,
+      Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
+      Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
+      Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
+      Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
+    ]
 
 theorem convergedState_has_zero_disagreement (s : ReconcileState) :
     disagreementCount (convergedState s) = 0 := by
@@ -41,6 +55,6 @@ theorem reconcile_converges_in_finite_steps
       post.converged ∧
       disagreementCount post = 0 := by
   refine ⟨convergedState s, ?_, convergedState_converged s, convergedState_has_zero_disagreement s⟩
-  simp [convergedState]
+  cases h : s.desired <;> simp [convergedState, h]
 
 end PairingReconcile

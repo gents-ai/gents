@@ -42,6 +42,8 @@ end PairingPhase
 /-- Stringly-typed transition kinds emitted by the supervisor. -/
 inductive TransitionKind where
   | operatorWrite
+  | operatorDelete
+  | readFailure
   | reconcileInstall
   | reconcileTeardown
   | reconcileInstallReplicator
@@ -53,6 +55,8 @@ namespace TransitionKind
 
 def fromString? : String → Option TransitionKind
   | "operatorWrite" => some .operatorWrite
+  | "operatorDelete" => some .operatorDelete
+  | "readFailure" => some .readFailure
   | "reconcileInstall" => some .reconcileInstall
   | "reconcileTeardown" => some .reconcileTeardown
   | "reconcileInstallReplicator" => some .reconcileInstallReplicator
@@ -62,6 +66,8 @@ def fromString? : String → Option TransitionKind
 
 def toString : TransitionKind → String
   | .operatorWrite => "operatorWrite"
+  | .operatorDelete => "operatorDelete"
+  | .readFailure => "readFailure"
   | .reconcileInstall => "reconcileInstall"
   | .reconcileTeardown => "reconcileTeardown"
   | .reconcileInstallReplicator => "reconcileInstallReplicator"
@@ -79,6 +85,10 @@ def step? : PairingPhase → TransitionKind → Option PairingPhase
   | .idle, .operatorWrite => some .diverged
   | .converged, .operatorWrite => some .diverged
   | .crashed, .operatorWrite => some .diverged
+  | .idle, .operatorDelete => some .diverged
+  | .converged, .operatorDelete => some .diverged
+  | .crashed, .operatorDelete => some .diverged
+  | phase, .readFailure => some phase
   | .diverged, .reconcileInstall => some .converged
   | .diverged, .reconcileTeardown => some .converged
   | .diverged, .reconcileInstallReplicator => some .converged

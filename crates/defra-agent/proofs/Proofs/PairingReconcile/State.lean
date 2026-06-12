@@ -33,6 +33,12 @@ structure PairingActual where
   replicators : Finset String
   deriving DecidableEq
 
+/-- Wiring introduced by this reconciler and therefore safe to remove. -/
+structure PairingApplied where
+  collections : Finset String
+  replicators : Finset String
+  deriving DecidableEq
+
 /-- One emitted RPC instruction, matching Rust `DiffOp`. -/
 inductive DiffOp where
   | installCollection (c : String)
@@ -44,8 +50,10 @@ inductive DiffOp where
 /-- Full reconcile state for one peer. -/
 structure ReconcileState where
   peer : PeerId
-  desired : PairingDesired
+  /-- `none` means the desired row read failed; `some ∅` means positive absence. -/
+  desired : Option PairingDesired
   actual : PairingActual
+  applied : PairingApplied
   pairing : List PairingCollectionStatus
   deriving DecidableEq
 
@@ -53,23 +61,39 @@ namespace ReconcileState
 
 /-- A peer is converged when desired and actual managed wiring sets match. -/
 def converged (s : ReconcileState) : Prop :=
-  s.desired.collections = s.actual.collections ∧
-    s.desired.replicators = s.actual.replicators
+  match s.desired with
+  | none => True
+  | some desired =>
+      desired.collections ⊆ s.actual.collections ∧
+      desired.replicators ⊆ s.actual.replicators ∧
+      s.applied.collections ⊆ desired.collections ∧
+      s.applied.replicators ⊆ desired.replicators
 
 instance (s : ReconcileState) : Decidable s.converged := by
+  classical
   unfold converged
-  infer_instance
+  cases s.desired <;> infer_instance
 
 /-- Canonical converged state reached after all pending diff ops are applied. -/
 def convergedState (s : ReconcileState) : ReconcileState :=
-  { s with actual := {
-      collections := s.desired.collections
-      replicators := s.desired.replicators
-    } }
+  match s.desired with
+  | none => s
+  | some desired =>
+      { s with
+        actual := {
+          collections := desired.collections
+          replicators := desired.replicators
+        }
+        applied := {
+          collections := desired.collections
+          replicators := desired.replicators
+        }
+      }
 
 theorem convergedState_converged (s : ReconcileState) :
     (convergedState s).converged := by
-  simp [converged, convergedState]
+  unfold converged convergedState
+  cases h : s.desired <;> simp [h]
 
 end ReconcileState
 
