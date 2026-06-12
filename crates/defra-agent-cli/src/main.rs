@@ -386,7 +386,11 @@ pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let argv = std::env::args().collect::<Vec<_>>();
+    if let Some(warning) = cli::deprecations::deprecation_warning(&argv) {
+        eprintln!("{warning}");
+    }
+    let cli = Cli::parse_from(argv);
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
