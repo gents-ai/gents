@@ -86,9 +86,17 @@ pub(super) async fn next_steering_request_after(
     queued_after_request_id: &str,
 ) -> Result<Option<NextSteeringRequest>> {
     let rows = load_thread_request_rows(state, thread_id).await?;
-    Ok(rows
-        .iter()
-        .filter(|row| row.lifecycle_state_is_active())
+    Ok(next_steering_request_after_from_rows(
+        &rows,
+        queued_after_request_id,
+    ))
+}
+
+fn next_steering_request_after_from_rows(
+    rows: &[RequestRow],
+    queued_after_request_id: &str,
+) -> Option<NextSteeringRequest> {
+    rows.iter()
         .filter(|row| steering_parent_id(row).as_deref() == Some(queued_after_request_id))
         .min_by(|left, right| {
             left.created_at
@@ -98,7 +106,7 @@ pub(super) async fn next_steering_request_after(
         .map(|row| NextSteeringRequest {
             request_id: row.request_id.clone(),
             lifecycle_state: row.lifecycle_state.clone(),
-        }))
+        })
 }
 
 pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
@@ -505,5 +513,33 @@ mod tests {
         assert_eq!(active.turn_id, "turn-1");
         assert_eq!(active.interrupt_request_id, "turn-1");
         assert_eq!(active.current_request_id, "steer-1");
+    }
+
+    #[test]
+    fn next_steering_request_includes_already_completed_child() {
+        let rows = vec![
+            row("turn-1", "completed", None),
+            row("steer-1", "completed", Some("turn-1")),
+        ];
+
+        let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
+
+        assert_eq!(next.request_id, "steer-1");
+        assert_eq!(next.lifecycle_state, "completed");
+        assert!(!next.is_pending());
+    }
+
+    #[test]
+    fn next_steering_request_preserves_queue_order_across_terminal_children() {
+        let rows = vec![
+            row("turn-1", "completed", None),
+            row("steer-2", "completed", Some("turn-1")),
+            row("steer-1", "failed", Some("turn-1")),
+        ];
+
+        let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
+
+        assert_eq!(next.request_id, "steer-1");
+        assert_eq!(next.lifecycle_state, "failed");
     }
 }
