@@ -171,9 +171,15 @@ obligations:
   missing — so deleting (or failing to read) a pairing row diffs into
   teardown of everything live, including wiring installed manually via the
   low-level `p2p collections/replicators` commands. The model gains a
-  managed set: each pairing row's reconciler tracks what it introduced
-  (persisted alongside the desired row as applied-state), and teardown ops
-  are restricted to managed objects. Unmanaged wiring is never touched.
+  managed set, and it must **survive desired-row deletion**: applied-state
+  lives in its own collection, `PeerPairingApplied` (keyed by `peer_id`,
+  recording the collections/replicators the reconciler introduced for that
+  peer) — not as fields on `PeerPairingDesired`, where deleting the row
+  would destroy the record and make safe teardown impossible after a
+  restart. Unpair is two-phase: desired row deleted → reconciler observes
+  desired-absent + applied-present → tears down exactly the applied set →
+  deletes the applied row. Teardown ops are restricted to managed objects;
+  unmanaged wiring is never touched.
 - **Read-failure is not desire.** `load_desired_for_peer` also returns empty
   desired state on a GraphQL *error* (supervisor.rs:426 region) — a
   transient query failure is currently indistinguishable from "tear it all
@@ -191,8 +197,13 @@ the structure fence.
 dependency already points the other way (`desktop-core/Cargo.toml:14` depends
 on `defra-agent`). So: the diff + reconcile engine moves into the
 `defra-agent` runtime crate (e.g. `agent/p2p_reconcile/`), started/stopped by
-`run_agent` alongside the other daemons; the desktop supervisor calls the
-moved engine and `remote_admin/diff.rs` is deleted. Headless startup today
+`run_agent` alongside the other daemons. The moved module owns the **admin
+trait seam** too, not just the pure diff: `RemoteP2pAdmin`
+(`desktop-core/src/remote_admin/trait_def.rs:45`) moves with it, with two
+implementations — a local embedded-node adapter for the headless runtime and
+the existing HTTP adapter (`http_impl.rs`) for desktop/ops reuse. The desktop
+supervisor calls the moved engine; `remote_admin/` in desktop-core is
+deleted. Headless startup today
 only ensures `PeerPairingDesired` migrations and loads paired peer DIDs into
 the snapshot (`runtime/startup.rs:56,603`) — it gains the reconciler
 unconditionally (the `DEFRA_AGENT_PAIRING_RECONCILE` flag dies), fixing the
@@ -227,7 +238,13 @@ carries the #180 auth caveat in help text.
   `documents` remain as the low-level imperative layer (useful for surgery
   and for non-paired topologies).
 
-### Schema change
+### Schema changes
+
+New collection `PeerPairingApplied` (peer_id unique, applied collections,
+applied replicator addresses, timestamps) — the reconciler's durable record
+of what it introduced per peer, per the ownership model above. Written only
+by the reconciler, never by operators; lands with the reconciler move
+(sequencing step 4) and is modeled in the Lean extension (step 3).
 
 `PeerPairingDesired` gains `profiles: [String!]` (nillable — written as
 `null` when empty per the empty-list sharp edge) so a pairing can track
@@ -251,7 +268,12 @@ bootstrap, and the reconciler's desired-state load.
   + liveness sweep tests (pattern from #473).
 - Integration: two-node pairing test (invite → join → join → converged both
   ways), restart-reconverge test (kill one node, restart, pairing returns
-  without operator action), removal test (rm row → wiring removed).
+  without operator action), removal test (rm row → wiring removed). Plus,
+  explicitly: read-failure no-op (desired-state query error → reconcile tick
+  changes nothing), unmanaged-wiring survival (manually installed
+  collections/replicators untouched by reconcile and by unpair), and
+  delete-then-restart teardown (rm desired row, restart node, reconciler
+  tears down exactly the `PeerPairingApplied` set and nothing else).
 - CLI: snapshot tests for the normalized grammar; alias-compatibility tests
   asserting every deprecated spelling still parses and warns.
 - Gate with `cargo test -p defra-agent` (full package) + CLI crate suite.
