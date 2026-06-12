@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -597,6 +598,7 @@ pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
 
 pub(crate) fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
+    io::stdout().flush()?;
     Ok(())
 }
 

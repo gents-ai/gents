@@ -2,7 +2,7 @@ use std::io::BufRead;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -159,6 +159,8 @@ pub fn spawn_server_with_ready_json(
         .stdout
         .take()
         .context("capturing defra-agent server stdout")?;
+    let captured_stdout = Arc::new(Mutex::new(String::new()));
+    let thread_captured_stdout = Arc::clone(&captured_stdout);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = std::io::BufReader::new(stdout);
@@ -175,7 +177,10 @@ pub fn spawn_server_with_ready_json(
                 }
                 Ok(_) => {
                     buffer.push_str(&line);
-                    if let Ok(value) = serde_json::from_str::<Value>(&buffer) {
+                    if let Ok(mut captured) = thread_captured_stdout.lock() {
+                        *captured = buffer.clone();
+                    }
+                    if let Some(value) = server_readiness_json(&buffer) {
                         let _ = tx.send(Ok(value));
                         break;
                     }
@@ -206,15 +211,32 @@ pub fn spawn_server_with_ready_json(
             let output = child
                 .wait_with_output()
                 .context("waiting for timed out defra-agent server process")?;
+            let captured_stdout = captured_stdout
+                .lock()
+                .map(|captured| captured.clone())
+                .unwrap_or_default();
             bail!(
                 "timed out waiting for defra-agent server readiness JSON\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
+                captured_stdout,
                 String::from_utf8_lossy(&output.stderr)
             );
         }
     };
 
     Ok((ServeProcess::new(child), readiness))
+}
+
+fn server_readiness_json(buffer: &str) -> Option<Value> {
+    buffer
+        .char_indices()
+        .filter_map(|(index, ch)| (ch == '{').then_some(index))
+        .find_map(|index| {
+            let value = serde_json::Deserializer::from_str(&buffer[index..])
+                .into_iter::<Value>()
+                .next()
+                .and_then(|result| result.ok())?;
+            (value.get("status").and_then(Value::as_str) == Some("serving")).then_some(value)
+        })
 }
 
 pub fn spawn_server_with_env(
