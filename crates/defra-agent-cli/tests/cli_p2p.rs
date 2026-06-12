@@ -575,6 +575,25 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         Some(agent_did_b.as_str())
     );
 
+    let applied_b =
+        wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(70)).await?;
+    assert!(
+        applied_b
+            .get("collections")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))),
+        "B applied row missing AgentRequest after joining A: {applied_b}"
+    );
+    let applied_a =
+        wait_for_pairing_applied(&graphql_a, peer_id_b, Duration::from_secs(70)).await?;
+    assert!(
+        applied_a
+            .get("collections")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))),
+        "A applied row missing AgentRequest after joining B: {applied_a}"
+    );
+
     Ok(())
 }
 
@@ -596,4 +615,44 @@ async fn peer_pairing_row(graphql: &str, peer_id: &str) -> Result<Value> {
     )
     .await?;
     Ok(first_graphql_row(&response, "PeerPairingDesired")?.clone())
+}
+
+async fn wait_for_pairing_applied(
+    graphql: &str,
+    peer_id: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_error = None;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            let detail = last_error
+                .map(|error: anyhow::Error| error.to_string())
+                .unwrap_or_else(|| "no row observed".to_string());
+            anyhow::bail!("timed out waiting for PeerPairingApplied({peer_id}): {detail}");
+        }
+        match peer_pairing_applied_row(graphql, peer_id).await {
+            Ok(row) => return Ok(row),
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn peer_pairing_applied_row(graphql: &str, peer_id: &str) -> Result<Value> {
+    let peer_id = escape_graphql_string(peer_id);
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{
+                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}, limit: 1) {{
+                    peer_id
+                    collections
+                    replicator_addresses
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    Ok(first_graphql_row(&response, "PeerPairingApplied")?.clone())
 }

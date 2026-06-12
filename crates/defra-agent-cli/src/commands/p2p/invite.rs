@@ -6,10 +6,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::cli::args::{P2pCollectionProfileArg, P2pInviteArgs};
-use crate::{print_json, resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir};
+use crate::{
+    http_get_json, normalize_optional_string, print_json, read_runtime_state, resolve_agent_did,
+    resolve_graphql_endpoint, resolve_home_dir,
+};
 
 use super::collections::p2p_collection_profile_id;
-use super::output::fetch_live_http_p2p_status;
+use super::output::resolve_p2p_peer_id;
 
 /// Versioned pairing-invite envelope. CBOR-encoded, bs58-encoded, prefixed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,28 +80,75 @@ pub(super) async fn current_invite_token(
     graphql: &str,
     profiles: Vec<String>,
 ) -> Result<InviteToken> {
-    let status = fetch_live_http_p2p_status(home, graphql).await?;
-    let peer_id = status
-        .get("p2p_peer_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("runtime did not report a P2P peer id")?
-        .to_string();
-    let ticket = status
-        .get("p2p_listen_addresses")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|addresses| addresses.first())
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            status
-                .get("p2p_shareable_address")
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("runtime did not report a shareable P2P address")?
-        .to_string();
+    let home_dir = resolve_home_dir(home);
+    if let Some(token) = persisted_invite_token(&home_dir, graphql, profiles.clone())? {
+        return Ok(token);
+    }
+    live_invite_token(home, graphql, profiles).await
+}
+
+fn persisted_invite_token(
+    home_dir: &Path,
+    graphql: &str,
+    profiles: Vec<String>,
+) -> Result<Option<InviteToken>> {
+    let Some(runtime_state) = read_runtime_state(home_dir)? else {
+        return Ok(None);
+    };
+    if runtime_state.graphql != graphql {
+        return Ok(None);
+    }
+    let Some(peer_id) = normalize_optional_string(runtime_state.p2p_peer_id.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(ticket) = runtime_state
+        .p2p_listen_addresses
+        .iter()
+        .find_map(|address| normalize_optional_string(Some(address.as_str())))
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(InviteToken {
+        v: 1,
+        ticket,
+        peer_id,
+        did: runtime_state.agent_did,
+        profiles,
+    }))
+}
+
+async fn live_invite_token(
+    home: Option<&Path>,
+    graphql: &str,
+    profiles: Vec<String>,
+) -> Result<InviteToken> {
+    use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .context("building P2P invite HTTP client")?;
+    let api_base = crate::graphql_access::graphql_api_base(graphql)?;
+    let identity =
+        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+            .await
+            .ok();
+    let shareable_address: P2pShareableAddressResponse =
+        http_get_json(&client, &format!("{api_base}/p2p/shareable-address"))
+            .await
+            .context("loading shareable P2P address")?;
+    let ticket = normalize_optional_string(shareable_address.address.as_deref())
+        .context("runtime did not report a shareable P2P address")?;
+    let peer_id = resolve_p2p_peer_id(
+        identity
+            .as_ref()
+            .and_then(|identity| identity.peer_id.as_deref()),
+        Some(&ticket),
+        &[],
+        None,
+    )
+    .context("runtime reported a shareable P2P address but no usable peer id")?;
     let did = resolve_agent_did(home, None).context("resolving local agent DID for invite")?;
 
     Ok(InviteToken {
