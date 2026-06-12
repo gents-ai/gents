@@ -21,22 +21,12 @@ defra-agent server    # start the runtime (embedded DefraDB + GraphQL + P2P)
 defra-agent codex     # chat in the Codex terminal UI (no Codex install needed)
 ```
 
-The release binary is signed and notarized. Building from source instead:
-`cargo install --profile dev-install --locked --path crates/defra-agent-cli`
-from a checkout.
-
-Want the agent to actually change things? Re-run `defra-agent init --write`
-(writes sandboxed under the directory you ran `init` from) or `--yolo`
-(unrestricted, full host access).
-
-`init` defaults to llama.cpp's server (`http://127.0.0.1:8080/v1`). Point it
-at anything OpenAI-compatible: `defra-agent init --inference-url
-http://HOST:PORT/v1 --model-name MODEL`, or use a preset
-(`--backend-preset ollama|llama-cpp|openai|openrouter|chatgpt-codex|vllm`).
-
-The full walkthrough, what each permission preset guarantees, and the fallback
-`chat` REPL: **[docs/demo.md](docs/demo.md)**. Desktop app, fleet bring-up,
-and P2P pairing: **[docs/operations.md](docs/operations.md)**.
+**[The getting-started guide](docs/demo.md)** walks every step and the paths
+off it: letting the agent change things (`init --write` / `--yolo`, and what
+each preset guarantees), pointing `init` at other OpenAI-compatible backends,
+verifying the signed binary, building from source, and the fallback `chat`
+REPL. Desktop app, fleet bring-up, and P2P pairing:
+[docs/operations.md](docs/operations.md).
 
 ## Why this exists
 
