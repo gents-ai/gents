@@ -1,8 +1,10 @@
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
+use super::fs::read_runtime_state_json;
 use super::graphql::{escape_graphql_string, first_graphql_row, graphql_query};
 use super::process::run_cli_json;
 
@@ -33,6 +35,45 @@ pub async fn wait_for_runtime_ready(
 
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentRuntime ready state for {agent_did}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+pub async fn wait_for_runtime_state_graphql(
+    home_dir: &Path,
+    expected_graphql: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    let mut last_state = None::<Value>;
+    let mut last_error: Option<anyhow::Error>;
+
+    loop {
+        match read_runtime_state_json(home_dir) {
+            Ok(state) => {
+                if state.get("graphql").and_then(Value::as_str) == Some(expected_graphql) {
+                    return Ok(state);
+                }
+                last_state = Some(state);
+                last_error = None;
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for runtime.json graphql={expected_graphql}; last_state={}; last_error={}",
+                last_state
+                    .map(|state| state.to_string())
+                    .unwrap_or_else(|| "null".to_string()),
+                last_error
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            );
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
