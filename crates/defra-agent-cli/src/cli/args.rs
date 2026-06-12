@@ -2235,6 +2235,10 @@ pub(crate) struct SubagentCancelArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum SessionCommand {
+    #[command(about = "List AgentSession documents")]
+    List(ConfigListArgs),
+    #[command(about = "Show an AgentSession document")]
+    Show(ConfigShowArgs),
     #[command(about = "Fork an existing session at a user-turn boundary")]
     Fork(SessionForkArgs),
 }
