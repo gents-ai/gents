@@ -1,93 +1,85 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use chrono::{SecondsFormat, Utc};
+use serde_json::json;
 
 use crate::cli::args::P2pPairArgs;
-use crate::shared::{P2pReplicatorRequest, P2pReplicatorRow};
-use crate::{http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::request_helpers::parse_duration_suffix;
+use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
 use super::collections::{expand_p2p_collection_args, p2p_collection_profile_id};
-use super::output::{fetch_live_http_p2p_status, flatten_p2p_fields};
+use super::pairings::{wait_for_pairing_connected, write_pairing_desired};
 
-/// `p2p pair` sets up one direction of delegation replication in three steps:
-///   1. connect to the peer
-///   2. subscribe the profile's collections for P2P
-///   3. install a push replicator to the peer for those collections
-///
-/// Replication is directional. Run this command on both servers (each pointing
-/// at the other's listen address) to enable bidirectional delegation replication.
+/// `p2p pair` is a compatibility shortcut for writing a desired pairing row
+/// from a peer address. DID-carrying pairing should use `p2p invite`/`p2p join`.
 pub(super) async fn p2p_pair(args: P2pPairArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("building P2P pair HTTP client")?;
-    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
-
-    // Resolve the collection list from the profile (single profile, no extras).
+    let peer_id = peer_id_from_addr(&args.peer)?;
     let collections = expand_p2p_collection_args(&[], &[args.profile])?;
-    let profile = p2p_collection_profile_id(args.profile);
-
-    // Step 1: connect to peer.
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/connect"),
-        &vec![args.peer.clone()],
-    )
-    .await
-    .context("p2p connect")?;
-
-    // Step 2: subscribe collections.
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/collections"),
+    let profile = p2p_collection_profile_id(args.profile).to_string();
+    let profiles = vec![profile.clone()];
+    let addresses = vec![args.peer.clone()];
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let (access, home_dir) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let doc_id = write_pairing_desired(
+        &access,
+        &peer_id,
+        None,
         &collections,
+        &addresses,
+        &profiles,
+        &now,
     )
-    .await
-    .context("p2p collections add")?;
+    .await?;
 
-    // Step 3: install replicator.
-    let replicator_request = P2pReplicatorRequest {
-        collections: collections.clone(),
-        addresses: vec![args.peer.clone()],
+    let p2p = if args.wait {
+        let timeout = parse_duration_suffix(&args.timeout)?;
+        Some(wait_for_pairing_connected(args.home.as_deref(), &graphql, &peer_id, timeout).await?)
+    } else {
+        None
     };
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/replicators"),
-        &replicator_request,
-    )
-    .await
-    .context("p2p replicators add")?;
-
-    // Fetch a live snapshot of the replicators list so the output can report
-    // how many replicators are now installed on this server.
-    let replicators: Vec<P2pReplicatorRow> =
-        crate::http_get_json(&client, &format!("{api_base}/p2p/replicators"))
-            .await
-            .unwrap_or_default();
-    let replicator_count = replicators.len();
-
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
 
     let mut output = json!({
-        "status": "paired",
+        "status": "pairing_set",
         "home": home_dir,
         "graphql": graphql,
+        "access_mode": access.mode(),
+        "peer_id": peer_id,
+        "agent_did": serde_json::Value::Null,
         "peer": args.peer,
         "profile": profile,
+        "profiles": profiles,
         "collections": collections,
-        "replicator_count": replicator_count,
-        "note": "Replication is one-directional. Run `p2p pair` on the other server (with --peer set to this server's listen address) to complete bidirectional delegation replication.",
-        "p2p": p2p,
+        "replicator_addresses": addresses,
+        "doc_id": doc_id,
+        "waited": args.wait,
+        "note": "Desired pairing written. The running defra-agent runtime applies P2P wiring on its pairing sweep.",
     });
-
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
+    if let Some(p2p) = p2p {
+        output["p2p"] = p2p;
     }
-
     print_json(&output)?;
     Ok(())
+}
+
+fn peer_id_from_addr(peer: &str) -> Result<String> {
+    let peer = peer.trim();
+    if peer.is_empty() {
+        anyhow::bail!("--peer must not be empty");
+    }
+    p2p::iroh::parse_public_peer_addr(peer)
+        .map(|(peer_id, _)| peer_id.to_string())
+        .map_err(|error| anyhow::anyhow!("--peer must be a shareable P2P address: {error}"))
+        .with_context(|| format!("parsing peer id from {peer}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_id_rejects_empty_peer() {
+        let err = peer_id_from_addr(" ").unwrap_err().to_string();
+        assert!(err.contains("--peer must not be empty"));
+    }
 }

@@ -2,6 +2,8 @@ mod access;
 mod collections;
 mod connect;
 mod documents;
+mod invite;
+mod join;
 mod output;
 mod pair;
 mod pairings;
@@ -45,6 +47,8 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pDocumentsCommand::Sync(args) => documents::p2p_documents_sync(args).await,
         },
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
+        P2pCommand::Invite(args) => invite::p2p_invite(args).await,
+        P2pCommand::Join(args) => join::p2p_join(args).await,
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
             P2pPairingsCommand::Set(args) => pairings::p2p_pairings_set(args).await,

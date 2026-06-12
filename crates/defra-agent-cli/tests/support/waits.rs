@@ -337,21 +337,36 @@ pub async fn wait_for_connected_peer(
     timeout: Duration,
 ) -> Result<Value> {
     let deadline = Instant::now() + timeout;
+    let mut last_error = "none".to_string();
     loop {
-        let status = run_cli_json(home_dir, &["p2p", "status"])?;
-        if status
-            .get("p2p_connected_peers")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| {
-                rows.iter()
-                    .filter_map(Value::as_str)
-                    .any(|row| row.contains(peer_id))
-            })
-        {
-            return Ok(status);
+        match run_cli_json(home_dir, &["p2p", "peers"]) {
+            Ok(status) => {
+                last_error.clear();
+                if status
+                    .get("peers")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter()
+                            .filter_map(Value::as_str)
+                            .any(|row| row.contains(peer_id))
+                    })
+                {
+                    return Ok(status);
+                }
+            }
+            Err(error) => {
+                last_error = error.to_string();
+            }
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for connected peer {peer_id}");
+            bail!(
+                "timed out waiting for connected peer {peer_id}; last_error={}",
+                if last_error.is_empty() {
+                    "none"
+                } else {
+                    &last_error
+                }
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

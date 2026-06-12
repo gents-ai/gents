@@ -1768,6 +1768,10 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(about = "Create a shareable P2P pairing invite token")]
+    Invite(P2pInviteArgs),
+    #[command(about = "Accept a P2P pairing invite token")]
+    Join(P2pJoinArgs),
     #[command(about = "Manage desired out-of-band P2P pairings")]
     Pairings {
         #[command(subcommand)]
@@ -1784,18 +1788,14 @@ running server."
     )]
     Unpair(P2pPairingRefArgs),
     #[command(
-        about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
+        about = "Create a desired P2P pairing row for a peer address",
         after_help = "\
-This command runs against the LOCAL server (--graphql / --home) and sets up \
-one direction of replication toward --peer:\n\
-  1. connect  — dials the peer\n\
-  2. collections add  — subscribes the profile's collections\n\
-  3. replicators add  — installs a push replicator to the peer\n\
+This command writes PeerPairingDesired for the running runtime's pairing \
+reconciler. It does not perform immediate live P2P mutations itself.\n\
 \n\
-Replication is directional. For bidirectional delegation (the child writes \
-AgentRequests/AgentToolCalls that the parent reads, and the parent writes \
-AgentResponses/AgentMessages that the child reads) you must run `p2p pair` on \
-BOTH servers, each with --peer set to the other's listen address.\n\
+Pairing is directional. For bidirectional delegation, run `p2p pair` on BOTH \
+servers, each with --peer set to the other's listen address, or use \
+`p2p invite` / `p2p join` to exchange DID-carrying pairing tokens.\n\
 \n\
 NOTE: replication alone does NOT enable cross-deployment delegation. \
 Cross-deployment delegation is off by default and DEFERRED — to opt in, \
@@ -1862,7 +1862,7 @@ pub(crate) enum P2pDocumentsCommand {
 #[derive(Subcommand)]
 pub(crate) enum P2pPairingsCommand {
     #[command(about = "List desired out-of-band P2P pairings")]
-    List(P2pAccessArgs),
+    List(P2pPairingsListArgs),
     #[command(
         about = "Create or update a desired out-of-band P2P pairing",
         after_help = "\
@@ -1908,6 +1908,47 @@ pub(crate) struct P2pPairingRefArgs {
     /// Remote peer ID stored in PeerPairingDesired.peer_id.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
     pub(crate) peer_id: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingsListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pInviteArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Collection profile offered by this invite. Defaults to chat-requests.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pJoinArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Invite token produced by `defra-agent p2p invite`.
+    #[arg(value_name = "TOKEN")]
+    pub(crate) token: String,
+    /// Accepted collection profile. Defaults to the profiles offered by the token.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Wait for the runtime to observe the peer as connected.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
+    #[arg(long, default_value = "30s")]
+    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]
@@ -1987,6 +2028,12 @@ pub(crate) struct P2pPairArgs {
         default_value = "chat-requests"
     )]
     pub(crate) profile: P2pCollectionProfileArg,
+    /// Wait for the runtime to observe the peer as connected.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
+    #[arg(long, default_value = "30s")]
+    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]

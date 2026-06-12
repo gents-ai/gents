@@ -1,18 +1,23 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Write};
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::cli::args::{P2pAccessArgs, P2pPairingRefArgs, P2pPairingSetArgs};
+use crate::cli::args::{P2pPairingRefArgs, P2pPairingSetArgs, P2pPairingsListArgs};
+use crate::cli::output_format::OutputFormat;
+use crate::config_writes::ConfigAccess;
 use crate::{
     expand_nonempty_values, graphql_rows, graphql_string_list_literal, print_json,
     resolve_config_access,
 };
 
 use super::collections::{expand_p2p_collection_args, p2p_collection_profile_id};
-
-const PAIRINGS_RECONCILE_NOTE: &str = "Desired pairing rows are reconciled by the running defra-agent runtime. The reconciler only removes wiring it previously applied; use `defra-agent p2p pair --peer <multiaddr>` or the p2p collections/replicators commands for immediate manual live wiring.";
+use super::output::fetch_connected_peer_ids;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingDesiredRow {
@@ -26,25 +31,46 @@ struct PeerPairingDesiredRow {
     created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     updated_at: Option<String>,
+    connected: bool,
+    subscribed: bool,
+    replicating: bool,
 }
 
-pub(super) async fn p2p_pairings_list(args: P2pAccessArgs) -> Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PeerPairingAppliedRow {
+    peer_id: String,
+    collections: Vec<String>,
+    replicator_addresses: Vec<String>,
+}
+
+pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let rows = graphql_rows(&access, "PeerPairingDesired", pairings_list_query())
         .await
         .context("loading PeerPairingDesired rows")?;
-    let pairings = parse_pairing_rows(rows);
+    let applied_rows = graphql_rows(&access, "PeerPairingApplied", applied_list_query())
+        .await
+        .unwrap_or_default();
+    let applied = parse_applied_rows(applied_rows);
+    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let connected_peers = fetch_connected_peer_ids(&graphql).await.unwrap_or_default();
+    let pairings = annotate_pairing_health(parse_pairing_rows(rows), &applied, &connected_peers);
     let count = pairings.len();
-    print_json(&json!({
-        "status": "ok",
-        "home": home_dir,
-        "access_mode": access.mode(),
-        "pairings": pairings,
-        "count": count,
-        "note": PAIRINGS_RECONCILE_NOTE,
-    }))?;
-    Ok(())
+    match args.output.ensure_supported(
+        "p2p pairings list",
+        &[OutputFormat::Json, OutputFormat::Table],
+    )? {
+        OutputFormat::Json => print_json(&json!({
+            "status": "ok",
+            "home": home_dir,
+            "access_mode": access.mode(),
+            "pairings": pairings,
+            "count": count,
+        })),
+        OutputFormat::Table => print_pairings_table(&pairings),
+        _ => unreachable!("ensure_supported restricts p2p pairings list output formats"),
+    }
 }
 
 pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
@@ -54,22 +80,18 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let profiles = pairing_profile_ids(&args.profiles);
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mutation = upsert_pairing_mutation(
+    let (access, home_dir) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let doc_id = write_pairing_desired(
+        &access,
         &peer_id,
-        &agent_did,
+        Some(&agent_did),
         &collections,
         &addresses,
         &profiles,
         &now,
-    );
-    let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
-    let response = access
-        .execute(&mutation)
-        .await
-        .context("writing PeerPairingDesired row")?;
-    let doc_id = crate::extract_mutation_doc_id(&response, "PeerPairingDesired")
-        .context("reading PeerPairingDesired mutation doc id")?;
+    )
+    .await?;
 
     print_json(&json!({
         "status": "pairing_set",
@@ -81,7 +103,6 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         "replicator_addresses": addresses,
         "profiles": profiles,
         "doc_id": doc_id,
-        "note": PAIRINGS_RECONCILE_NOTE,
     }))?;
     Ok(())
 }
@@ -105,7 +126,6 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
         "peer_id": peer_id,
         "removed_doc_ids": doc_ids,
         "removed_count": count,
-        "note": PAIRINGS_RECONCILE_NOTE,
     }))?;
     Ok(())
 }
@@ -132,16 +152,65 @@ fn pairings_list_query() -> &'static str {
     }"#
 }
 
-fn upsert_pairing_mutation(
+fn applied_list_query() -> &'static str {
+    r#"query {
+        PeerPairingApplied {
+            peer_id
+            collections
+            replicator_addresses
+        }
+    }"#
+}
+
+pub(super) async fn write_pairing_desired(
+    access: &ConfigAccess,
     peer_id: &str,
-    agent_did: &str,
+    agent_did: Option<&str>,
+    collections: &[String],
+    addresses: &[String],
+    profiles: &[String],
+    now: &str,
+) -> Result<String> {
+    let mutation =
+        upsert_pairing_mutation(peer_id, agent_did, collections, addresses, profiles, now);
+    let response = access
+        .execute(&mutation)
+        .await
+        .context("writing PeerPairingDesired row")?;
+    crate::extract_mutation_doc_id(&response, "PeerPairingDesired")
+        .context("reading PeerPairingDesired mutation doc id")
+}
+
+pub(super) async fn peer_pairing_exists(access: &ConfigAccess, peer_id: &str) -> Result<bool> {
+    let peer_id = escape_graphql_string(peer_id);
+    let query = format!(
+        r#"query {{
+            PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}, limit: 1) {{
+                peer_id
+            }}
+        }}"#
+    );
+    let rows = graphql_rows(access, "PeerPairingDesired", &query)
+        .await
+        .context("checking existing PeerPairingDesired row")?;
+    Ok(!rows.is_empty())
+}
+
+pub(super) fn upsert_pairing_mutation(
+    peer_id: &str,
+    agent_did: Option<&str>,
     collections: &[String],
     addresses: &[String],
     profiles: &[String],
     now: &str,
 ) -> String {
     let peer_id = escape_graphql_string(peer_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let agent_did = graphql_nullable_string_literal(agent_did);
+    let agent_did_update = if agent_did == "null" {
+        String::new()
+    } else {
+        format!("agent_did: {agent_did},")
+    };
     let collections = graphql_string_list_literal(collections);
     let addresses = graphql_string_list_literal(addresses);
     let profiles = graphql_nullable_string_list_literal(profiles);
@@ -153,7 +222,7 @@ fn upsert_pairing_mutation(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
-                    agent_did: "{agent_did}",
+                    agent_did: {agent_did},
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
@@ -161,7 +230,7 @@ fn upsert_pairing_mutation(
                     updated_at: "{now}"
                 }},
                 update: {{
-                    agent_did: "{agent_did}",
+                    {agent_did_update}
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
@@ -201,11 +270,73 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                 profiles: string_list(&row, "profiles"),
                 created_at: optional_string(&row, "created_at"),
                 updated_at: optional_string(&row, "updated_at"),
+                connected: false,
+                subscribed: false,
+                replicating: false,
             })
         })
         .collect::<Vec<_>>();
     pairings.sort_by(|left, right| left.peer_id.cmp(&right.peer_id));
     pairings
+}
+
+fn parse_applied_rows(rows: Vec<Value>) -> Vec<PeerPairingAppliedRow> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let peer_id = row
+                .get("peer_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?
+                .to_string();
+            Some(PeerPairingAppliedRow {
+                peer_id,
+                collections: string_list(&row, "collections"),
+                replicator_addresses: string_list(&row, "replicator_addresses"),
+            })
+        })
+        .collect()
+}
+
+fn annotate_pairing_health(
+    mut desired: Vec<PeerPairingDesiredRow>,
+    applied: &[PeerPairingAppliedRow],
+    connected: &[String],
+) -> Vec<PeerPairingDesiredRow> {
+    let applied_by_peer = applied
+        .iter()
+        .map(|row| {
+            (
+                row.peer_id.as_str(),
+                (
+                    row.collections.iter().cloned().collect::<BTreeSet<_>>(),
+                    row.replicator_addresses
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for row in &mut desired {
+        row.connected = connected.iter().any(|peer| peer.contains(&row.peer_id));
+        let (applied_collections, applied_replicators) = applied_by_peer
+            .get(row.peer_id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        row.subscribed = !row.collections.is_empty()
+            && row
+                .collections
+                .iter()
+                .all(|collection| applied_collections.contains(collection));
+        row.replicating = !row.replicator_addresses.is_empty()
+            && row
+                .replicator_addresses
+                .iter()
+                .all(|address| applied_replicators.contains(address));
+    }
+    desired
 }
 
 fn optional_string(row: &Value, field: &str) -> Option<String> {
@@ -248,6 +379,98 @@ fn graphql_nullable_string_list_literal(values: &[String]) -> String {
     }
 }
 
+fn graphql_nullable_string_literal(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+pub(super) async fn wait_for_pairing_connected(
+    _home: Option<&std::path::Path>,
+    graphql: &str,
+    peer_id: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let peers = fetch_connected_peer_ids(graphql).await?;
+        if peers.iter().any(|peer| peer.contains(peer_id)) {
+            return Ok(json!({
+                "p2p_connected_peers": peers,
+            }));
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for peer {peer_id} to connect after {}s",
+                timeout.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
+    let headers = [
+        "PEER".to_string(),
+        "DID".to_string(),
+        "PROFILES".to_string(),
+        "CONNECTED".to_string(),
+        "SUBSCRIBED".to_string(),
+        "REPLICATING".to_string(),
+    ];
+    let mut widths = headers.clone().map(|header| header.len());
+    let table_rows = rows
+        .iter()
+        .map(|row| {
+            [
+                row.peer_id.clone(),
+                row.agent_did.clone().unwrap_or_else(|| "-".to_string()),
+                if row.profiles.is_empty() {
+                    "-".to_string()
+                } else {
+                    row.profiles.join(",")
+                },
+                yes_no(row.connected),
+                yes_no(row.subscribed),
+                yes_no(row.replicating),
+            ]
+        })
+        .collect::<Vec<_>>();
+    for row in &table_rows {
+        for (idx, cell) in row.iter().enumerate() {
+            widths[idx] = widths[idx].max(cell.len());
+        }
+    }
+    let mut stdout = io::stdout();
+    print_table_row(&mut stdout, &headers, &widths)?;
+    print_table_row(&mut stdout, &widths.map(|width| "-".repeat(width)), &widths)?;
+    for row in &table_rows {
+        print_table_row(&mut stdout, row, &widths)?;
+    }
+    stdout.flush().context("flushing p2p pairings table")?;
+    Ok(())
+}
+
+fn yes_no(value: bool) -> String {
+    if value { "yes" } else { "no" }.to_string()
+}
+
+fn print_table_row<const N: usize>(
+    writer: &mut impl Write,
+    cells: &[String; N],
+    widths: &[usize; N],
+) -> Result<()> {
+    let line = cells
+        .iter()
+        .zip(widths.iter())
+        .map(|(cell, width)| format!("{cell:<width$}"))
+        .collect::<Vec<_>>()
+        .join("  ");
+    writeln!(writer, "{line}").context("writing p2p pairings table row")
+}
+
 fn mutation_doc_ids(response: &Value, field_name: &str) -> Vec<String> {
     let Some(value) = response.get("data").and_then(|data| data.get(field_name)) else {
         return Vec::new();
@@ -274,7 +497,7 @@ mod tests {
     fn upsert_pairing_mutation_escapes_and_preserves_created_at_on_update() {
         let mutation = upsert_pairing_mutation(
             r#"peer"one"#,
-            r#"did:key:agent\one"#,
+            Some(r#"did:key:agent\one"#),
             &["AgentRequest".to_string(), "AgentResponse".to_string()],
             &[r#"/ip4/127.0.0.1/tcp/4001/p2p/peer"one"#.to_string()],
             &["chat-requests".to_string()],
@@ -302,7 +525,7 @@ mod tests {
     fn upsert_pairing_mutation_emits_null_for_empty_profiles() {
         let mutation = upsert_pairing_mutation(
             "peer-one",
-            "did:key:agent-one",
+            Some("did:key:agent-one"),
             &["AgentRequest".to_string()],
             &["addr1".to_string()],
             &[],
@@ -311,6 +534,25 @@ mod tests {
 
         assert!(mutation.contains("profiles: null"));
         assert!(!mutation.contains("profiles: []"));
+    }
+
+    #[test]
+    fn upsert_pairing_mutation_with_null_did_preserves_existing_did_on_update() {
+        let mutation = upsert_pairing_mutation(
+            "peer-one",
+            None,
+            &["AgentRequest".to_string()],
+            &["addr1".to_string()],
+            &["chat-requests".to_string()],
+            "2026-06-10T00:00:00Z",
+        );
+
+        assert!(mutation.contains("agent_did: null"));
+        let update_block = mutation
+            .split("update:")
+            .nth(1)
+            .expect("mutation contains update block");
+        assert!(!update_block.contains("agent_did"));
     }
 
     #[test]

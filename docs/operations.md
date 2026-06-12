@@ -56,30 +56,39 @@ defra-agent server \
 
 ## Connected runtime bring-up
 
-To bring up two runtimes and connect them through the operator CLI:
+To bring up two runtimes and pair them through the operator CLI:
 
 ```bash
 defra-agent server --home /tmp/amy --p2p-bind-addr 127.0.0.1 --p2p-port 4017
 defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
 ```
 
-Read Amy's startup JSON or `/tmp/amy/runtime.json` and take one of the values
-from `p2p_listen_addresses`. Then connect Coding to Amy:
+Create an invite on Amy and join it from Coding:
 
 ```bash
-defra-agent p2p connect --home /tmp/coding --peer "<peer-id-or-listen-address>"
+AMY_INVITE=$(defra-agent p2p invite --home /tmp/amy | jq -r .token)
+CODING_JOIN=$(defra-agent p2p join --home /tmp/coding "$AMY_INVITE")
+CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
+defra-agent p2p join --home /tmp/amy "$CODING_INVITE"
 ```
 
-Inspect connectivity from either runtime:
+Inspect desired pairing rows and live connectivity from either runtime:
 
 ```bash
+defra-agent p2p pairings list --home /tmp/amy --output table
 defra-agent p2p status --home /tmp/amy
 defra-agent p2p peers --home /tmp/coding
 defra-agent status --home /tmp/coding
 ```
 
 The most useful fields for bring-up are `p2p_transport`, `p2p_peer_id`,
-`p2p_listen_addresses`, and `p2p_connected_peers`.
+`p2p_listen_addresses`, `p2p_connected_peers`, and the `CONNECTED`,
+`SUBSCRIBED`, and `REPLICATING` columns in `p2p pairings list`.
+
+The low-level `p2p connect`, `p2p collections`, and `p2p replicators`
+commands remain available for diagnostics and repair. They mutate live P2P
+state directly; normal pairing should go through invite/join or desired
+pairing rows.
 
 ## Remote Codex clients
 
