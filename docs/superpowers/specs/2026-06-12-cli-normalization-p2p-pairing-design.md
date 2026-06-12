@@ -78,12 +78,20 @@ gap: you can write documents you cannot read back except via raw `query` or
    ValueEnum; each command declares its default and its supported subset, but
    the flag is always `--output` and values mean the same thing everywhere.
 3. **IDs positional everywhere**, with the existing `--*-id` flags kept as
-   hidden aliases. Standard precedence: positional wins; both set → error.
+   hidden aliases. Conflict semantics follow the existing
+   `resolve_request_id` helper (`request_helpers.rs:497`): both provided and
+   equal → fine; both provided and different → error; neither → error. That
+   helper becomes the shared resolver for every dual-form ID.
 4. **Common access args** (`--home`, `--graphql`) stay as the universal
    pattern (already consistent).
 5. **Deprecations, not removals:** every renamed/merged command keeps its old
-   spelling as a hidden alias for one release; hidden aliases print a one-line
-   stderr deprecation note. Removals land in the release after.
+   spelling as a hidden alias for one release; deprecated spellings print a
+   one-line stderr note. Mechanism: clap aliases alone cannot do this — the
+   handler never learns which spelling was used (e.g. the
+   `aliases = ["rm", "unpair"]` on `pairings remove`, args.rs:1794). A small
+   argv pre-scan before clap parsing matches deprecated spellings against a
+   static table and emits the warning; clap aliases are kept purely for
+   routing. Removals land in the release after.
 
 ### Specific moves
 
@@ -145,23 +153,50 @@ whose delete the Lean model does not cover gets list/show only until it does.
 
 ### Design: pairing is a document; the runtime converges it
 
-**1. Server-side pairing reconcile (Lean first).**
-New spec `Proofs/.../PairingReconcile.lean` modeling:
+**1. Server-side pairing reconcile (Lean first — by extension).**
+A PairingReconcile model already exists
+(`proofs/Proofs/PairingReconcile/{State,Transition,Convergence,Executable}.lean`)
+and is already narrower than the Rust it fences: the Lean `DiffOp` covers
+only installCollection/teardownCollection (State.lean:36) while the Rust diff
+also emits replicator ops (`desktop-core/src/remote_admin/diff.rs:23`). This
+work **extends the existing model** — no parallel spec — with explicit new
+obligations:
 
-- State: desired set (PeerPairingDesired rows) × live set (connections,
-  subscriptions, replicators).
-- Transitions: reconcile step = diff(desired, live) → dial / subscribe /
-  install-replicator / remove; event nudges (PeerDisconnected → redial);
-  periodic sweep (rides the #477 sweep-registry cadence dimension).
-- Properties: convergence (live ⊇ desired after quiesce), idempotence
-  (reconcile twice = once), no-flap (a satisfied pairing is never torn down
-  and re-created), removal soundness (deleting the row removes only what the
-  row introduced).
+- **Replicator dimension** (close the existing model↔code gap first).
+- **Connection/dial dimension** (peer connected/disconnected; event nudges —
+  PeerDisconnected → redial; periodic sweep rides the #477 registry).
+- **Ownership-safe removal.** Today `compute_pairing_diff` tears down ANY
+  actual collection/replicator not in desired state, and
+  `load_desired_for_peer` returns empty desired state when the row is
+  missing — so deleting (or failing to read) a pairing row diffs into
+  teardown of everything live, including wiring installed manually via the
+  low-level `p2p collections/replicators` commands. The model gains a
+  managed set: each pairing row's reconciler tracks what it introduced
+  (persisted alongside the desired row as applied-state), and teardown ops
+  are restricted to managed objects. Unmanaged wiring is never touched.
+- **Read-failure is not desire.** `load_desired_for_peer` also returns empty
+  desired state on a GraphQL *error* (supervisor.rs:426 region) — a
+  transient query failure is currently indistinguishable from "tear it all
+  down". The model distinguishes `desired = ∅` (positive read of absence)
+  from `desired = unknown` (read failed → tick is a no-op).
+- Existing properties retained and re-proved over the larger state:
+  convergence, idempotence, no-flap.
 
-Conformance tests mirror the model under `tests/conformance/` per the
-structure fence, then the Rust reconciler runs in the headless runtime
-unconditionally (the env flag dies; desktop supervisor calls the same
-engine). Startup re-applies desired pairings, fixing the no-redial gap.
+Conformance tests mirror the extended model under `tests/conformance/` per
+the structure fence.
+
+**Placement.** The production reconcile engine lives in
+`defra-agent-desktop-core` (`remote_admin/diff.rs`,
+`client/core/supervisor.rs`), which the runtime must not depend on — but the
+dependency already points the other way (`desktop-core/Cargo.toml:14` depends
+on `defra-agent`). So: the diff + reconcile engine moves into the
+`defra-agent` runtime crate (e.g. `agent/p2p_reconcile/`), started/stopped by
+`run_agent` alongside the other daemons; the desktop supervisor calls the
+moved engine and `remote_admin/diff.rs` is deleted. Headless startup today
+only ensures `PeerPairingDesired` migrations and loads paired peer DIDs into
+the snapshot (`runtime/startup.rs:56,603`) — it gains the reconciler
+unconditionally (the `DEFRA_AGENT_PAIRING_RECONCILE` flag dies), fixing the
+no-redial-after-restart gap.
 
 **2. Invite/join handshake (CLI ergonomics over documents).**
 Because there is no admin channel, bidirectional pairing is a two-terminal
@@ -196,9 +231,18 @@ carries the #180 auth caveat in help text.
 
 `PeerPairingDesired` gains `profiles: [String!]` (nillable — written as
 `null` when empty per the empty-list sharp edge) so a pairing can track
-profile intent, not just the resolved collection list at write time. The
-reconciler resolves profiles → collections at reconcile time, picking up
-profile-definition changes. `collections` remains for explicit pins.
+profile intent, not just the resolved collection list at write time. Today
+profile intent is lost immediately: `p2p pairings set --profile` flattens
+profiles into `collections` at the CLI (`commands/p2p/pairings.rs:53`) and
+the schema has no profiles field. The reconciler resolves profiles →
+collections at reconcile time, picking up profile-definition changes.
+`collections` remains for explicit pins.
+
+This is one atomic slice — the pieces are coupled and ship together:
+schema migration (via the existing `ensure_peer_pairing_desired_migrations`
+vehicle, startup.rs:56), CLI write path (store profiles, keep writing the
+flattened collections for back-compat), CLI read path, desktop pairing
+bootstrap, and the reconciler's desired-state load.
 
 ## Testing
 
@@ -217,11 +261,16 @@ profile-definition changes. `collections` remains for explicit pins.
 1. Normalization mechanics (shared OutputFormat, positional IDs, aliases,
    task/config-task merge) — pure CLI, no spec impact.
 2. Gap-fill read commands (list/show groups) — pure CLI.
-3. Lean PairingReconcile + conformance mirror.
-4. Headless reconciler in the runtime (+ desktop supervisor reuse, env flag
+3. Extend Lean PairingReconcile (replicator dimension first — closes the
+   existing model↔code gap — then connections, managed-set removal,
+   unknown-desired) + conformance mirror.
+4. Move the reconcile engine from desktop-core into the runtime crate;
+   headless reconciler in `run_agent` (+ desktop supervisor reuse, env flag
    removal, startup re-apply).
-5. Invite/join token flow + `p2p pair` rework + pairings health columns.
-6. Gap-fill rm commands where ApplyReconcile already covers the delete.
+5. Profiles slice (schema migration + CLI + bootstrap + reconciler load,
+   atomic per Part C).
+6. Invite/join token flow + `p2p pair` rework + pairings health columns.
+7. Gap-fill rm commands where ApplyReconcile already covers the delete.
 
 ## Open questions
 
