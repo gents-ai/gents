@@ -367,6 +367,7 @@ pub(super) async fn write_peer_pairing_desired(
                     replicator_addresses: ["{replicator_addr}"],
                     agent_did: "{agent_did}",
                     created_at: "{created_at}",
+                    profiles: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }} }}"#
@@ -378,6 +379,7 @@ pub(super) async fn write_peer_pairing_desired(
                 agent_did: "{agent_did}",
                 collections: [{collections}],
                 replicator_addresses: ["{replicator_addr}"],
+                profiles: null,
                 created_at: "{now}",
                 updated_at: "{now}"
             }}) {{ _docID }} }}"#

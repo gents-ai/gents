@@ -7,7 +7,7 @@ use crate::cli::args::P2pPairArgs;
 use crate::shared::{P2pReplicatorRequest, P2pReplicatorRow};
 use crate::{http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir};
 
-use super::collections::p2p_collection_profile_names;
+use super::collections::{expand_p2p_collection_args, p2p_collection_profile_id};
 use super::output::{fetch_live_http_p2p_status, flatten_p2p_fields};
 
 /// `p2p pair` sets up one direction of delegation replication in three steps:
@@ -26,10 +26,8 @@ pub(super) async fn p2p_pair(args: P2pPairArgs) -> Result<()> {
     let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
 
     // Resolve the collection list from the profile (single profile, no extras).
-    let collections: Vec<String> = p2p_collection_profile_names(args.profile)
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .collect();
+    let collections = expand_p2p_collection_args(&[], &[args.profile])?;
+    let profile = p2p_collection_profile_id(args.profile);
 
     // Step 1: connect to peer.
     http_post_json(
@@ -78,7 +76,7 @@ pub(super) async fn p2p_pair(args: P2pPairArgs) -> Result<()> {
         "home": home_dir,
         "graphql": graphql,
         "peer": args.peer,
-        "profile": format!("{:?}", args.profile).to_lowercase(),
+        "profile": profile,
         "collections": collections,
         "replicator_count": replicator_count,
         "note": "Replication is one-directional. Run `p2p pair` on the other server (with --peer set to this server's listen address) to complete bidirectional delegation replication.",

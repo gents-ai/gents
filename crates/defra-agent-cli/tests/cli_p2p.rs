@@ -28,6 +28,8 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
             "/ip4/127.0.0.1/tcp/4001/p2p/peer-one",
             "--collection",
             "AgentRequest",
+            "--profile",
+            "tool-services",
         ],
     )?;
     assert_eq!(
@@ -60,6 +62,16 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
         .get("collections")
         .and_then(Value::as_array)
         .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))));
+    assert!(row
+        .get("collections")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str() == Some("ToolServiceRegistry"))));
+    assert!(row
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("tool-services"))));
 
     let remove = run_cli_json(&home, &["p2p", "unpair", "--peer", "peer-one"])?;
     assert_eq!(

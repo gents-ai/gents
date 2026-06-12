@@ -1,6 +1,5 @@
-use std::collections::BTreeSet;
-
 use anyhow::Result;
+use defra_agent::agent::p2p_reconcile::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 use serde_json::{json, Value};
 
 use crate::cli::args::{
@@ -10,7 +9,7 @@ use crate::cli::args::{
 use crate::shared::{P2pSyncBranchableRequest, P2pSyncVersionsRequest};
 use crate::{
     expand_nonempty_values, http_delete_json, http_post_json, print_json, resolve_graphql_endpoint,
-    resolve_home_dir, SCHEMA_COLLECTION_CHECKS,
+    resolve_home_dir,
 };
 
 use super::output::{
@@ -19,74 +18,27 @@ use super::output::{
 };
 use super::p2p_http_client;
 
-const P2P_AGENT_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
-    "AgentRuntime",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
-];
-
-const P2P_DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
-    "ToolServiceRegistry",
-    "Task",
-    "Schedule",
-];
-
-const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[
-    "AgentConversation",
-    "AgentRequest",
-    "AgentResponse",
-    "AgentToolResult",
-    "AgentSession",
-    "AgentMessage",
-    "AgentToolCall",
-    "CompactionEntry",
-    "CodexThreadProjection",
-];
-
-const P2P_TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
-
 pub(super) fn expand_p2p_collection_args(
     explicit_collections: &[String],
     profiles: &[P2pCollectionProfileArg],
 ) -> Result<Vec<String>> {
-    let mut collections = explicit_collections
+    let profile_ids = profiles
         .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
-
-    for profile in profiles {
-        for collection in p2p_collection_profile_names(*profile) {
-            collections.insert(collection.to_string());
-        }
-    }
-
-    if collections.is_empty() {
-        anyhow::bail!("provide at least one --collection or --profile");
-    }
-
+        .map(|profile| p2p_collection_profile_id(*profile));
+    let collections = expand_p2p_collection_profile_ids(
+        explicit_collections.iter().map(String::as_str),
+        profile_ids,
+    )?;
     Ok(collections.into_iter().collect())
 }
 
-pub(super) fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'static str> {
+pub(super) fn p2p_collection_profile_id(profile: P2pCollectionProfileArg) -> &'static str {
     match profile {
-        P2pCollectionProfileArg::Runtime => SCHEMA_COLLECTION_CHECKS
-            .iter()
-            .map(|(collection, _)| *collection)
-            .collect(),
-        P2pCollectionProfileArg::Agent => P2P_AGENT_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::DesktopConfig => P2P_DESKTOP_CONFIG_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::ChatRequests => P2P_CHAT_REQUEST_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::ToolServices => P2P_TOOL_SERVICE_COLLECTIONS.to_vec(),
+        P2pCollectionProfileArg::Runtime => P2pCollectionProfile::Runtime.id(),
+        P2pCollectionProfileArg::Agent => P2pCollectionProfile::Agent.id(),
+        P2pCollectionProfileArg::DesktopConfig => P2pCollectionProfile::DesktopConfig.id(),
+        P2pCollectionProfileArg::ChatRequests => P2pCollectionProfile::ChatRequests.id(),
+        P2pCollectionProfileArg::ToolServices => P2pCollectionProfile::ToolServices.id(),
     }
 }
 

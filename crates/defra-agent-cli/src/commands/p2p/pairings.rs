@@ -10,7 +10,7 @@ use crate::{
     resolve_config_access,
 };
 
-use super::collections::expand_p2p_collection_args;
+use super::collections::{expand_p2p_collection_args, p2p_collection_profile_id};
 
 const PAIRINGS_RECONCILE_NOTE: &str = "Desired pairing rows are reconciled by the running defra-agent runtime. The reconciler only removes wiring it previously applied; use `defra-agent p2p pair --peer <multiaddr>` or the p2p collections/replicators commands for immediate manual live wiring.";
 
@@ -21,6 +21,7 @@ struct PeerPairingDesiredRow {
     agent_did: Option<String>,
     collections: Vec<String>,
     replicator_addresses: Vec<String>,
+    profiles: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,8 +52,16 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let agent_did = required_trimmed(&args.agent_did, "--did")?;
     let addresses = expand_nonempty_values(&args.addresses, "--address")?;
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    let profiles = pairing_profile_ids(&args.profiles);
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mutation = upsert_pairing_mutation(&peer_id, &agent_did, &collections, &addresses, &now);
+    let mutation = upsert_pairing_mutation(
+        &peer_id,
+        &agent_did,
+        &collections,
+        &addresses,
+        &profiles,
+        &now,
+    );
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let response = access
@@ -70,6 +79,7 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         "agent_did": agent_did,
         "collections": collections,
         "replicator_addresses": addresses,
+        "profiles": profiles,
         "doc_id": doc_id,
         "note": PAIRINGS_RECONCILE_NOTE,
     }))?;
@@ -115,6 +125,7 @@ fn pairings_list_query() -> &'static str {
             agent_did
             collections
             replicator_addresses
+            profiles
             created_at
             updated_at
         }
@@ -126,12 +137,14 @@ fn upsert_pairing_mutation(
     agent_did: &str,
     collections: &[String],
     addresses: &[String],
+    profiles: &[String],
     now: &str,
 ) -> String {
     let peer_id = escape_graphql_string(peer_id);
     let agent_did = escape_graphql_string(agent_did);
     let collections = graphql_string_list_literal(collections);
     let addresses = graphql_string_list_literal(addresses);
+    let profiles = graphql_nullable_string_list_literal(profiles);
     let now = escape_graphql_string(now);
 
     format!(
@@ -143,6 +156,7 @@ fn upsert_pairing_mutation(
                     agent_did: "{agent_did}",
                     collections: {collections},
                     replicator_addresses: {addresses},
+                    profiles: {profiles},
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
@@ -150,6 +164,7 @@ fn upsert_pairing_mutation(
                     agent_did: "{agent_did}",
                     collections: {collections},
                     replicator_addresses: {addresses},
+                    profiles: {profiles},
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -183,6 +198,7 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                 agent_did: optional_string(&row, "agent_did"),
                 collections: string_list(&row, "collections"),
                 replicator_addresses: string_list(&row, "replicator_addresses"),
+                profiles: string_list(&row, "profiles"),
                 created_at: optional_string(&row, "created_at"),
                 updated_at: optional_string(&row, "updated_at"),
             })
@@ -215,6 +231,23 @@ fn string_list(row: &Value, field: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn pairing_profile_ids(profiles: &[crate::cli::args::P2pCollectionProfileArg]) -> Vec<String> {
+    profiles
+        .iter()
+        .map(|profile| p2p_collection_profile_id(*profile).to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn graphql_nullable_string_list_literal(values: &[String]) -> String {
+    if values.is_empty() {
+        "null".to_string()
+    } else {
+        graphql_string_list_literal(values)
+    }
+}
+
 fn mutation_doc_ids(response: &Value, field_name: &str) -> Vec<String> {
     let Some(value) = response.get("data").and_then(|data| data.get(field_name)) else {
         return Vec::new();
@@ -244,6 +277,7 @@ mod tests {
             r#"did:key:agent\one"#,
             &["AgentRequest".to_string(), "AgentResponse".to_string()],
             &[r#"/ip4/127.0.0.1/tcp/4001/p2p/peer"one"#.to_string()],
+            &["chat-requests".to_string()],
             "2026-06-10T00:00:00Z",
         );
 
@@ -253,6 +287,7 @@ mod tests {
         assert!(
             mutation.contains(r#"replicator_addresses: ["/ip4/127.0.0.1/tcp/4001/p2p/peer\"one"]"#)
         );
+        assert!(mutation.contains(r#"profiles: ["chat-requests"]"#));
         assert!(mutation.contains(r#"created_at: "2026-06-10T00:00:00Z""#));
 
         let update_block = mutation
@@ -264,6 +299,21 @@ mod tests {
     }
 
     #[test]
+    fn upsert_pairing_mutation_emits_null_for_empty_profiles() {
+        let mutation = upsert_pairing_mutation(
+            "peer-one",
+            "did:key:agent-one",
+            &["AgentRequest".to_string()],
+            &["addr1".to_string()],
+            &[],
+            "2026-06-10T00:00:00Z",
+        );
+
+        assert!(mutation.contains("profiles: null"));
+        assert!(!mutation.contains("profiles: []"));
+    }
+
+    #[test]
     fn parse_pairing_rows_sorts_and_ignores_incomplete_rows() {
         let rows = vec![
             json!({
@@ -271,6 +321,7 @@ mod tests {
                 "agent_did": " did:key:b ",
                 "collections": ["AgentResponse", "", 3],
                 "replicator_addresses": ["/ip4/2/tcp/4001"],
+                "profiles": ["chat-requests", "", 4],
                 "created_at": "",
                 "updated_at": "2026-06-10T00:00:01Z"
             }),
@@ -281,7 +332,8 @@ mod tests {
             json!({
                 "peer_id": "peer-a",
                 "collections": ["AgentRequest"],
-                "replicator_addresses": null
+                "replicator_addresses": null,
+                "profiles": null
             }),
         ];
 
@@ -294,6 +346,7 @@ mod tests {
         assert_eq!(pairings[1].peer_id, "peer-b");
         assert_eq!(pairings[1].agent_did.as_deref(), Some("did:key:b"));
         assert_eq!(pairings[1].collections, vec!["AgentResponse"]);
+        assert_eq!(pairings[1].profiles, vec!["chat-requests"]);
         assert!(pairings[1].created_at.is_none());
         assert_eq!(
             pairings[1].updated_at.as_deref(),

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
+use super::profiles::expand_p2p_collection_profile_ids;
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
     PairingDesired, RemoteP2pAdmin,
@@ -292,23 +293,15 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     collections
                     replicator_addresses
+                    profiles
                 }}
             }}"#
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query PeerPairingDesired")?;
-        Ok(
-            first_row::<PairingStateRow>(&response, "PeerPairingDesired")?.map(|row| {
-                PairingDesired {
-                    collections: row.collections.unwrap_or_default().into_iter().collect(),
-                    replicator_addresses: row
-                        .replicator_addresses
-                        .unwrap_or_default()
-                        .into_iter()
-                        .collect(),
-                }
-            }),
-        )
+        first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
+            .map(desired_from_pairing_row)
+            .transpose()
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
@@ -406,11 +399,36 @@ impl PairingStateStore for GraphqlPairingStateStore {
 struct PairingStateRow {
     collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
+    profiles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
 struct PeerIdRow {
     peer_id: String,
+}
+
+fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
+    let explicit_collections = row.collections.unwrap_or_default();
+    let profile_ids = row.profiles.unwrap_or_default();
+    let collections = if explicit_collections.is_empty() && profile_ids.is_empty() {
+        BTreeSet::new()
+    } else {
+        expand_p2p_collection_profile_ids(
+            explicit_collections.iter().map(String::as_str),
+            profile_ids.iter().map(String::as_str),
+        )?
+    };
+
+    Ok(PairingDesired {
+        collections,
+        replicator_addresses: row
+            .replicator_addresses
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+    })
 }
 
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
@@ -789,5 +807,31 @@ mod tests {
             graphql_nullable_string_array(&set(&["a", "b"])),
             r#"["a", "b"]"#
         );
+    }
+
+    #[test]
+    fn desired_row_profiles_resolve_to_collections_at_load_boundary() {
+        let desired = desired_from_pairing_row(PairingStateRow {
+            collections: None,
+            replicator_addresses: Some(vec!["addr1".into()]),
+            profiles: Some(vec!["chat-requests".into()]),
+        })
+        .expect("profile resolves");
+
+        assert!(desired.collections.contains("AgentRequest"));
+        assert!(desired.collections.contains("AgentResponse"));
+        assert_eq!(desired.replicator_addresses, set(&["addr1"]));
+    }
+
+    #[test]
+    fn desired_row_unknown_profile_is_load_error() {
+        let error = desired_from_pairing_row(PairingStateRow {
+            collections: None,
+            replicator_addresses: Some(vec!["addr1".into()]),
+            profiles: Some(vec!["not-a-profile".into()]),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown P2P collection profile"));
     }
 }

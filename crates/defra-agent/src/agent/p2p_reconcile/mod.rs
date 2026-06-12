@@ -4,6 +4,7 @@ pub mod diff;
 pub mod embedded_impl;
 pub mod engine;
 pub mod error_class;
+pub mod profiles;
 pub mod trait_def;
 
 pub use diff::{
@@ -16,6 +17,7 @@ pub use engine::{
     PairingTickOutcome, PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
+pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,
 };
