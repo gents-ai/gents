@@ -6,8 +6,8 @@ import Proofs.Transcript.State
 
 Vocabulary for the provider-input narrowing model: the durable transcript is
 *permissive* (`Transcript.PairClosed` only constrains completed calls), while
-providers reject any assistant tool-call not followed by its result and any
-tool-result not preceded by its call. `sanitize` (Rust:
+providers reject any assistant tool-call not followed immediately by its
+result block and any tool-result not closing the active call block. `sanitize` (Rust:
 `compaction::sanitize_history_for_provider`, applied at the
 `run_loop_stream` entry chokepoint) narrows the former to the latter.
 
@@ -18,11 +18,22 @@ content ordering (`normalize_assistant_content_order`) is therefore NOT
 modeled here; it is deferred to the `MessageKind` content-order extension
 (follow-up to #448).
 
+KNOWN GAP at that granularity: the row projection of a MIXED user message
+(text + tool results in ONE message) is stricter than the Rust sanitizer.
+Rust (`history.rs::drop_orphaned_tool_results`) filters a user message's
+results against the pending block BEFORE clearing it for plain content, so
+`User[Text, ToolResult(open)]` keeps the result; its row projection
+`[ordinary, toolResult]` drops it (the ordinary row closes the block). The
+owned loop never emits mixed user messages — results are threaded one per
+message — so the gap is unreachable on the loop path, and the conformance
+vectors are restricted to canonical single-content messages until the
+content-order extension closes it.
+
 Unlike `Compaction.PromptView.PairsClosedInMessages` (existence of a caller
-*anywhere* in the list), the provider predicates here are ORDER-AWARE —
-results must follow their calls and calls must be followed by their results —
-and are defined recursively so the sanitizer theorems are structural
-inductions.
+*anywhere* in the list), the provider predicate here is ACTIVE-BLOCK aware:
+an assistant tool-call row opens a pending result block, only matching
+tool-results may appear while that block is open, and ordinary conversation
+may resume only after every pending call is closed.
 -/
 
 namespace PromptAssembly
@@ -113,45 +124,41 @@ theorem callsIn_append (a b : List MessageRow) :
       rw [List.cons_append, callsIn_cons_ordinary row _ h,
         callsIn_cons_ordinary row rest h, ih]
 
-/-- Every tool-result row's call id was announced by an EARLIER row, with
-`seen` carrying the call ids announced before the current suffix. Stricter
-than `Compaction.PromptView.PairsClosedInMessages` (existence anywhere). -/
-def ResultsFollowCallsFrom (seen : Finset ToolExecution.ToolCallId) :
+/-- Provider-validity from an active pending result block. `pending` is the
+set of call ids announced by the current assistant tool-call row whose
+tool-results must appear before ordinary conversation or another assistant
+turn. -/
+def ActiveBlockValidFrom (pending : Finset ToolExecution.ToolCallId) :
     List MessageRow → Prop
-  | [] => True
+  | [] => pending = ∅
   | row :: rest =>
     match row.kind with
     | .toolResult callId _ =>
-        callId ∈ seen ∧ ResultsFollowCallsFrom seen rest
+        callId ∈ pending ∧ ActiveBlockValidFrom (pending.erase callId) rest
     | .assistantToolCalls callIds =>
-        ResultsFollowCallsFrom (seen ∪ callIds) rest
-    | .ordinary => ResultsFollowCallsFrom seen rest
+        pending = ∅ ∧ ActiveBlockValidFrom callIds rest
+    | .ordinary =>
+        pending = ∅ ∧ ActiveBlockValidFrom ∅ rest
 
-abbrev ResultsFollowCalls (msgs : List MessageRow) : Prop :=
-  ResultsFollowCallsFrom ∅ msgs
+abbrev ActiveBlockValid (msgs : List MessageRow) : Prop :=
+  ActiveBlockValidFrom ∅ msgs
 
-/-- Every announced call id is resolved by a tool-result row AFTER the
-announcing row — the provider-side requirement on assistant tool calls. -/
-def CallsFollowedByResults : List MessageRow → Prop
-  | [] => True
-  | row :: rest =>
-    match row.kind with
-    | .assistantToolCalls callIds =>
-        callIds ⊆ resolvedIn rest ∧ CallsFollowedByResults rest
-    | _ => CallsFollowedByResults rest
-
-/-- Provider-valid history at row granularity: ordered pairing in both
-directions. (Content-order canonicalization is deferred to the
-`MessageKind` content extension — see the module docstring.) -/
+/-- Provider-valid history at row granularity: active-block discipline.
+Strictly stronger than "ordered pairing in both directions" — it also
+rejects ordinary rows interleaved mid-block, duplicate results for one
+call, and late results for an already-closed block. (Content-order
+canonicalization is deferred to the `MessageKind` content extension — see
+the module docstring.) -/
 structure ProviderValid (msgs : List MessageRow) : Prop where
-  resultsFollowCalls : ResultsFollowCalls msgs
-  callsFollowedByResults : CallsFollowedByResults msgs
+  activeBlockValid : ActiveBlockValid msgs
 
 /-- Each call id is announced by at most one assistant row: every announced
 set is disjoint from all LATER announcements. (Two announcements of `c` at
 positions `i < j` violate the disjointness recorded at `i`.) The system
-invariant — call ids are uuids — under which the `followed-by-results`
-direction of soundness holds. -/
+invariant — call ids are uuids — under which soundness (T1) holds: without
+it a later announcement could re-open an id from an abandoned block, so a
+stale result would survive orphan-dropping and break the active-block
+shape (e.g. `[call A, call A, result A]`). -/
 def UniqueCallIds : List MessageRow → Prop
   | [] => True
   | row :: rest =>
@@ -167,39 +174,26 @@ variable (row : MessageRow) (rest : List MessageRow)
 variable (seen callIds : Finset ToolExecution.ToolCallId)
 variable (callId : ToolExecution.ToolCallId) (key : Transcript.ToolResultKey)
 
-@[simp] theorem resultsFollowFrom_nil : ResultsFollowCallsFrom seen [] := trivial
-
-@[simp] theorem callsFollowed_nil : CallsFollowedByResults [] := trivial
+@[simp] theorem activeBlockValidFrom_nil :
+    ActiveBlockValidFrom seen [] ↔ seen = ∅ := by
+  simp only [ActiveBlockValidFrom]
 
 @[simp] theorem uniqueCallIds_nil : UniqueCallIds [] := trivial
 
-theorem resultsFollowFrom_cons_result (h : row.kind = .toolResult callId key) :
-    ResultsFollowCallsFrom seen (row :: rest) ↔
-      callId ∈ seen ∧ ResultsFollowCallsFrom seen rest := by
-  simp only [ResultsFollowCallsFrom, h]
+theorem activeBlockValidFrom_cons_result (h : row.kind = .toolResult callId key) :
+    ActiveBlockValidFrom seen (row :: rest) ↔
+      callId ∈ seen ∧ ActiveBlockValidFrom (seen.erase callId) rest := by
+  simp only [ActiveBlockValidFrom, h]
 
-theorem resultsFollowFrom_cons_assistant (h : row.kind = .assistantToolCalls callIds) :
-    ResultsFollowCallsFrom seen (row :: rest) ↔
-      ResultsFollowCallsFrom (seen ∪ callIds) rest := by
-  simp only [ResultsFollowCallsFrom, h]
+theorem activeBlockValidFrom_cons_assistant (h : row.kind = .assistantToolCalls callIds) :
+    ActiveBlockValidFrom seen (row :: rest) ↔
+      seen = ∅ ∧ ActiveBlockValidFrom callIds rest := by
+  simp only [ActiveBlockValidFrom, h]
 
-theorem resultsFollowFrom_cons_ordinary (h : row.kind = .ordinary) :
-    ResultsFollowCallsFrom seen (row :: rest) ↔
-      ResultsFollowCallsFrom seen rest := by
-  simp only [ResultsFollowCallsFrom, h]
-
-theorem callsFollowed_cons_assistant (h : row.kind = .assistantToolCalls callIds) :
-    CallsFollowedByResults (row :: rest) ↔
-      callIds ⊆ resolvedIn rest ∧ CallsFollowedByResults rest := by
-  simp only [CallsFollowedByResults, h]
-
-theorem callsFollowed_cons_result (h : row.kind = .toolResult callId key) :
-    CallsFollowedByResults (row :: rest) ↔ CallsFollowedByResults rest := by
-  simp only [CallsFollowedByResults, h]
-
-theorem callsFollowed_cons_ordinary (h : row.kind = .ordinary) :
-    CallsFollowedByResults (row :: rest) ↔ CallsFollowedByResults rest := by
-  simp only [CallsFollowedByResults, h]
+theorem activeBlockValidFrom_cons_ordinary (h : row.kind = .ordinary) :
+    ActiveBlockValidFrom seen (row :: rest) ↔
+      seen = ∅ ∧ ActiveBlockValidFrom ∅ rest := by
+  simp only [ActiveBlockValidFrom, h]
 
 theorem uniqueCallIds_cons_assistant (h : row.kind = .assistantToolCalls callIds) :
     UniqueCallIds (row :: rest) ↔

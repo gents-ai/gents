@@ -75,7 +75,15 @@ fn assert_provider_valid(msgs: &[Message]) {
                 );
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
-                        pending.push(tool_call.id.clone());
+                        // Pairing identity must mirror history.rs::tool_call_key:
+                        // `call_id` when present (OpenAI responses-API shape),
+                        // falling back to the item id.
+                        pending.push(
+                            tool_call
+                                .call_id
+                                .clone()
+                                .unwrap_or_else(|| tool_call.id.clone()),
+                        );
                     }
                 }
             }
@@ -226,4 +234,41 @@ fn t5_loop_threaded_turn_is_a_fixpoint() {
     ];
     let out = sanitize_history_for_provider(threaded.clone());
     assert_eq!(out, threaded);
+}
+
+/// Pairing identity: calls and results pair on `call_id.unwrap_or(id)`
+/// (`history.rs::tool_call_key` / `tool_result_key`), never on the item id
+/// alone. The Lean model abstracts both into one `ToolCallId`, so this
+/// below-the-model identity is fenced only here: a pair whose `call_id`
+/// differs from both item ids (the OpenAI responses-API shape) must survive
+/// sanitize and validate.
+#[test]
+fn pairing_identity_uses_call_id_over_item_id() {
+    let history = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "item-9".to_string(),
+                call_id: Some("fc-1".to_string()),
+                function: ToolFunction {
+                    name: "echo".to_string(),
+                    arguments: serde_json::json!({}),
+                },
+                signature: None,
+                additional_params: None,
+            })],
+        },
+        Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "out-3".to_string(),
+                call_id: Some("fc-1".to_string()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "fc-1-result".to_string(),
+                })],
+            })],
+        },
+    ];
+    let out = sanitize_history_for_provider(history.clone());
+    assert_eq!(out, history);
+    assert_provider_valid(&out);
 }

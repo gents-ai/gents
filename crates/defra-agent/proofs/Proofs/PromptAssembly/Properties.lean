@@ -6,34 +6,23 @@ import Proofs.PromptAssembly.Executable
 The provider-input narrowing theorems, in the labeling of the design:
 
 - **T1 `sanitize_sound`** — under `UniqueCallIds` (call ids are uuids — the
-  system invariant), `sanitize` always produces `ProviderValid` history.
-  Quantified over arbitrary lists, so **T4 split-stability falls out as a
-  corollary**: any pair-blind compaction split's recent window is just
-  another list whose uniqueness is inherited from the whole.
+  system invariant), `sanitize` always produces active-block-valid provider
+  history.
 - **T2 `sanitize_fixpoint`** — `sanitize` is the identity on already-valid
   history (with non-empty announcements, which `sanitize` itself always
-  outputs). This is the preservation statement: nothing provider-valid is
-  ever dropped.
+  outputs).
 - **T3 `sanitize_idempotent`** — T1 ∘ T2.
-- **T4 `sanitize_split_stable`** — see T1.
+- **T4 `sanitize_split_stable`** — a suffix of a unique transcript inherits
+  uniqueness, so T1 applies to pair-blind compaction windows.
 - **T5 `threaded_turn_fixpoint`** — the owned loop's threaded turn shape
-  (one assistant tool-call row followed by its results) is provider-valid
-  and a fixpoint of `sanitize`. This is the formal justification for
-  sanitizing ONLY the loaded history at the `run_loop_stream` entry
-  chokepoint: the loop's own in-flight messages need no repair, and
-  sanitizing them mid-flight would be wrong (a result can ride as the next
-  turn's prompt).
-- **Assembly lemmas** — the layer order of the assembled request is fixed
-  by definition: preamble first, skill reminders before the summary
-  reminder and conversation, the new prompt last.
+  (one assistant tool-call row followed by one result row per announced
+  call — the syntactic `ResultBlock` shape, bridged to validity by
+  `ResultBlock.activeBlockValid`) is a fixpoint of `sanitize`.
 
-The composition ORDER of `sanitize` (orphans first) is load-bearing: with
-the swapped order, `[result A, call A]` keeps the call on the strength of
-the result it then drops, and an unpaired call reaches the provider. The
-swap was a live bug in the Rust sanitizer found while sketching T1; the
-counterexample is pinned here (`sanitize_repairs_result_before_call`) and in
-`crates/defra-agent/tests/prompt_assembly_conformance.rs` /
-`compaction/tests.rs::sanitize_repairs_result_preceding_its_call`.
+The provider-valid shape is stricter than "some earlier call exists":
+ordinary conversation or a new assistant turn closes the active tool-call
+block. A late result for an older call is stale and must be dropped before
+unpaired assistant calls are filtered.
 -/
 
 namespace PromptAssembly
@@ -70,139 +59,70 @@ theorem nonemptyAnnouncements_cons_other (row : MessageRow)
   | toolResult callId key => simp only [NonemptyAnnouncements, hk]
   | ordinary => simp only [NonemptyAnnouncements, hk]
 
-/-! ## dropOrphanedResults lemmas -/
+/-! ## Basic sanitizer-preservation lemmas -/
 
-/-- Orphan-dropping never removes assistant rows, so the announced call set
-is unchanged. (This stability is why orphan-drop is safe to run FIRST.) -/
 theorem callsIn_dropOrphanedFrom (l : List MessageRow) :
-    ∀ seen, callsIn (dropOrphanedFrom seen l) = callsIn l := by
+    ∀ pending, callsIn (dropOrphanedFrom pending l) = callsIn l := by
   induction l with
-  | nil => intro seen; rfl
+  | nil => intro pending; rfl
   | cons row rest ih =>
-    intro seen
+    intro pending
     cases hk : row.kind with
     | toolResult callId key =>
-      rw [dropOrphanedFrom_cons_result row rest seen callId key hk]
-      by_cases hc : callId ∈ seen
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk]
+      by_cases hc : callId ∈ pending
       · rw [if_pos hc, callsIn_cons_result row _ callId key hk,
-          callsIn_cons_result row rest callId key hk, ih seen]
-      · rw [if_neg hc, ih seen, callsIn_cons_result row rest callId key hk]
+          callsIn_cons_result row rest callId key hk, ih (pending.erase callId)]
+      · rw [if_neg hc, ih pending, callsIn_cons_result row rest callId key hk]
     | assistantToolCalls callIds =>
-      rw [dropOrphanedFrom_cons_assistant row rest seen callIds hk,
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk,
         callsIn_cons_assistant row _ callIds hk,
-        callsIn_cons_assistant row rest callIds hk, ih (seen ∪ callIds)]
+        callsIn_cons_assistant row rest callIds hk, ih callIds]
     | ordinary =>
-      rw [dropOrphanedFrom_cons_ordinary row rest seen hk,
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk,
         callsIn_cons_ordinary row _ hk, callsIn_cons_ordinary row rest hk,
-        ih seen]
+        ih ∅]
 
-theorem uniqueCallIds_dropOrphanedFrom (l : List MessageRow) :
-    ∀ seen, UniqueCallIds l → UniqueCallIds (dropOrphanedFrom seen l) := by
+/-- Surviving tool results resolve either the active pending block or calls
+announced later in the scanned suffix. -/
+theorem resolvedIn_dropOrphanedFrom_subset (l : List MessageRow) :
+    ∀ pending, resolvedIn (dropOrphanedFrom pending l) ⊆ pending ∪ callsIn l := by
   induction l with
-  | nil => intro seen _; simp
+  | nil =>
+    intro pending c hc
+    simp at hc
   | cons row rest ih =>
-    intro seen huniq
+    intro pending c hc
     cases hk : row.kind with
     | toolResult callId key =>
-      rw [dropOrphanedFrom_cons_result row rest seen callId key hk]
-      have hrest := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
-      by_cases hc : callId ∈ seen
-      · rw [if_pos hc, uniqueCallIds_cons_result row _ callId key hk]
-        exact ih seen hrest
-      · rw [if_neg hc]; exact ih seen hrest
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk] at hc
+      rw [callsIn_cons_result row rest callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem] at hc
+        rw [resolvedIn_cons_result row _ callId key hk] at hc
+        rcases Finset.mem_insert.mp hc with hcEq | hcTail
+        · subst hcEq
+          exact Finset.mem_union_left _ hmem
+        · exact (Finset.mem_union.mp ((ih (pending.erase callId)) hcTail)).elim
+            (fun hp => Finset.mem_union_left _ (Finset.mem_of_mem_erase hp))
+            (fun hcall => Finset.mem_union_right _ hcall)
+      · rw [if_neg hmem] at hc
+        exact (ih pending) hc
     | assistantToolCalls callIds =>
-      rw [dropOrphanedFrom_cons_assistant row rest seen callIds hk]
-      have h := (uniqueCallIds_cons_assistant row rest callIds hk).mp huniq
-      rw [uniqueCallIds_cons_assistant row _ callIds hk]
-      exact ⟨by rw [callsIn_dropOrphanedFrom rest (seen ∪ callIds)]; exact h.1,
-        ih (seen ∪ callIds) h.2⟩
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk] at hc
+      rw [resolvedIn_cons_assistant row _ callIds hk] at hc
+      rw [callsIn_cons_assistant row rest callIds hk]
+      exact (Finset.mem_union.mp ((ih callIds) hc)).elim
+        (fun hp => Finset.mem_union_right _ (Finset.mem_union_left _ hp))
+        (fun hcall => Finset.mem_union_right _ (Finset.mem_union_right _ hcall))
     | ordinary =>
-      rw [dropOrphanedFrom_cons_ordinary row rest seen hk]
-      have hrest := (uniqueCallIds_cons_ordinary row rest hk).mp huniq
-      rw [uniqueCallIds_cons_ordinary row _ hk]
-      exact ih seen hrest
-
-theorem nonemptyAnnouncements_dropOrphanedFrom (l : List MessageRow) :
-    ∀ seen, NonemptyAnnouncements l →
-      NonemptyAnnouncements (dropOrphanedFrom seen l) := by
-  induction l with
-  | nil => intro seen _; simp
-  | cons row rest ih =>
-    intro seen hne
-    cases hk : row.kind with
-    | toolResult callId key =>
-      rw [dropOrphanedFrom_cons_result row rest seen callId key hk]
-      have hrest := (nonemptyAnnouncements_cons_other row rest
-        (by intro callIds h; rw [hk] at h; exact MessageKind.noConfusion h)).mp hne
-      by_cases hc : callId ∈ seen
-      · rw [if_pos hc, nonemptyAnnouncements_cons_other row _
-          (by intro callIds h; rw [hk] at h; exact MessageKind.noConfusion h)]
-        exact ih seen hrest
-      · rw [if_neg hc]; exact ih seen hrest
-    | assistantToolCalls callIds =>
-      rw [dropOrphanedFrom_cons_assistant row rest seen callIds hk]
-      have h := (nonemptyAnnouncements_cons_assistant row rest callIds hk).mp hne
-      rw [nonemptyAnnouncements_cons_assistant row _ callIds hk]
-      exact ⟨h.1, ih (seen ∪ callIds) h.2⟩
-    | ordinary =>
-      rw [dropOrphanedFrom_cons_ordinary row rest seen hk]
-      have hrest := (nonemptyAnnouncements_cons_other row rest
-        (by intro callIds h; rw [hk] at h; exact MessageKind.noConfusion h)).mp hne
-      rw [nonemptyAnnouncements_cons_other row _
-        (by intro callIds h; rw [hk] at h; exact MessageKind.noConfusion h)]
-      exact ih seen hrest
-
-/-- Step A: orphan-dropping establishes results-follow-calls relative to the
-accumulator, unconditionally. -/
-theorem resultsFollow_dropOrphanedFrom (l : List MessageRow) :
-    ∀ seen, ResultsFollowCallsFrom seen (dropOrphanedFrom seen l) := by
-  induction l with
-  | nil => intro seen; simp
-  | cons row rest ih =>
-    intro seen
-    cases hk : row.kind with
-    | toolResult callId key =>
-      rw [dropOrphanedFrom_cons_result row rest seen callId key hk]
-      by_cases hc : callId ∈ seen
-      · rw [if_pos hc,
-          resultsFollowFrom_cons_result row _ seen callId key hk]
-        exact ⟨hc, ih seen⟩
-      · rw [if_neg hc]; exact ih seen
-    | assistantToolCalls callIds =>
-      rw [dropOrphanedFrom_cons_assistant row rest seen callIds hk,
-        resultsFollowFrom_cons_assistant row _ seen callIds hk]
-      exact ih (seen ∪ callIds)
-    | ordinary =>
-      rw [dropOrphanedFrom_cons_ordinary row rest seen hk,
-        resultsFollowFrom_cons_ordinary row _ seen hk]
-      exact ih seen
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk] at hc
+      rw [resolvedIn_cons_ordinary row _ hk] at hc
+      rw [callsIn_cons_ordinary row rest hk]
+      exact Finset.mem_union_right _
+        ((Finset.mem_union.mp ((ih ∅) hc)).elim (by intro h; simp at h) id)
 
 /-! ## dropUnpairedCalls lemmas -/
-
-/-- Call-filtering never touches result rows. -/
-theorem resolvedIn_filterCallsBy (resolved : Finset ToolExecution.ToolCallId)
-    (l : List MessageRow) :
-    resolvedIn (filterCallsBy resolved l) = resolvedIn l := by
-  induction l with
-  | nil => rfl
-  | cons row rest ih =>
-    cases hk : row.kind with
-    | assistantToolCalls callIds =>
-      rw [filterCallsBy_cons_assistant row rest resolved callIds hk,
-        resolvedIn_cons_assistant row rest callIds hk]
-      by_cases hempty : callIds ∩ resolved = ∅
-      · rw [if_pos hempty, ih]
-      · rw [if_neg hempty,
-          resolvedIn_cons_assistant (withKind row _) _ (callIds ∩ resolved)
-            (withKind_kind row _), ih]
-    | toolResult callId key =>
-      rw [filterCallsBy_cons_result row rest resolved callId key hk,
-        resolvedIn_cons_result row _ callId key hk,
-        resolvedIn_cons_result row rest callId key hk, ih]
-    | ordinary =>
-      rw [filterCallsBy_cons_ordinary row rest resolved hk,
-        resolvedIn_cons_ordinary row _ hk,
-        resolvedIn_cons_ordinary row rest hk, ih]
 
 /-- Call-filtering always outputs non-empty announcements (the empty-set
 branch drops the row). -/
@@ -232,128 +152,138 @@ theorem nonempty_filterCallsBy (resolved : Finset ToolExecution.ToolCallId)
           (by intro c h; rw [hk] at h; exact MessageKind.noConfusion h)]
       exact ih
 
-/-- Results-follow-calls survives call-filtering: a kept result's call id is
-resolved by the result itself, so the announcing row keeps that id. -/
-theorem resultsFollow_filterCallsBy (R : Finset ToolExecution.ToolCallId)
-    (l : List MessageRow) :
-    ∀ seen, ResultsFollowCallsFrom seen l → resolvedIn l ⊆ R →
-      ResultsFollowCallsFrom (seen ∩ R) (filterCallsBy R l) := by
+theorem filterCallsBy_irrelevant (l : List MessageRow) :
+    ∀ extra R, Disjoint extra (callsIn l) →
+      filterCallsBy (extra ∪ R) l = filterCallsBy R l := by
   induction l with
-  | nil => intro seen _ _; simp
+  | nil => intro extra R _; rfl
   | cons row rest ih =>
-    intro seen hfollow hres
+    intro extra R hdisj
     cases hk : row.kind with
     | assistantToolCalls callIds =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_assistant row rest seen callIds hk).mp hfollow
-      have hres' : resolvedIn rest ⊆ R := by
-        rwa [resolvedIn_cons_assistant row rest callIds hk] at hres
-      rw [filterCallsBy_cons_assistant row rest R callIds hk]
-      by_cases hempty : callIds ∩ R = ∅
-      · rw [if_pos hempty]
-        have := ih (seen ∪ callIds) hfollow' hres'
-        rwa [Finset.union_inter_distrib_right, hempty,
-          Finset.union_empty] at this
-      · rw [if_neg hempty,
-          resultsFollowFrom_cons_assistant (withKind row _) _ (seen ∩ R)
-            (callIds ∩ R) (withKind_kind row _)]
-        have := ih (seen ∪ callIds) hfollow' hres'
-        rwa [Finset.union_inter_distrib_right] at this
-    | toolResult callId key =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_result row rest seen callId key hk).mp hfollow
-      rw [resolvedIn_cons_result row rest callId key hk,
-        Finset.insert_subset_iff] at hres
-      rw [filterCallsBy_cons_result row rest R callId key hk,
-        resultsFollowFrom_cons_result row _ (seen ∩ R) callId key hk]
-      exact ⟨Finset.mem_inter.mpr ⟨hfollow'.1, hres.1⟩,
-        ih seen hfollow'.2 hres.2⟩
-    | ordinary =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_ordinary row rest seen hk).mp hfollow
-      have hres' : resolvedIn rest ⊆ R := by
-        rwa [resolvedIn_cons_ordinary row rest hk] at hres
-      rw [filterCallsBy_cons_ordinary row rest R hk,
-        resultsFollowFrom_cons_ordinary row _ (seen ∩ R) hk]
-      exact ih seen hfollow' hres'
-
-/-- Calls-followed-by-results holds for the output of call-filtering on an
-orphan-free, unique-call-id list. The carried context: `seen` is the calls
-announced by the already-processed prefix, `extra ⊆ seen` the results the
-prefix resolved (orphan-freedom: prefix results only resolve prefix calls),
-and `Disjoint seen (callsIn l)` the uniqueness frontier. A kept call id must
-then be resolved by a LATER result: it cannot be in `extra` (it was just
-announced, and announcements are unique), so it is resolved in the tail. -/
-theorem callsFollowed_filterCallsBy (l : List MessageRow) :
-    ∀ (seen extra : Finset ToolExecution.ToolCallId),
-      ResultsFollowCallsFrom seen l →
-      UniqueCallIds l →
-      Disjoint seen (callsIn l) →
-      extra ⊆ seen →
-      CallsFollowedByResults (filterCallsBy (extra ∪ resolvedIn l) l) := by
-  induction l with
-  | nil => intro seen extra _ _ _ _; simp
-  | cons row rest ih =>
-    intro seen extra hfollow huniq hdisj hextra
-    cases hk : row.kind with
-    | assistantToolCalls callIds =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_assistant row rest seen callIds hk).mp hfollow
-      have huniq' := (uniqueCallIds_cons_assistant row rest callIds hk).mp huniq
-      have hdisjPair : Disjoint seen callIds ∧ Disjoint seen (callsIn rest) := by
+      have hpair : Disjoint extra callIds ∧ Disjoint extra (callsIn rest) := by
         rw [callsIn_cons_assistant row rest callIds hk,
           Finset.disjoint_union_right] at hdisj
         exact hdisj
-      have hdisj' : Disjoint (seen ∪ callIds) (callsIn rest) :=
-        Finset.disjoint_union_left.mpr ⟨hdisjPair.2, huniq'.1⟩
-      have hextra' : extra ⊆ seen ∪ callIds :=
-        hextra.trans Finset.subset_union_left
-      have hR : extra ∪ resolvedIn (row :: rest) = extra ∪ resolvedIn rest := by
-        rw [resolvedIn_cons_assistant row rest callIds hk]
-      rw [hR, filterCallsBy_cons_assistant row rest _ callIds hk]
-      by_cases hempty : callIds ∩ (extra ∪ resolvedIn rest) = ∅
-      · rw [if_pos hempty]
-        exact ih (seen ∪ callIds) extra hfollow' huniq'.2 hdisj' hextra'
-      · rw [if_neg hempty,
-          callsFollowed_cons_assistant (withKind row _) _
-            (callIds ∩ (extra ∪ resolvedIn rest)) (withKind_kind row _)]
-        refine ⟨?_, ih (seen ∪ callIds) extra hfollow' huniq'.2 hdisj' hextra'⟩
-        rw [resolvedIn_filterCallsBy]
-        intro c hc
-        have hcS := (Finset.mem_inter.mp hc).1
-        have hcR := (Finset.mem_inter.mp hc).2
-        rcases Finset.mem_union.mp hcR with hcExtra | hcRest
-        · exact absurd hcS
-            (Finset.disjoint_left.mp hdisjPair.1 (hextra hcExtra))
-        · exact hcRest
+      rw [filterCallsBy_cons_assistant row rest (extra ∪ R) callIds hk,
+        filterCallsBy_cons_assistant row rest R callIds hk, ih extra R hpair.2]
+      have hinter : callIds ∩ (extra ∪ R) = callIds ∩ R := by
+        rw [Finset.inter_union_distrib_left,
+          Finset.disjoint_iff_inter_eq_empty.mp hpair.1.symm, Finset.empty_union]
+      rw [hinter]
     | toolResult callId key =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_result row rest seen callId key hk).mp hfollow
-      have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
-      have hdisj' : Disjoint seen (callsIn rest) := by
+      rw [filterCallsBy_cons_result row rest (extra ∪ R) callId key hk,
+        filterCallsBy_cons_result row rest R callId key hk]
+      have hrest : Disjoint extra (callsIn rest) := by
         rwa [callsIn_cons_result row rest callId key hk] at hdisj
-      have hextra' : insert callId extra ⊆ seen :=
-        Finset.insert_subset_iff.mpr ⟨hfollow'.1, hextra⟩
-      have hR : extra ∪ resolvedIn (row :: rest) =
-          insert callId extra ∪ resolvedIn rest := by
-        rw [resolvedIn_cons_result row rest callId key hk,
-          Finset.union_insert, Finset.insert_union]
-      rw [hR, filterCallsBy_cons_result row rest _ callId key hk,
-        callsFollowed_cons_result row _ callId key hk]
-      exact ih seen (insert callId extra) hfollow'.2 huniq' hdisj' hextra'
+      rw [ih extra R hrest]
     | ordinary =>
-      have hfollow' :=
-        (resultsFollowFrom_cons_ordinary row rest seen hk).mp hfollow
-      have huniq' := (uniqueCallIds_cons_ordinary row rest hk).mp huniq
-      have hdisj' : Disjoint seen (callsIn rest) := by
+      rw [filterCallsBy_cons_ordinary row rest (extra ∪ R) hk,
+        filterCallsBy_cons_ordinary row rest R hk]
+      have hrest : Disjoint extra (callsIn rest) := by
         rwa [callsIn_cons_ordinary row rest hk] at hdisj
-      have hR : extra ∪ resolvedIn (row :: rest) = extra ∪ resolvedIn rest := by
-        rw [resolvedIn_cons_ordinary row rest hk]
-      rw [hR, filterCallsBy_cons_ordinary row rest _ hk,
-        callsFollowed_cons_ordinary row _ hk]
-      exact ih seen extra hfollow' huniq' hdisj' hextra
+      rw [ih extra R hrest]
+
+theorem erase_inter_insert_eq (pending R : Finset ToolExecution.ToolCallId)
+    (callId : ToolExecution.ToolCallId) :
+    (pending ∩ insert callId R).erase callId = pending.erase callId ∩ R := by
+  apply Finset.ext
+  intro c
+  by_cases hEq : c = callId
+  · subst hEq
+    simp
+  · simp [Finset.mem_erase, hEq, eq_comm]
 
 /-! ## T1 + T4: soundness and split-stability -/
+
+theorem activeBlockValid_filterOrphanedFrom (l : List MessageRow) :
+    ∀ pending,
+      UniqueCallIds l →
+      Disjoint pending (callsIn l) →
+      ActiveBlockValidFrom (pending ∩ resolvedIn (dropOrphanedFrom pending l))
+        (filterCallsBy (resolvedIn (dropOrphanedFrom pending l))
+          (dropOrphanedFrom pending l)) := by
+  induction l with
+  | nil =>
+    intro pending _ _
+    simp [ActiveBlockValidFrom]
+  | cons row rest ih =>
+    intro pending huniq hdisj
+    cases hk : row.kind with
+    | toolResult callId key =>
+      have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
+      have hdisj' : Disjoint pending (callsIn rest) := by
+        rwa [callsIn_cons_result row rest callId key hk] at hdisj
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem]
+        let tail := dropOrphanedFrom (pending.erase callId) rest
+        let Rtail := resolvedIn tail
+        have hnotCall : callId ∉ callsIn rest := by
+          intro hcall
+          exact Finset.disjoint_left.mp hdisj' hmem hcall
+        have hfilter :
+            filterCallsBy (insert callId Rtail) tail = filterCallsBy Rtail tail := by
+          have hirrel : Disjoint {callId} (callsIn tail) := by
+            rw [callsIn_dropOrphanedFrom rest (pending.erase callId)]
+            exact Finset.disjoint_singleton_left.mpr hnotCall
+          simpa using
+            filterCallsBy_irrelevant tail {callId} Rtail hirrel
+        rw [resolvedIn_cons_result row tail callId key hk,
+          filterCallsBy_cons_result row tail (insert callId Rtail) callId key hk,
+          activeBlockValidFrom_cons_result row (filterCallsBy (insert callId Rtail) tail)
+            (pending ∩ insert callId Rtail) callId key hk]
+        refine ⟨?_, ?_⟩
+        · exact Finset.mem_inter.mpr ⟨hmem, Finset.mem_insert_self _ _⟩
+        · rw [hfilter, erase_inter_insert_eq pending Rtail callId]
+          exact ih (pending.erase callId) huniq' (by
+            rw [Finset.disjoint_left]
+            intro c hc hcall
+            exact Finset.disjoint_left.mp hdisj'
+              (Finset.mem_of_mem_erase hc) hcall)
+      · rw [if_neg hmem]
+        exact ih pending huniq' hdisj'
+    | assistantToolCalls callIds =>
+      have huniqPair := (uniqueCallIds_cons_assistant row rest callIds hk).mp huniq
+      have hdisjPair : Disjoint pending callIds ∧ Disjoint pending (callsIn rest) := by
+        rw [callsIn_cons_assistant row rest callIds hk,
+          Finset.disjoint_union_right] at hdisj
+        exact hdisj
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk]
+      let tail := dropOrphanedFrom callIds rest
+      let Rtail := resolvedIn tail
+      have hRsub : Rtail ⊆ callIds ∪ callsIn rest :=
+        resolvedIn_dropOrphanedFrom_subset rest callIds
+      have hstart : pending ∩ Rtail = ∅ :=
+        Finset.disjoint_iff_inter_eq_empty.mp
+          ((Finset.disjoint_union_right.mpr
+            ⟨hdisjPair.1, hdisjPair.2⟩).mono_right hRsub)
+      rw [resolvedIn_cons_assistant row tail callIds hk,
+        filterCallsBy_cons_assistant row tail Rtail callIds hk]
+      by_cases hempty : callIds ∩ Rtail = ∅
+      · rw [if_pos hempty, hstart]
+        have htail := ih callIds huniqPair.2 huniqPair.1
+        change callIds ∩ resolvedIn (dropOrphanedFrom callIds rest) = ∅ at hempty
+        rwa [hempty] at htail
+      · rw [if_neg hempty, hstart,
+          activeBlockValidFrom_cons_assistant (withKind row _) _ ∅
+            (callIds ∩ Rtail) (withKind_kind row _)]
+        exact ⟨rfl, ih callIds huniqPair.2 huniqPair.1⟩
+    | ordinary =>
+      have huniq' := (uniqueCallIds_cons_ordinary row rest hk).mp huniq
+      have hdisj' : Disjoint pending (callsIn rest) := by
+        rwa [callsIn_cons_ordinary row rest hk] at hdisj
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk]
+      let tail := dropOrphanedFrom ∅ rest
+      let Rtail := resolvedIn tail
+      have hRsub : Rtail ⊆ callsIn rest := by
+        simpa using resolvedIn_dropOrphanedFrom_subset rest ∅
+      have hstart : pending ∩ Rtail = ∅ :=
+        Finset.disjoint_iff_inter_eq_empty.mp (hdisj'.mono_right hRsub)
+      rw [resolvedIn_cons_ordinary row tail hk,
+        filterCallsBy_cons_ordinary row tail Rtail hk, hstart,
+        activeBlockValidFrom_cons_ordinary row _ ∅ hk]
+      exact ⟨rfl, ih ∅ huniq' (Finset.disjoint_empty_left _)⟩
 
 /-- **T1 (soundness).** Under unique call ids, `sanitize` always produces
 provider-valid history — for ANY input list, including the recent window of
@@ -362,18 +292,9 @@ transcripts. -/
 theorem sanitize_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
     ProviderValid (sanitize msgs) := by
   unfold sanitize dropUnpairedCalls dropOrphanedResults
-  set orphanFree := dropOrphanedFrom ∅ msgs with horphan
-  have hfollow : ResultsFollowCallsFrom ∅ orphanFree := by
-    rw [horphan]; exact resultsFollow_dropOrphanedFrom msgs ∅
-  have huniq' : UniqueCallIds orphanFree := by
-    rw [horphan]; exact uniqueCallIds_dropOrphanedFrom msgs ∅ huniq
   constructor
-  · have := resultsFollow_filterCallsBy (resolvedIn orphanFree) orphanFree ∅
-      hfollow (Finset.Subset.refl _)
-    rwa [Finset.empty_inter] at this
-  · have := callsFollowed_filterCallsBy orphanFree ∅ ∅ hfollow huniq'
-      (Finset.disjoint_empty_left _) (Finset.Subset.refl _)
-    rwa [Finset.empty_union] at this
+  simpa using
+    activeBlockValid_filterOrphanedFrom msgs ∅ huniq (Finset.disjoint_empty_left _)
 
 /-- **T4 (split-stability).** Any suffix window — in particular the recent
 window of `split_messages_for_summary`, which is token-budgeted and
@@ -387,25 +308,50 @@ theorem sanitize_split_stable {old recent : List MessageRow}
 /-! ## T2 + T3: fixpoint and idempotence -/
 
 theorem dropOrphanedFrom_eq_self (l : List MessageRow) :
-    ∀ seen, ResultsFollowCallsFrom seen l → dropOrphanedFrom seen l = l := by
+    ∀ pending, ActiveBlockValidFrom pending l → dropOrphanedFrom pending l = l := by
   induction l with
-  | nil => intro seen _; rfl
+  | nil => intro pending hvalid; rfl
   | cons row rest ih =>
-    intro seen hfollow
+    intro pending hvalid
     cases hk : row.kind with
     | toolResult callId key =>
-      have h := (resultsFollowFrom_cons_result row rest seen callId key hk).mp
-        hfollow
-      rw [dropOrphanedFrom_cons_result row rest seen callId key hk,
-        if_pos h.1, ih seen h.2]
+      have h := (activeBlockValidFrom_cons_result row rest pending callId key hk).mp hvalid
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk,
+        if_pos h.1, ih (pending.erase callId) h.2]
     | assistantToolCalls callIds =>
-      have h :=
-        (resultsFollowFrom_cons_assistant row rest seen callIds hk).mp hfollow
-      rw [dropOrphanedFrom_cons_assistant row rest seen callIds hk,
-        ih (seen ∪ callIds) h]
+      have h := (activeBlockValidFrom_cons_assistant row rest pending callIds hk).mp hvalid
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk,
+        ih callIds h.2]
     | ordinary =>
-      have h := (resultsFollowFrom_cons_ordinary row rest seen hk).mp hfollow
-      rw [dropOrphanedFrom_cons_ordinary row rest seen hk, ih seen h]
+      have h := (activeBlockValidFrom_cons_ordinary row rest pending hk).mp hvalid
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk, ih ∅ h.2]
+
+theorem activeBlockValid_pending_subset_resolved (l : List MessageRow) :
+    ∀ pending, ActiveBlockValidFrom pending l → pending ⊆ resolvedIn l := by
+  induction l with
+  | nil =>
+    intro pending hvalid
+    rw [(activeBlockValidFrom_nil pending).mp hvalid]
+    simp
+  | cons row rest ih =>
+    intro pending hvalid c hc
+    cases hk : row.kind with
+    | toolResult callId key =>
+      have h := (activeBlockValidFrom_cons_result row rest pending callId key hk).mp hvalid
+      rw [resolvedIn_cons_result row rest callId key hk]
+      by_cases hEq : c = callId
+      · subst hEq
+        exact Finset.mem_insert_self _ _
+      · exact Finset.mem_insert_of_mem (ih (pending.erase callId) h.2
+          (Finset.mem_erase.mpr ⟨hEq, hc⟩))
+    | assistantToolCalls callIds =>
+      have h := (activeBlockValidFrom_cons_assistant row rest pending callIds hk).mp hvalid
+      rw [h.1] at hc
+      simp at hc
+    | ordinary =>
+      have h := (activeBlockValidFrom_cons_ordinary row rest pending hk).mp hvalid
+      rw [h.1] at hc
+      simp at hc
 
 theorem resolvedIn_subset_cons (row : MessageRow) (rest : List MessageRow) :
     resolvedIn rest ⊆ resolvedIn (row :: rest) := by
@@ -418,44 +364,57 @@ theorem resolvedIn_subset_cons (row : MessageRow) (rest : List MessageRow) :
   | ordinary => rw [resolvedIn_cons_ordinary row rest hk]
 
 theorem filterCallsBy_eq_self (l : List MessageRow) :
-    ∀ (R : Finset ToolExecution.ToolCallId),
-      CallsFollowedByResults l → NonemptyAnnouncements l →
+    ∀ (R pending : Finset ToolExecution.ToolCallId),
+      ActiveBlockValidFrom pending l → NonemptyAnnouncements l →
       resolvedIn l ⊆ R → filterCallsBy R l = l := by
   induction l with
-  | nil => intro R _ _ _; rfl
+  | nil => intro R pending _ _ _; rfl
   | cons row rest ih =>
-    intro R hfollowed hne hres
+    intro R pending hvalid hne hres
     have hres' : resolvedIn rest ⊆ R :=
       (resolvedIn_subset_cons row rest).trans hres
     cases hk : row.kind with
     | assistantToolCalls callIds =>
-      have h := (callsFollowed_cons_assistant row rest callIds hk).mp hfollowed
-      have hne' := (nonemptyAnnouncements_cons_assistant row rest callIds hk).mp
-        hne
-      have hsub : callIds ⊆ R := h.1.trans hres'
+      have h := (activeBlockValidFrom_cons_assistant row rest pending callIds hk).mp hvalid
+      have hne' := (nonemptyAnnouncements_cons_assistant row rest callIds hk).mp hne
+      have hsub : callIds ⊆ R :=
+        (activeBlockValid_pending_subset_resolved rest callIds h.2).trans hres'
       have hinter : callIds ∩ R = callIds := Finset.inter_eq_left.mpr hsub
       rw [filterCallsBy_cons_assistant row rest R callIds hk, hinter,
-        if_neg hne'.1, withKind_self row _ hk, ih R h.2 hne'.2 hres']
+        if_neg hne'.1, withKind_self row _ hk,
+        ih R callIds h.2 hne'.2 hres']
     | toolResult callId key =>
-      have h := (callsFollowed_cons_result row rest callId key hk).mp hfollowed
+      have h := (activeBlockValidFrom_cons_result row rest pending callId key hk).mp hvalid
       have hne' := (nonemptyAnnouncements_cons_other row rest
         (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp hne
-      rw [filterCallsBy_cons_result row rest R callId key hk, ih R h hne' hres']
+      rw [filterCallsBy_cons_result row rest R callId key hk,
+        ih R (pending.erase callId) h.2 hne' hres']
     | ordinary =>
-      have h := (callsFollowed_cons_ordinary row rest hk).mp hfollowed
+      have h := (activeBlockValidFrom_cons_ordinary row rest pending hk).mp hvalid
       have hne' := (nonemptyAnnouncements_cons_other row rest
         (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp hne
-      rw [filterCallsBy_cons_ordinary row rest R hk, ih R h hne' hres']
+      rw [filterCallsBy_cons_ordinary row rest R hk,
+        ih R ∅ h.2 hne' hres']
 
 /-- **T2 (fixpoint / preservation).** `sanitize` is the identity on
 provider-valid history with non-empty announcements: nothing valid is ever
-dropped or reordered. -/
+dropped or reordered.
+
+The guarantee is exactly as wide as `ProviderValid`, and the active-block
+predicate is deliberately NARROWER than "paired somewhere": a result that
+is paired but arrives after its block closed (`[call A, ordinary,
+result A]`) is not provider-valid and IS dropped, together with its
+now-unpaired call — see the second pinned counterexample at the bottom of
+this file. That encodes the strict provider contract (Anthropic and OpenAI
+reject results that do not immediately close the announcing turn); lenient
+backends would have accepted the wider shape, and narrowing to the strict
+contract is the chosen tradeoff. -/
 theorem sanitize_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
     (hne : NonemptyAnnouncements msgs) : sanitize msgs = msgs := by
   unfold sanitize dropUnpairedCalls dropOrphanedResults
-  rw [dropOrphanedFrom_eq_self msgs ∅ hvalid.resultsFollowCalls,
-    filterCallsBy_eq_self msgs (resolvedIn msgs) hvalid.callsFollowedByResults
-      hne (Finset.Subset.refl _)]
+  rw [dropOrphanedFrom_eq_self msgs ∅ hvalid.activeBlockValid]
+  exact filterCallsBy_eq_self msgs (resolvedIn msgs) ∅ hvalid.activeBlockValid
+    hne (Finset.Subset.refl _)
 
 /-- `sanitize` always outputs non-empty announcements (the filter's
 empty-set branch drops the row), so T2 applies to its own output. -/
@@ -471,69 +430,62 @@ theorem sanitize_idempotent {msgs : List MessageRow}
 
 /-! ## T5: the owned loop's threaded turn is a fixpoint -/
 
-/-- Every row is a tool result resolving a call in `S` — the shape of the
-result block the owned loop threads after an assistant turn. -/
-def AllResultsIn (S : Finset ToolExecution.ToolCallId) :
-    List MessageRow → Prop
-  | [] => True
-  | row :: rest =>
-    (∃ callId key, row.kind = .toolResult callId key ∧ callId ∈ S) ∧
-      AllResultsIn S rest
+/-- The syntactic shape of the result block the owned loop threads after an
+assistant turn announcing `S`: one tool-result row per executed call, each
+closing a distinct pending id, jointly draining `S`. Defined WITHOUT
+reference to the validity predicate — this is what `loop_stream.rs` emits
+(every call gets exactly one result; even a vetoed call threads the
+rejection reason as its result). The bridge lemmas below connect this shape
+to provider validity; T5 must take the shape, not validity itself, as its
+hypothesis — otherwise the theorem assumes its conclusion and a loop change
+that stops draining `S` would make it vacuous. -/
+inductive ResultBlock : Finset ToolExecution.ToolCallId → List MessageRow → Prop
+  | nil : ResultBlock ∅ []
+  | cons {S : Finset ToolExecution.ToolCallId} {row : MessageRow}
+      {rest : List MessageRow} (callId : ToolExecution.ToolCallId)
+      (key : Transcript.ToolResultKey)
+      (hk : row.kind = .toolResult callId key) (hmem : callId ∈ S)
+      (hrest : ResultBlock (S.erase callId) rest) :
+      ResultBlock S (row :: rest)
 
-theorem AllResultsIn.resultsFollow {S : Finset ToolExecution.ToolCallId} :
-    ∀ {l : List MessageRow}, AllResultsIn S l → ResultsFollowCallsFrom S l := by
-  intro l
-  induction l with
-  | nil => intro _; simp
-  | cons row rest ih =>
-    intro h
-    obtain ⟨⟨callId, key, hk, hmem⟩, hrest⟩ := h
-    rw [resultsFollowFrom_cons_result row rest S callId key hk]
-    exact ⟨hmem, ih hrest⟩
+/-- Bridge: the loop's threaded shape is an active result block. -/
+theorem ResultBlock.activeBlockValid {S : Finset ToolExecution.ToolCallId}
+    {l : List MessageRow} (h : ResultBlock S l) : ActiveBlockValidFrom S l := by
+  induction h with
+  | nil => simp
+  | cons callId key hk hmem hrest ih =>
+    rw [activeBlockValidFrom_cons_result _ _ _ callId key hk]
+    exact ⟨hmem, ih⟩
 
-theorem AllResultsIn.callsFollowed {S : Finset ToolExecution.ToolCallId} :
-    ∀ {l : List MessageRow}, AllResultsIn S l → CallsFollowedByResults l := by
-  intro l
-  induction l with
-  | nil => intro _; simp
-  | cons row rest ih =>
-    intro h
-    obtain ⟨⟨callId, key, hk, _⟩, hrest⟩ := h
-    rw [callsFollowed_cons_result row rest callId key hk]
-    exact ih hrest
-
-theorem AllResultsIn.nonempty {S : Finset ToolExecution.ToolCallId} :
-    ∀ {l : List MessageRow}, AllResultsIn S l → NonemptyAnnouncements l := by
-  intro l
-  induction l with
-  | nil => intro _; simp
-  | cons row rest ih =>
-    intro h
-    obtain ⟨⟨callId, key, hk, _⟩, hrest⟩ := h
-    rw [nonemptyAnnouncements_cons_other row rest
+/-- Bridge: a result block contains no assistant rows, so announcements are
+trivially non-empty. -/
+theorem ResultBlock.nonemptyAnnouncements {S : Finset ToolExecution.ToolCallId}
+    {l : List MessageRow} (h : ResultBlock S l) : NonemptyAnnouncements l := by
+  induction h with
+  | nil => simp
+  | cons callId key hk hmem hrest ih =>
+    rw [nonemptyAnnouncements_cons_other _ _
       (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)]
-    exact ih hrest
+    exact ih
 
 /-- **T5 (loop-threading validity).** The canonical turn the owned loop
-threads — one assistant tool-call row, then its results — is provider-valid
-and a fixpoint of `sanitize`. Formal justification for the `run_loop_stream`
-entry chokepoint sanitizing ONLY the loaded history: the loop's own
-in-flight messages need no repair. -/
+threads — one assistant tool-call row, then one result row per announced
+call (`ResultBlock`, the loop's syntactic emission shape) — is
+provider-valid and a fixpoint of `sanitize`. Formal justification for the
+`run_loop_stream` entry chokepoint sanitizing ONLY the loaded history: the
+loop's own in-flight messages need no repair. -/
 theorem threaded_turn_fixpoint {row : MessageRow}
     {S : Finset ToolExecution.ToolCallId} {results : List MessageRow}
     (hrow : row.kind = .assistantToolCalls S) (hne : S ≠ ∅)
-    (hresults : AllResultsIn S results) (hresolved : S ⊆ resolvedIn results) :
+    (hresults : ResultBlock S results) :
     ProviderValid (row :: results) ∧ sanitize (row :: results) = row :: results := by
   have hvalid : ProviderValid (row :: results) := by
     constructor
-    · rw [ResultsFollowCalls, resultsFollowFrom_cons_assistant row results ∅ S hrow,
-        Finset.empty_union]
-      exact hresults.resultsFollow
-    · rw [callsFollowed_cons_assistant row results S hrow]
-      exact ⟨hresolved, hresults.callsFollowed⟩
+    rw [ActiveBlockValid, activeBlockValidFrom_cons_assistant row results ∅ S hrow]
+    exact ⟨rfl, hresults.activeBlockValid⟩
   refine ⟨hvalid, sanitize_fixpoint hvalid ?_⟩
   rw [nonemptyAnnouncements_cons_assistant row results S hrow]
-  exact ⟨hne, hresults.nonempty⟩
+  exact ⟨hne, hresults.nonemptyAnnouncements⟩
 
 /-! ## Assembly order -/
 
@@ -558,18 +510,40 @@ theorem assemble_last (skillCount summaryCount conversationLen : Nat) :
       some Slot.prompt := by
   rw [assemble_spec, ← List.cons_append, List.getLast?_concat]
 
-/-! ## The composition-order counterexample, repaired
+/-! ## Counterexamples, repaired
 
-`[result A, call A]` (a result PRECEDING its call — backfill ordering or a
-P2P-merged transcript) must sanitize to the empty list: the result is
-orphaned, and with it gone the call is unpaired. The swapped composition
-(unpaired-drop first) kept the call — the live Rust bug found while
-sketching T1. Mirrored in
-`compaction/tests.rs::sanitize_repairs_result_preceding_its_call`. -/
+Pinned as executable evaluations so a semantics change here is a
+Lean-breaking change. Each has a Rust mirror so the fence holds on both
+sides of the conformance boundary.
+
+1. **Composition order.** `[result A, call A]` (a result PRECEDING its
+   call — backfill ordering or a P2P-merged transcript) must sanitize to
+   the empty list: the result is orphaned, and with it gone the call is
+   unpaired. The swapped composition (unpaired-drop first) kept the call —
+   a live Rust bug found while sketching T1. Rust mirrors:
+   `compaction/tests.rs::sanitize_repairs_result_preceding_its_call`,
+   conformance `t1_composition_order_result_before_call_sanitizes_to_empty`.
+
+2. **Ordinary conversation closes the block.** `[call A, ordinary,
+   result A]`: under the active-block contract the late result is stale,
+   so it is dropped and the call is then unpaired; only the ordinary row
+   survives. Rust mirrors:
+   `compaction/tests.rs::sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call`,
+   conformance `t1_result_after_conversation_resumes_sanitizes_to_plain_history`.
+-/
+
 example :
     sanitize
       [⟨0, 0, 0, .user, .toolResult 1 ⟨0, 0, 0⟩⟩,
         ⟨1, 0, 1, .assistant, .assistantToolCalls {1}⟩] = [] := by
+  rfl
+
+example :
+    sanitize
+      [⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩,
+        ⟨1, 0, 1, .user, .ordinary⟩,
+        ⟨2, 0, 2, .user, .toolResult 1 ⟨0, 0, 0⟩⟩] =
+      [⟨1, 0, 1, .user, .ordinary⟩] := by
   rfl
 
 end PromptAssembly
