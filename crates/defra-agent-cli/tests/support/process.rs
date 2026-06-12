@@ -122,6 +122,17 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
+/// The Codex shim is on by default and binds a fixed port, which parallel
+/// test servers would fight over. Disable it unless the test configures the
+/// shim explicitly.
+fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
+    if extra_args.iter().any(|arg| arg.starts_with("--codex-shim")) {
+        &[]
+    } else {
+        &["--no-codex-shim"]
+    }
+}
+
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
@@ -136,6 +147,7 @@ pub fn spawn_server_with_ready_json(
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
+        .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -227,6 +239,7 @@ pub fn spawn_server_with_env(
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
+        .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));

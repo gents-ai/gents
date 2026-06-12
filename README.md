@@ -6,22 +6,31 @@ defra-agent runs LLM agents on top of [DefraDB](https://github.com/sourcenetwork
 
 ## Get running
 
-Grab a binary from [releases](https://github.com/sourcenetwork/defra-agent/releases), or build from source (`cargo build --release -p defra-agent-cli`).
+Everything local, on a Mac, in a few minutes:
 
 ```bash
-defra-agent init      # provision a safe default agent under ~/.defra-agent
+brew install llama.cpp
+llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
+
+cargo install --profile dev-install --locked --path crates/defra-agent-cli
+
+defra-agent init      # provision a safe read-only agent under ~/.defra-agent
 defra-agent server    # start the runtime (embedded DefraDB + GraphQL + P2P)
-defra-agent chat      # talk to it
+defra-agent codex     # chat in the Codex terminal UI (no Codex install needed)
 ```
 
-`init` defaults to local Ollama (`http://localhost:11434/v1`, model
-`gemma4-26b-a4b`). Point it at anything OpenAI-compatible:
+Want the agent to actually change things? Re-run `defra-agent init --write`
+(writes sandboxed under the directory you ran `init` from) or `--yolo`
+(unrestricted, full host access).
 
-```bash
-defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
-```
+`init` defaults to llama.cpp's server (`http://127.0.0.1:8080/v1`). Point it
+at anything OpenAI-compatible: `defra-agent init --inference-url
+http://HOST:PORT/v1 --model-name MODEL`, or use a preset
+(`--backend-preset ollama|llama-cpp|openai|openrouter|chatgpt-codex|vllm`).
 
-For the desktop app, the full demo walkthrough, write-capable tools, fleet bring-up, and the Codex shim: **[docs/demo.md](docs/demo.md)**.
+The full walkthrough, what each permission preset guarantees, and the fallback
+`chat` REPL: **[docs/demo.md](docs/demo.md)**. Desktop app, fleet bring-up,
+and P2P pairing: **[docs/operations.md](docs/operations.md)**.
 
 ## Why this exists
 

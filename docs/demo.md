@@ -1,408 +1,250 @@
-# Demo walkthrough
+# Getting started on a Mac
 
-The full operational runbook: demo choreography, desktop pairing, tool
-defaults, connected-runtime bring-up, and testing. For the short version, see
-the [README](../README.md).
-
-If you want to try it, the shortest path is:
-
-1. Build the CLI and desktop binaries.
-2. Run `init`.
-3. Start `server`.
-4. For the desktop demo, run `defra-agent-desktop init`, launch the desktop app, and wait for `replication: subscriptions armed`.
-5. Open `chat` in another terminal or submit a prompt from the desktop Chat view.
-
-## Demo Quickstart
-
-Prerequisites:
-
-- Rust toolchain
-- local Ollama for the default path, or another reachable OpenAI-compatible inference endpoint
-- default model `gemma4-26b-a4b` pulled in Ollama, or one model name served by your custom endpoint
-- if your endpoint requires auth, pass `--api-key` or `--api-key-env-var` during `init`
-
-The backend endpoint must be the OpenAI-compatible base URL, including `/v1`.
-
-### 1. Build the CLI and desktop
+One story, end to end: local inference on your Mac driving a native Defra
+agent that can inspect — and, when you allow it, change — your computer,
+through the Codex terminal UI. No accounts, no API keys, nothing leaves your
+machine.
 
 ```bash
-cargo build -p defra-agent-cli -p defra-agent-desktop --release
+brew install llama.cpp
+llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
+
+cargo install --profile dev-install --locked --path crates/defra-agent-cli
+
+defra-agent init
+defra-agent server
+defra-agent codex
 ```
 
-### 2. Set demo variables
+The rest of this document walks those six commands, then the permission
+presets, then the paths off the happy path. Desktop app, fleet bring-up, and
+P2P pairing live in [operations.md](operations.md).
 
-Set the binary paths. The default `init` target is local Ollama at `http://localhost:11434/v1` with model `gemma4-26b-a4b`.
+## Prerequisites
+
+- macOS on Apple silicon
+- [Homebrew](https://brew.sh)
+- A Rust toolchain (`rustup`), for `cargo install`
+
+## 1. Start local inference
 
 ```bash
-export AGENT=./target/release/defra-agent
-export DESKTOP=./target/release/defra-agent-desktop
+brew install llama.cpp
+llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 ```
 
-By default the CLI keeps its local node, keys, and runtime state in `~/.defra-agent`.
-If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`, and pass the same path as `--agent-home /some/path` to `$DESKTOP init`.
+The first run downloads the model (~7 GB) from Hugging Face, then serves an
+OpenAI-compatible API on `http://127.0.0.1:8080/v1`. Leave it running. Gemma 4
+12B QAT is the demo default because it is small enough for a 16 GB machine
+and strong enough to drive tools; any model llama-server can load works the
+same way.
 
-### 3. Initialize the default runtime
-
-Run this once:
+Check it:
 
 ```bash
-$AGENT init
+curl -s http://127.0.0.1:8080/v1/models | head -c 200
 ```
 
-This is idempotent. It provisions a standard safe home directory under `~/.defra-agent`:
-
-- default principal
-- default backend
-- default tool selection
-- default behavior
-- a CLI-oriented default system prompt
-- read-only file and bash tools by default
-
-The default tool root is the current directory where you run `init`. Pass `--tool-root /path/to/root` if you want a different read-only scope.
-
-For the default local backend, pull the default model before starting the server:
+## 2. Install defra-agent
 
 ```bash
-ollama pull gemma4-26b-a4b
+cargo install --profile dev-install --locked --path crates/defra-agent-cli
 ```
 
-To point at a different OpenAI-compatible backend during init:
+This installs the `defra-agent` binary into `~/.cargo/bin`.
+
+## 3. Initialize the agent
 
 ```bash
-export INFERENCE_ENDPOINT=http://127.0.0.1:8000/v1
-export MODEL_NAME=your-model-name
-
-$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME"
+defra-agent init
 ```
 
-If you want write-capable local tools for a demo, opt in explicitly:
+This is idempotent. It provisions a safe home directory under
+`~/.defra-agent`: a DID-keyed principal, a backend document pointing at
+`http://127.0.0.1:8080/v1`, a default behavior, and a **read-only** tool
+selection — file and bash tools that can inspect but not change anything.
+
+The tool root — the directory the agent can see — defaults to wherever you
+ran `init`. Pass `--tool-root /path` for a different scope. The output is
+JSON; the fields you will use are `agent_did` and `next_steps`.
+
+### Letting it write
+
+Two presets, both explicit opt-ins:
 
 ```bash
-$AGENT init --write-tools
+defra-agent init --write   # sandboxed writes, scoped to the tool root
+defra-agent init --yolo    # unrestricted: full host access as your user
 ```
 
-With `--write-tools`, the same tool root also caps write/edit and write-capable
-bash access. On macOS, the default write-capable bash policy uses
-`sandbox-exec` to contain writes to that root. Custom tool selections with
-`bash_mode: Unrestricted` default to the unsandboxed command policy unless they
-explicitly request `workspace_write`. See [macOS Bash Sandbox Policies](macos-bash-sandbox.md)
-for the policy tiers and the host-diagnostics configuration path.
+What they actually guarantee is in [Permission presets](#permission-presets)
+below.
 
-If you want to wipe and recreate the configured agent home from scratch:
+## 4. Start the runtime
+
+In terminal 1:
 
 ```bash
-$AGENT init --dangerously-overwrite
+defra-agent server
 ```
 
-Re-running `init` does not clear persisted runtime connectivity state. Clear it explicitly when needed:
+This starts the embedded DefraDB node, the GraphQL API, P2P transport for
+desktop pairing, and the Codex endpoint on `ws://127.0.0.1:9292/` (loopback
+only). It prints readiness JSON and stays in the foreground; stop it with
+`Ctrl-C`. For debug output, set `RUST_LOG=info`.
+
+## 5. Chat
+
+In terminal 2:
 
 ```bash
-$AGENT reset
-# or combine it with init:
-$AGENT init --reset
+defra-agent codex
 ```
 
-If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`, and pass the same path as `--agent-home /some/path` to `defra-agent-desktop init`.
+This opens the Codex terminal UI — running embedded inside `defra-agent`, so
+there is nothing to install or configure — connected to your local runtime.
+Ask it something about the directory you initialized in:
 
-If you want to override the default backend id as well:
+> what is in this directory? summarize the project.
+
+You'll see tool calls stream as the agent reads files and runs read-only
+commands. If you initialized with `--write`, try asking it to create or edit
+a file under the tool root.
+
+Codex-side approvals and sandboxing are intentionally bypassed: every tool
+call executes inside the Defra runtime, where the preset you chose at `init`
+is enforced. The TUI is a window, not a boundary.
+
+Prefer a plain REPL, or scripting a turn? `defra-agent chat` talks to the
+same runtime without the Codex UI:
 
 ```bash
-$AGENT init "$INFERENCE_ENDPOINT" \
-  --model-name "$MODEL_NAME" \
-  --backend-id my-backend
+defra-agent chat
+defra-agent chat "Introduce yourself in two short sentences."
 ```
 
-The init output is JSON. The most useful fields are:
+## Permission presets
 
-- `agent_did`
-- `key_path`
-- `default_behavior_id`
-- `tool_ceiling`
-- `init.backend_id`
-- `init.endpoint`
-- `init.model_name`
-- `init.tool_selection_id`
-- `next_steps`
+| | file tools | bash | containment |
+|---|---|---|---|
+| default | read-only | read-only allowlist | n/a — nothing can write |
+| `--write` | read + write | write-capable | `sandbox-exec` seatbelt; writes contained to the tool root |
+| `--yolo` | read + write | unrestricted | **none** — anything your user can do |
 
-If your inference endpoint requires auth, pass `--api-key-env-var NAME` or `--api-key VALUE` when running `init`.
+- **Default (read-only).** File tools can list, read, glob, and grep under
+  the tool root. Bash is limited to a Rust-side allowlist of diagnostic
+  commands (`ps`, `df`, `uptime`, ...). There is no write path.
+- **`--write`.** File write/edit and write-capable bash, both capped by the
+  tool root. On macOS, bash runs under a `sandbox-exec` deny-by-default
+  seatbelt profile: writes outside the root are blocked by the OS, not by
+  convention. See [macOS Bash Sandbox Policies](macos-bash-sandbox.md) for
+  the exact policy tiers.
+- **`--yolo`.** The same write tools with the sandbox off. The agent can run
+  any command and touch any file your user account can. `init` prints a
+  warning; mean it.
 
-### 4. Start the server
+Identity is the other half of the boundary: every action the runtime takes is
+attributed to the agent's DID, and every tool call is persisted as a document
+you can audit afterwards (`defra-agent show response <request-id>`, or
+`defra-agent trace timeline`).
 
-Run this in terminal 1:
+## Other backends
+
+`init` speaks to anything OpenAI-compatible:
 
 ```bash
-$AGENT server
+defra-agent init --backend-preset ollama --model-name MODEL
+defra-agent init --backend-preset openai --model-name MODEL
+defra-agent init --backend-preset openrouter --model-name MODEL
+defra-agent init --backend-preset chatgpt-codex --model-name MODEL   # uses your ~/.codex OAuth
+defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
 ```
 
-The server reads the initialized home directory, starts the local node, and prints JSON when it is ready. The most useful fields are:
+If the endpoint needs auth, pass `--api-key` or `--api-key-env-var NAME`.
+OpenAI and OpenRouter presets default to their standard env vars
+(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
 
-- `agent_did`
-- `graphql`
-- `default_behavior_id`
-- `tool_ceiling`
-- `p2p_transport`
-- `p2p_peer_id`
-- `p2p_listen_addresses`
+## Off the happy path
 
-The same connectivity fields are persisted to `runtime.json` under the agent home, usually `~/.defra-agent/runtime.json`. Use `defra-agent reset` to remove that file.
+**Re-running init.** `init` is idempotent and re-running it with a different
+preset (`--write`, `--yolo`) updates the tool documents in place. It does not
+clear persisted runtime connectivity state; `defra-agent reset` does, and
+`defra-agent init --reset` combines them. `--dangerously-overwrite` wipes the
+home entirely.
 
-The runtime HTTP port also exposes a stable machine-readable operations surface:
+**Isolated homes.** Pass `--home /some/path` to `init`, `server`, `chat`, and
+`codex`-adjacent commands to keep a demo out of `~/.defra-agent`.
 
-- `GET /version`: build and package metadata for the running `defra-agent` binary.
-- `GET /healthz`: JSON process/runtime health. It returns HTTP 200 when the runtime is serving, including degraded-but-running states, and HTTP 503 when the runtime status cannot be read or no runtime is ready.
-- `GET /metrics`: Prometheus metrics for runtime state, backend health, and admission settings.
+**The shim port is taken.** Something else is on 9292; either stop it or run
+`defra-agent server --codex-shim-port PORT` and
+`defra-agent codex --remote ws://127.0.0.1:PORT/`.
 
-`server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
+**No Codex endpoint.** If the server was started with `--no-codex-shim`,
+`defra-agent codex` will tell you nothing is listening. Restart the server
+without the flag.
 
-The standard server path always starts the IROH P2P transport for local desktop pairing. It binds to localhost on an ephemeral P2P port by default, with relay and discovery disabled.
+**Inference is down.** The server starts degraded if the backend is
+unreachable; `defra-agent status` and `GET /healthz` show backend health.
+Make sure `llama-server` is still running and serving `/v1` on port 8080.
 
-To pin the local P2P socket for demos:
-
-```bash
-$AGENT server \
-  --p2p-bind-addr 127.0.0.1 \
-  --p2p-port 4017 \
-  --p2p-relay-mode disabled \
-  --p2p-discovery disabled
-```
-
-### 5. Pair and launch the desktop
-
-Run this in terminal 2:
-
-```bash
-$DESKTOP init
-$DESKTOP
-```
-
-`defra-agent-desktop init` discovers a runtime and saves it in the desktop peer directory. To seed a remote or deployed runtime from its operations API, pass its GraphQL or status endpoint:
-
-```bash
-$DESKTOP init --graphql http://agent-host:9181/api/v0/graphql
-# or:
-$DESKTOP init --status-endpoint http://agent-host:9181/status
-```
-
-The discovery URL is used to read connection metadata; the saved deployment stores the runtime's P2P address and GraphQL endpoint. The desktop app completes the P2P pairing and replication bootstrap when it launches. For the replicated chat demo, leave the desktop app open and wait for the status bar to show `replication: subscriptions armed` before sending prompts you expect to render in the UI.
-
-### 6. Start chatting
-
-Run this in terminal 3, after the desktop has finished bootstrapping:
-
-```bash
-$AGENT chat
-```
-
-That opens a terminal session using the runtime state written by `server`. Type a message, press Enter, and keep going on the same session. Exit with `/exit`. While the agent is working, `chat` now prints live tool progress and streamed response text instead of waiting silently for the turn to finish.
-
-If you only want a single turn, pass the message directly:
-
-```bash
-$AGENT chat "Introduce yourself in two short sentences."
-```
-
-## Tool Defaults
-
-`init` enables a standard local toolset by default:
-
-- file tools: `ReadOnly`
-- bash: `ReadOnly`
-- meta tools: enabled
-
-That means a fresh demo can immediately inspect the local filesystem after `init -> server -> chat`.
-
-If you want write-capable tools instead, rerun `init` with `--write-tools`.
-
-Bash outputs are model-readable by default: the first line is a `defra_exec:`
-JSON metadata envelope containing command, cwd, exit code, timeout status,
-duration, sandbox/policy mode, and stdout/stderr truncation metadata. The tool
-also supports `raw_json=true` for a fully structured response.
-
-Bash commands inherit a small core environment only. Variables containing
-`KEY`, `SECRET`, or `TOKEN` are stripped by default, and pager/color variables
-are forced for non-interactive output (`PAGER=cat`, `GIT_PAGER=cat`,
-`NO_COLOR=1`, `TERM=dumb`).
-
-`init` writes the default backend, behavior, and tool-selection documents through the same upsert code used by `config backend set`, `config behavior set`, and `config tools set`.
-
-The remaining `init.json` file stores only filesystem-local context that is not represented in DefraDB documents: the home path, agent name, agent DID, key path, operator tool ceiling, and tool root. Runtime configuration itself lives in DefraDB documents.
-
-## Advanced: Change Tool Selection After Init
-
-If you want to replace the default tool selection, you can still update documents directly. Read `agent_did` and `graphql` from the `server` startup JSON.
+**Single requests without a UI:**
 
 ```bash
 export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
-export AGENT_DID="did:key:..."
-export TOOL_SELECTION_ID="${AGENT_DID}:default-tools"
-
-$AGENT config tools set \
-  --graphql "$GRAPHQL" \
-  --agent-did "$AGENT_DID" \
-  --selection-id "$TOOL_SELECTION_ID" \
-  --enable-file-tools
-
-$AGENT config behavior set \
-  --graphql "$GRAPHQL" \
-  --agent-did "$AGENT_DID" \
-  --tool-selection-id "$TOOL_SELECTION_ID" \
-  --display-name "Demo"
-```
-
-After that, the agent can use read-only file tools on new requests. This change is live; no restart is required.
-
-## Connected Runtime Bring-Up
-
-To bring up two runtimes and connect them through the operator CLI:
-
-```bash
-$AGENT server --home /tmp/amy --p2p-bind-addr 127.0.0.1 --p2p-port 4017
-$AGENT server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
-```
-
-Read Amy's startup JSON or `/tmp/amy/runtime.json` and take one of the values from `p2p_listen_addresses`.
-
-Then connect Coding to Amy:
-
-```bash
-$AGENT p2p connect --home /tmp/coding --peer "<peer-id-or-listen-address>"
-```
-
-Inspect connectivity from either runtime:
-
-```bash
-$AGENT p2p status --home /tmp/amy
-$AGENT p2p peers --home /tmp/coding
-$AGENT status --home /tmp/coding
-```
-
-The most useful fields for bring-up are:
-
-- `p2p_transport`
-- `p2p_peer_id`
-- `p2p_listen_addresses`
-- `p2p_connected_peers`
-
-## Useful Commands
-
-Submit a single request without using `chat`:
-
-```bash
-$AGENT request submit \
-  --graphql "$GRAPHQL" \
-  --agent-did "$AGENT_DID" \
+defra-agent request submit --graphql "$GRAPHQL" --agent-did "did:key:..." \
   --content "Introduce yourself in two short sentences."
+defra-agent response wait --graphql "$GRAPHQL" --request-id "<request-id>"
 ```
 
-Show a request document:
+## How this is wired (for the curious)
 
-```bash
-$AGENT request show \
-  --graphql "$GRAPHQL" \
-  --request-id "<request-id>"
-```
+Everything above is documents. `init` writes config documents (principal,
+backend, behavior, tool selection) through the same upsert code as
+`defra-agent config ... set`. `codex` and `chat` create request documents;
+the runtime claims them, drives the proven request lifecycle, executes tool
+calls inside the preset's boundary, and persists every observable step. Bash
+results come back with a `defra_exec:` JSON metadata envelope (command, exit
+code, sandbox mode, truncation); command environments are stripped of
+variables containing `KEY`, `SECRET`, or `TOKEN`.
 
-Show a response document:
-
-```bash
-$AGENT response show \
-  --graphql "$GRAPHQL" \
-  --request-id "<request-id>"
-```
-
-Wait for a response explicitly:
-
-```bash
-$AGENT response wait \
-  --graphql "$GRAPHQL" \
-  --request-id "<request-id>"
-```
+The only file outside the database is `init.json` (home path, agent name,
+DID, key path, tool ceiling, tool root) — filesystem context that documents
+cannot hold.
 
 ## Testing
 
-The main regression path should use the shipped CLI binary against the full local flow:
-
-1. `defra-agent init`
-2. `defra-agent server`
-3. `defra-agent chat` or `defra-agent request submit`
-
-That flow already has a mocked end-to-end harness in the per-subcommand
-suites under [crates/defra-agent-cli/tests](../crates/defra-agent-cli/tests)
-(`cli_init`, `cli_chat`, `cli_reconciliation`, ...). Those tests are intentionally:
-
-- idempotent
-- isolated to a temp home directory
-- bound to ephemeral local ports
-- cleaned up when the test exits
-
-## Further Reading
-
-- Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
-- Lean proof guide: `crates/defra-agent/proofs/README.md`
-- Client turn observation protocol: `crates/defra-agent/proofs/client-state-machine.md`
-- macOS release signing: `macos-signing.md`
-
-Run the mocked binary-flow suites locally with:
+The mocked end-to-end harness for the `init → server → codex/chat` flow lives
+in [crates/defra-agent-cli/tests](../crates/defra-agent-cli/tests). Gate with
+the full package suites:
 
 ```bash
+cargo test -p defra-agent
 cargo test -p defra-agent-cli
 ```
 
-Run the library/integration suite with:
+There is also an ignored live smoke test against a real inference endpoint:
 
 ```bash
-cargo test -p defra-agent --lib --tests
-```
-
-Run the Lean proofs with:
-
-```bash
-cd crates/defra-agent/proofs && lake build
-```
-
-There is also an ignored live smoke test for the real binary flow against an external inference endpoint:
-
-```bash
-export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://workstation-1:8000/v1
-export DEFRA_AGENT_CLI_E2E_MODEL_NAME=MiniMax-M2.7-NVFP4
-# export DEFRA_AGENT_CLI_E2E_API_KEY=...   # if your endpoint requires auth
+export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://127.0.0.1:8080/v1
+export DEFRA_AGENT_CLI_E2E_MODEL_NAME=google/gemma-4-12B-it-qat-q4_0-gguf
+# Optional for hosted OpenAI-compatible endpoints:
+# export DEFRA_AGENT_CLI_E2E_API_KEY="$OPENAI_API_KEY"
 
 cargo test -p defra-agent-cli \
   --test cli_live \
   cli_flow_runs_real_tool_loop_against_live_endpoint \
   -- --ignored --nocapture --test-threads=1
+
+cargo test -p defra-agent-cli \
+  --test cli_codex_shim \
+  codex_shim_live_protocol_uses_real_backend \
+  -- --ignored --nocapture --test-threads=1
 ```
 
-The mocked binary-flow suite is what CI should gate on. The live smoke test is for manual or release validation, not the main correctness gate.
+## Further reading
 
-## Repository Layout
-
-- `crates/defra-agent`
-  runtime library, schemas, state-machine conformance tests, and Lean proofs
-- `crates/defra-agent-cli`
-  compiled CLI used in the demo flow above
-- `crates/defra-agent-protocol`
-  shared schema, row, and client protocol types
-- `apps/desktop-tauri`
-  Tauri desktop shell
-
-## Proofs
-
-The Lean proof tree lives under `crates/defra-agent/proofs`.
-
-Good entry points:
-
-- `crates/defra-agent/proofs/Proofs/Client.lean`
-- `crates/defra-agent/proofs/Proofs/ClientShell.lean`
-- `crates/defra-agent/proofs/Proofs/SessionRecovery.lean`
-- `crates/defra-agent/proofs/Proofs/RuntimeReconcile.lean`
-- `crates/defra-agent/proofs/README.md`
-
-`RuntimeReconcile` is executable in Lean: its barrel imports
-`Proofs/RuntimeReconcile/Executable.lean`, which defines `Action`, `step?`,
-`replay?`, and soundness/completeness theorems against the relational
-`Transition` semantics.
-It also exports helper lemmas for executable generation monotonicity, coherent
-preservation, publish well-formedness, accept-time binding and router
-readiness/liveness, and denial of generation retirement while in-flight work
-depends on that generation.
+- Desktop app, fleet, and P2P: [operations.md](operations.md)
+- macOS bash sandbox tiers: [macos-bash-sandbox.md](macos-bash-sandbox.md)
+- macOS release signing: [macos-signing.md](macos-signing.md)
+- Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
+- Lean proof guide: `crates/defra-agent/proofs/README.md`

@@ -17,7 +17,7 @@
 For custom tool selections, `bash_mode: Unrestricted` with no explicit
 `command_execution_policy` defaults to `unrestricted`.
 
-The generated `defra-agent init --write-tools` selection pins
+The generated `defra-agent init --write` selection pins
 `command_execution_policy: workspace_write` on macOS so the default demo path
 keeps write-capable bash contained to the configured tool root. Change that
 policy to `unrestricted` for host-diagnostics stewards that need `ps`, broad

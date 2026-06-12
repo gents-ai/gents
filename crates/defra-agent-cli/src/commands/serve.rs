@@ -242,24 +242,42 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     )?;
 
     let mut codex_shim_output = None;
-    let mut codex_shim_handle = if args.codex_shim {
-        let bound = bind_codex_shim(CodexShimBindArgs {
-            home: home_dir.clone(),
-            fs_root: effective_tool_root.clone(),
-            node: node.clone(),
-            background_execution_registry: background_execution_registry.clone(),
-            graphql: graphql_url.clone(),
-            agent_did: identity.did().to_string(),
-            behavior_id: args.codex_shim_behavior_id.clone(),
-            bind_addr: args.codex_shim_bind_addr,
-            port: args.codex_shim_port,
-            timeout_secs: args.codex_shim_timeout_secs,
-            poll_ms: args.codex_shim_poll_ms,
-        })
-        .await?;
+    // The shim runs by default, so its preconditions (free port, behavior with
+    // an inference profile) must not take the whole runtime down: degrade to
+    // a disabled endpoint and keep serving.
+    let mut codex_shim_handle = if args.no_codex_shim {
+        None
+    } else if let Some(bound) = match bind_codex_shim(CodexShimBindArgs {
+        home: home_dir.clone(),
+        fs_root: effective_tool_root.clone(),
+        node: node.clone(),
+        background_execution_registry: background_execution_registry.clone(),
+        graphql: graphql_url.clone(),
+        agent_did: identity.did().to_string(),
+        behavior_id: args.codex_shim_behavior_id.clone(),
+        bind_addr: args.codex_shim_bind_addr,
+        port: args.codex_shim_port,
+        timeout_secs: args.codex_shim_timeout_secs,
+        poll_ms: args.codex_shim_poll_ms,
+    })
+    .await
+    {
+        Ok(bound) => Some(bound),
+        Err(error) => {
+            eprintln!("Codex endpoint disabled: {error:#}");
+            eprintln!(
+                "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
+            );
+            codex_shim_output = Some(json!({
+                "disabled": true,
+                "reason": format!("{error:#}"),
+            }));
+            None
+        }
+    } {
         let codex_shim_url = format!(
             "ws://{}:{}/",
-            display_host(bound.addr().ip()),
+            display_shim_host(bound.addr().ip()),
             bound.addr().port()
         );
         eprintln!(
@@ -267,12 +285,12 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             bound.codex_home().display(),
         );
         eprintln!("Codex shim event log: {}", bound.trace_path().display());
-        eprintln!(
-            "Launch Codex with: codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}",
-        );
-        eprintln!(
-            "No CODEX_HOME override is required; Codex keeps using its normal local config while Defra handles the remote runtime."
-        );
+        eprintln!("Chat from another terminal with: defra-agent codex");
+        if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
+            eprintln!(
+                "  (this shim is not on the default address; pass --remote {codex_shim_url})"
+            );
+        }
         if args.codex_shim_bind_addr.is_loopback() {
             eprintln!(
                 "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
@@ -284,9 +302,11 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         }
         codex_shim_output = Some(json!({
             "websocket": codex_shim_url,
-            "launch_command": format!(
-                "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote {codex_shim_url}"
-            ),
+            "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
+                "defra-agent codex".to_string()
+            } else {
+                format!("defra-agent codex --remote {codex_shim_url}")
+            },
             "shim_home": bound.codex_home().to_path_buf(),
             "codex_home": bound.codex_home().to_path_buf(),
             "event_log": bound.trace_path().to_path_buf(),
@@ -618,4 +638,26 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
+}
+
+/// Shim host for URLs handed to `defra-agent codex --remote`: IPv6 addresses
+/// need bracketing to form a valid authority (`ws://[::1]:9292/`).
+fn display_shim_host(host: IpAddr) -> String {
+    let host_text = display_host(host);
+    if host.is_ipv6() {
+        format!("[{host_text}]")
+    } else {
+        host_text
+    }
+}
+
+#[cfg(test)]
+mod shim_host_tests {
+    use super::*;
+
+    #[test]
+    fn ipv6_shim_hosts_are_bracketed() {
+        assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
+        assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
+    }
 }

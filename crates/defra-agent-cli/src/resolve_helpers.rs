@@ -131,5 +131,6 @@ pub(crate) fn format_tool_package(value: ToolPackageArg) -> &'static str {
         ToolPackageArg::Introspection => "introspection",
         ToolPackageArg::Readonly => "readonly",
         ToolPackageArg::Write => "write",
+        ToolPackageArg::Yolo => "yolo",
     }
 }

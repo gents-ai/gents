@@ -36,10 +36,15 @@ use request_helpers::*;
 use resolve_helpers::*;
 
 const DEFAULT_AGENT_NAME: &str = "default";
-const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
-const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
+// Defaults target llama.cpp's llama-server running the demo model:
+//   llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
+const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
+const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
+const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
+const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
+const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 1_800;
 const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
@@ -62,6 +67,9 @@ const CLI_AFTER_HELP: &str = "\
 Quick start:
   defra-agent init
   defra-agent server
+  defra-agent codex
+
+Or without the Codex TUI:
   defra-agent chat
 
 Inspect the local runtime:
@@ -87,17 +95,18 @@ Examples:
   defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
-  defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --write
+  defra-agent init --yolo
+  defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
   defra-agent init --enable-memory --defra-query-collection AgentRequest
   defra-agent init --identity-only
   defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
 
 Next:
-  ollama pull gemma4-26b-a4b
-  defra-agent config apply --root infra/agents/HOST/AGENT --bind-agent-did home
+  llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
   defra-agent server
-  defra-agent chat";
+  defra-agent codex";
 const PROVISION_AFTER_HELP: &str = "\
 Provision binds a portable manifest root to this host's initialized identity,
 applies it locally, and verifies an exact post-apply diff.
@@ -127,19 +136,14 @@ const SERVER_AFTER_HELP: &str = "\
 Common flow:
   defra-agent init
   defra-agent server
-  defra-agent-desktop init
-  defra-agent-desktop
-  defra-agent chat
+  defra-agent codex
 
-Codex flow:
-  defra-agent server --codex-shim
-  codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:9292/
-
-Codex keeps using its normal local ~/.codex config in this mode. The Defra shim state directory is server-side state and is only useful for debugging or an intentionally isolated client profile.
+The server runs the Codex TUI endpoint by default (loopback only); disable it
+with --no-codex-shim. `defra-agent codex` in another terminal connects to it.
 
 For laptop-to-fleet use, bind the shim on a reachable interface:
-  defra-agent server --codex-shim --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
-  codex --remote ws://<tailscale-host>:9292/
+  defra-agent server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
+  defra-agent codex --remote ws://<tailscale-host>:9292/
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
@@ -153,6 +157,17 @@ Examples:
 Diagnostics:
   defra-agent status
   defra-agent show response REQUEST_ID";
+const CODEX_AFTER_HELP: &str = "\
+Runs the Codex terminal UI in-process, connected to the local agent's Codex
+shim. Codex-side approvals and sandboxing are bypassed: the tool preset chosen
+at `defra-agent init` (read-only by default) is the permission boundary.
+
+Examples:
+  defra-agent codex
+  defra-agent codex \"what is in this directory?\"
+  defra-agent codex --remote ws://127.0.0.1:9292/
+
+Requires a running `defra-agent server` in another terminal.";
 const P2P_AFTER_HELP: &str = "\
 Examples:
   defra-agent p2p status
@@ -376,6 +391,11 @@ async fn main() -> Result<()> {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
+        // The Codex TUI owns the terminal and its own log routing; our
+        // stderr-bound telemetry layer would corrupt the display.
+        Command::Codex(args) => {
+            return commands::codex::codex(args).await;
+        }
         command => command,
     };
 
@@ -390,6 +410,7 @@ async fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,
+        Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,
@@ -595,7 +616,7 @@ pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
 
 pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. For the default local backend, run `ollama pull {DEFAULT_INIT_MODEL_NAME}` and make sure Ollama is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
+        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
         init_config_path(home_dir).display(),
         home_dir.display()
     )
@@ -605,6 +626,17 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn default_codex_remote_matches_shim_port() {
+        // serve.rs decides whether to print a --remote hint by comparing the
+        // formatted shim URL against DEFAULT_CODEX_REMOTE; the two constants
+        // must agree byte-for-byte.
+        assert_eq!(
+            DEFAULT_CODEX_REMOTE,
+            format!("ws://127.0.0.1:{DEFAULT_CODEX_SHIM_PORT}/")
+        );
+    }
 
     #[test]
     fn sanitize_inference_backend_drops_deprecated_capability_fields() {

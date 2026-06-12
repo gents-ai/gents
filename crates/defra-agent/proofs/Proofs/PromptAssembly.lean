@@ -13,5 +13,5 @@ contract theorems (T1 soundness — which subsumes T4 split-stability, T2
 fixpoint/preservation, T3 idempotence, T5 loop-threading validity, and the
 assembly-order lemmas).
 
-Rust conformance: `crates/defra-agent/tests/prompt_assembly_conformance.rs`.
+Rust conformance: `crates/defra-agent/tests/conformance/prompt_assembly.rs`.
 -/
