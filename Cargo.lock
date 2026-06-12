@@ -6707,6 +6707,7 @@ dependencies = [
  "defra-core",
  "defra-native-fs-runner",
  "defra-node",
+ "defra-p2p-adapter",
  "dirs 5.0.1",
  "events",
  "futures",

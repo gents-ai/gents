@@ -21,6 +21,7 @@ codex-login.workspace = true
 codex-model-provider-info.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
+defra-p2p-adapter.workspace = true
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
