@@ -8,9 +8,31 @@ pub enum Action {
     OperatorWrite {
         node: NodeId,
         peer: NodeId,
+        #[serde(default)]
         collections: Vec<String>,
+        #[serde(default)]
+        replicator_addresses: Vec<String>,
+    },
+    OperatorDelete {
+        node: NodeId,
+        peer: NodeId,
     },
     Reconcile {
+        node: NodeId,
+    },
+    ReadFailure {
+        node: NodeId,
+    },
+    PreseedActual {
+        node: NodeId,
+        #[serde(default)]
+        collections: Vec<String>,
+        #[serde(default)]
+        replicator_addresses: Vec<String>,
+        #[serde(default)]
+        connected: bool,
+    },
+    PeerDisconnected {
         node: NodeId,
     },
     Drop {
@@ -53,12 +75,14 @@ mod tests {
                     node: "A".into(),
                     peer: "B".into(),
                     collections: vec!["c1".into()],
+                    replicator_addresses: vec!["/ip4/127.0.0.1/tcp/4101/p2p/p1".into()],
                 },
+                Action::ReadFailure { node: "A".into() },
                 Action::WaitForConvergence { timeout_secs: 10 },
             ],
         };
         let json = serde_json::to_string(&scenario).unwrap();
         let parsed: Scenario = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.actions.len(), 2);
+        assert_eq!(parsed.actions.len(), 3);
     }
 }

@@ -1,16 +1,16 @@
 {
-  "name": "install_teardown_happy_path",
+  "name": "delete_after_restart",
   "actions": [
     {
       "op": "OperatorWrite",
       "node": "A",
       "peer": "B",
-      "collections": ["AgentRequest", "AgentResponse"],
-      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4101/p2p/peer-b"]
+      "collections": ["AgentRequest"],
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4105/p2p/peer-b"]
     },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 },
     { "op": "OperatorDelete", "node": "A", "peer": "B" },
+    { "op": "Crash", "node": "A" },
     { "op": "Reconcile", "node": "A" },
     { "op": "WaitForConvergence", "timeout_secs": 15 }
   ]

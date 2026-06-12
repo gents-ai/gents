@@ -1,0 +1,15 @@
+{
+  "name": "read_failure_noop",
+  "actions": [
+    {
+      "op": "OperatorWrite",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest"],
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4103/p2p/peer-b"]
+    },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "ReadFailure", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 }
+  ]
+}
