@@ -95,6 +95,10 @@ const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
 
+const ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"profiles","Kind":21}}
+]"#;
+
 // Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
 // fields compiles to that kind. AgentBehavior gained `description` and `summary`
 // on branch design/issue-377; existing DBs upgraded from a prior schema version
@@ -575,31 +579,70 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
 }
 
 pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    let Some(collection) = node
+    ensure_peer_pairing_applied_schema(node.as_ref()).await?;
+
+    let Some(mut collection) = node
         .get_collection("PeerPairingDesired")
         .context("get PeerPairingDesired collection")?
     else {
         return Ok(());
     };
-    if collection_has_field(&collection, "agent_did") {
+
+    if !collection_has_field(&collection, "agent_did") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired agent_did")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired agent_did")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with agent_did field"
+        );
+        collection = next;
+    }
+
+    if !collection_has_field(&collection, "profiles") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired profiles")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired profiles")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with profiles field"
+        );
+    }
+
+    Ok(())
+}
+
+async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
+    if node
+        .get_collection("PeerPairingApplied")
+        .context("get PeerPairingApplied collection")?
+        .is_some()
+    {
         return Ok(());
     }
 
-    let next = node
-        .patch_collection(
-            "PeerPairingDesired",
-            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
-        )
+    match node
+        .add_schema(defra_agent_protocol::schemas::PEER_PAIRING_APPLIED)
         .await
-        .context("patch_collection PeerPairingDesired agent_did")?;
-    node.set_active_collection_version(&next.version_id)
-        .await
-        .context("set_active_collection_version PeerPairingDesired agent_did")?;
-    tracing::info!(
-        version = %next.version_id,
-        "PeerPairingDesired patched with agent_did field"
-    );
-    Ok(())
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PeerPairingApplied schema"),
+    }
 }
 
 pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
@@ -752,10 +795,25 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
+    use serde::Deserialize;
 
     // defradb.rs ScalarArrayKind::NillableStringArray. SDL `[String]` (nullable
     // elements) compiles to this; migration patches adding such fields must match.
     const NILLABLE_STRING_ARRAY_KIND: i64 = 21;
+    const OLD_PEER_PAIRING_DESIRED_SCHEMA: &str = r#"
+        type PeerPairingDesired {
+            peer_id: String @index(unique: true)
+            agent_did: String @index
+            collections: [String!]!
+            replicator_addresses: [String!]!
+            created_at: DateTime @index(direction: DESC)
+            updated_at: DateTime @index(direction: DESC)
+        }
+    "#;
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        Arc::new(EmbeddedNode::builder().build().await.unwrap())
+    }
 
     fn field_kinds(patch_json: &str) -> Vec<(String, i64)> {
         let ops: serde_json::Value = serde_json::from_str(patch_json).expect("patch is valid JSON");
@@ -791,6 +849,13 @@ mod patch_kind_tests {
                 "backgroundable_tool_names must be NillableStringArray (21), got {kind}"
             );
         }
+        for (name, kind) in field_kinds(ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH) {
+            assert_eq!(name, "profiles", "unexpected field in profiles patch");
+            assert_eq!(
+                kind, NILLABLE_STRING_ARRAY_KIND,
+                "profiles must be NillableStringArray (21), got {kind}"
+            );
+        }
     }
 
     #[test]
@@ -820,6 +885,8 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
             ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
+            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+            ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
@@ -854,5 +921,119 @@ mod patch_kind_tests {
                 ("behavior_executor_status_json".to_string(), 11),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn peer_pairing_migration_ensures_applied_and_desired_profiles() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let desired = node
+            .get_collection("PeerPairingDesired")
+            .unwrap()
+            .expect("PeerPairingDesired collection");
+        assert!(collection_has_field(&desired, "agent_did"));
+        assert!(collection_has_field(&desired, "profiles"));
+
+        let applied = node
+            .get_collection("PeerPairingApplied")
+            .unwrap()
+            .expect("PeerPairingApplied collection");
+        assert!(collection_has_field(&applied, "collections"));
+        assert!(collection_has_field(&applied, "replicator_addresses"));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PairingDesiredRow {
+        peer_id: String,
+        collections: Option<Vec<String>>,
+        replicator_addresses: Option<Vec<String>>,
+        profiles: Option<Vec<String>>,
+    }
+
+    #[tokio::test]
+    async fn peer_pairing_profiles_migration_preserves_existing_rows() {
+        let node = test_node().await;
+        node.add_schema(OLD_PEER_PAIRING_DESIRED_SCHEMA)
+            .await
+            .unwrap();
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_PeerPairingDesired(input: {
+                        peer_id: "peer-b",
+                        agent_did: "did:defra-agent:peer-b",
+                        collections: ["AgentRequest"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/4101/p2p/peer-b"],
+                        created_at: "2026-06-12T00:00:00Z",
+                        updated_at: "2026-06-12T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "create old PeerPairingDesired row failed: {:?}",
+            response.errors
+        );
+
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let desired = node
+            .get_collection("PeerPairingDesired")
+            .unwrap()
+            .expect("PeerPairingDesired collection");
+        assert!(collection_has_field(&desired, "profiles"));
+        assert!(
+            node.get_collection("PeerPairingApplied").unwrap().is_some(),
+            "PeerPairingApplied collection should be added"
+        );
+
+        let response = node
+            .execute(
+                r#"{
+                    PeerPairingDesired(filter: { peer_id: { _eq: "peer-b" } }) {
+                        peer_id
+                        collections
+                        replicator_addresses
+                        profiles
+                    }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query migrated PeerPairingDesired failed: {:?}",
+            response.errors
+        );
+        let rows: Vec<PairingDesiredRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].peer_id, "peer-b");
+        assert_eq!(
+            rows[0].collections.as_deref(),
+            Some(&["AgentRequest".to_string()][..])
+        );
+        assert_eq!(
+            rows[0].replicator_addresses.as_deref(),
+            Some(&["/ip4/127.0.0.1/tcp/4101/p2p/peer-b".to_string()][..])
+        );
+        assert!(rows[0].profiles.is_none());
     }
 }

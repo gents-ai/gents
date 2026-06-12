@@ -3,6 +3,7 @@ type PeerPairingDesired {
     agent_did: String @index
     collections: [String!]!
     replicator_addresses: [String!]!
+    profiles: [String!]
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

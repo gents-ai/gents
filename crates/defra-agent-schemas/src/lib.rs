@@ -47,6 +47,9 @@ pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.gra
 pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
 pub const PEER_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/peer_pairing_desired.graphql");
+pub const PEER_PAIRING_APPLIED_NAME: &str = "PeerPairingApplied";
+pub const PEER_PAIRING_APPLIED: &str =
+    include_str!("../schemas/agent/peer_pairing_applied.graphql");
 
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
@@ -70,6 +73,7 @@ pub const ALL: &[&str] = &[
     SCHEDULE,
     EVENT_TRIGGER,
     PEER_PAIRING_DESIRED,
+    PEER_PAIRING_APPLIED,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -94,6 +98,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
     PEER_PAIRING_DESIRED_NAME,
+    PEER_PAIRING_APPLIED_NAME,
 ];
 
 /// Agent-domain collections that can be replicated across desktop branches.
@@ -122,7 +127,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 19);
+        assert_eq!(ALL.len(), 21);
     }
 
     #[test]
