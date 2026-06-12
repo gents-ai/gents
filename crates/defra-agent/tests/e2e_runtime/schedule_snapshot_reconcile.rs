@@ -35,9 +35,12 @@ use defra_agent::{
     ToolCeiling,
 };
 
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
+
+// These tests never execute inference; they pre-mark the backend healthy so
+// startup can resolve an active behavior without standing up an HTTP fake.
+const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
@@ -210,12 +213,11 @@ where
 async fn schedule_insert_bumps_active_generation() {
     let db = test_db("schedule-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("schedule-snapshot-reconcile"));
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-schedule-snapshot-reconcile",
-        mock_endpoint.endpoint(),
+        UNUSED_BACKEND_ENDPOINT,
     )
     .await;
     let agent = DefraAgent::from_default_behavior_documents(
@@ -302,12 +304,11 @@ async fn schedule_insert_bumps_active_generation() {
 async fn event_trigger_insert_bumps_active_generation() {
     let db = test_db("event-trigger-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-event-trigger-snapshot-reconcile",
-        mock_endpoint.endpoint(),
+        UNUSED_BACKEND_ENDPOINT,
     )
     .await;
     let agent = DefraAgent::from_default_behavior_documents(

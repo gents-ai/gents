@@ -580,9 +580,7 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
 /// Running bridge rows only (`child_request_id` set) — the periodic liveness
 /// sweep's scope, filtered server-side so the 5s tick never pays for
 /// non-subagent tool rows.
-async fn load_running_subagent_bridge_rows(
-    node: &EmbeddedNode,
-) -> Result<Vec<RunningToolCallRow>> {
+async fn load_running_subagent_bridge_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
     load_running_tool_call_rows_with_filter(node, r#", child_request_id: { _ne: "" }"#).await
 }
 
