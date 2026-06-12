@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use crate::cli::args::{
-    RequestCommand, RequestInterruptArgs, RequestInterruptOutputFormat, RequestResendArgs,
-    RequestShowArgs, RequestShowOutputFormat, RequestSubmitArgs,
+    RequestCommand, RequestInterruptArgs, RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
 };
+use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
     fetch_request_view, is_terminal_lifecycle_state, parse_duration_suffix, parse_valid_until_flag,
 };
@@ -97,14 +97,18 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let snapshot = load_request_show_snapshot(&graphql, &request_id).await?;
-    match args.output {
-        RequestShowOutputFormat::Json => {
+    match args
+        .output
+        .ensure_supported("request show", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => {
             let value = serde_json::to_value(&snapshot)?;
             print_json(&value)?;
         }
-        RequestShowOutputFormat::Text => {
+        OutputFormat::Text => {
             print!("{}", render_request_show_text(&snapshot));
         }
+        _ => unreachable!("ensure_supported restricts request show output formats"),
     }
     Ok(())
 }
@@ -1117,9 +1121,13 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
         already_interrupted,
         already_terminal,
     );
-    match args.output {
-        RequestInterruptOutputFormat::Json => print_json(&summary)?,
-        RequestInterruptOutputFormat::Text => print_interrupt_text(&summary)?,
+    match args.output.ensure_supported(
+        "request interrupt",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )? {
+        OutputFormat::Json => print_json(&summary)?,
+        OutputFormat::Text => print_interrupt_text(&summary)?,
+        _ => unreachable!("ensure_supported restricts request interrupt output formats"),
     }
     Ok(())
 }

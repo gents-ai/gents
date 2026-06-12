@@ -494,22 +494,25 @@ pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     )
 }
 
-pub(crate) fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -> Result<String> {
+pub(crate) fn resolve_dual_id(
+    noun: &str,
+    flag_name: &str,
+    positional: Option<&str>,
+    flag: Option<&str>,
+) -> Result<String> {
     let positional = positional.map(str::trim).filter(|value| !value.is_empty());
     let flag = flag.map(str::trim).filter(|value| !value.is_empty());
     match (positional, flag) {
-        (Some(positional), Some(flag)) if positional != flag => {
-            anyhow::bail!(
-                "conflicting request ids provided: positional={} and --request-id={}\nNext:\n  1. Pass the request id once: `defra-agent show response REQUEST_ID`\n  2. Or use `--request-id REQUEST_ID`, but not both",
-                positional,
-                flag
-            );
-        }
-        (Some(request_id), _) | (_, Some(request_id)) => Ok(request_id.to_string()),
-        (None, None) => anyhow::bail!(
-            "missing request id\nNext:\n  1. Pass it positionally: `defra-agent show response REQUEST_ID`\n  2. Or use `--request-id REQUEST_ID`"
+        (Some(positional), Some(flag)) if positional != flag => anyhow::bail!(
+            "conflicting {noun} ids provided: positional={positional} and {flag_name}={flag}"
         ),
+        (Some(request_id), _) | (_, Some(request_id)) => Ok(request_id.to_string()),
+        (None, None) => anyhow::bail!("missing {noun} id"),
     }
+}
+
+pub(crate) fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -> Result<String> {
+    resolve_dual_id("request", "--request-id", positional, flag)
 }
 
 pub(crate) fn resolve_request_content(
@@ -530,6 +533,53 @@ pub(crate) fn resolve_request_content(
         (None, None) => {
             anyhow::bail!("request content is required; pass --content or --content-file")
         }
+    }
+}
+
+#[cfg(test)]
+mod dual_id_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_dual_id_accepts_positional_only() {
+        assert_eq!(
+            resolve_dual_id("task", "--task-id", Some("task-1"), None).unwrap(),
+            "task-1"
+        );
+    }
+
+    #[test]
+    fn resolve_dual_id_accepts_flag_only() {
+        assert_eq!(
+            resolve_dual_id("task", "--task-id", None, Some("task-1")).unwrap(),
+            "task-1"
+        );
+    }
+
+    #[test]
+    fn resolve_dual_id_accepts_equal_positional_and_flag() {
+        assert_eq!(
+            resolve_dual_id("task", "--task-id", Some("task-1"), Some("task-1")).unwrap(),
+            "task-1"
+        );
+    }
+
+    #[test]
+    fn resolve_dual_id_rejects_conflict() {
+        let err = resolve_dual_id("task", "--task-id", Some("task-1"), Some("task-2"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("conflicting task ids provided"));
+        assert!(err.contains("positional=task-1"));
+        assert!(err.contains("--task-id=task-2"));
+    }
+
+    #[test]
+    fn resolve_dual_id_rejects_missing_id() {
+        let err = resolve_dual_id("task", "--task-id", None, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "missing task id");
     }
 }
 

@@ -8,6 +8,7 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
+use crate::cli::output_format::OutputFormat;
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP,
@@ -503,8 +504,8 @@ pub(crate) struct ChatArgs {
     pub(crate) behavior_id: Option<String>,
     #[arg(long = "message-file", help = "Read the user message from a file")]
     pub(crate) message_file: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = ChatOutputFormat::Text)]
-    pub(crate) output_format: ChatOutputFormat,
+    #[arg(long = "output", alias = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output_format: OutputFormat,
     #[arg(long = "output-file", help = "Write the final response to a file")]
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
@@ -558,16 +559,10 @@ pub(crate) struct McpProbeArgs {
     pub(crate) all: bool,
     #[arg(long, default_value = "5s", value_name = "DURATION")]
     pub(crate) timeout: String,
-    #[arg(long, value_enum, default_value_t = McpProbeOutput::Text)]
-    pub(crate) output: McpProbeOutput,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[arg(value_name = "SERVICE")]
     pub(crate) service: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum McpProbeOutput {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -604,14 +599,8 @@ pub(crate) struct BackgroundListArgs {
         help = "Only show calls older than this duration, e.g. 30s, 5m, 2h"
     )]
     pub(crate) age_gt: Option<String>,
-    #[arg(long, value_enum, default_value_t = BackgroundOutputFormat::Table)]
-    pub(crate) output: BackgroundOutputFormat,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum BackgroundOutputFormat {
-    Table,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -657,12 +646,6 @@ pub(crate) struct QueryArgs {
         help = "Restrict the query to these collections (repeatable); omit for all"
     )]
     pub(crate) allow_collections: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ChatOutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -1973,12 +1956,6 @@ impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::Cancel
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum RequestInterruptOutputFormat {
-    Text,
-    Json,
-}
-
 #[derive(clap::Args)]
 pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
@@ -2045,10 +2022,10 @@ pub(crate) struct RequestInterruptArgs {
     #[arg(
         long,
         value_enum,
-        default_value_t = RequestInterruptOutputFormat::Text,
+        default_value_t = OutputFormat::Text,
         help = "Output format; use json for scripts"
     )]
-    pub(crate) output: RequestInterruptOutputFormat,
+    pub(crate) output: OutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
@@ -2081,18 +2058,12 @@ pub(crate) struct RequestShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "output", value_enum, default_value_t = RequestShowOutputFormat::Text)]
-    pub(crate) output: RequestShowOutputFormat,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum RequestShowOutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -2117,15 +2088,8 @@ pub(crate) struct SubagentListArgs {
     pub(crate) root: Option<String>,
     #[arg(long, value_name = "N")]
     pub(crate) depth: Option<usize>,
-    #[arg(long, value_enum, default_value_t = SubagentListOutput::Tree)]
-    pub(crate) output: SubagentListOutput,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum SubagentListOutput {
-    Tree,
-    Table,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Tree)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -2167,14 +2131,8 @@ pub(crate) struct SubagentCancelArgs {
         help = "Wait timeout such as 30s, 5m, or 1h. Only valid with --wait"
     )]
     pub(crate) timeout: Option<String>,
-    #[arg(long, value_enum, default_value_t = SubagentCancelOutput::Text)]
-    pub(crate) output: SubagentCancelOutput,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum SubagentCancelOutput {
-    Text,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(Subcommand)]
