@@ -14,7 +14,7 @@ use defra_agent::{
     ProjectionRedactionMode, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
     TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const FIXTURE_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES";
 const LEGACY_FIXTURE_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES";
@@ -169,6 +169,94 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
     Ok(())
 }
 
+#[test]
+fn malformed_external_capture_json_is_rejected_before_import() {
+    let error = serde_json::from_str::<ExternalAdapterCapture>(
+        r#"{"source":{"system":"autogen-agentchat"},"mapping":"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.is_eof(),
+        "expected truncated JSON to fail during capture parsing, got {error}"
+    );
+}
+
+#[tokio::test]
+async fn negative_external_capture_imports_reject_bad_mappings_without_partial_rows() -> Result<()>
+{
+    let cases = [
+        (
+            "missing participants",
+            capture_with_mutation(|capture| {
+                capture["mapping"]["participants"] = json!([]);
+            }),
+            "must include at least one participant",
+        ),
+        (
+            "delegation references absent child request",
+            capture_with_mutation(|capture| {
+                capture["mapping"]["delegations"][0]["child_request_id"] = json!("req-missing");
+            }),
+            "child_request_id \"req-missing\" does not reference a declared child participant",
+        ),
+        (
+            "tool result references absent child request",
+            capture_with_mutation(|capture| {
+                capture["mapping"]["tool_events"][0]["child_request_id"] = json!("req-missing");
+            }),
+            "child_request_id \"req-missing\" does not reference a declared child participant",
+        ),
+        (
+            "unknown multi-agent framework",
+            capture_with_mutation(|capture| {
+                capture["source"]["system"] = json!("unknown-agent-framework");
+            }),
+            "is not supported for mapped import",
+        ),
+        (
+            "wrong envelope projection",
+            capture_with_mutation(|capture| {
+                capture["envelope"] = langgraph_envelope_value();
+            }),
+            "envelope projection langgraph_state_history does not match mapping projection multi_agent_task",
+        ),
+        (
+            "langgraph capture without history",
+            langgraph_capture_without_history(),
+            "requires non-empty native.history",
+        ),
+    ];
+
+    for (name, value, expected_error) in cases {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let data_dir = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await
+            .with_context(|| format!("opening embedded node for {name}"))?;
+        ensure_runtime_schemas(&node)
+            .await
+            .with_context(|| format!("creating runtime schemas for {name}"))?;
+
+        let capture = serde_json::from_value::<ExternalAdapterCapture>(value)
+            .with_context(|| format!("parsing negative capture case {name}"))?;
+        let error = import_external_adapter_capture_to_timeline_rows(&capture)
+            .expect_err("negative capture import unexpectedly succeeded");
+        let error_text = format!("{error:#}");
+        assert!(
+            error_text.contains(expected_error),
+            "{name} produced unexpected error:\nexpected substring: {expected_error}\nactual: {error_text}"
+        );
+        assert_no_timeline_rows(&node)
+            .await
+            .with_context(|| format!("checking rejected import left no rows for {name}"))?;
+    }
+    Ok(())
+}
+
 fn fixture_root() -> Option<PathBuf> {
     std::env::var_os(FIXTURE_ROOT_ENV)
         .or_else(|| std::env::var_os(LEGACY_FIXTURE_ROOT_ENV))
@@ -219,6 +307,153 @@ fn is_defra_export_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.contains(".defra."))
+}
+
+fn valid_multi_agent_capture_value() -> Value {
+    json!({
+        "source": {
+            "system": "autogen-agentchat",
+            "package": "autogen-agentchat",
+            "package_version": "0.7.0",
+            "generator": "negative-case-test"
+        },
+        "native": {
+            "messages": [
+                {
+                    "source": "planner",
+                    "content": "Plan the work."
+                },
+                {
+                    "source": "researcher",
+                    "content": "Research complete."
+                }
+            ]
+        },
+        "mapping": {
+            "projection": "multi_agent_task",
+            "scenario_id": "negative-case-test",
+            "request_id": "req-root",
+            "session_id": "session-negative",
+            "participants": [
+                {
+                    "role": "planner",
+                    "agent_did": "did:defra-agent:planner"
+                },
+                {
+                    "role": "researcher",
+                    "agent_did": "did:defra-agent:researcher",
+                    "request_id": "req-child"
+                }
+            ],
+            "delegations": [
+                {
+                    "parent_request_id": "req-root",
+                    "child_request_id": "req-child",
+                    "parent_tool_call_id": "tool-delegate",
+                    "tool_name": "delegate_to_researcher",
+                    "status": "completed"
+                }
+            ],
+            "tool_events": [
+                {
+                    "id": "tool-delegate",
+                    "request_id": "req-root",
+                    "tool_name": "delegate_to_researcher",
+                    "status": "completed",
+                    "child_request_id": "req-child"
+                }
+            ]
+        }
+    })
+}
+
+fn capture_with_mutation(mut mutate: impl FnMut(&mut Value)) -> Value {
+    let mut capture = valid_multi_agent_capture_value();
+    mutate(&mut capture);
+    capture
+}
+
+fn langgraph_capture_without_history() -> Value {
+    json!({
+        "source": {
+            "system": "langgraph",
+            "package": "langgraph",
+            "package_version": "0.2.0"
+        },
+        "native": {
+            "thread_id": "thread-missing-history"
+        },
+        "mapping": {
+            "projection": "langgraph_state_history",
+            "scenario_id": "missing-history",
+            "request_id": "req-langgraph"
+        }
+    })
+}
+
+fn langgraph_envelope_value() -> Value {
+    json!({
+        "projection_id": "langgraph_state_history",
+        "projection_version": "v1",
+        "source_request_id": "req-root",
+        "redaction_mode": "full",
+        "provenance": {
+            "runtime": "defra-agent",
+            "source_projection_id": "run_timeline",
+            "source_projection_version": "v1"
+        },
+        "output": {
+            "adapter": "langgraph_state_history",
+            "projection": {
+                "checkpoint_id": "checkpoint-negative",
+                "root_request_id": "req-root",
+                "values": {
+                    "request_id": "req-root"
+                },
+                "nodes": [
+                    {
+                        "id": "langgraph:start",
+                        "kind": "start"
+                    }
+                ],
+                "edges": [],
+                "tasks": []
+            }
+        }
+    })
+}
+
+async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
+    for collection in [
+        "AgentSession",
+        "AgentConversation",
+        "AgentRequest",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentResponse",
+    ] {
+        let response = node
+            .execute(&format!("{{ {collection} {{ _docID }} }}"))
+            .await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "GraphQL query for {collection} failed: {:?}",
+                response.errors
+            );
+        }
+        let row_count = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(collection))
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+        anyhow::ensure!(
+            row_count == 0,
+            "rejected import left {row_count} row(s) in {collection}"
+        );
+    }
+    Ok(())
 }
 
 async fn persist_run_timeline_rows(node: &EmbeddedNode, rows: &RunTimelineRows) -> Result<()> {
