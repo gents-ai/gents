@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
@@ -7,8 +8,11 @@ use serde::de::DeserializeOwned;
 pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
 pub const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
 
-const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts";
+// Build only the module artifact needed by `lake env lean --run`; the broader
+// target can pull package extra artifacts such as ProofWidgets' widget bundle.
+const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
 const CONTRACT_RUN_FILE: &str = "Proofs/Conformance/Contracts.lean";
+const LAKE_BUILD_ATTEMPTS: usize = 3;
 
 pub fn load_contract_snapshot<T>() -> Result<T>
 where
@@ -33,28 +37,51 @@ pub fn load_contract_stdout() -> Result<String> {
 }
 
 pub fn run_lake_build(proofs_dir: &Path) -> Result<()> {
-    let output = Command::new("lake")
-        .args(["build", CONTRACT_TARGET])
-        .current_dir(proofs_dir)
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to build Lean conformance contract target in {}",
-                proofs_dir.display()
-            )
-        })?;
+    let mut failures = Vec::new();
 
-    if !output.status.success() {
-        anyhow::bail!(
-            "Lean conformance contract build failed\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    for attempt in 1..=LAKE_BUILD_ATTEMPTS {
+        let output = Command::new("lake")
+            .args(["build", CONTRACT_TARGET])
+            .current_dir(proofs_dir)
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to build Lean conformance contract target in {}",
+                    proofs_dir.display()
+                )
+            })?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let retryable = is_retryable_lake_build_failure(&stdout, &stderr);
+        failures.push(format!(
+            "attempt {attempt}/{LAKE_BUILD_ATTEMPTS}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
+            output.status, stdout, stderr
+        ));
+
+        if !retryable || attempt == LAKE_BUILD_ATTEMPTS {
+            anyhow::bail!(
+                "Lean conformance contract build failed\n  cwd: {}\n{}",
+                proofs_dir.display(),
+                failures.join("\n\n")
+            );
+        }
+
+        std::thread::sleep(Duration::from_secs((attempt as u64) * 5));
     }
 
-    Ok(())
+    unreachable!("lake build retry loop should return or bail")
+}
+
+fn is_retryable_lake_build_failure(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}");
+    combined.contains("external command 'git' exited with code 128")
+        || combined.contains("failed to fetch GitHub release")
+        || combined.contains("ProofWidgets not up-to-date")
 }
 
 pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
@@ -170,5 +197,22 @@ mod tests {
             err.contains("duplicate"),
             "expected duplicate sentinel error, got: {err}"
         );
+    }
+
+    #[test]
+    fn retries_transient_lake_dependency_fetch_failures() {
+        assert!(is_retryable_lake_build_failure(
+            "",
+            "info: mathlib: cloning https://github.com/leanprover-community/mathlib4\n\
+             error: external command 'git' exited with code 128"
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_ordinary_lean_build_errors() {
+        assert!(!is_retryable_lake_build_failure(
+            "",
+            "error: Proofs/Foo.lean:12:4: unknown identifier 'bar'"
+        ));
     }
 }

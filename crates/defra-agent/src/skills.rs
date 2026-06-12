@@ -260,52 +260,184 @@ pub fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
         })
 }
 
-/// Extract skill ids named by leading slash commands in a prompt.
-///
-/// This is intentionally only a reference extractor. It does not resolve the
-/// skill or edit the prompt text; the runtime later resolves each id against
-/// the behavior's effective skill set before injecting any skill body. Keeping
-/// the prompt unchanged avoids corrupting legitimate prompts that happen to
-/// start with an absolute path.
-pub fn selected_skill_ids_from_prompt_slash_commands(prompt: &str) -> Vec<String> {
-    let mut selected = Vec::new();
-    let mut saw_command = false;
-
-    for line in prompt.lines() {
-        if line.trim().is_empty() && !saw_command {
-            continue;
-        }
-        let Some(skill_id) = leading_slash_skill_id(line) else {
-            break;
-        };
-        if !selected.iter().any(|existing| existing == &skill_id) {
-            selected.push(skill_id);
-        }
-        saw_command = true;
-    }
-
-    selected
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSlashSkillSelection {
+    pub selected_skill_ids: Vec<String>,
+    pub prompt: String,
 }
 
-fn leading_slash_skill_id(line: &str) -> Option<String> {
+/// Extract native leading skill selectors from a prompt.
+///
+/// The selector is request-control syntax, not user text: selected ids are
+/// recorded as metadata, and the returned prompt has selector tokens removed so
+/// they do not reach the provider. The runtime later resolves ids against the
+/// behavior's effective skill set before injecting any skill body.
+pub fn prompt_slash_skill_selection(prompt: &str) -> PromptSlashSkillSelection {
+    let mut selected = Vec::new();
+    let mut body_lines = Vec::new();
+    let mut saw_selector = false;
+
+    let mut lines = prompt.lines();
+    while let Some(line) = lines.next() {
+        if line.trim().is_empty() && !saw_selector {
+            continue;
+        }
+
+        let Some(selector) = leading_slash_skill_selector(line) else {
+            if !saw_selector {
+                return PromptSlashSkillSelection {
+                    selected_skill_ids: Vec::new(),
+                    prompt: prompt.to_string(),
+                };
+            }
+            body_lines.push(line.to_string());
+            body_lines.extend(lines.map(ToOwned::to_owned));
+            break;
+        };
+
+        if !selected
+            .iter()
+            .any(|existing| existing == &selector.skill_id)
+        {
+            selected.push(selector.skill_id);
+        }
+        if !selector.remainder.is_empty() {
+            body_lines.push(selector.remainder);
+        }
+        saw_selector = true;
+    }
+
+    if !saw_selector {
+        return PromptSlashSkillSelection {
+            selected_skill_ids: Vec::new(),
+            prompt: prompt.to_string(),
+        };
+    }
+
+    PromptSlashSkillSelection {
+        selected_skill_ids: selected,
+        prompt: body_lines.join("\n"),
+    }
+}
+
+/// Extract skill ids named by leading slash selectors in a prompt.
+pub fn selected_skill_ids_from_prompt_slash_commands(prompt: &str) -> Vec<String> {
+    prompt_slash_skill_selection(prompt).selected_skill_ids
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SlashSkillSelector {
+    skill_id: String,
+    remainder: String,
+}
+
+fn leading_slash_skill_selector(line: &str) -> Option<SlashSkillSelector> {
     let trimmed = line.trim_start();
     let rest = trimmed.strip_prefix('/')?;
     let end = rest
         .find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
         .unwrap_or(rest.len());
-    let skill_id = &rest[..end];
-    if skill_id.is_empty() {
+    let command = &rest[..end];
+    if command.is_empty() {
         return None;
     }
 
-    // Treat `/work/file.rs` and similar as a path, not a slash command. If this
-    // rejects a path-shaped skill id, the model can still load it through the
-    // normal catalog-driven `load_skill` tool.
+    let after_command = &rest[end..];
+    if command.eq_ignore_ascii_case("skill") {
+        let remainder = after_command.trim_start();
+        return parse_skill_command_argument(remainder);
+    }
+
+    if is_reserved_client_slash_command(command) {
+        return None;
+    }
+
+    // Treat `/work/file.rs` and similar as a path, not a slash selector. If
+    // this rejects a path-shaped skill id, the model can still load it through
+    // the normal catalog-driven `load_skill` tool or the caller can use
+    // structured metadata.
     if rest[end..].starts_with('/') {
         return None;
     }
 
-    Some(skill_id.to_string())
+    Some(SlashSkillSelector {
+        skill_id: command.to_string(),
+        remainder: after_command.trim_start().to_string(),
+    })
+}
+
+fn parse_skill_command_argument(input: &str) -> Option<SlashSkillSelector> {
+    let end = input
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
+        .unwrap_or(input.len());
+    let skill_id = &input[..end];
+    if skill_id.is_empty() || input[end..].starts_with('/') {
+        return None;
+    }
+    Some(SlashSkillSelector {
+        skill_id: skill_id.to_string(),
+        remainder: input[end..].trim_start().to_string(),
+    })
+}
+
+fn is_reserved_client_slash_command(command: &str) -> bool {
+    matches!(
+        command.to_ascii_lowercase().as_str(),
+        "agent"
+            | "apps"
+            | "approve"
+            | "btw"
+            | "clean"
+            | "clear"
+            | "compact"
+            | "copy"
+            | "debug-config"
+            | "debug-m-drop"
+            | "debug-m-update"
+            | "diff"
+            | "exit"
+            | "experimental"
+            | "feedback"
+            | "fork"
+            | "goal"
+            | "hooks"
+            | "ide"
+            | "init"
+            | "keymap"
+            | "logout"
+            | "mcp"
+            | "memories"
+            | "mention"
+            | "model"
+            | "new"
+            | "permissions"
+            | "personality"
+            | "pet"
+            | "pets"
+            | "plan"
+            | "plugins"
+            | "ps"
+            | "quit"
+            | "raw"
+            | "realtime"
+            | "rename"
+            | "resume"
+            | "review"
+            | "rollout"
+            | "sandbox-add-read-dir"
+            | "settings"
+            | "setup-default-sandbox"
+            | "side"
+            | "skills"
+            | "status"
+            | "statusline"
+            | "stop"
+            | "subagents"
+            | "test-approval"
+            | "theme"
+            | "title"
+            | "vim"
+    )
 }
 
 /// Error type for [`LoadSkillTool`]. A missing skill is returned as readable
@@ -625,11 +757,12 @@ mod tests {
     }
 
     #[test]
-    fn leading_slash_commands_select_skills_without_rewriting_prompt() {
-        let ids = selected_skill_ids_from_prompt_slash_commands(
+    fn leading_slash_commands_select_skills_and_strip_control_syntax() {
+        let selection = prompt_slash_skill_selection(
             "\n/vuln-scan /work --focus parser\n/triage\nRun the task.",
         );
-        assert_eq!(ids, vec!["vuln-scan", "triage"]);
+        assert_eq!(selection.selected_skill_ids, vec!["vuln-scan", "triage"]);
+        assert_eq!(selection.prompt, "/work --focus parser\nRun the task.");
 
         assert!(
             selected_skill_ids_from_prompt_slash_commands("Run /vuln-scan as plain text",)
@@ -639,6 +772,14 @@ mod tests {
             selected_skill_ids_from_prompt_slash_commands("/work/entry.c is an absolute path",)
                 .is_empty()
         );
+
+        let explicit = prompt_slash_skill_selection("/skill review inspect the diff");
+        assert_eq!(explicit.selected_skill_ids, vec!["review"]);
+        assert_eq!(explicit.prompt, "inspect the diff");
+
+        let codex_command = prompt_slash_skill_selection("/review inspect the diff");
+        assert!(codex_command.selected_skill_ids.is_empty());
+        assert_eq!(codex_command.prompt, "/review inspect the diff");
     }
 
     #[test]

@@ -22,7 +22,9 @@ use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
-use crate::request_helpers::{metadata_with_prompt_selected_skill_ids, wait_for_terminal_response};
+use crate::request_helpers::{
+    content_and_metadata_with_prompt_selected_skill_ids, wait_for_terminal_response,
+};
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
 /// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
@@ -185,7 +187,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     //    `write_manual_agent_request`: same field set, same lineage.
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let metadata = metadata_with_prompt_selected_skill_ids(None, &content);
+    let (content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(None, &content);
     let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
         request_id: &request_id,
         session_id: &session_id,

@@ -60,16 +60,17 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(&session_id);
+    let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
+    let content = prompt_selection.prompt.as_str();
     let escaped_content = escape_graphql_string(content);
     let escaped_created_at = escape_graphql_string(&now);
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
-    let selected_skill_ids = crate::skills::selected_skill_ids_from_prompt_slash_commands(content);
-    let metadata_field = if selected_skill_ids.is_empty() {
+    let metadata_field = if prompt_selection.selected_skill_ids.is_empty() {
         String::new()
     } else {
         let metadata = serde_json::json!({
-            "selected_skill_ids": selected_skill_ids,
+            "selected_skill_ids": prompt_selection.selected_skill_ids,
         })
         .to_string();
         format!(

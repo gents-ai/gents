@@ -159,6 +159,14 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         InferenceError::RateLimited {
                             retry_after_secs: 60,
                         }
+                    } else if provider_message_is_tool_call_json_parse_failure(provider_msg) {
+                        // vLLM returns 400 (type "BadRequestError") when its server-side
+                        // tool-call parser fails to json.loads the model's streamed tool
+                        // arguments — e.g. a single-backslash regex/path the model emits in
+                        // an array/object-typed argument that the raw-mode parser does not
+                        // repair. This is intermittent and sampling-dependent (a fresh
+                        // generation usually parses cleanly), so retry rather than fail fast.
+                        InferenceError::TransientFailure { reason }
                     } else if provider_message_has_any_status(
                         provider_msg,
                         &[400, 401, 403, 404, 422],
@@ -216,6 +224,22 @@ fn provider_message_has_any_status(message: &str, statuses: &[u16]) -> bool {
     statuses
         .iter()
         .any(|status| error_message_has_status(message, *status))
+}
+
+/// Detects vLLM's intermittent 400 raised when its tool-call parser cannot
+/// `json.loads` the model's streamed tool arguments. The response body carries a
+/// Python `json.decoder.JSONDecodeError`, which always renders with the positional
+/// signature `"... line L column C (char N)"`, wrapped in a `"BadRequestError"`
+/// envelope. We key off that signature rather than the variable leading phrase
+/// (`Expecting ',' delimiter`, `Invalid \escape`, `Expecting property name`, ...) so
+/// every decode variant is covered without depending on backslash escaping in the
+/// wire body. Genuine request-shape 400s (e.g. `duplicate field max_tokens`) lack the
+/// JSONDecodeError signature and stay permanent.
+fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
+    message.contains("BadRequestError")
+        && message.contains(" line ")
+        && message.contains(" column ")
+        && message.contains("(char ")
 }
 
 fn provider_message_is_transport_failure(message_lower: &str) -> bool {

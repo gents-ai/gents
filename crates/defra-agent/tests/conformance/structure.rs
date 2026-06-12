@@ -41,7 +41,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("CodexShim", Module("conformance/codex_shim.rs")),
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
-        ("CrossMachineComposed", Module("conformance/r5_cross_deployment.rs")),
+        (
+            "CrossMachineComposed",
+            Module("conformance/r5_cross_deployment.rs"),
+        ),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Identity", Module("conformance/identity.rs")),
@@ -52,7 +55,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // home: both models are exercised by the same two-node scenario
         // harness (tests/support/pairing_conformance/), where the handlers
         // are the reconcile loop's transition functions.
-        ("PairingReconcile", Module("conformance/pairing_reconcile.rs")),
+        (
+            "PairingReconcile",
+            Module("conformance/pairing_reconcile.rs"),
+        ),
         (
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
@@ -64,7 +70,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),
         ("SessionRecovery", Module("conformance/session_recovery.rs")),
-        ("Skills", Gap("#460 — implementation slices unshipped; fence lands with them")),
+        (
+            "Skills",
+            Gap("#460 — implementation slices unshipped; fence lands with them"),
+        ),
         (
             "StorageObservation",
             Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),
@@ -72,7 +81,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // Idle-deadline precondition is additionally a registered boundary
         // (boundary.streaming-response.idle-timeout-deadline); the timeout
         // became configurable in #450.
-        ("StreamingResponse", Module("conformance/streaming_compaction.rs")),
+        (
+            "StreamingResponse",
+            Module("conformance/streaming_compaction.rs"),
+        ),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),

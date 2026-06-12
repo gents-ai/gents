@@ -183,7 +183,7 @@ mod tests {
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             "behavior-1",
             "task-1",
-            "/vuln-scan /work",
+            "/vuln-scan\nReview /work",
             serde_json::json!({}),
         )
         .await
@@ -211,7 +211,7 @@ mod tests {
             .and_then(|rows| rows.first())
             .expect("expected request row");
 
-        assert_eq!(row["content"].as_str(), Some("/vuln-scan /work"));
+        assert_eq!(row["content"].as_str(), Some("Review /work"));
         assert_eq!(
             row["metadata"].as_str(),
             Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
