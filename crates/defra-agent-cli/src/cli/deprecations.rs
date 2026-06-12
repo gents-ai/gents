@@ -1,4 +1,4 @@
-const DEPRECATED: &[(&[&str], &str)] = &[
+pub(crate) const DEPRECATED: &[(&[&str], &str)] = &[
     (&["config", "task"], "task"),
     (&["p2p", "unpair"], "p2p pairings rm"),
     (&["p2p", "pairings", "remove"], "p2p pairings rm"),

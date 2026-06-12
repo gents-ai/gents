@@ -145,7 +145,7 @@ defra-agent chat "Introduce yourself in two short sentences."
 
 Identity is the other half of the boundary: every action the runtime takes is
 attributed to the agent's DID, and every tool call is persisted as a document
-you can audit afterwards (`defra-agent show response <request-id>`, or
+you can audit afterwards (`defra-agent response show <request-id>`, or
 `defra-agent trace timeline`).
 
 ## Other backends

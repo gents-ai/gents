@@ -2666,4 +2666,34 @@ mod tests {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
         }
     }
+
+    #[test]
+    fn every_deprecated_path_warns_and_still_parses() {
+        use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
+
+        for (path, replacement) in DEPRECATED {
+            let mut argv = vec!["defra-agent".to_string()];
+            argv.extend(path.iter().copied().map(str::to_string));
+            argv.extend(deprecated_path_required_args(path));
+
+            let warning =
+                deprecation_warning(&argv).unwrap_or_else(|| panic!("missing warning: {argv:?}"));
+            assert!(
+                warning.contains(&format!("use `defra-agent {}`", replacement)),
+                "warning did not mention replacement for {argv:?}: {warning}"
+            );
+            Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+        }
+    }
+
+    fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
+        match path {
+            ["config", "task"] => vec!["list".to_string()],
+            ["p2p", "unpair"] | ["p2p", "pairings", "remove"] => {
+                vec!["--peer".to_string(), "p1".to_string()]
+            }
+            ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
+            _ => panic!("no parse fixture for deprecated path: {path:?}"),
+        }
+    }
 }

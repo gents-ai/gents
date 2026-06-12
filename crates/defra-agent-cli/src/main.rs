@@ -74,8 +74,7 @@ Or without the Codex TUI:
 
 Inspect the local runtime:
   defra-agent status
-  defra-agent show runtime
-  defra-agent show response REQUEST_ID
+  defra-agent response show REQUEST_ID
   defra-agent task list
   defra-agent task show TASK_ID
   defra-agent task run TASK_ID --wait
@@ -156,7 +155,7 @@ Examples:
 
 Diagnostics:
   defra-agent status
-  defra-agent show response REQUEST_ID";
+  defra-agent response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Runs the Codex terminal UI in-process, connected to the local agent's Codex
 shim. Codex-side approvals and sandboxing are bypassed: the tool preset chosen
@@ -179,7 +178,7 @@ Examples:
   defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
   defra-agent p2p pairings set --peer <peer-id> --did <agent-did> --address <multiaddr> --profile chat-requests
   defra-agent p2p pairings list
-  defra-agent p2p unpair --peer <peer-id>
+  defra-agent p2p pairings rm --peer <peer-id>
   defra-agent p2p pair --peer <multiaddr> --profile chat-requests
   defra-agent p2p diagnose";
 const SCHEMA_AFTER_HELP: &str = "\
@@ -236,9 +235,9 @@ Examples:
   defra-agent task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
-  defra-agent show runtime
-  defra-agent show request REQUEST_ID
-  defra-agent show response REQUEST_ID";
+  defra-agent status
+  defra-agent request show REQUEST_ID
+  defra-agent response show REQUEST_ID";
 const TRACE_AFTER_HELP: &str = "\
 Exports one JSON object per persisted AgentToolCall row. The command reads
 AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and

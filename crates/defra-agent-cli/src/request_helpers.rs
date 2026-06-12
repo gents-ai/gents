@@ -490,7 +490,7 @@ pub(crate) async fn wait_for_terminal_response(
 
 pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     format!(
-        "Next:\n  1. Run `defra-agent show request {request_id}`\n  2. Run `defra-agent show response {request_id}`\n  3. Inspect the runtime with `defra-agent status`"
+        "Next:\n  1. Run `defra-agent request show {request_id}`\n  2. Run `defra-agent response show {request_id}`\n  3. Inspect the runtime with `defra-agent status`"
     )
 }
 
