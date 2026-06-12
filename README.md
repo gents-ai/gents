@@ -12,12 +12,18 @@ Everything local, on a Mac, in a few minutes:
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
 
-cargo install --profile dev-install --locked --path crates/defra-agent-cli
+gh release download v0.4.0 --repo sourcenetwork/defra-agent -p 'defra-agent-aarch64-apple-darwin.tar.gz'
+tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
+sudo install defra-agent-aarch64-apple-darwin/defra-agent /usr/local/bin/defra-agent
 
 defra-agent init      # provision a safe read-only agent under ~/.defra-agent
 defra-agent server    # start the runtime (embedded DefraDB + GraphQL + P2P)
 defra-agent codex     # chat in the Codex terminal UI (no Codex install needed)
 ```
+
+The release binary is signed and notarized. Building from source instead:
+`cargo install --profile dev-install --locked --path crates/defra-agent-cli`
+from a checkout.
 
 Want the agent to actually change things? Re-run `defra-agent init --write`
 (writes sandboxed under the directory you ran `init` from) or `--yolo`
