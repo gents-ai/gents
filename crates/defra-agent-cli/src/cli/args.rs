@@ -971,6 +971,21 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    #[command(about = "Inspect EventTrigger documents")]
+    Trigger {
+        #[command(subcommand)]
+        command: ConfigTriggerCommand,
+    },
+    #[command(about = "Inspect Schedule documents")]
+    Schedule {
+        #[command(subcommand)]
+        command: ConfigScheduleCommand,
+    },
+    #[command(about = "Inspect MCP service registry documents")]
+    Mcp {
+        #[command(subcommand)]
+        command: ConfigMcpCommand,
+    },
     #[command(about = "Create, list, show, delete, enable, or disable Skill documents")]
     Skill {
         #[command(subcommand)]
@@ -1401,6 +1416,30 @@ pub(crate) enum InferenceProfileCommand {
         alias = "remove"
     )]
     Rm(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigTriggerCommand {
+    #[command(name = "list", about = "List EventTrigger documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an EventTrigger document")]
+    Show(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigScheduleCommand {
+    #[command(name = "list", about = "List Schedule documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a Schedule document")]
+    Show(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigMcpCommand {
+    #[command(name = "list", about = "List ToolServiceRegistry documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a ToolServiceRegistry document")]
+    Show(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]

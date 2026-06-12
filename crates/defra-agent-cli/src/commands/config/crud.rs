@@ -12,9 +12,10 @@ use crate::request_helpers::resolve_dual_id;
 use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, print_json, resolve_config_access, CONFIG_EXPORT_FORMAT,
-    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
-    EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_PROJECTION_ACP_BINDING_FIELDS, EXPORT_TASK_FIELDS,
-    EXPORT_TOOL_SELECTION_FIELDS,
+    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS,
+    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
+    EXPORT_PROJECTION_ACP_BINDING_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TASK_FIELDS,
+    EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 #[derive(Clone, Copy)]
@@ -46,6 +47,24 @@ pub(super) const PROFILE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "profile",
     collection: Collection::InferenceProfile,
     fields: EXPORT_INFERENCE_PROFILE_FIELDS,
+};
+
+pub(super) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "trigger",
+    collection: Collection::EventTrigger,
+    fields: EXPORT_EVENT_TRIGGER_FIELDS,
+};
+
+pub(super) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "schedule",
+    collection: Collection::Schedule,
+    fields: EXPORT_SCHEDULE_FIELDS,
+};
+
+pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "mcp",
+    collection: Collection::ToolServiceRegistry,
+    fields: EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {

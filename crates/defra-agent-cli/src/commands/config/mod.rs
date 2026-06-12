@@ -61,6 +61,18 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             TaskCommand::Show(args) => crate::commands::task::task_show(args).await,
             TaskCommand::Run(args) => task_run::config_task_run(args).await,
         },
+        ConfigCommand::Trigger { command } => match command {
+            ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,
+            ConfigTriggerCommand::Show(args) => crud::config_show(crud::TRIGGER_SPEC, args).await,
+        },
+        ConfigCommand::Schedule { command } => match command {
+            ConfigScheduleCommand::List(args) => crud::config_list(crud::SCHEDULE_SPEC, args).await,
+            ConfigScheduleCommand::Show(args) => crud::config_show(crud::SCHEDULE_SPEC, args).await,
+        },
+        ConfigCommand::Mcp { command } => match command {
+            ConfigMcpCommand::List(args) => crud::config_list(crud::MCP_SPEC, args).await,
+            ConfigMcpCommand::Show(args) => crud::config_show(crud::MCP_SPEC, args).await,
+        },
         ConfigCommand::Skill { command } => match command {
             SkillCommand::Add(args) => skill::skill_add(args).await,
             SkillCommand::Import(args) => skill::skill_import(args).await,
