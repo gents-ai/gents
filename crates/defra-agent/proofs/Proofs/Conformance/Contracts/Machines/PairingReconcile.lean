@@ -17,6 +17,8 @@ def pairingReconcileActions : List (String × PairingReconcile.TransitionKind) :
   [ ("operatorWrite", .operatorWrite)
   , ("operatorDelete", .operatorDelete)
   , ("readFailure", .readFailure)
+  , ("dial", .dial)
+  , ("peerDisconnected", .peerDisconnected)
   , ("reconcileInstall", .reconcileInstall)
   , ("reconcileTeardown", .reconcileTeardown)
   , ("reconcileInstallReplicator", .reconcileInstallReplicator)

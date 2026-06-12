@@ -22,7 +22,8 @@ def disagreementCount (s : ReconcileState) : Nat :=
       (desired.collections \ s.actual.collections).card +
       (desired.replicators \ s.actual.replicators).card +
       (s.applied.collections \ desired.collections).card +
-      (s.applied.replicators \ desired.replicators).card
+      (s.applied.replicators \ desired.replicators).card +
+      if desired.hasWiring && !s.actual.connected then 1 else 0
 
 theorem converged_disagreementCount_zero
     {s : ReconcileState}
@@ -35,13 +36,21 @@ theorem converged_disagreementCount_zero
   | some desired =>
     simp [h_desired] at h
     rcases h with ⟨h_desired_collections, h_desired_replicators,
-      h_applied_collections, h_applied_replicators⟩
-    simp [disagreementCount, h_desired,
-      Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
-      Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
-      Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
-      Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
-    ]
+      h_applied_collections, h_applied_replicators, h_connected⟩
+    by_cases h_has_wiring : desired.hasWiring = true
+    · have h_actual_connected : s.actual.connected = true := h_connected h_has_wiring
+      simp [disagreementCount, h_desired, h_has_wiring, h_actual_connected,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
+      ]
+    · simp [disagreementCount, h_desired, h_has_wiring,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
+        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
+      ]
 
 theorem convergedState_has_zero_disagreement (s : ReconcileState) :
     disagreementCount (convergedState s) = 0 := by

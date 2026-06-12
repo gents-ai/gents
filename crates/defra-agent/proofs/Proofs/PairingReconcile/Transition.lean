@@ -12,23 +12,55 @@ namespace PairingReconcile
 
 def installCollectionState (pre : ReconcileState) (c : String) : ReconcileState :=
   { pre with
-    actual := ({ collections := insert c pre.actual.collections, replicators := pre.actual.replicators } : PairingActual),
+    actual := ({
+      collections := insert c pre.actual.collections,
+      replicators := pre.actual.replicators,
+      connected := pre.actual.connected
+    } : PairingActual),
     applied := ({ collections := insert c pre.applied.collections, replicators := pre.applied.replicators } : PairingApplied) }
 
 def teardownCollectionState (pre : ReconcileState) (c : String) : ReconcileState :=
   { pre with
-    actual := ({ collections := pre.actual.collections.erase c, replicators := pre.actual.replicators } : PairingActual),
+    actual := ({
+      collections := pre.actual.collections.erase c,
+      replicators := pre.actual.replicators,
+      connected := pre.actual.connected
+    } : PairingActual),
     applied := ({ collections := pre.applied.collections.erase c, replicators := pre.applied.replicators } : PairingApplied) }
 
 def installReplicatorState (pre : ReconcileState) (r : String) : ReconcileState :=
   { pre with
-    actual := ({ collections := pre.actual.collections, replicators := insert r pre.actual.replicators } : PairingActual),
+    actual := ({
+      collections := pre.actual.collections,
+      replicators := insert r pre.actual.replicators,
+      connected := pre.actual.connected
+    } : PairingActual),
     applied := ({ collections := pre.applied.collections, replicators := insert r pre.applied.replicators } : PairingApplied) }
 
 def teardownReplicatorState (pre : ReconcileState) (r : String) : ReconcileState :=
   { pre with
-    actual := ({ collections := pre.actual.collections, replicators := pre.actual.replicators.erase r } : PairingActual),
+    actual := ({
+      collections := pre.actual.collections,
+      replicators := pre.actual.replicators.erase r,
+      connected := pre.actual.connected
+    } : PairingActual),
     applied := ({ collections := pre.applied.collections, replicators := pre.applied.replicators.erase r } : PairingApplied) }
+
+def dialState (pre : ReconcileState) : ReconcileState :=
+  { pre with
+    actual := ({
+      collections := pre.actual.collections,
+      replicators := pre.actual.replicators,
+      connected := true
+    } : PairingActual) }
+
+def disconnectedState (pre : ReconcileState) : ReconcileState :=
+  { pre with
+    actual := ({
+      collections := pre.actual.collections,
+      replicators := pre.actual.replicators,
+      connected := false
+    } : PairingActual) }
 
 inductive Transition : ReconcileState → ReconcileState → Prop where
   | operatorWrite {pre post : ReconcileState} (newDesired : PairingDesired) :
@@ -44,10 +76,21 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
   | readFailure {pre post : ReconcileState} :
       post = { pre with desired := none } →
       Transition pre post
+  | dial {pre post : ReconcileState} (desired : PairingDesired) :
+      pre.desired = some desired →
+      desired.hasWiring = true →
+      pre.actual.connected = false →
+      post = dialState pre →
+      Transition pre post
+  | peerDisconnected {pre post : ReconcileState} :
+      pre.actual.connected = true →
+      post = disconnectedState pre →
+      Transition pre post
   | reconcileInstall {pre post : ReconcileState} (desired : PairingDesired) (c : String) :
       pre.desired = some desired →
       c ∈ desired.collections →
       c ∉ pre.actual.collections →
+      pre.actual.connected = true →
       post = installCollectionState pre c →
       Transition pre post
   | reconcileTeardown {pre post : ReconcileState} (desired : PairingDesired) (c : String) :
@@ -61,6 +104,7 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       pre.desired = some desired →
       r ∈ desired.replicators →
       r ∉ pre.actual.replicators →
+      pre.actual.connected = true →
       post = installReplicatorState pre r →
       Transition pre post
   | reconcileTeardownReplicator {pre post : ReconcileState} (desired : PairingDesired) (r : String) :
@@ -137,7 +181,13 @@ theorem unmanaged_collection_survives
   | readFailure h_post =>
       cases h_post
       exact hc
-  | reconcileInstall desired target h_desired h_target h_missing h_post =>
+  | dial desired h_desired h_has_wiring h_disconnected h_post =>
+      cases h_post
+      exact hc
+  | peerDisconnected h_connected h_post =>
+      cases h_post
+      exact hc
+  | reconcileInstall desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact Finset.mem_insert_of_mem hc
   | reconcileTeardown desired target h_desired h_actual h_not_desired h_applied h_post =>
@@ -146,7 +196,7 @@ theorem unmanaged_collection_survives
       · subst h_eq
         exact False.elim (hunmanaged h_applied)
       · exact Finset.mem_erase.mpr ⟨h_eq, hc⟩
-  | reconcileInstallReplicator desired target h_desired h_target h_missing h_post =>
+  | reconcileInstallReplicator desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact hc
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
@@ -171,13 +221,19 @@ theorem unmanaged_replicator_survives
   | readFailure h_post =>
       cases h_post
       exact hr
-  | reconcileInstall desired target h_desired h_target h_missing h_post =>
+  | dial desired h_desired h_has_wiring h_disconnected h_post =>
+      cases h_post
+      exact hr
+  | peerDisconnected h_connected h_post =>
+      cases h_post
+      exact hr
+  | reconcileInstall desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact hr
   | reconcileTeardown desired target h_desired h_actual h_not_desired h_applied h_post =>
       cases h_post
       exact hr
-  | reconcileInstallReplicator desired target h_desired h_target h_missing h_post =>
+  | reconcileInstallReplicator desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact Finset.mem_insert_of_mem hr
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>

@@ -44,6 +44,8 @@ inductive TransitionKind where
   | operatorWrite
   | operatorDelete
   | readFailure
+  | dial
+  | peerDisconnected
   | reconcileInstall
   | reconcileTeardown
   | reconcileInstallReplicator
@@ -57,6 +59,8 @@ def fromString? : String → Option TransitionKind
   | "operatorWrite" => some .operatorWrite
   | "operatorDelete" => some .operatorDelete
   | "readFailure" => some .readFailure
+  | "dial" => some .dial
+  | "peerDisconnected" => some .peerDisconnected
   | "reconcileInstall" => some .reconcileInstall
   | "reconcileTeardown" => some .reconcileTeardown
   | "reconcileInstallReplicator" => some .reconcileInstallReplicator
@@ -68,6 +72,8 @@ def toString : TransitionKind → String
   | .operatorWrite => "operatorWrite"
   | .operatorDelete => "operatorDelete"
   | .readFailure => "readFailure"
+  | .dial => "dial"
+  | .peerDisconnected => "peerDisconnected"
   | .reconcileInstall => "reconcileInstall"
   | .reconcileTeardown => "reconcileTeardown"
   | .reconcileInstallReplicator => "reconcileInstallReplicator"
@@ -89,6 +95,9 @@ def step? : PairingPhase → TransitionKind → Option PairingPhase
   | .converged, .operatorDelete => some .diverged
   | .crashed, .operatorDelete => some .diverged
   | phase, .readFailure => some phase
+  | .diverged, .dial => some .converged
+  | .converged, .peerDisconnected => some .diverged
+  | .diverged, .peerDisconnected => some .diverged
   | .diverged, .reconcileInstall => some .converged
   | .diverged, .reconcileTeardown => some .converged
   | .diverged, .reconcileInstallReplicator => some .converged
