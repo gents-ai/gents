@@ -21,6 +21,13 @@ use crate::watcher::AgentRequest;
 /// API. Used by backends that don't serve `/v1/responses` and by the CLI
 /// integration tests whose mock + assertions are chat-format.
 fn force_chat_completions() -> bool {
+    // defra-agent's own lib unit tests (compiled with `cfg(test)`) boot in-process
+    // agents against Chat Completions mocks, so default to chat there. Integration
+    // tests link defra-agent WITHOUT `cfg(test)`, so they set the env explicitly;
+    // production + the real CLI binary default to the Responses API.
+    if cfg!(test) {
+        return true;
+    }
     matches!(
         std::env::var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS")
             .ok()
