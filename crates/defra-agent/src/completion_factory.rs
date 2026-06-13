@@ -139,6 +139,14 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
 /// object — exactly where the server reads it.
 fn thinking_default_params() -> Option<serde_json::Value> {
     Some(serde_json::json!({
+        // Responses API (our default for OpenAI-compatible + ChatGptCodex):
+        // structured reasoning, controlled by `reasoning.effort`. This is the
+        // first-class, round-trippable reasoning surface. TODO(inference-profile):
+        // thread the effort level (low/medium/high) from behavior config instead
+        // of defaulting to medium.
+        "reasoning": { "effort": "medium" },
+        // Chat Completions fallback (CompletionsClient / vLLM `--reasoning-parser`):
+        // the legacy thinking toggle. Ignored by the Responses endpoint.
         "chat_template_kwargs": { "enable_thinking": true }
     }))
 }

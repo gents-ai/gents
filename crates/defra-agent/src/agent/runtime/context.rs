@@ -128,9 +128,16 @@ impl RuntimeContext {
                     "building OpenAI-compatible completion client for behavior {} against {}",
                     behavior.behavior_id, behavior.backend_endpoint
                 );
-                let client: rig::providers::openai::CompletionsClient<
+                // Default OpenAI-compatible inference to the Responses API:
+                // rig's `openai::Client` defaults `Completion = Capable<ResponsesCompletionModel>`
+                // (vs `CompletionsClient` = Chat Completions). The owned loop already
+                // drives a `ResponsesCompletionModel` today via the ChatGptCodex path
+                // (`build_responses_client`), so this swap reuses that machinery. The
+                // Responses API gives first-class, round-trippable structured reasoning
+                // (`encrypted_content`) instead of the unstandardized chat side-channel.
+                let client: rig::providers::openai::Client<
                     crate::inference_http::SessionTaggingHttpClient,
-                > = rig::providers::openai::CompletionsClient::builder()
+                > = rig::providers::openai::Client::builder()
                     .api_key(&api_key)
                     .base_url(&behavior.backend_endpoint)
                     .http_client(crate::inference_http::SessionTaggingHttpClient::default())
