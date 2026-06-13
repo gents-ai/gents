@@ -191,6 +191,14 @@ pub enum OpenAiCodexTraceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         lifecycle_state: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        agent_did: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        behavior_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_request_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_tool_call_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         input: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
@@ -251,6 +259,14 @@ pub struct LangGraphNode {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
 }
@@ -550,6 +566,10 @@ pub fn adapter_projection_eval_jsonl_records(
                         id,
                         status,
                         lifecycle_state,
+                        agent_did,
+                        behavior_id,
+                        parent_request_id,
+                        parent_tool_call_id,
                         input,
                         timestamp,
                     } => records.push(eval_record(
@@ -561,7 +581,13 @@ pub fn adapter_projection_eval_jsonl_records(
                         EvalRecordFields {
                             input: input.clone(),
                             status: lifecycle_state.clone().or(status.clone()),
-                            metadata: metadata([("timestamp", timestamp.clone())]),
+                            metadata: metadata([
+                                ("timestamp", timestamp.clone()),
+                                ("agent_did", agent_did.clone()),
+                                ("behavior_id", behavior_id.clone()),
+                                ("parent_request_id", parent_request_id.clone()),
+                                ("parent_tool_call_id", parent_tool_call_id.clone()),
+                            ]),
                             ..EvalRecordFields::default()
                         },
                     )),
@@ -675,6 +701,10 @@ pub fn adapter_projection_eval_jsonl_records(
                         metadata: metadata([
                             ("kind", Some(node.kind.clone())),
                             ("request_id", node.request_id.clone()),
+                            ("agent_did", node.agent_did.clone()),
+                            ("behavior_id", node.behavior_id.clone()),
+                            ("parent_request_id", node.parent_request_id.clone()),
+                            ("parent_tool_call_id", node.parent_tool_call_id.clone()),
                         ]),
                         ..EvalRecordFields::default()
                     },
@@ -969,6 +999,10 @@ fn openai_codex_projection_schema() -> Value {
                                 "id": string_schema(),
                                 "status": optional_string_schema(),
                                 "lifecycle_state": optional_string_schema(),
+                                "agent_did": optional_string_schema(),
+                                "behavior_id": optional_string_schema(),
+                                "parent_request_id": optional_string_schema(),
+                                "parent_tool_call_id": optional_string_schema(),
                                 "input": optional_string_schema(),
                                 "timestamp": optional_string_schema()
                             }
@@ -1048,6 +1082,10 @@ fn langgraph_projection_schema() -> Value {
                         "id": string_schema(),
                         "kind": string_schema(),
                         "request_id": optional_string_schema(),
+                        "agent_did": optional_string_schema(),
+                        "behavior_id": optional_string_schema(),
+                        "parent_request_id": optional_string_schema(),
+                        "parent_tool_call_id": optional_string_schema(),
                         "status": optional_string_schema()
                     }
                 }
@@ -1463,6 +1501,10 @@ fn build_openai_codex_run_trace(
                     id: event.request_id.clone(),
                     status: event.status.clone(),
                     lifecycle_state: event.lifecycle_state.clone(),
+                    agent_did: event.agent_did.clone(),
+                    behavior_id: event.behavior_id.clone(),
+                    parent_request_id: event.parent_request_id.clone(),
+                    parent_tool_call_id: event.parent_tool_call_id.clone(),
                     input: timeline_request_input(timeline, event, context),
                     timestamp: event.timestamp.clone(),
                 });
@@ -1541,29 +1583,54 @@ fn build_langgraph_state_history(
     ]);
 
     for event in &timeline.events {
-        let (node_id, kind, request_id, status) = match event {
+        let (
+            node_id,
+            kind,
+            request_id,
+            agent_did,
+            behavior_id,
+            parent_request_id,
+            parent_tool_call_id,
+            status,
+        ) = match event {
             RunTimelineEvent::Request(event) => (
                 format!("request:{}", event.request_id),
                 "request".to_string(),
                 Some(event.request_id.clone()),
+                event.agent_did.clone(),
+                event.behavior_id.clone(),
+                event.parent_request_id.clone(),
+                event.parent_tool_call_id.clone(),
                 event.lifecycle_state.clone().or(event.status.clone()),
             ),
             RunTimelineEvent::Message(event) => (
                 format!("message:{}:{}", event.session_id, event.sequence),
                 "message".to_string(),
                 event.request_id.clone(),
+                None,
+                None,
+                None,
+                None,
                 Some(event.role.clone()),
             ),
             RunTimelineEvent::ToolCall(event) => (
                 format!("tool_call:{}", event.tool_call_id),
                 "tool_call".to_string(),
                 event.request_id.clone(),
+                None,
+                None,
+                None,
+                None,
                 Some(event.status.clone()),
             ),
             RunTimelineEvent::Response(event) => (
                 format!("response:{}", event.request_id),
                 "response".to_string(),
                 Some(event.request_id.clone()),
+                None,
+                None,
+                None,
+                None,
                 event.status.clone(),
             ),
         };
@@ -1573,6 +1640,10 @@ fn build_langgraph_state_history(
                 id: node_id.clone(),
                 kind,
                 request_id,
+                agent_did,
+                behavior_id,
+                parent_request_id,
+                parent_tool_call_id,
                 status,
             });
         }
@@ -1719,7 +1790,7 @@ fn build_multi_agent_task(
                     status: tool.status.clone(),
                     selected_service_id: tool.selected_service_id.clone(),
                     selected_tool_name: tool.selected_tool_name.clone(),
-                    denial_reason: tool.denial_reason.clone(),
+                    denial_reason: redact_option(tool.denial_reason.as_deref(), context),
                     child_request_id: tool.child_request_id.clone(),
                 });
             }
@@ -1944,6 +2015,8 @@ fn redact_training_safe(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
     use crate::run_timeline::{
         build_run_timeline, RunTimelineRows, TimelineMessageRow, TimelineRequestRow,
         TimelineResponseRow, TimelineToolCallRow,
@@ -2011,6 +2084,421 @@ mod tests {
                 &record_value,
                 &format!("{} eval JSONL record {}", kind.id(), record.record_id),
             );
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ProjectionParticipant {
+        agent_did: Option<String>,
+        behavior_id: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ProjectionDelegation {
+        parent_request_id: String,
+        child_request_id: String,
+        parent_tool_call_id: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ProjectionToolCall {
+        tool_call_id: String,
+        tool_name: String,
+        status: String,
+    }
+
+    fn delegated_coherence_timeline() -> RunTimeline {
+        build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-root".to_string(),
+                agent_did: Some("did:defra-agent:coordinator".to_string()),
+                behavior_id: Some("coordinator".to_string()),
+                session_id: Some("session-root".to_string()),
+                content: Some("root private objective".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                created_at: Some("2026-06-05T00:00:00Z".to_string()),
+                ..TimelineRequestRow::default()
+            },
+            requests: vec![TimelineRequestRow {
+                request_id: "req-review".to_string(),
+                agent_did: Some("did:defra-agent:reviewer".to_string()),
+                behavior_id: Some("reviewer".to_string()),
+                session_id: Some("session-review".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                caused_by_parent_request_id: Some("req-root".to_string()),
+                caused_by_parent_tool_call_id: Some("call-delegate".to_string()),
+                created_at: Some("2026-06-05T00:00:03Z".to_string()),
+                ..TimelineRequestRow::default()
+            }],
+            messages: vec![
+                TimelineMessageRow {
+                    doc_id: None,
+                    session_id: "session-root".to_string(),
+                    request_id: Some("req-root".to_string()),
+                    sequence: 1,
+                    role: "assistant".to_string(),
+                    content: "root private assistant note".to_string(),
+                    timestamp: Some("2026-06-05T00:00:01Z".to_string()),
+                },
+                TimelineMessageRow {
+                    doc_id: None,
+                    session_id: "session-review".to_string(),
+                    request_id: Some("req-review".to_string()),
+                    sequence: 1,
+                    role: "assistant".to_string(),
+                    content: "child private assistant note".to_string(),
+                    timestamp: Some("2026-06-05T00:00:03.100Z".to_string()),
+                },
+            ],
+            tool_calls: vec![
+                TimelineToolCallRow {
+                    request_id: Some("req-root".to_string()),
+                    session_id: "session-root".to_string(),
+                    message_sequence: Some(1),
+                    tool_name: "delegate".to_string(),
+                    tool_call_id: "call-delegate".to_string(),
+                    args: r#"{"prompt":"delegate private args"}"#.to_string(),
+                    result: r#"{"summary":"delegate private result"}"#.to_string(),
+                    status: "completed".to_string(),
+                    child_request_id: Some("req-review".to_string()),
+                    started_at: Some("2026-06-05T00:00:02Z".to_string()),
+                    completed_at: Some("2026-06-05T00:00:03Z".to_string()),
+                    ..TimelineToolCallRow::default()
+                },
+                TimelineToolCallRow {
+                    request_id: Some("req-review".to_string()),
+                    session_id: "session-review".to_string(),
+                    message_sequence: Some(1),
+                    tool_name: "bash".to_string(),
+                    tool_call_id: "call-review-check".to_string(),
+                    args: r#"{"cmd":"child private args"}"#.to_string(),
+                    result: "child private result".to_string(),
+                    status: "denied".to_string(),
+                    denial_reason: Some("child private denial reason".to_string()),
+                    selected_service_id: Some("native-shell".to_string()),
+                    selected_tool_name: Some("bash".to_string()),
+                    started_at: Some("2026-06-05T00:00:03.200Z".to_string()),
+                    completed_at: Some("2026-06-05T00:00:03.300Z".to_string()),
+                    ..TimelineToolCallRow::default()
+                },
+            ],
+            responses: vec![
+                TimelineResponseRow {
+                    request_id: "req-review".to_string(),
+                    session_id: Some("session-review".to_string()),
+                    content: Some("child private final".to_string()),
+                    reasoning: Some("child private reasoning".to_string()),
+                    status: Some("completed".to_string()),
+                    completed_at: Some("2026-06-05T00:00:03.500Z".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+                TimelineResponseRow {
+                    request_id: "req-root".to_string(),
+                    session_id: Some("session-root".to_string()),
+                    content: Some("root private final".to_string()),
+                    reasoning: Some("root private reasoning".to_string()),
+                    status: Some("completed".to_string()),
+                    completed_at: Some("2026-06-05T00:00:04Z".to_string()),
+                    ..TimelineResponseRow::default()
+                },
+            ],
+            ..RunTimelineRows::default()
+        })
+    }
+
+    fn build_all_adapter_projections(
+        timeline: &RunTimeline,
+        redaction_mode: ProjectionRedactionMode,
+    ) -> Vec<AdapterProjectionEnvelope> {
+        let context = ProjectionContext {
+            actor_did: Some("did:defra-agent:projection-reader".to_string()),
+            redaction_mode,
+        };
+        [
+            AdapterProjectionKind::OpenAiCodexRunTrace,
+            AdapterProjectionKind::LangGraphStateHistory,
+            AdapterProjectionKind::MultiAgentTask,
+        ]
+        .into_iter()
+        .map(|kind| build_adapter_projection(kind, timeline, &context))
+        .collect()
+    }
+
+    fn projection_participants(
+        envelope: &AdapterProjectionEnvelope,
+    ) -> BTreeSet<ProjectionParticipant> {
+        match &envelope.output {
+            AdapterProjection::OpenAiCodexRunTrace(projection) => projection
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    OpenAiCodexTraceItem::Request {
+                        agent_did,
+                        behavior_id,
+                        ..
+                    } => participant(agent_did.clone(), behavior_id.clone()),
+                    _ => None,
+                })
+                .collect(),
+            AdapterProjection::LangGraphStateHistory(projection) => projection
+                .nodes
+                .iter()
+                .filter(|node| node.kind == "request")
+                .filter_map(|node| participant(node.agent_did.clone(), node.behavior_id.clone()))
+                .collect(),
+            AdapterProjection::MultiAgentTask(projection) => projection
+                .participants
+                .iter()
+                .filter_map(|participant| {
+                    self::participant(
+                        participant.agent_did.clone(),
+                        participant.behavior_id.clone(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn participant(
+        agent_did: Option<String>,
+        behavior_id: Option<String>,
+    ) -> Option<ProjectionParticipant> {
+        if agent_did.is_none() && behavior_id.is_none() {
+            return None;
+        }
+        Some(ProjectionParticipant {
+            agent_did,
+            behavior_id,
+        })
+    }
+
+    fn projection_delegations(
+        envelope: &AdapterProjectionEnvelope,
+    ) -> BTreeSet<ProjectionDelegation> {
+        match &envelope.output {
+            AdapterProjection::OpenAiCodexRunTrace(projection) => projection
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    OpenAiCodexTraceItem::ToolCall {
+                        id,
+                        request_id,
+                        child_run_id,
+                        ..
+                    } => Some(ProjectionDelegation {
+                        parent_request_id: request_id.clone()?,
+                        child_request_id: child_run_id.clone()?,
+                        parent_tool_call_id: Some(id.clone()),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            AdapterProjection::LangGraphStateHistory(projection) => projection
+                .tasks
+                .iter()
+                .filter_map(|task| {
+                    Some(ProjectionDelegation {
+                        parent_request_id: task.request_id.clone()?,
+                        child_request_id: task.child_request_id.clone()?,
+                        parent_tool_call_id: Some(task.id.clone()),
+                    })
+                })
+                .collect(),
+            AdapterProjection::MultiAgentTask(projection) => projection
+                .delegations
+                .iter()
+                .map(|delegation| ProjectionDelegation {
+                    parent_request_id: delegation.parent_request_id.clone(),
+                    child_request_id: delegation.child_request_id.clone(),
+                    parent_tool_call_id: delegation.parent_tool_call_id.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn projection_tool_calls(envelope: &AdapterProjectionEnvelope) -> BTreeSet<ProjectionToolCall> {
+        match &envelope.output {
+            AdapterProjection::OpenAiCodexRunTrace(projection) => projection
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    OpenAiCodexTraceItem::ToolCall {
+                        id, name, status, ..
+                    } => Some(ProjectionToolCall {
+                        tool_call_id: id.clone(),
+                        tool_name: name.clone(),
+                        status: status.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            AdapterProjection::LangGraphStateHistory(projection) => projection
+                .tasks
+                .iter()
+                .map(|task| ProjectionToolCall {
+                    tool_call_id: task.id.clone(),
+                    tool_name: task.name.clone(),
+                    status: task.status.clone(),
+                })
+                .collect(),
+            AdapterProjection::MultiAgentTask(projection) => projection
+                .tool_events
+                .iter()
+                .map(|event| ProjectionToolCall {
+                    tool_call_id: event.id.clone(),
+                    tool_name: event.tool_name.clone(),
+                    status: event.status.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn projection_terminal_status(envelope: &AdapterProjectionEnvelope) -> Option<String> {
+        match &envelope.output {
+            AdapterProjection::OpenAiCodexRunTrace(projection) => projection.status.clone(),
+            AdapterProjection::LangGraphStateHistory(projection) => projection
+                .values
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                .or_else(|| projection.values.get("status").and_then(Value::as_str))
+                .map(ToOwned::to_owned),
+            AdapterProjection::MultiAgentTask(projection) => projection.status.clone(),
+        }
+    }
+
+    #[test]
+    fn adapter_projections_are_coherent_for_delegated_timeline() {
+        let timeline = delegated_coherence_timeline();
+        let full = build_all_adapter_projections(&timeline, ProjectionRedactionMode::Full);
+        let expected_participants = BTreeSet::from([
+            ProjectionParticipant {
+                agent_did: Some("did:defra-agent:coordinator".to_string()),
+                behavior_id: Some("coordinator".to_string()),
+            },
+            ProjectionParticipant {
+                agent_did: Some("did:defra-agent:reviewer".to_string()),
+                behavior_id: Some("reviewer".to_string()),
+            },
+        ]);
+        let expected_delegations = BTreeSet::from([ProjectionDelegation {
+            parent_request_id: "req-root".to_string(),
+            child_request_id: "req-review".to_string(),
+            parent_tool_call_id: Some("call-delegate".to_string()),
+        }]);
+        let expected_tool_calls = BTreeSet::from([
+            ProjectionToolCall {
+                tool_call_id: "call-delegate".to_string(),
+                tool_name: "delegate".to_string(),
+                status: "completed".to_string(),
+            },
+            ProjectionToolCall {
+                tool_call_id: "call-review-check".to_string(),
+                tool_name: "bash".to_string(),
+                status: "denied".to_string(),
+            },
+        ]);
+
+        for envelope in &full {
+            validate_adapter_projection_contract(envelope).unwrap();
+            assert_adapter_projection_matches_json_schema(envelope);
+            assert_eq!(
+                projection_participants(envelope),
+                expected_participants,
+                "{} participant identities drifted from the shared timeline",
+                envelope.projection_id
+            );
+            assert_eq!(
+                projection_delegations(envelope),
+                expected_delegations,
+                "{} delegation shape drifted from the shared timeline",
+                envelope.projection_id
+            );
+            assert_eq!(
+                projection_tool_calls(envelope),
+                expected_tool_calls,
+                "{} tool calls drifted from the shared timeline",
+                envelope.projection_id
+            );
+            assert_eq!(
+                projection_terminal_status(envelope).as_deref(),
+                Some("completed"),
+                "{} terminal status drifted from the shared timeline",
+                envelope.projection_id
+            );
+        }
+
+        let sensitive_literals = [
+            "root private objective",
+            "root private assistant note",
+            "delegate private args",
+            "delegate private result",
+            "child private assistant note",
+            "child private args",
+            "child private result",
+            "child private denial reason",
+            "child private final",
+            "child private reasoning",
+            "root private final",
+            "root private reasoning",
+        ];
+        let full_serialized = serde_json::to_string(&full).unwrap();
+        for literal in sensitive_literals {
+            assert!(
+                full_serialized.contains(literal),
+                "full projections should retain sensitive literal {literal:?}"
+            );
+        }
+
+        for (mode, marker) in [
+            (
+                ProjectionRedactionMode::TrainingSafe,
+                "[training_safe_redacted]",
+            ),
+            (ProjectionRedactionMode::Public, "[redacted]"),
+        ] {
+            let redacted = build_all_adapter_projections(&timeline, mode);
+            for envelope in &redacted {
+                validate_adapter_projection_contract(envelope).unwrap();
+                assert_adapter_projection_matches_json_schema(envelope);
+                assert_eq!(
+                    projection_participants(envelope),
+                    expected_participants,
+                    "{} participant identities changed under {mode:?} redaction",
+                    envelope.projection_id
+                );
+                assert_eq!(
+                    projection_delegations(envelope),
+                    expected_delegations,
+                    "{} delegation shape changed under {mode:?} redaction",
+                    envelope.projection_id
+                );
+                assert_eq!(
+                    projection_tool_calls(envelope),
+                    expected_tool_calls,
+                    "{} tool calls changed under {mode:?} redaction",
+                    envelope.projection_id
+                );
+                assert_eq!(
+                    projection_terminal_status(envelope).as_deref(),
+                    Some("completed"),
+                    "{} terminal status changed under {mode:?} redaction",
+                    envelope.projection_id
+                );
+            }
+
+            let serialized = serde_json::to_string(&redacted).unwrap();
+            assert!(
+                serialized.contains(marker),
+                "{mode:?} projections should carry redaction markers"
+            );
+            for literal in sensitive_literals {
+                assert!(
+                    !serialized.contains(literal),
+                    "{mode:?} projections leaked sensitive literal {literal:?}"
+                );
+            }
         }
     }
 

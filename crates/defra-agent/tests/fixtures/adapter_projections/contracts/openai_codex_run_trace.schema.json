@@ -24,6 +24,26 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "agent_did": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "behavior_id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "id": {
                         "type": "string"
                       },
@@ -38,6 +58,26 @@
                         ]
                       },
                       "lifecycle_state": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "parent_request_id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "parent_tool_call_id": {
                         "anyOf": [
                           {
                             "type": "string"
