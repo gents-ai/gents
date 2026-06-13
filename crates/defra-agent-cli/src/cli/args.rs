@@ -1768,41 +1768,18 @@ pub(crate) enum P2pCommand {
     },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
-    #[command(about = "Create a shareable P2P pairing invite token")]
-    Invite(P2pInviteArgs),
-    #[command(about = "Accept a P2P pairing invite token")]
-    Join(P2pJoinArgs),
-    #[command(about = "Manage desired out-of-band P2P pairings")]
+    #[command(
+        about = "Manage declarative P2P pairings (the runtime reconciles them)",
+        after_help = "\
+Pairings are declarative: every subcommand here writes or reads \
+PeerPairingDesired documents, and the running runtime reconciles live P2P \
+state toward them. The imperative `p2p connect/collections/replicators` \
+commands are the low-level surgery layer for non-paired topologies."
+    )]
     Pairings {
         #[command(subcommand)]
         command: P2pPairingsCommand,
     },
-    #[command(
-        about = "Remove a desired out-of-band P2P pairing",
-        hide = true,
-        after_help = "\
-Removes the PeerPairingDesired row for --peer. The runtime reconciler tears \
-down only wiring it previously applied for that pairing. For immediate manual \
-live wiring changes, use p2p collections/replicators commands against the \
-running server."
-    )]
-    Unpair(P2pPairingRefArgs),
-    #[command(
-        about = "Create a desired P2P pairing row for a peer address",
-        after_help = "\
-This command writes PeerPairingDesired for the running runtime's pairing \
-reconciler. It does not perform immediate live P2P mutations itself.\n\
-\n\
-Pairing is directional. For bidirectional delegation, run `p2p pair` on BOTH \
-servers, each with --peer set to the other's listen address, or use \
-`p2p invite` / `p2p join` to exchange DID-carrying pairing tokens.\n\
-\n\
-NOTE: replication alone does NOT enable cross-deployment delegation. \
-Cross-deployment delegation is off by default and DEFERRED — to opt in, \
-set `subagent_allow_cross_deployment: true` on the relevant behaviors' tool \
-selections on BOTH the orchestrator and the target server (trusted-fleet only)."
-    )]
-    Pair(P2pPairArgs),
 }
 
 #[derive(clap::Args)]
@@ -1861,23 +1838,42 @@ pub(crate) enum P2pDocumentsCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum P2pPairingsCommand {
-    #[command(about = "List desired out-of-band P2P pairings")]
+    #[command(about = "List desired pairings annotated with live health")]
     List(P2pPairingsListArgs),
     #[command(
-        about = "Create or update a desired out-of-band P2P pairing",
+        about = "Create or update a desired pairing row (the runtime reconciles it)",
         after_help = "\
-Writes PeerPairingDesired for runtime pairing reconcile. A running \
-defra-agent runtime applies desired rows on its pairing sweep. Use \
-`defra-agent p2p pair --peer <multiaddr>` to apply live P2P wiring \
-immediately."
+Writes a PeerPairingDesired row. A running defra-agent runtime reads desired \
+rows on its pairing sweep and reconciles live P2P state toward them — this \
+command never mutates live wiring itself.\n\
+\n\
+--did (the expected remote agent DID) is required: the DID is the permission \
+and audit boundary, so a pairing always names who it trusts. If you do not \
+know the remote DID, use `p2p pairings invite` / `p2p pairings join`, which \
+carry it for you.\n\
+\n\
+--peer may be omitted when a --address is a shareable ticket or multiaddr; the \
+peer id is derived from it.\n\
+\n\
+Pairing is directional. For bidirectional delegation, create a row on BOTH \
+servers, each naming the other.\n\
+\n\
+NOTE: replication alone does NOT enable cross-deployment delegation. That is \
+off by default and DEFERRED — opt in with `subagent_allow_cross_deployment: \
+true` on the relevant behaviors' tool selections on BOTH servers \
+(trusted-fleet only)."
     )]
     Set(P2pPairingSetArgs),
     #[command(
         name = "rm",
-        about = "Remove a desired out-of-band P2P pairing",
-        aliases = ["remove", "unpair"]
+        about = "Remove a desired pairing row (runtime tears down only what it applied)",
+        alias = "unpair"
     )]
     Remove(P2pPairingRefArgs),
+    #[command(about = "Create a shareable, DID-carrying pairing invite token")]
+    Invite(P2pInviteArgs),
+    #[command(about = "Accept a pairing invite token and write a desired row")]
+    Join(P2pJoinArgs),
 }
 
 #[derive(clap::Args)]
@@ -1886,14 +1882,16 @@ pub(crate) struct P2pPairingSetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    /// Remote peer ID. Optional when a --address is a shareable ticket or
+    /// multiaddr the peer id can be derived from.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
-    pub(crate) peer_id: String,
-    /// Agent DID expected for the remote peer.
+    pub(crate) peer_id: Option<String>,
+    /// Agent DID expected for the remote peer. Required: the DID is the trust boundary.
     #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
     pub(crate) agent_did: String,
-    /// Replicator multiaddr to install during reconcile. Repeat for multiple addresses.
-    #[arg(long = "address", value_name = "MULTIADDR")]
+    /// Replicator address (shareable ticket or multiaddr) to install during
+    /// reconcile. Repeat for multiple addresses.
+    #[arg(long = "address", value_name = "ADDRESS")]
     pub(crate) addresses: Vec<String>,
     /// Collection name to include in the desired pairing. Repeat or combine with --profile.
     #[arg(long = "collection", value_name = "COLLECTION")]
@@ -1901,6 +1899,12 @@ pub(crate) struct P2pPairingSetArgs {
     /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Wait for the runtime to observe the peer as connected.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
+    #[arg(long, default_value = "30s")]
+    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]
@@ -2013,31 +2017,6 @@ pub(crate) struct P2pReplicatorRemoveArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pPairArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Multiaddr of the remote peer (e.g. /ip4/1.2.3.4/tcp/4001/p2p/<peer-id>)
-    #[arg(long)]
-    pub(crate) peer: String,
-    /// Collection profile to subscribe and replicate (default: chat-requests)
-    #[arg(
-        long = "profile",
-        value_enum,
-        value_name = "PROFILE",
-        default_value = "chat-requests"
-    )]
-    pub(crate) profile: P2pCollectionProfileArg,
-    /// Wait for the runtime to observe the peer as connected.
-    #[arg(long, default_value_t = false)]
-    pub(crate) wait: bool,
-    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
-    #[arg(long, default_value = "30s")]
-    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]
@@ -2711,8 +2690,8 @@ mod tests {
     fn deprecated_spellings_still_parse() {
         for argv in [
             vec!["defra-agent", "config", "task", "list"],
-            vec!["defra-agent", "p2p", "unpair", "--peer", "p1"],
             vec!["defra-agent", "p2p", "pairings", "rm", "--peer", "p1"],
+            vec!["defra-agent", "p2p", "pairings", "unpair", "--peer", "p1"],
             vec!["defra-agent", "show", "request", "req-1"],
         ] {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
@@ -2741,9 +2720,6 @@ mod tests {
     fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
         match path {
             ["config", "task"] => vec!["list".to_string()],
-            ["p2p", "unpair"] | ["p2p", "pairings", "remove"] => {
-                vec!["--peer".to_string(), "p1".to_string()]
-            }
             ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
             _ => panic!("no parse fixture for deprecated path: {path:?}"),
         }

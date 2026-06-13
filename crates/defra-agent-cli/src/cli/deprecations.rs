@@ -1,7 +1,5 @@
 pub(crate) const DEPRECATED: &[(&[&str], &str)] = &[
     (&["config", "task"], "task"),
-    (&["p2p", "unpair"], "p2p pairings rm"),
-    (&["p2p", "pairings", "remove"], "p2p pairings rm"),
     (&["show", "request"], "request show"),
     (&["show", "response"], "response show"),
 ];
@@ -134,27 +132,19 @@ mod tests {
     }
 
     #[test]
-    fn p2p_alias_paths_warn() {
-        assert_eq!(
-            deprecation_warning(&argv(&["defra-agent", "p2p", "unpair", "--peer", "peer-1"])),
-            Some(
-                "warning: `defra-agent p2p unpair` is deprecated; use `defra-agent p2p pairings rm`"
-                    .to_string()
-            )
-        );
+    fn pairings_alias_paths_do_not_warn() {
+        // `p2p pairings unpair` is a blessed alias of `rm`, not a deprecated
+        // spelling — it must parse silently.
         assert_eq!(
             deprecation_warning(&argv(&[
                 "defra-agent",
                 "p2p",
                 "pairings",
-                "remove",
+                "unpair",
                 "--peer",
                 "peer-1",
             ])),
-            Some(
-                "warning: `defra-agent p2p pairings remove` is deprecated; use `defra-agent p2p pairings rm`"
-                    .to_string()
-            )
+            None
         );
     }
 

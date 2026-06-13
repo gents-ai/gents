@@ -74,12 +74,16 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
 }
 
 pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
-    let peer_id = required_trimmed(&args.peer_id, "--peer")?;
     let agent_did = required_trimmed(&args.agent_did, "--did")?;
     let addresses = expand_nonempty_values(&args.addresses, "--address")?;
+    let peer_id = resolve_set_peer_id(args.peer_id.as_deref(), &addresses)?;
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    if collections.is_empty() {
+        anyhow::bail!("provide at least one --collection or --profile");
+    }
     let profiles = pairing_profile_ids(&args.profiles);
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let doc_id = write_pairing_desired(
@@ -93,7 +97,14 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     )
     .await?;
 
-    print_json(&json!({
+    let p2p = if args.wait {
+        let timeout = crate::request_helpers::parse_duration_suffix(&args.timeout)?;
+        Some(wait_for_pairing_connected(args.home.as_deref(), &graphql, &peer_id, timeout).await?)
+    } else {
+        None
+    };
+
+    let mut output = json!({
         "status": "pairing_set",
         "home": home_dir,
         "access_mode": access.mode(),
@@ -103,8 +114,30 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         "replicator_addresses": addresses,
         "profiles": profiles,
         "doc_id": doc_id,
-    }))?;
+        "waited": args.wait,
+        "note": "Desired pairing written. The running runtime applies P2P wiring on its pairing sweep.",
+    });
+    if let Some(p2p) = p2p {
+        output["p2p"] = p2p;
+    }
+    print_json(&output)?;
     Ok(())
+}
+
+/// Resolve the pairing peer id: explicit `--peer`, else derived from the first
+/// shareable `--address` (ticket or multiaddr).
+fn resolve_set_peer_id(peer: Option<&str>, addresses: &[String]) -> Result<String> {
+    if let Some(peer) = peer.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(peer.to_string());
+    }
+    for address in addresses {
+        if let Ok((peer_id, _)) = p2p::iroh::parse_public_peer_addr(address.trim()) {
+            return Ok(peer_id.to_string());
+        }
+    }
+    anyhow::bail!(
+        "provide --peer, or a --address that is a shareable ticket or multiaddr to derive it from"
+    )
 }
 
 pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {

@@ -72,7 +72,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     if let Some(reciprocal) = reciprocal {
         output["reciprocal_token"] = Value::String(reciprocal.clone());
         output["reciprocal_join_command"] =
-            Value::String(format!("defra-agent p2p join {reciprocal}"));
+            Value::String(format!("defra-agent p2p pairings join {reciprocal}"));
     }
     if let Some(p2p) = p2p {
         output["p2p"] = p2p;

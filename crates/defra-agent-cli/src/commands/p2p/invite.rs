@@ -70,7 +70,7 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "did": token.did,
         "profiles": token.profiles,
         "ticket": token.ticket,
-        "join_command": format!("defra-agent p2p join {encoded}"),
+        "join_command": format!("defra-agent p2p pairings join {encoded}"),
     }))?;
     Ok(())
 }

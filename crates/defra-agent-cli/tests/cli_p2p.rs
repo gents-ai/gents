@@ -80,7 +80,7 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     assert!(table.contains("SUBSCRIBED"));
     assert!(table.contains("REPLICATING"));
 
-    let remove = run_cli_json(&home, &["p2p", "unpair", "--peer", "peer-one"])?;
+    let remove = run_cli_json(&home, &["p2p", "pairings", "unpair", "--peer", "peer-one"])?;
     assert_eq!(
         remove.get("status").and_then(Value::as_str),
         Some("pairing_removed")
@@ -276,7 +276,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_pair_writes_desired_row_for_runtime_reconcile() -> Result<()> {
+async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_a = tempdir.path().join("parent-agent");
     let home_b = tempdir.path().join("child-agent");
@@ -367,15 +367,19 @@ async fn p2p_pair_writes_desired_row_for_runtime_reconcile() -> Result<()> {
         .ok_or_else(|| {
             anyhow!("Parent readiness JSON missing P2P listen address: {readiness_a}")
         })?;
-    // Pair child -> parent by writing PeerPairingDesired. The command itself
-    // does not perform immediate live P2P mutations; the runtime reconciler
-    // consumes the row on its sweep.
+    // Pair child -> parent by writing PeerPairingDesired with `pairings set`.
+    // --peer is omitted to exercise peer-id derivation from the shareable
+    // --address. The command never mutates live P2P state; the runtime
+    // reconciler consumes the row on its sweep.
     let pair_b = run_cli_json(
         &home_b,
         &[
             "p2p",
-            "pair",
-            "--peer",
+            "pairings",
+            "set",
+            "--did",
+            agent_did_a.as_str(),
+            "--address",
             peer_addr_a,
             "--profile",
             "chat-requests",
@@ -384,27 +388,34 @@ async fn p2p_pair_writes_desired_row_for_runtime_reconcile() -> Result<()> {
     assert_eq!(
         pair_b.get("status").and_then(Value::as_str),
         Some("pairing_set"),
-        "child pair status: {pair_b}"
+        "child pairings set status: {pair_b}"
     );
     assert_eq!(
         pair_b.get("peer_id").and_then(Value::as_str),
-        Some(peer_id_a)
+        Some(peer_id_a),
+        "peer id should be derived from the shareable address: {pair_b}"
     );
-    assert!(pair_b.get("agent_did").is_some_and(Value::is_null));
+    assert_eq!(
+        pair_b.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
     assert!(
         pair_b
             .get("collections")
             .and_then(Value::as_array)
             .is_some_and(|rows| rows.iter().any(|r| r.as_str() == Some("AgentRequest"))),
-        "pair output missing AgentRequest in collections: {pair_b}"
+        "pairings set output missing AgentRequest in collections: {pair_b}"
     );
     assert!(
         pair_b.get("note").and_then(Value::as_str).is_some(),
-        "pair output missing runtime reconcile note: {pair_b}"
+        "pairings set output missing runtime reconcile note: {pair_b}"
     );
 
     let row = peer_pairing_row(&graphql_b, peer_id_a).await?;
-    assert_eq!(row.get("agent_did"), Some(&Value::Null));
+    assert_eq!(
+        row.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
     assert!(row
         .get("replicator_addresses")
         .and_then(Value::as_array)
@@ -512,7 +523,10 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("B readiness JSON missing p2p_peer_id: {readiness_b}"))?;
 
-    let invite_a = run_cli_json(&home_a, &["p2p", "invite", "--profile", "chat-requests"])?;
+    let invite_a = run_cli_json(
+        &home_a,
+        &["p2p", "pairings", "invite", "--profile", "chat-requests"],
+    )?;
     assert_eq!(
         invite_a.get("status").and_then(Value::as_str),
         Some("invite_created")
@@ -530,7 +544,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("invite A missing token: {invite_a}"))?;
 
-    let join_b = run_cli_json(&home_b, &["p2p", "join", token_a])?;
+    let join_b = run_cli_json(&home_b, &["p2p", "pairings", "join", token_a])?;
     assert_eq!(
         join_b.get("status").and_then(Value::as_str),
         Some("pairing_joined"),
@@ -549,7 +563,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("join B missing reciprocal token: {join_b}"))?;
 
-    let join_a = run_cli_json(&home_a, &["p2p", "join", reciprocal])?;
+    let join_a = run_cli_json(&home_a, &["p2p", "pairings", "join", reciprocal])?;
     assert_eq!(
         join_a.get("status").and_then(Value::as_str),
         Some("pairing_joined"),
