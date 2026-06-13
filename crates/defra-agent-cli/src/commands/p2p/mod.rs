@@ -4,6 +4,7 @@ mod connect;
 mod documents;
 mod invite;
 mod join;
+mod network;
 mod output;
 mod pairings;
 mod replicators;
@@ -12,8 +13,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    P2pAdminCommand, P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pPairingsCommand,
-    P2pReplicatorsCommand,
+    P2pAdminCommand, P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pNetworkCommand,
+    P2pPairingsCommand, P2pReplicatorsCommand,
 };
 
 pub(crate) use output::{flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status};
@@ -29,6 +30,11 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pPairingsCommand::Remove(args) => pairings::p2p_pairings_remove(args).await,
             P2pPairingsCommand::Invite(args) => invite::p2p_invite(args).await,
             P2pPairingsCommand::Join(args) => join::p2p_join(args).await,
+        },
+        P2pCommand::Network { command } => match command {
+            P2pNetworkCommand::Register(args) => network::p2p_network_register(args).await,
+            P2pNetworkCommand::List(args) => network::p2p_network_list(args).await,
+            P2pNetworkCommand::Rm(args) => network::p2p_network_rm(args).await,
         },
         P2pCommand::Admin { command } => match command {
             P2pAdminCommand::Connect(args) => connect::p2p_connect(args).await,

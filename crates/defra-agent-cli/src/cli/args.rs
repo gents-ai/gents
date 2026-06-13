@@ -1765,6 +1765,21 @@ diagnostics, break-glass repair, and non-paired topologies."
         command: P2pPairingsCommand,
     },
     #[command(
+        about = "Register into and inspect the peer discovery registry",
+        after_help = "\
+The peer registry (PeerRegistry collection) is the service-discovery layer: \
+nodes self-register here, peers replicate the collection, and the discovery \
+reconciler materializes registry-owned PeerPairingDesired rows for live peers.\n\
+\n\
+`p2p network register` — write this node's row (idempotent / upsert).\n\
+`p2p network list`     — read all PeerRegistry rows with liveness and pairing annotations.\n\
+`p2p network rm`       — deregister this node (delete its PeerRegistry row)."
+    )]
+    Network {
+        #[command(subcommand)]
+        command: P2pNetworkCommand,
+    },
+    #[command(
         about = "Low-level live P2P admin (escape hatch — prefer `p2p pairings`)",
         after_help = "\
 These commands mutate live P2P state on the running runtime directly, without \
@@ -1778,6 +1793,49 @@ the reconciler is the suspect component, and intentionally ad-hoc topologies \
         #[command(subcommand)]
         command: P2pAdminCommand,
     },
+}
+
+/// Subcommands for `p2p network` — the peer-registry front door.
+#[derive(Subcommand)]
+pub(crate) enum P2pNetworkCommand {
+    #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
+    Register(P2pNetworkRegisterArgs),
+    #[command(about = "List PeerRegistry rows with liveness and pairing annotations")]
+    List(P2pNetworkListArgs),
+    #[command(
+        name = "rm",
+        about = "Deregister this node from the peer discovery registry",
+        alias = "deregister"
+    )]
+    Rm(P2pAccessArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pNetworkRegisterArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Human-readable display name for this node in the registry.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) display_name: Option<String>,
+    /// Collection profile to advertise (repeatable). Maps to the same profile
+    /// enum as `p2p pairings set --profile`.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Network / fleet id. Defaults to "default".
+    #[arg(long = "network", value_name = "NETWORK_ID")]
+    pub(crate) network_id: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pNetworkListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
 }
 
 /// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
