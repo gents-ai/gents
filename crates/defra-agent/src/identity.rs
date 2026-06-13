@@ -516,12 +516,34 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 }
 
 fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
-    known_public_keys()
+    // Fast path: the process-local registry (populated when a KeyIdentity or
+    // RegisteredIdentity is constructed in this process).
+    if let Some(key) = known_public_keys()
         .read()
         .expect("known public keys lock poisoned")
         .get(did)
         .cloned()
-        .ok_or_else(|| anyhow!("no public key registered for DID {did}"))
+    {
+        return Ok(key);
+    }
+
+    // Fallback: `did:key` DIDs are self-describing — the public key is encoded
+    // in the DID string itself. This makes cross-node verification possible
+    // (e.g. node B verifying a signed invite from node A) without requiring A's
+    // key to be pre-registered in B's process.
+    if did.starts_with("did:key:") {
+        let (key_type, bytes) = crypto::parse_did_key(did)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("parsing did:key public key from DID {did}"))?;
+        tracing::trace!(
+            did,
+            ?key_type,
+            "resolved public key from did:key (not in local registry)"
+        );
+        return Ok(KnownPublicKey { key_type, bytes });
+    }
+
+    anyhow::bail!("no public key registered for DID {did}")
 }
 
 fn verify_with_public_key(
