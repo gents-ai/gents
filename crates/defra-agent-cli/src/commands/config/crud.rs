@@ -12,10 +12,9 @@ use crate::request_helpers::resolve_dual_id;
 use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, print_json, resolve_config_access, CONFIG_EXPORT_FORMAT,
-    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS,
-    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
-    EXPORT_PROJECTION_ACP_BINDING_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TASK_FIELDS,
-    EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
+    EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
+    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 #[derive(Clone, Copy)]
@@ -115,7 +114,14 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true)
         .await
         .with_context(|| format!("resolving access for config {} rm", spec.noun))?;
-    let live = targeted_live_manifest(&access, spec, &id).await?;
+    let live = live_manifest_for_delete(
+        &access,
+        spec,
+        &id,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+    )
+    .await?;
     let mut desired = live.clone();
     remove_target(&mut desired, spec.collection, &id);
 
@@ -173,120 +179,25 @@ fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<
     )
 }
 
-async fn targeted_live_manifest(
+async fn live_manifest_for_delete(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     id: &str,
+    home: Option<&std::path::Path>,
+    graphql: Option<&str>,
 ) -> Result<desired_state::DesiredStateManifest> {
     let target = load_one(access, spec, id).await?;
-    let mut bundle = empty_bundle(access.mode());
-    bundle.agent_principal = Some(synthetic_principal());
+    let agent_did =
+        super::binding::resolve_target_agent_did(None, None, home, graphql, Some(access)).await?;
+    let mut bundle = empty_bundle(access.mode(), &agent_did);
+    bundle.agent_principal = Some(synthetic_principal(&agent_did));
     push_doc(&mut bundle, spec.collection, target);
-
-    match spec.collection {
-        Collection::AgentBehavior => {
-            if let Some(principal) = query_one_by_field(
-                access,
-                Collection::AgentPrincipal,
-                EXPORT_AGENT_PRINCIPAL_FIELDS,
-                "default_behavior_id",
-                id,
-            )
-            .await?
-            {
-                bundle.agent_principal = Some(principal);
-            }
-            bundle.tasks = query_collection(
-                access,
-                ConfigDocumentSpec {
-                    noun: "task",
-                    collection: Collection::Task,
-                    fields: EXPORT_TASK_FIELDS,
-                },
-                Some("behavior_id"),
-                Some(id),
-            )
-            .await?;
-            bundle.projection_acp_bindings = query_collection(
-                access,
-                ConfigDocumentSpec {
-                    noun: "projection ACP binding",
-                    collection: Collection::ProjectionAcpBinding,
-                    fields: EXPORT_PROJECTION_ACP_BINDING_FIELDS,
-                },
-                Some("behavior_id"),
-                Some(id),
-            )
-            .await?;
-        }
-        Collection::InferenceBackend => {
-            bundle.agent_behaviors = query_agent_behaviors_by_ref(access, "backend_id", id).await?;
-        }
-        Collection::InferenceProfile => {
-            bundle.agent_behaviors =
-                query_agent_behaviors_by_ref(access, "inference_profile_id", id).await?;
-        }
-        Collection::ToolSelection => {
-            bundle.agent_behaviors =
-                query_agent_behaviors_by_ref(access, "tool_selection_id", id).await?;
-        }
-        _ => {}
-    }
-
     normalize_bundle_for_manifest(&mut bundle);
-    desired_state::manifest_from_export_bundle(&bundle)
-}
-
-async fn query_agent_behaviors_by_ref(
-    access: &ConfigAccess,
-    field: &str,
-    value: &str,
-) -> Result<Vec<Value>> {
-    query_collection(
-        access,
-        ConfigDocumentSpec {
-            noun: "behavior",
-            collection: Collection::AgentBehavior,
-            fields: EXPORT_AGENT_BEHAVIOR_FIELDS,
-        },
-        Some(field),
-        Some(value),
-    )
-    .await
-}
-
-async fn load_one(access: &ConfigAccess, spec: ConfigDocumentSpec, id: &str) -> Result<Value> {
-    let rows =
-        query_collection(access, spec, Some(spec.collection.unique_field()), Some(id)).await?;
-    rows.into_iter().next().ok_or_else(|| {
-        anyhow::anyhow!(
-            "not found: no {} document with {} {}",
-            spec.collection.graphql_type(),
-            spec.collection.unique_field(),
-            id
-        )
-    })
-}
-
-async fn query_one_by_field(
-    access: &ConfigAccess,
-    collection: Collection,
-    fields: &'static str,
-    filter_field: &str,
-    value: &str,
-) -> Result<Option<Value>> {
-    let rows = query_collection(
-        access,
-        ConfigDocumentSpec {
-            noun: collection.graphql_type(),
-            collection,
-            fields,
-        },
-        Some(filter_field),
-        Some(value),
-    )
-    .await?;
-    Ok(rows.into_iter().next())
+    let desired_with_target = desired_state::manifest_from_export_bundle(&bundle)?;
+    let mut live_bundle =
+        crate::build_desired_state_live_bundle(access, &desired_with_target).await?;
+    normalize_bundle_for_manifest(&mut live_bundle);
+    desired_state::manifest_from_export_bundle(&live_bundle)
 }
 
 async fn query_collection(
@@ -316,10 +227,23 @@ async fn query_collection(
     graphql_rows(access, spec.collection.graphql_type(), &query).await
 }
 
-fn empty_bundle(access_mode: &str) -> ConfigExportBundle {
+async fn load_one(access: &ConfigAccess, spec: ConfigDocumentSpec, id: &str) -> Result<Value> {
+    let rows =
+        query_collection(access, spec, Some(spec.collection.unique_field()), Some(id)).await?;
+    rows.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "not found: no {} document with {} {}",
+            spec.collection.graphql_type(),
+            spec.collection.unique_field(),
+            id
+        )
+    })
+}
+
+fn empty_bundle(access_mode: &str, agent_did: &str) -> ConfigExportBundle {
     ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
-        agent_did: "did:defra-agent:config-crud".to_string(),
+        agent_did: agent_did.to_string(),
         exported_at: chrono::Utc::now().to_rfc3339(),
         access_mode: access_mode.to_string(),
         agent_principal: None,
@@ -336,9 +260,9 @@ fn empty_bundle(access_mode: &str) -> ConfigExportBundle {
     }
 }
 
-fn synthetic_principal() -> Value {
+fn synthetic_principal(agent_did: &str) -> Value {
     json!({
-        "agent_did": "did:defra-agent:config-crud",
+        "agent_did": agent_did,
         "display_name": null,
         "default_behavior_id": null,
         "enabled": true,
