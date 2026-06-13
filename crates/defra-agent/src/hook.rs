@@ -379,7 +379,7 @@ impl DefraSessionHook {
         agent_did: &str,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
-        session::ensure_session(&node, session_id, agent_name).await?;
+        session::ensure_session(&node, session_id, agent_name, agent_did).await?;
         let max_seq = session::max_sequence(&node, session_id).await?;
 
         Ok(Self {

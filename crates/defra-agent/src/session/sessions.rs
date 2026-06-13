@@ -2,9 +2,13 @@ use super::query::{load_session_document, load_session_document_optional};
 use super::retry::{execute_query_timed, log_mutation_timing, retry_operation};
 use super::*;
 
-pub async fn create_session(node: &EmbeddedNode, agent_name: &str) -> Result<String> {
+pub async fn create_session(
+    node: &EmbeddedNode,
+    agent_name: &str,
+    agent_did: &str,
+) -> Result<String> {
     let session_id = uuid::Uuid::new_v4().to_string();
-    create_session_with_id(node, &session_id, agent_name).await?;
+    create_session_with_id(node, &session_id, agent_name, agent_did).await?;
     Ok(session_id)
 }
 
@@ -12,18 +16,21 @@ pub(crate) async fn create_session_with_id(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
+    agent_did: &str,
 ) -> Result<()> {
-    create_session_with_behavior_id(node, session_id, agent_name, agent_name).await
+    create_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
 }
 
 pub(crate) async fn create_session_with_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
+    let escaped_agent_did = escape_graphql_string(agent_did);
 
     let created = retry_operation("create_session", || async {
         let now = chrono::Utc::now().to_rfc3339();
@@ -38,6 +45,8 @@ pub(crate) async fn create_session_with_behavior_id(
         let escaped_started = escape_graphql_string(&started);
         let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
 
+        // `agent_did` is the immutable scope key: written only in the `add`
+        // branch (create), never rewritten on update.
         let mutation = format!(
             r#"mutation {{
                 upsert_AgentSession(
@@ -45,6 +54,7 @@ pub(crate) async fn create_session_with_behavior_id(
                     add: {{
                         session_id: "{escaped_session_id}",
                         agent_name: "{escaped_agent_name}",
+                        agent_did: "{escaped_agent_did}",
                         behavior_id: "{escaped_behavior_id}",
                         started: "{escaped_started}",
                         status: "active"
@@ -90,17 +100,19 @@ pub(crate) async fn ensure_session(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
+    agent_did: &str,
 ) -> Result<()> {
-    ensure_session_with_behavior_id(node, session_id, agent_name, agent_name).await
+    ensure_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
 }
 
 pub(crate) async fn ensure_session_with_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<()> {
-    create_session_with_behavior_id(node, session_id, agent_name, behavior_id).await
+    create_session_with_behavior_id(node, session_id, agent_name, agent_did, behavior_id).await
 }
 
 pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {

@@ -107,6 +107,7 @@ impl DefraSessionHook {
             self.node.clone(),
             request_id.clone(),
             session_id.clone(),
+            self.agent_did.clone(),
             background_tool_call_id.clone(),
             seq,
             target_tool_name.clone(),

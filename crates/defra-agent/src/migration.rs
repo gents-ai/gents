@@ -128,6 +128,27 @@ const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
     {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
 ]"#;
 
+// Kind 11 == NillableString. The `agent_did` scope key denormalizes the owning
+// agent onto the four conversation collections that key on `session_id` and
+// historically lacked it (AgentMessage, AgentToolCall, AgentSession,
+// CompactionEntry). The field is `@immutable` in the SDL: it is logically
+// write-once (stamped from the session owner at create), which lets filtered
+// replication (#1033) scope each collection to one agent's DID. Adding a brand-
+// new field has no prior values to violate immutability, so this is an ordinary
+// additive patch. `@immutable` enforcement is upstream's (#1033); we declare it.
+const ADD_AGENT_MESSAGE_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+const ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+const ADD_AGENT_SESSION_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+const ADD_COMPACTION_ENTRY_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -852,6 +873,62 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
     Ok(())
 }
 
+/// Idempotent migration adding the `agent_did` immutable scope key to the four
+/// conversation collections that key on `session_id` and historically lacked it
+/// (AgentMessage, AgentToolCall, AgentSession, CompactionEntry). The other four
+/// conversation collections (AgentRequest, AgentResponse, AgentToolResult,
+/// AgentConversation) already declare `agent_did`; their SDL gains `@immutable`
+/// directly with no row transform.
+///
+/// Each collection is checked independently so a partial failure resumes at the
+/// un-migrated collection on the next run. The patch is a pure additive field
+/// add (nullable String), so no lens is required: a row written before the
+/// migration reads back `agent_did: null` until it is rewritten or recreated.
+pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    for (collection_name, patch) in [
+        ("AgentMessage", ADD_AGENT_MESSAGE_AGENT_DID_PATCH),
+        ("AgentToolCall", ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH),
+        ("AgentSession", ADD_AGENT_SESSION_AGENT_DID_PATCH),
+        ("CompactionEntry", ADD_COMPACTION_ENTRY_AGENT_DID_PATCH),
+    ] {
+        let Some(collection) = node
+            .get_collection(collection_name)
+            .with_context(|| format!("get {collection_name} collection"))?
+        else {
+            tracing::debug!(
+                collection = collection_name,
+                "collection absent; scope-key patch no-op"
+            );
+            continue;
+        };
+
+        if collection_has_field(&collection, "agent_did") {
+            tracing::debug!(
+                collection = collection_name,
+                "already has agent_did scope key; skipping patch"
+            );
+            continue;
+        }
+
+        let next = node
+            .patch_collection(collection_name, patch)
+            .await
+            .with_context(|| format!("patch_collection {collection_name} agent_did scope key"))?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .with_context(|| {
+                format!("set_active_collection_version {collection_name} agent_did scope key")
+            })?;
+        tracing::info!(
+            collection = collection_name,
+            version = %next.version_id,
+            "patched with agent_did immutable scope key"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
@@ -951,9 +1028,32 @@ mod patch_kind_tests {
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
+            ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
+            ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
+            ADD_AGENT_SESSION_AGENT_DID_PATCH,
+            ADD_COMPACTION_ENTRY_AGENT_DID_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
+            }
+        }
+    }
+
+    #[test]
+    fn conversation_scope_key_patches_use_nillable_string_kind() {
+        const NILLABLE_STRING_KIND: i64 = 11;
+        for patch in [
+            ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
+            ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
+            ADD_AGENT_SESSION_AGENT_DID_PATCH,
+            ADD_COMPACTION_ENTRY_AGENT_DID_PATCH,
+        ] {
+            for (name, kind) in field_kinds(patch) {
+                assert_eq!(name, "agent_did", "unexpected field in scope-key patch");
+                assert_eq!(
+                    kind, NILLABLE_STRING_KIND,
+                    "agent_did scope key must be NillableString (11), got {kind}"
+                );
             }
         }
     }
@@ -1097,6 +1197,186 @@ mod patch_kind_tests {
             Some(&["/ip4/127.0.0.1/tcp/4101/p2p/peer-b".to_string()][..])
         );
         assert!(rows[0].profiles.is_none());
+    }
+
+    // Pre-scope-key SDL for the four session-keyed conversation collections:
+    // identical to the shipped schema minus the `agent_did` field. Registering
+    // these on a fresh node simulates a database upgraded from a schema version
+    // that predates the immutable scope key, which the migration must patch.
+    const OLD_AGENT_MESSAGE_SCHEMA: &str = r#"
+        type AgentMessage @branchable {
+            message_key: String @index(unique: true)
+            session_id: String @index
+            request_id: String @index
+            sequence: Int @index
+            role: String
+            content: String
+            timestamp: DateTime
+        }
+    "#;
+    const OLD_AGENT_TOOL_CALL_SCHEMA: &str = r#"
+        type AgentToolCall @branchable {
+            tool_call_key: String @index(unique: true)
+            request_id: String @index
+            session_id: String @index
+            tool_name: String @index
+            tool_call_id: String @index
+            args: String
+            status: String
+            lifecycle_state: String @index
+        }
+    "#;
+    const OLD_AGENT_SESSION_SCHEMA: &str = r#"
+        type AgentSession @branchable {
+            session_id: String @index(unique: true)
+            agent_name: String @index
+            behavior_id: String @index
+            started: DateTime
+            ended: DateTime
+            status: String
+        }
+    "#;
+    const OLD_COMPACTION_ENTRY_SCHEMA: &str = r#"
+        type CompactionEntry @branchable {
+            compaction_key: String @index(unique: true)
+            session_id: String @index
+            sequence: Int @index
+            summary: String
+            created_at: DateTime
+        }
+    "#;
+
+    #[tokio::test]
+    async fn conversation_scope_key_migration_adds_agent_did_to_session_keyed_collections() {
+        let node = test_node().await;
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+
+        for collection in [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentSession",
+            "CompactionEntry",
+        ] {
+            let cv = node
+                .get_collection(collection)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{collection} collection"));
+            assert!(
+                !collection_has_field(&cv, "agent_did"),
+                "{collection} should not yet have agent_did before migration"
+            );
+        }
+
+        // Idempotent: running twice must not fail.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+
+        for collection in [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentSession",
+            "CompactionEntry",
+        ] {
+            let cv = node
+                .get_collection(collection)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{collection} collection"));
+            assert!(
+                collection_has_field(&cv, "agent_did"),
+                "{collection} must have agent_did after migration"
+            );
+        }
+    }
+
+    /// Guard: every conversation collection must declare `agent_did` as an
+    /// `@immutable` scope key in its canonical SDL. This is the property that
+    /// filtered replication (#1033) relies on. Asserting against the SDL is what
+    /// is verifiable on the CURRENT pin (v0.14.2): the `@immutable` directive
+    /// parses and round-trips through `add_schema`, but enforcement (rejecting a
+    /// rewrite on local write / remote merge) is #1033's and lights up at the
+    /// pin bump. The companion runtime assertion below documents that today's
+    /// embedded node does NOT yet reject a rewrite.
+    #[test]
+    fn all_conversation_collections_declare_agent_did_immutable() {
+        use defra_agent_protocol::schemas;
+        let conversation_sdls = [
+            ("AgentRequest", schemas::AGENT_REQUEST),
+            ("AgentResponse", schemas::AGENT_RESPONSE),
+            ("AgentToolResult", schemas::AGENT_TOOL_RESULT),
+            ("AgentConversation", schemas::AGENT_CONVERSATION),
+            ("AgentMessage", schemas::AGENT_MESSAGE),
+            ("AgentToolCall", schemas::AGENT_TOOL_CALL),
+            ("AgentSession", schemas::AGENT_SESSION),
+            ("CompactionEntry", schemas::COMPACTION_ENTRY),
+        ];
+        for (name, sdl) in conversation_sdls {
+            let line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("agent_did:"))
+                .unwrap_or_else(|| panic!("{name} SDL must declare an agent_did field"));
+            assert!(
+                line.contains("@immutable"),
+                "{name}.agent_did must be declared @immutable (the filtered-replication scope key); got: {line}"
+            );
+        }
+    }
+
+    /// Companion to the SDL guard: against a fresh embedded node on the CURRENT
+    /// pin, the `@immutable` directive parses and a row is created, but a rewrite
+    /// of `agent_did` is NOT yet rejected (enforcement is #1033's). This pins the
+    /// observed pre-#1033 behavior so the test that checks it FLIPS — and must be
+    /// updated to assert rejection — when the pin bumps.
+    #[tokio::test]
+    async fn agent_did_rewrite_not_yet_enforced_on_current_pin() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        let create = node
+            .execute(
+                r#"mutation {
+                    create_AgentRequest(input: {
+                        request_id: "scope-guard-req",
+                        agent_did: "did:defra-agent:alice",
+                        session_id: "scope-guard-session",
+                        content: "hi",
+                        status: "pending",
+                        lifecycle_state: "pending",
+                        created_at: "2026-06-13T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create AgentRequest with agent_did failed: {:?}",
+            create.errors
+        );
+
+        // Attempt to rewrite the immutable scope key to a different DID.
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentRequest(
+                        filter: { request_id: { _eq: "scope-guard-req" } },
+                        input: { agent_did: "did:defra-agent:mallory" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !rewrite.has_errors(),
+            "PRE-#1033: agent_did rewrite is expected to succeed (no enforcement yet); \
+             when the pin bumps this must be changed to assert rejection. errors={:?}",
+            rewrite.errors
+        );
     }
 
     #[tokio::test]

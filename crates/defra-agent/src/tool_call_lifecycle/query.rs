@@ -70,6 +70,8 @@ struct ToolCallRow {
     doc_id: String,
     #[serde(default)]
     request_id: Option<String>,
+    #[serde(default)]
+    agent_did: Option<String>,
     message_sequence: u32,
     tool_name: String,
     args: String,
@@ -107,6 +109,7 @@ impl ToolCallLifecycle {
                 ) {{
                     _docID
                     request_id
+                    agent_did
                     message_sequence
                     tool_name
                     args
@@ -197,6 +200,7 @@ impl ToolCallLifecycle {
             node,
             request_id: row.request_id.unwrap_or_default(),
             session_id: session_id.to_string(),
+            agent_did: row.agent_did.unwrap_or_default(),
             tool_call_id: tool_call_id.to_string(),
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,

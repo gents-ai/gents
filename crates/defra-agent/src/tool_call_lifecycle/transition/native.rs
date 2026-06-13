@@ -15,6 +15,7 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_agent_did = escape_graphql_string(&self.agent_did);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
         let escaped_args = escape_graphql_string(&self.args);
@@ -60,6 +61,7 @@ impl ToolCallLifecycle {
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",
@@ -249,6 +251,7 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_agent_did = escape_graphql_string(&self.agent_did);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
         let escaped_args = escape_graphql_string(&self.args);
@@ -264,6 +267,7 @@ impl ToolCallLifecycle {
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",
@@ -364,6 +368,7 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_agent_did = escape_graphql_string(&self.agent_did);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
         let escaped_args = escape_graphql_string(&self.args);
@@ -379,6 +384,7 @@ impl ToolCallLifecycle {
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",

@@ -680,6 +680,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         db.node.clone(),
         child_request_id.clone(),
         child_session_id.clone(),
+        "did:defra-agent:test".to_string(),
         "internal-steer-descendant".to_string(),
         1,
         "spawn_subagent".to_string(),

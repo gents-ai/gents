@@ -23,6 +23,7 @@ async fn resolve_behavior_prefers_existing_session_binding() {
         node.as_ref(),
         "session-bound",
         "general",
+        "did:defra-agent:test",
         "code",
     )
     .await
@@ -45,6 +46,7 @@ async fn resolve_behavior_rejects_session_switches() {
         node.as_ref(),
         "session-pinned",
         "general",
+        "did:defra-agent:test",
         "general",
     )
     .await

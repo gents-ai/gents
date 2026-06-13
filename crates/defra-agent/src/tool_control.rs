@@ -86,6 +86,7 @@ mod tests {
             node.clone(),
             "request-1".to_string(),
             "session-1".to_string(),
+            "did:defra-agent:test".to_string(),
             "tool-1".to_string(),
             1,
             "bash_unrestricted".to_string(),
