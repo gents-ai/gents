@@ -38,14 +38,38 @@ pub struct RegistryEntry {
     pub invited_by: Option<String>,
 }
 
+/// Controls which fields the `update` branch of [`registry_upsert_mutation`]
+/// writes.
+///
+/// - `Full` (operator register, `p2p network register`): the update includes
+///   all fields — `display_name`, `profiles`, `addresses`, `status`, and
+///   `updated_at` — because the operator explicitly supplied them.
+/// - `Heartbeat` (daemon self-registration tick): the update writes ONLY
+///   `status`, `updated_at`, and `addresses` (network location can change),
+///   and deliberately omits `display_name` and `profiles`. This preserves any
+///   value an operator previously set via `p2p network register` rather than
+///   resetting it to null every 30 seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertKind {
+    /// Full operator-supplied registration — update writes all fields.
+    Full,
+    /// Daemon heartbeat tick — update writes only liveness fields, preserving
+    /// operator-set `display_name` and `profiles`.
+    Heartbeat,
+}
+
 /// Build a GraphQL upsert mutation for `PeerRegistry`.
 ///
 /// - Filters on `peer_id`.
-/// - `registered_at` is set only on the `add` branch (first registration).
-/// - `updated_at` is refreshed on both `add` and `update` (heartbeat).
+/// - The `add` branch (first registration) always sets every field from the
+///   entry, including `display_name`, `profiles`, and `registered_at`.
+/// - The `update` branch behaviour depends on `kind`:
+///   - [`UpsertKind::Full`]: updates all fields (operator register path).
+///   - [`UpsertKind::Heartbeat`]: updates only `status`, `updated_at`, and
+///     `addresses`, leaving operator-set `display_name`/`profiles` intact.
 /// - `profiles`, `invited_by`, and `display_name` emit `null` when absent to
 ///   avoid the DefraDB empty-list / nil-column corruption (never `[]`).
-pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str) -> String {
+pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
     let agent_did = escape_graphql_string(&entry.agent_did);
     let addresses = graphql_nullable_string_list_literal(&entry.addresses);
@@ -55,6 +79,31 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str) -> String {
     let network_id = escape_graphql_string(&entry.network_id);
     let invited_by = graphql_nullable_string_literal(entry.invited_by.as_deref());
     let now = escape_graphql_string(now);
+
+    // The update block differs by kind: Full rewrites every field; Heartbeat
+    // writes only the liveness fields (status, updated_at, addresses) so that
+    // operator-set display_name and profiles are never clobbered by the 30s tick.
+    let update_block = match kind {
+        UpsertKind::Full => format!(
+            r#"update: {{
+                    agent_did: "{agent_did}",
+                    addresses: {addresses},
+                    profiles: {profiles},
+                    display_name: {display_name},
+                    status: "{status}",
+                    network_id: "{network_id}",
+                    invited_by: {invited_by},
+                    updated_at: "{now}"
+                }}"#
+        ),
+        UpsertKind::Heartbeat => format!(
+            r#"update: {{
+                    addresses: {addresses},
+                    status: "{status}",
+                    updated_at: "{now}"
+                }}"#
+        ),
+    };
 
     format!(
         r#"mutation {{
@@ -72,16 +121,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str) -> String {
                     registered_at: "{now}",
                     updated_at: "{now}"
                 }},
-                update: {{
-                    agent_did: "{agent_did}",
-                    addresses: {addresses},
-                    profiles: {profiles},
-                    display_name: {display_name},
-                    status: "{status}",
-                    network_id: "{network_id}",
-                    invited_by: {invited_by},
-                    updated_at: "{now}"
-                }}
+                {update_block}
             ) {{ _docID }}
         }}"#
     )
@@ -188,7 +228,10 @@ async fn tick_registry(
     };
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = registry_upsert_mutation(&entry, &now);
+    // Use Heartbeat variant so recurring ticks never overwrite operator-set
+    // display_name or profiles (the add branch on first registration still sets
+    // them from the entry, which is empty here — the operator path sets them).
+    let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
     let response = node.execute(&mutation).await;
 
     if response.has_errors() {
@@ -245,10 +288,84 @@ mod tests {
                 invited_by: None,
             },
             "2026-06-13T00:00:00Z",
+            UpsertKind::Full,
         );
         assert!(m.contains(r#"peer_id: { _eq: "p\"1" }"#));
         assert!(m.contains("profiles: null"));
         assert!(!m.contains("profiles: []"));
         assert!(m.contains(r#"status: "online""#));
+    }
+
+    /// The heartbeat-variant `update` block must NOT contain `display_name` or
+    /// `profiles` — those fields must be absent so the operator-set values are
+    /// never overwritten by the 30-second heartbeat tick.
+    #[test]
+    fn heartbeat_upsert_update_block_omits_display_name_and_profiles() {
+        let entry = RegistryEntry {
+            peer_id: "peer-hb".into(),
+            agent_did: "did:key:hb".into(),
+            addresses: vec!["/ip4/1/tcp/9/p2p/peer-hb".into()],
+            profiles: vec!["chat-requests".into()],
+            display_name: Some("should-not-appear-in-update".into()),
+            status: "online".into(),
+            network_id: "default".into(),
+            invited_by: None,
+        };
+        let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Heartbeat);
+
+        // The `add` branch (first-registration) IS allowed to set everything.
+        assert!(
+            m.contains(r#"display_name: "should-not-appear-in-update""#),
+            "add branch must still set display_name on first registration: {m}"
+        );
+        assert!(
+            m.contains(r#"profiles: ["chat-requests"]"#),
+            "add branch must still set profiles on first registration: {m}"
+        );
+
+        // Split the mutation at `update: {` to isolate the update block, then
+        // confirm display_name and profiles do NOT appear in the update portion.
+        let update_portion = m
+            .split_once("update: {")
+            .expect("mutation must contain an update block")
+            .1;
+        assert!(
+            !update_portion.contains("display_name"),
+            "heartbeat update block must NOT contain display_name — it would clobber operator-set values: {update_portion}"
+        );
+        assert!(
+            !update_portion.contains("profiles"),
+            "heartbeat update block must NOT contain profiles — it would clobber operator-set values: {update_portion}"
+        );
+    }
+
+    /// The full/operator-variant `update` block MUST contain `display_name` and
+    /// `profiles` — the operator explicitly supplied them via `p2p network register`.
+    #[test]
+    fn operator_upsert_update_block_includes_display_name_and_profiles() {
+        let entry = RegistryEntry {
+            peer_id: "peer-op".into(),
+            agent_did: "did:key:op".into(),
+            addresses: vec!["/ip4/1/tcp/9/p2p/peer-op".into()],
+            profiles: vec!["chat-requests".into()],
+            display_name: Some("my-node".into()),
+            status: "online".into(),
+            network_id: "default".into(),
+            invited_by: None,
+        };
+        let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Full);
+
+        let update_portion = m
+            .split_once("update: {")
+            .expect("mutation must contain an update block")
+            .1;
+        assert!(
+            update_portion.contains(r#"display_name: "my-node""#),
+            "operator update block must contain display_name: {update_portion}"
+        );
+        assert!(
+            update_portion.contains("profiles:"),
+            "operator update block must contain profiles: {update_portion}"
+        );
     }
 }

@@ -65,15 +65,36 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     // bootstrap arm: the operator handed the token out-of-band and there is no
     // peer trust set to check against, so the verified signature above suffices.
     //
-    // A reciprocal join (`--reciprocal`) completes a pairing the issuer already
-    // initiated (they accepted our invite and we are pairing back). Both sides
-    // have agreed; re-gating this leg on membership would reject it whenever our
-    // registry has since learned of other peers. The signature is still verified
-    // above; only the membership check is skipped.
+    // `--reciprocal` gate bypass — trust model:
+    //
+    // A reciprocal join completes the second leg of a bidirectional handshake:
+    // peer A called `p2p pairings join <token>` (or used auto-pair), received a
+    // `reciprocal_token` in the response, and now peer B calls
+    // `p2p pairings join --reciprocal <reciprocal_token>` to wire the return
+    // direction. Both sides have already agreed to pair; re-gating this leg on
+    // registry membership would spuriously reject it whenever our registry has
+    // since converged with new peers, making `--reciprocal` unreliable during
+    // network formation.
+    //
+    // Safety invariant: the SIGNATURE IS STILL VERIFIED above — only the
+    // registry-membership arm is bypassed. This is safe under the current
+    // TOFU/trusted-fleet model where:
+    //   - membership authority is cryptographic identity (DID / key material),
+    //     not in-band registry state;
+    //   - revocation is one-sided and deferred pending upstream primitives
+    //     (defradb.rs#1012 for admin channels / #180 for ACP);
+    //   - the trusted-fleet boundary is operator-controlled (the token was
+    //     issued by a node that passed this same verification).
+    //
+    // TODO: once wire-admission lands (defradb.rs#1012/#180), `--reciprocal`
+    // should be bound to a tracked pending/known reciprocal pairing (e.g., a
+    // session nonce or pending-pair document) rather than a free CLI flag,
+    // to prevent an unrelated actor from supplying a valid signature with
+    // `--reciprocal` to bypass the membership gate entirely.
     if args.reciprocal {
         tracing::debug!(
             issuer_did = %remote.issuer_did,
-            "reciprocal join: signature verified, membership gate bypassed"
+            "reciprocal join: signature verified, membership gate bypassed (TOFU/trusted-fleet; see join.rs comment)"
         );
     } else {
         enforce_registry_membership(&access, &remote.issuer_did, identity.did()).await?;

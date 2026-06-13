@@ -10,7 +10,9 @@ use std::io::{self, Write};
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::discovery::REGISTRY_STALE_AFTER;
-use defra_agent::agent::p2p_reconcile::registry::{registry_upsert_mutation, RegistryEntry};
+use defra_agent::agent::p2p_reconcile::registry::{
+    registry_upsert_mutation, RegistryEntry, UpsertKind,
+};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -109,7 +111,9 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         invited_by: None,
     };
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mutation = registry_upsert_mutation(&entry, &now);
+    // Full variant: the operator explicitly supplied display_name and profiles,
+    // so the update branch must write them (overwriting any stale heartbeat value).
+    let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Full);
     access
         .execute(&mutation)
         .await
@@ -707,7 +711,7 @@ mod tests {
             invited_by: None,
         };
         let now = "2026-06-13T00:00:00Z";
-        let mutation = registry_upsert_mutation(&entry, now);
+        let mutation = registry_upsert_mutation(&entry, now, UpsertKind::Full);
 
         assert!(mutation.contains(r#"peer_id: { _eq: "test-peer-1" }"#));
         assert!(mutation.contains(r#"agent_did: "did:key:test""#));

@@ -476,6 +476,21 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 /// nillable array columns). The filter is on `peer_id` alone (the unique index):
 /// the tick only ever upserts peers that have no operator-owned row, so this
 /// never collides with operator intent.
+///
+/// Narrow TOCTOU note: the filter here is `peer_id`-only (the unique index).
+/// Within a single tick, [`reconcile_discovery_tick`] reads operator-owned peers
+/// first, subtracts them from the derived set, then calls this upsert for the
+/// remaining registry-derived peers. If an operator writes a new desired row for
+/// the *same* peer between that operator-owned-peers read and this upsert (within
+/// the same tick), the update branch of this mutation could flip a freshly
+/// operator-authored row's `source` field from `"operator"` to `"registry"`,
+/// silently reassigning ownership.
+///
+/// This window is narrow in practice because the discovery reconciler is single-
+/// threaded per process (per-process serialization means no concurrent tick can
+/// be racing), and operator writes are human/CLI-initiated. A guarded read-back
+/// (re-check `source` after the upsert and retract if it flipped) is the correct
+/// mitigation; deferred until the tick rate justifies it.
 pub fn upsert_registry_desired_mutation(
     entry: &DiscoveredEntry,
     collections: &BTreeSet<String>,
