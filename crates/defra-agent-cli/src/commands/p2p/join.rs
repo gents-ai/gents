@@ -6,18 +6,22 @@ use defra_agent::agent::p2p_reconcile::expand_p2p_collection_profile_ids;
 use defra_agent_protocol::pairing_token::{decode, signing_payload};
 use serde_json::{json, Value};
 
-use crate::cli::args::P2pJoinArgs;
-use crate::request_helpers::parse_duration_suffix;
-use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
+use defra_agent::agent::p2p_reconcile::REGISTRY_STALE_AFTER;
 
-use super::invite::{current_invite_token, encode_token, profile_ids_or_default, resolve_home_identity};
+use crate::cli::args::P2pJoinArgs;
+use crate::config_writes::ConfigAccess;
+use crate::request_helpers::parse_duration_suffix;
+use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_endpoint};
+
+use super::invite::{
+    current_invite_token, encode_token, profile_ids_or_default, resolve_home_identity,
+};
 use super::pairings::{peer_pairing_exists, wait_for_pairing_connected, write_pairing_desired};
 
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let remote = decode(&args.token)?;
 
-    // Verify the issuer's signature over the token payload (TOFU).
-    // TODO(R5): registry membership check — verify issuer_did is a registered peer-registry member.
+    // Verify the issuer's signature over the token payload (TOFU bootstrap arm).
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for invite verification")?;
     let payload = signing_payload(&remote);
@@ -53,6 +57,14 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+
+    // Registry-membership gate (mirrors Lean `signedByMember`): once a local
+    // `PeerRegistry` is populated, an invite is only admissible if its issuer is
+    // a live member. An empty/absent registry is the TOFU bootstrap arm — the
+    // operator handed the token out-of-band and there is no trust set to check
+    // against, so the verified signature above suffices.
+    enforce_registry_membership(&access, &remote.issuer_did).await?;
+
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     // Thread issuer_did through as the `invited_by` value on the desired row.
@@ -107,6 +119,83 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     }
 
     print_json(&output)?;
+    Ok(())
+}
+
+/// Registry-membership gate on join. If a local `PeerRegistry` exists and is
+/// non-empty, the invite issuer must be a *live* member (status `online` and a
+/// fresh heartbeat); otherwise the join is rejected. An empty or absent registry
+/// is the TOFU bootstrap arm and is allowed (the signature check already ran).
+///
+/// Mirrors the Lean `signedByMember` predicate: `sigValid ∧ (tofuBootstrap ∨
+/// isMember issuer reg)`.
+async fn enforce_registry_membership(access: &ConfigAccess, issuer_did: &str) -> Result<()> {
+    let query = r#"query {
+        PeerRegistry {
+            agent_did
+            status
+            updated_at
+        }
+    }"#;
+    // A missing PeerRegistry collection (older DB / no discovery) is treated as
+    // the bootstrap arm: nothing to check against.
+    let rows = match graphql_rows(access, "PeerRegistry", query).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::debug!(error = %error, "PeerRegistry unreadable; treating join as TOFU bootstrap");
+            return Ok(());
+        }
+    };
+
+    let now = Utc::now();
+    let mut any_members = false;
+    let mut issuer_is_live_member = false;
+    for row in &rows {
+        let did = row
+            .get("agent_did")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(did) = did else { continue };
+        any_members = true;
+
+        let status_online =
+            row.get("status").and_then(Value::as_str).map(str::trim) == Some("online");
+        let fresh = row
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw.trim()).ok())
+            .map(|ts| ts.with_timezone(&Utc))
+            .map(|ts| {
+                now.signed_duration_since(ts)
+                    .to_std()
+                    .map(|age| age <= REGISTRY_STALE_AFTER)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+
+        if did == issuer_did && status_online && fresh {
+            issuer_is_live_member = true;
+        }
+    }
+
+    // Bootstrap arm: no members yet → TOFU, allow.
+    if !any_members {
+        tracing::debug!("PeerRegistry empty; join admitted via TOFU bootstrap arm");
+        return Ok(());
+    }
+
+    if !issuer_is_live_member {
+        anyhow::bail!(
+            "pairing invite issuer {issuer_did} is not a live member of the local peer registry; \
+             join rejected (registry is non-empty, so TOFU bootstrap does not apply)"
+        );
+    }
+
+    tracing::debug!(
+        issuer_did,
+        "pairing invite issuer is a live registry member"
+    );
     Ok(())
 }
 

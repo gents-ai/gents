@@ -99,6 +99,10 @@ const ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"profiles","Kind":21}}
 ]"#;
 
+const ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
+]"#;
+
 // Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
 // fields compiles to that kind. AgentBehavior gained `description` and `summary`
 // on branch design/issue-377; existing DBs upgraded from a prior schema version
@@ -621,6 +625,40 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
             version = %next.version_id,
             "PeerPairingDesired patched with profiles field"
         );
+        collection = next;
+    }
+
+    if !collection_has_field(&collection, "source") {
+        let next = node
+            .patch_collection("PeerPairingDesired", ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH)
+            .await
+            .context("patch_collection PeerPairingDesired source")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired source")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with source field"
+        );
+
+        // Default pre-existing rows (all operator-authored, since registry-owned
+        // rows only exist once this field does) to `source: "operator"` so the
+        // operator/registry ownership partition is well-formed: any row written
+        // before this migration is operator intent. An empty filter matches all
+        // rows; this runs once, immediately after the field is added.
+        let backfill = r#"mutation {
+            update_PeerPairingDesired(
+                filter: {},
+                input: { source: "operator" }
+            ) { _docID }
+        }"#;
+        let response = node.execute(backfill).await;
+        if response.has_errors() {
+            tracing::warn!(
+                errors = ?response.errors,
+                "PeerPairingDesired source backfill to \"operator\" reported errors"
+            );
+        }
     }
 
     Ok(())
@@ -909,6 +947,7 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
             ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
             ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
+            ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
@@ -963,6 +1002,7 @@ mod patch_kind_tests {
             .expect("PeerPairingDesired collection");
         assert!(collection_has_field(&desired, "agent_did"));
         assert!(collection_has_field(&desired, "profiles"));
+        assert!(collection_has_field(&desired, "source"));
 
         let applied = node
             .get_collection("PeerPairingApplied")
@@ -1065,12 +1105,8 @@ mod patch_kind_tests {
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         // Idempotent: calling twice must not fail.
-        ensure_peer_registry_migrations(node.clone())
-            .await
-            .unwrap();
-        ensure_peer_registry_migrations(node.clone())
-            .await
-            .unwrap();
+        ensure_peer_registry_migrations(node.clone()).await.unwrap();
+        ensure_peer_registry_migrations(node.clone()).await.unwrap();
 
         let collection = node
             .get_collection("PeerRegistry")

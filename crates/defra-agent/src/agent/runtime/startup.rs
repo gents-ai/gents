@@ -34,6 +34,7 @@ enum BackgroundTaskResult {
     CrossDeploymentCancelMirror(Result<()>),
     PairingReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
+    DiscoveryReconcile(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -62,10 +63,9 @@ pub(in crate::agent) async fn run_agent(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
-    if let Err(error) =
-        crate::migration::ensure_peer_registry_migrations(agent.node.clone())
-            .await
-            .context("ensure PeerRegistry migrations")
+    if let Err(error) = crate::migration::ensure_peer_registry_migrations(agent.node.clone())
+        .await
+        .context("ensure PeerRegistry migrations")
     {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
@@ -329,6 +329,19 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
+    // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
+    // OFF, gated by DEFRA_AGENT_DISCOVERY_AUTO_PAIR) — the registry still
+    // replicates either way, but no auto-pairing happens when off.
+    let discovery_node = agent.node.clone();
+    let discovery_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::DiscoveryReconcile(
+            crate::agent::p2p_reconcile::run_discovery_reconciler(discovery_node, discovery_cancel)
+                .await,
+        )
+    });
+
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
@@ -424,6 +437,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
             Ok(BackgroundTaskResult::PairingReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => (result, false),
+            Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),

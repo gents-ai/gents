@@ -259,6 +259,7 @@ pub(super) fn upsert_pairing_mutation(
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
+                    source: "operator",
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
@@ -267,6 +268,7 @@ pub(super) fn upsert_pairing_mutation(
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
+                    source: "operator",
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}

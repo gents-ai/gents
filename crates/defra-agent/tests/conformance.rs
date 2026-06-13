@@ -288,6 +288,8 @@ mod live_overlay;
 mod manual_run;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
+#[path = "conformance/peer_registry_discovery.rs"]
+mod peer_registry_discovery;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "conformance/r5_scenarios.rs"]
