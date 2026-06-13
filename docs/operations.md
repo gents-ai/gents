@@ -66,10 +66,10 @@ defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
 Create an invite on Amy and join it from Coding:
 
 ```bash
-AMY_INVITE=$(defra-agent p2p invite --home /tmp/amy | jq -r .token)
-CODING_JOIN=$(defra-agent p2p join --home /tmp/coding "$AMY_INVITE")
+AMY_INVITE=$(defra-agent p2p pairings invite --home /tmp/amy | jq -r .token)
+CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
 CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
-defra-agent p2p join --home /tmp/amy "$CODING_INVITE"
+defra-agent p2p pairings join --home /tmp/amy "$CODING_INVITE"
 ```
 
 Inspect desired pairing rows and live connectivity from either runtime:
@@ -85,10 +85,14 @@ The most useful fields for bring-up are `p2p_transport`, `p2p_peer_id`,
 `p2p_listen_addresses`, `p2p_connected_peers`, and the `CONNECTED`,
 `SUBSCRIBED`, and `REPLICATING` columns in `p2p pairings list`.
 
+For the narrated, end-to-end version of this flow — what each document means
+and how to watch the runtime reconcile it — see [Part 2 of the getting-started
+walkthrough](demo.md#part-2--pair-a-second-node).
+
 The low-level `p2p connect`, `p2p collections`, and `p2p replicators`
 commands remain available for diagnostics and repair. They mutate live P2P
-state directly; normal pairing should go through invite/join or desired
-pairing rows.
+state directly; normal pairing should go through `p2p pairings`
+(invite/join or `pairings set`).
 
 ## Remote Codex clients
 

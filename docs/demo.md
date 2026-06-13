@@ -196,6 +196,146 @@ defra-agent request submit --graphql "$GRAPHQL" --agent-did "did:key:..." \
 defra-agent response wait --graphql "$GRAPHQL" --request-id "<request-id>"
 ```
 
+# Part 2 — Pair a second node
+
+Part 1 is one runtime talking to itself. The reason defra-agent is built on
+DefraDB is that the *same documents* can live on more than one node and stay
+in sync over a peer-to-peer link — no shared server in the middle. Part 2
+pairs a second runtime to the first and replicates a chat between them.
+
+This is also the reference example for **how to drive Defra P2P replication
+from an application**. The pattern is the point: you do not imperatively wire
+peers together and hope the two sides agree. You **write a document that
+describes the pairing you want, and the runtime reconciles live P2P state
+toward it** — connecting, subscribing collections, installing replicators,
+and recording what it did. The same idea as `kubectl apply`, applied to
+gossip replication.
+
+## The two documents
+
+| Document | Who writes it | Meaning |
+|---|---|---|
+| `PeerPairingDesired` | you (the operator) | the pairing you want: which peer, which DID you expect it to have, which collections/profiles to replicate |
+| `PeerPairingApplied` | the runtime reconciler | what it actually installed for that peer — the **ownership record** |
+
+The split matters. The reconciler only ever tears down wiring it finds in
+`PeerPairingApplied` — so collections or replicators you added by hand with
+the low-level `p2p collections`/`p2p replicators` commands are never touched,
+and deleting a pairing removes exactly what the pairing introduced and nothing
+else. You declare intent; the runtime owns the consequences and can always
+undo precisely its own work.
+
+## 1. Start a second runtime
+
+Keep Part 1's runtime running. In a fresh home, start a second one. Both bind
+P2P to loopback for the demo:
+
+```bash
+defra-agent init  --home /tmp/coding --agent-name coding \
+  --inference-url http://127.0.0.1:8080/v1 --model-name "$MODEL"
+defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 0
+```
+
+Use Part 1's home (say `~/.defra-agent`) as the first node, "Amy", and
+`/tmp/coding` as the second, "Coding".
+
+## 2. Exchange a pairing invite
+
+Pairing carries the remote agent's **DID** — the identity that is the
+permission and audit boundary for everything that replicates. The
+invite/join flow moves the DID for you, so you never hand-type it.
+
+On Amy, mint an invite token. It encodes Amy's shareable P2P address, peer id,
+DID, and the collection profiles it offers:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite | jq -r .token)
+```
+
+On Coding, accept it. This writes Coding's `PeerPairingDesired` row for Amy
+and — because this is the first leg — prints a **reciprocal token** so Amy can
+pair back:
+
+```bash
+CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
+CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
+```
+
+Pairing is **directional**: Coding now wants documents from Amy, but Amy
+doesn't yet know about Coding. Close the loop by joining the reciprocal token
+on Amy:
+
+```bash
+defra-agent p2p pairings join "$CODING_INVITE"
+```
+
+## 3. Watch the runtime reconcile
+
+You wrote documents; you installed nothing. Watch the reconciler converge:
+
+```bash
+defra-agent p2p pairings list --home /tmp/coding --output table
+```
+
+```
+PEER       DID            PROFILES       CONNECTED  SUBSCRIBED  REPLICATING
+12D3Koo…   did:key:amy…   chat-requests  yes        yes         yes
+```
+
+Those last three columns are the health of the pairing, each derived from a
+different source so you can see *where* a stuck pairing is stuck:
+
+- **CONNECTED** — the live peer list includes that peer id (the dial worked).
+- **SUBSCRIBED** — every desired collection appears in `PeerPairingApplied`
+  (the reconciler subscribed them).
+- **REPLICATING** — every desired replicator address appears in
+  `PeerPairingApplied` (the push replicator is installed).
+
+All three flip to `yes` on their own, on the runtime's pairing sweep — no
+further commands. If one stays `no`, that column tells you whether the problem
+is connectivity, subscription, or replication.
+
+## 4. Confirm replication
+
+Send a chat on one node and read it on the other. Because the `chat-requests`
+profile replicates the request/response/message collections, a request created
+on Coding and its streamed response are visible from Amy:
+
+```bash
+defra-agent chat --home /tmp/coding "Say hello to the other node."
+defra-agent request submit --graphql http://127.0.0.1:9191/api/v0/graphql \
+  --agent-did "$CODING_DID" --content "ping" | jq -r '.request_id'
+# read the replicated row back from Amy's endpoint
+```
+
+## 5. Unpair
+
+Delete the desired row. The runtime sees the row gone, reads its
+`PeerPairingApplied` record, tears down **only** what it installed for that
+pairing, then deletes the applied record:
+
+```bash
+defra-agent p2p pairings rm --home /tmp/coding --peer "$AMY_PEER_ID"
+```
+
+Any wiring you had added by hand survives — the reconciler never owned it.
+
+## When to reach past invite/join
+
+- **`p2p pairings set`** is the scripted/manual path: you supply `--did`,
+  `--address`, and `--collection`/`--profile` directly. `--did` is required —
+  a pairing always names the identity it trusts. `--peer` is optional when an
+  `--address` is a shareable ticket the peer id can be derived from.
+- **`p2p connect` / `p2p collections` / `p2p replicators`** are imperative
+  surgery on live state, for non-paired topologies and debugging. They do not
+  write desired documents, so the reconciler leaves their wiring alone.
+
+One last boundary: replication moves *documents*, not *permission*. A child
+node replicating a parent's requests still cannot act as a delegated subagent
+across deployments unless `subagent_allow_cross_deployment: true` is set on
+both sides — that gate is off by default and deferred. Pairing is the
+transport; trust is still configured explicitly.
+
 ## How this is wired (for the curious)
 
 Everything above is documents. `init` writes config documents (principal,
