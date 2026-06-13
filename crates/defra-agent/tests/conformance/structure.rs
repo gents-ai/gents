@@ -59,6 +59,15 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),
         ),
+        // Discovery derivation + signed-invite guard. Lean-first per the
+        // 2026-06-13 peer-registry service-discovery design (sequencing step
+        // 3); the Rust discovery reconciler is sequencing step 4 (R5) and the
+        // conformance fence lands with it.
+        (
+            "PeerRegistryDiscovery",
+            Gap("docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md \
+                 R5 — discovery reconciler unshipped; fence lands with the runtime mirror"),
+        ),
         (
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
