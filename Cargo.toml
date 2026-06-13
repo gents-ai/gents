@@ -119,7 +119,7 @@ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev 
 # as `response.reasoning_text.delta`, which rig has no variant for (also a
 # `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
 # fork our Responses-API reasoning capture is silently empty.
-rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "804e235fe7c2b4e97b2233eea07d8d947aa5c32b" }
+rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "564359a62d6354ff474f9564f03d0e5be3011695" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
