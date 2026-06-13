@@ -94,6 +94,32 @@ The low-level `p2p admin` commands (`connect`, `collections`, `replicators`,
 P2P state directly; normal pairing should go through `p2p pairings`
 (invite/join or `pairings set`).
 
+## Service discovery — joining a network
+
+Beyond pairwise pairing, the `p2p network` commands target the replicated
+`PeerRegistry` collection so that joining one member surfaces the whole
+network. Pairing over the `discovery` collection profile replicates
+`PeerRegistry`, and `p2p pairings invite`/`join` mint and verify a member
+**signature** on the invite token (trust-on-first-use for the bootstrap join;
+registry-membership-checked thereafter).
+
+```bash
+defra-agent p2p network register --home /tmp/amy --profile discovery   # self-register / refresh this node's row
+defra-agent p2p network list --home /tmp/coding --output table          # discovered members + liveness + paired/auto-pair
+defra-agent p2p network rm --home /tmp/amy                              # deregister this node's row
+```
+
+Auto-pairing of discovered members is **off by default**. Set the
+`DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1` environment variable on `server` to have
+the discovery reconciler materialize registry-owned `PeerPairingDesired` rows
+(`source: "registry"`) for live members; with it unset, `network list` shows
+discovered peers and you pair explicitly. Registry-owned rows are retracted
+when their entry stales/removed and never touch operator-authored pairings.
+
+For the narrated walkthrough — the three layers (discovery / replication /
+authorization) and transitive pairing — see [Part 3 of the getting-started
+walkthrough](demo.md#part-3--join-a-network).
+
 ## Remote Codex clients
 
 The Codex endpoint binds loopback by default and has no transport

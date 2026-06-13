@@ -2029,6 +2029,14 @@ pub(crate) struct P2pJoinArgs {
     /// Accepted collection profile. Defaults to the profiles offered by the token.
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Mark this as a reciprocal join completing a pairing the issuer initiated
+    /// (the issuer already accepted our invite and we are pairing back). The
+    /// signature is still verified, but the registry-membership gate is bypassed:
+    /// re-gating the reciprocal leg on membership would reject a pairing both
+    /// sides already agreed to. Set automatically in the `reciprocal_join_command`
+    /// emitted by a first join.
+    #[arg(long, default_value_t = false)]
+    pub(crate) reciprocal: bool,
     /// Wait for the runtime to observe the peer as connected.
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
@@ -2126,6 +2134,7 @@ pub(crate) enum P2pCollectionProfileArg {
     DesktopConfig,
     ChatRequests,
     ToolServices,
+    Discovery,
 }
 
 #[derive(Subcommand)]

@@ -11,6 +11,7 @@ pub enum P2pCollectionProfile {
     DesktopConfig,
     ChatRequests,
     ToolServices,
+    Discovery,
 }
 
 impl P2pCollectionProfile {
@@ -21,6 +22,7 @@ impl P2pCollectionProfile {
             P2pCollectionProfile::DesktopConfig => "desktop-config",
             P2pCollectionProfile::ChatRequests => "chat-requests",
             P2pCollectionProfile::ToolServices => "tool-services",
+            P2pCollectionProfile::Discovery => "discovery",
         }
     }
 
@@ -31,6 +33,7 @@ impl P2pCollectionProfile {
             "desktop-config" => Some(P2pCollectionProfile::DesktopConfig),
             "chat-requests" => Some(P2pCollectionProfile::ChatRequests),
             "tool-services" => Some(P2pCollectionProfile::ToolServices),
+            "discovery" => Some(P2pCollectionProfile::Discovery),
             _ => None,
         }
     }
@@ -42,6 +45,7 @@ impl P2pCollectionProfile {
             P2pCollectionProfile::DesktopConfig => DESKTOP_CONFIG_COLLECTIONS,
             P2pCollectionProfile::ChatRequests => CHAT_REQUEST_COLLECTIONS,
             P2pCollectionProfile::ToolServices => TOOL_SERVICE_COLLECTIONS,
+            P2pCollectionProfile::Discovery => DISCOVERY_COLLECTIONS,
         }
     }
 }
@@ -131,6 +135,22 @@ const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
 ];
 
 const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
+
+/// The bootstrap discovery profile: the `PeerRegistry` service-discovery
+/// collection plus the agent config collections a joiner needs to actually run
+/// what it discovers. Pairing with a seed on this profile replicates the
+/// registry, so a node that joins one member sees every member that member knows
+/// (transitive discovery). See
+/// `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md`.
+const DISCOVERY_COLLECTIONS: &[&str] = &[
+    "PeerRegistry",
+    "AgentPrincipal",
+    "AgentBehavior",
+    "AgentRuntime",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+];
 
 #[cfg(test)]
 mod tests {

@@ -337,6 +337,116 @@ across deployments unless `subagent_allow_cross_deployment: true` is set on
 both sides — that gate is off by default and deferred. Pairing is the
 transport; trust is still configured explicitly.
 
+# Part 3 — Join a network
+
+Part 2 pairs two nodes you wired by hand. A real fleet has many nodes, and you
+do not want to hand-exchange an invite with each one. Part 3 turns pairwise
+pairing into a **network**: join one member, and you discover — and can pair
+with — the whole network. Three layers do this, and the point is that they stay
+distinct:
+
+| Layer | Document | Question it answers |
+|---|---|---|
+| **Discovery** | `PeerRegistry` | *Who is out there?* |
+| **Replication** | `PeerPairingDesired` + reconciler | *Move the documents.* (Part 2) |
+| **Authorization** | signed invite · `subagent_allow_cross_deployment` | *Who may join? Who may delegate?* |
+
+Discovery makes a peer *visible*. It does not make it *authorized*. Those are
+different documents, gated separately — that separation is the whole design.
+
+## 1. Self-register into the registry
+
+Each running node writes (and heartbeats) its own row in `PeerRegistry`, keyed
+by its peer id. The runtime does this automatically; the explicit command is
+for a manual refresh, a display name, or to advertise the profiles it offers:
+
+```bash
+defra-agent p2p network register --profile discovery --display-name amy
+```
+
+The registry travels in the `discovery` profile. So the moment a node pairs
+with a member over `discovery`, it replicates `PeerRegistry` and sees every
+member that member already knows.
+
+## 2. Mint a signed invite — the credential
+
+In Part 2 any reachable node could join. A network gates membership on a
+member's cryptographic say-so. `p2p pairings invite` now signs the token with
+the local agent's DID:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite --profile discovery | jq -r .token)
+```
+
+`p2p pairings join` verifies that signature. Because a `did:key` embeds its own
+public key, verification needs nothing but the token — no lookup, no registry:
+
+```bash
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+```
+
+The rule has two arms:
+
+- **Bootstrap (trust-on-first-use).** Your registry has no other members yet,
+  so a valid signature over a well-formed token is enough. The issuer's DID is
+  recorded as `invited_by` — an audit trail of how you entered the trust set.
+- **Subsequent invites.** Once your registry holds live members, an invite is
+  admitted only if its issuer is one of them. A signature from a non-member (or
+  an evicted one) is rejected. A tampered signature is rejected outright.
+
+A reciprocal join (the `--reciprocal` token a first join prints, so the issuer
+pairs back) completes a handshake both sides already agreed to, so it verifies
+the signature but skips the membership arm.
+
+## 3. Watch transitive pairing
+
+Pairing Coding to Amy replicated Amy's `PeerRegistry`. List what Coding can now
+see:
+
+```bash
+defra-agent p2p network list --home /tmp/coding --output table
+```
+
+```
+PEER       DID            NAME   NETWORK  ONLINE  PAIRED  PROFILES
+12D3Koo…   did:key:amy…   amy    default  yes     yes     discovery
+12D3Koo…   did:key:dana…  dana   default  yes     no      discovery
+```
+
+`ONLINE` is derived from the heartbeat age, not the self-reported `status` —
+the timestamp is the truth, the field is a hint. `PAIRED` shows whether a
+`PeerPairingDesired` row already exists for that peer.
+
+Dana is *visible* but not *paired*: discovery found her through Amy's registry,
+but nobody has paired with her yet. Turn on auto-pair and the discovery
+reconciler closes that gap:
+
+```bash
+DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1 defra-agent server --home /tmp/coding \
+  --p2p-bind-addr 127.0.0.1 --p2p-port 0
+```
+
+Now, for each live member that Coding has *not* already paired with by hand,
+the reconciler writes a **registry-owned** `PeerPairingDesired` row
+(`source: "registry"`) and the Part 2 pairing reconciler wires it — no invite,
+no operator command. Auto-pair is off by default; with it off, `network list`
+shows the peers and you pair explicitly.
+
+Ownership stays clean across the two sources of desired rows:
+
+- A registry entry going stale or removed retracts **only** its registry-owned
+  rows. Your hand-authored `pairings set` rows are never touched.
+- The discovery step never overwrites an operator-authored row for the same
+  peer — operator intent wins.
+
+## 4. The authorization boundary, again
+
+Discovery and replication moved documents and wired transport. They did **not**
+grant permission. A peer Coding auto-paired with still cannot run a delegated
+subagent on Coding's behalf unless `subagent_allow_cross_deployment: true` is
+set on both behaviors' tool selections — exactly the Part 2 boundary, now at
+network scale. Visible ≠ paired ≠ authorized; each is its own document.
+
 ## How this is wired (for the curious)
 
 Everything above is documents. `init` writes config documents (principal,

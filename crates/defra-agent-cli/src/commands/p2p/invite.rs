@@ -41,7 +41,10 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "graphql": graphql,
         "token": encoded,
         "peer_id": token.peer_id,
+        // `issuer_did` is the v2 vocabulary; `did` is kept as a backward-compatible
+        // alias so existing tooling/scripts that read `.did` keep working.
         "issuer_did": token.issuer_did,
+        "did": token.issuer_did,
         "network_id": token.network_id,
         "profiles": token.profiles,
         "ticket": token.ticket,

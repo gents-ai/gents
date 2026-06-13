@@ -59,11 +59,25 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
 
     // Registry-membership gate (mirrors Lean `signedByMember`): once a local
-    // `PeerRegistry` is populated, an invite is only admissible if its issuer is
-    // a live member. An empty/absent registry is the TOFU bootstrap arm — the
-    // operator handed the token out-of-band and there is no trust set to check
-    // against, so the verified signature above suffices.
-    enforce_registry_membership(&access, &remote.issuer_did).await?;
+    // `PeerRegistry` is populated with *other members*, an invite is only
+    // admissible if its issuer is a live member. An empty/absent registry — or
+    // one that holds only this node's own self-registration row — is the TOFU
+    // bootstrap arm: the operator handed the token out-of-band and there is no
+    // peer trust set to check against, so the verified signature above suffices.
+    //
+    // A reciprocal join (`--reciprocal`) completes a pairing the issuer already
+    // initiated (they accepted our invite and we are pairing back). Both sides
+    // have agreed; re-gating this leg on membership would reject it whenever our
+    // registry has since learned of other peers. The signature is still verified
+    // above; only the membership check is skipped.
+    if args.reciprocal {
+        tracing::debug!(
+            issuer_did = %remote.issuer_did,
+            "reciprocal join: signature verified, membership gate bypassed"
+        );
+    } else {
+        enforce_registry_membership(&access, &remote.issuer_did, identity.did()).await?;
+    }
 
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -111,8 +125,11 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     });
     if let Some(reciprocal) = reciprocal {
         output["reciprocal_token"] = Value::String(reciprocal.clone());
-        output["reciprocal_join_command"] =
-            Value::String(format!("defra-agent p2p pairings join {reciprocal}"));
+        // The reciprocal command carries `--reciprocal` so the issuer pairing back
+        // completes the handshake without being re-gated on registry membership.
+        output["reciprocal_join_command"] = Value::String(format!(
+            "defra-agent p2p pairings join --reciprocal {reciprocal}"
+        ));
     }
     if let Some(p2p) = p2p {
         output["p2p"] = p2p;
@@ -122,14 +139,25 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     Ok(())
 }
 
-/// Registry-membership gate on join. If a local `PeerRegistry` exists and is
-/// non-empty, the invite issuer must be a *live* member (status `online` and a
-/// fresh heartbeat); otherwise the join is rejected. An empty or absent registry
-/// is the TOFU bootstrap arm and is allowed (the signature check already ran).
+/// Registry-membership gate on join. If a local `PeerRegistry` holds members
+/// *other than this node itself*, the invite issuer must be a *live* member
+/// (status `online` and a fresh heartbeat); otherwise the join is rejected. An
+/// empty or absent registry — or one whose only entry is this node's own
+/// self-registration row (`self_did`) — is the TOFU bootstrap arm and is allowed
+/// (the signature check already ran).
+///
+/// Excluding `self_did` is essential: every running node self-registers into
+/// `PeerRegistry` via the heartbeat daemon, so without this exclusion a node's
+/// own row would defeat its own bootstrap arm and it could never accept a first
+/// (or reciprocal) invite.
 ///
 /// Mirrors the Lean `signedByMember` predicate: `sigValid ∧ (tofuBootstrap ∨
 /// isMember issuer reg)`.
-async fn enforce_registry_membership(access: &ConfigAccess, issuer_did: &str) -> Result<()> {
+async fn enforce_registry_membership(
+    access: &ConfigAccess,
+    issuer_did: &str,
+    self_did: &str,
+) -> Result<()> {
     let query = r#"query {
         PeerRegistry {
             agent_did
@@ -148,6 +176,7 @@ async fn enforce_registry_membership(access: &ConfigAccess, issuer_did: &str) ->
     };
 
     let now = Utc::now();
+    let self_did = self_did.trim();
     let mut any_members = false;
     let mut issuer_is_live_member = false;
     for row in &rows {
@@ -157,6 +186,11 @@ async fn enforce_registry_membership(access: &ConfigAccess, issuer_did: &str) ->
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let Some(did) = did else { continue };
+        // This node's own self-registration row does not count as a peer member:
+        // a registry holding only ourselves is still the TOFU bootstrap arm.
+        if !self_did.is_empty() && did == self_did {
+            continue;
+        }
         any_members = true;
 
         let status_online =

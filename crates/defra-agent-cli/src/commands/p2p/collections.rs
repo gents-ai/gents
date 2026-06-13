@@ -39,6 +39,7 @@ pub(super) fn p2p_collection_profile_id(profile: P2pCollectionProfileArg) -> &'s
         P2pCollectionProfileArg::DesktopConfig => P2pCollectionProfile::DesktopConfig.id(),
         P2pCollectionProfileArg::ChatRequests => P2pCollectionProfile::ChatRequests.id(),
         P2pCollectionProfileArg::ToolServices => P2pCollectionProfile::ToolServices.id(),
+        P2pCollectionProfileArg::Discovery => P2pCollectionProfile::Discovery.id(),
     }
 }
 
