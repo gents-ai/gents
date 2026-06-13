@@ -68,11 +68,12 @@ async fn current_invite_token_signed(
     identity: &dyn AgentIdentity,
 ) -> Result<InviteToken> {
     let home_dir = resolve_home_dir(home);
-    let mut token = if let Some(t) = build_persisted_token(&home_dir, graphql, profiles.clone(), identity)? {
-        t
-    } else {
-        build_live_token(home, graphql, profiles, identity).await?
-    };
+    let mut token =
+        if let Some(t) = build_persisted_token(&home_dir, graphql, profiles.clone(), identity)? {
+            t
+        } else {
+            build_live_token(home, graphql, profiles, identity).await?
+        };
 
     // Sign: compute payload over token with sig=[] then fill in the signature.
     let payload = signing_payload(&token);
@@ -143,9 +144,7 @@ async fn build_live_token(
     let ticket = normalize_optional_string(shareable_address.address.as_deref())
         .context("runtime did not report a shareable P2P address")?;
     let peer_id = resolve_p2p_peer_id(
-        node_identity
-            .as_ref()
-            .and_then(|id| id.peer_id.as_deref()),
+        node_identity.as_ref().and_then(|id| id.peer_id.as_deref()),
         Some(&ticket),
         &[],
         None,
@@ -203,9 +202,7 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    crate::default_key_path(&home_dir, &config.agent_name)
-                });
+                .unwrap_or_else(|| crate::default_key_path(&home_dir, &config.agent_name));
             let identity = KeyIdentity::load_or_create(&key_path, None)
                 .context("loading agent identity key for invite signing")?;
             Ok(Arc::new(identity))

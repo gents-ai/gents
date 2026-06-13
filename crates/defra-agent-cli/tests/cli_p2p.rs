@@ -212,7 +212,14 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
 
     let collections_add = run_cli_json(
         &home_b,
-        &["p2p", "admin", "collections", "add", "--profile", "chat-requests"],
+        &[
+            "p2p",
+            "admin",
+            "collections",
+            "add",
+            "--profile",
+            "chat-requests",
+        ],
     )?;
     assert_eq!(
         collections_add.get("status").and_then(Value::as_str),

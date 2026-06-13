@@ -38,7 +38,10 @@ pub const TOKEN_PREFIX: &str = "dapair1-";
 pub fn encode(token: &InviteToken) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(token, &mut bytes).context("encoding pairing invite token")?;
-    Ok(format!("{TOKEN_PREFIX}{}", bs58::encode(bytes).into_string()))
+    Ok(format!(
+        "{TOKEN_PREFIX}{}",
+        bs58::encode(bytes).into_string()
+    ))
 }
 
 /// Decode a `TOKEN_PREFIX`-prefixed invite token string.

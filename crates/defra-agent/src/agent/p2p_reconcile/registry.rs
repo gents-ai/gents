@@ -109,9 +109,7 @@ pub async fn run_registry_heartbeat(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Perform the initial registration immediately, then heartbeat.
-    if let Err(error) =
-        tick_registry(&node, &p2p, &agent_did, &network_id, "online").await
-    {
+    if let Err(error) = tick_registry(&node, &p2p, &agent_did, &network_id, "online").await {
         tracing::warn!(
             agent_did = %agent_did,
             network_id = %network_id,
@@ -194,10 +192,7 @@ async fn tick_registry(
     let response = node.execute(&mutation).await;
 
     if response.has_errors() {
-        bail!(
-            "upsert_PeerRegistry failed: {:?}",
-            response.errors
-        );
+        bail!("upsert_PeerRegistry failed: {:?}", response.errors);
     }
 
     tracing::debug!(
