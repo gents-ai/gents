@@ -318,9 +318,11 @@ async fn wait_for_desired_source_gone(
 ///   zero-flake gate. A's discovery reconciler reads B's row identically
 ///   regardless of how it arrived, so the auto-pair property is proven; only the
 ///   physical multi-hop transit of B's row is stubbed.
-/// - Document flow over the auto-wired A<->B pairing is not asserted: registry-
-///   owned rows carry null collections/addresses (the collection-population pass
-///   is future work).
+/// - The materialized registry-owned row IS asserted to carry the collections
+///   expanded from B's offered profile and B's advertised address (R8), so the
+///   pairing reconciler has something concrete to subscribe/replicate. Document
+///   flow over the auto-wired A<->B pairing is still not asserted (that needs a
+///   third live runtime and is out of scope for this zero-flake gate).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -374,6 +376,22 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     )
     .await?;
 
+    // The materialized registry-owned row is not inert: it carries the
+    // collections expanded from B's offered `chat-requests` profile and B's
+    // advertised address, so the pairing reconciler has something to subscribe
+    // and replicate (R8: populate the row from the registry entry).
+    let (collections, addresses) = desired_payload(&node_a.graphql, &peer_b)
+        .await?
+        .context("materialized registry-owned row for B must exist")?;
+    assert!(
+        collections.contains(&"AgentRequest".to_string()),
+        "registry-owned row for B must carry the chat-requests collections (incl. AgentRequest); saw {collections:?}"
+    );
+    assert!(
+        addresses.contains(&synthetic_registry_address(&peer_b)),
+        "registry-owned row for B must carry B's advertised address; saw {addresses:?}"
+    );
+
     // A's row for the seed stays operator-owned; discovery never converts or
     // touches the operator partition.
     assert_eq!(
@@ -386,15 +404,26 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     Ok(())
 }
 
-/// Upsert a `PeerRegistry` row with explicit peer_id + DID and a fresh heartbeat.
+/// The address advertised for a synthetic registry peer (so the discovery
+/// reconciler can copy it into the materialized row's `replicator_addresses`).
+fn synthetic_registry_address(peer_id: &str) -> String {
+    format!("/ip4/127.0.0.1/tcp/6001/p2p/{peer_id}")
+}
+
+/// Upsert a `PeerRegistry` row with explicit peer_id + DID, an advertised
+/// address, an offered `chat-requests` profile, and a fresh heartbeat. The
+/// profile + address are what the discovery reconciler materializes into the
+/// desired row's `collections` / `replicator_addresses`.
 async fn upsert_named_registry_peer(graphql: &str, peer_id: &str, agent_did: &str) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
+    let address = synthetic_registry_address(peer_id);
     let mutation = format!(
         r#"mutation {{
             create_PeerRegistry(input: {{
                 peer_id: "{peer_id}",
                 agent_did: "{agent_did}",
-                addresses: ["/ip4/127.0.0.1/tcp/6001/p2p/{peer_id}"],
+                addresses: ["{address}"],
+                profiles: ["chat-requests"],
                 status: "online",
                 network_id: "default",
                 registered_at: "{now}",
@@ -403,10 +432,50 @@ async fn upsert_named_registry_peer(graphql: &str, peer_id: &str, agent_did: &st
         }}"#,
         peer_id = escape_graphql_string(peer_id),
         agent_did = escape_graphql_string(agent_did),
+        address = escape_graphql_string(&address),
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
     Ok(())
+}
+
+/// Read the `collections` + `replicator_addresses` of the `PeerPairingDesired`
+/// row for `peer_id`, if present.
+async fn desired_payload(
+    graphql: &str,
+    peer_id: &str,
+) -> Result<Option<(Vec<String>, Vec<String>)>> {
+    let escaped = escape_graphql_string(peer_id);
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ peer_id collections replicator_addresses }} }}"#
+        ),
+    )
+    .await?;
+    let Some(row) = response
+        .pointer("/data/PeerPairingDesired")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(None);
+    };
+    let as_strings = |field: &str| -> Vec<String> {
+        row.get(field)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Ok(Some((
+        as_strings("collections"),
+        as_strings("replicator_addresses"),
+    )))
 }
 
 // ---------------------------------------------------------------------------

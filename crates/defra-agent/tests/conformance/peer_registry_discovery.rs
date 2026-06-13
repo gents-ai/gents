@@ -18,6 +18,9 @@ use defra_agent::agent::p2p_reconcile::discovery::{
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     DiscoveredEntry {
         peer_id: peer.to_string(),
+        agent_did: format!("did:key:{peer}"),
+        addresses: vec![format!("/ip4/1/tcp/1/p2p/{peer}")],
+        profiles: vec!["chat-requests".to_string()],
         live,
     }
 }
@@ -93,12 +96,12 @@ impl DiscoveryStore for PartitionStore {
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>> {
         Ok(self.operator_owned.clone())
     }
-    async fn upsert_registry_desired(&self, peer_id: &str) -> Result<()> {
+    async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
         self.registry_owned
             .lock()
             .unwrap()
-            .insert(peer_id.to_string());
-        self.upserts.lock().unwrap().push(peer_id.to_string());
+            .insert(entry.peer_id.clone());
+        self.upserts.lock().unwrap().push(entry.peer_id.clone());
         Ok(())
     }
     async fn delete_registry_desired(&self, peer_id: &str) -> Result<()> {

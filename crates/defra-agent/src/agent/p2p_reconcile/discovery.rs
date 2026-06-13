@@ -35,6 +35,7 @@ use serde::Deserialize;
 use crate::graphql::escape_graphql_string;
 
 use super::engine::PAIRING_SWEEP_INTERVAL;
+use super::profiles::expand_p2p_collection_profile_ids;
 use super::registry::REGISTRY_HEARTBEAT_INTERVAL;
 
 /// The `source` discriminator value for operator-authored desired rows.
@@ -57,6 +58,16 @@ pub const REGISTRY_STALE_AFTER: Duration =
 pub struct DiscoveredEntry {
     /// The libp2p peer id of the registered node.
     pub peer_id: String,
+    /// The agent DID (principal identity) running on the registered node. Used
+    /// to stamp `agent_did` on the materialized desired row.
+    pub agent_did: String,
+    /// Shareable multiaddrs (e.g. `/ip4/.../tcp/.../p2p/<peer_id>`) the peer
+    /// advertised. These become the desired row's `replicator_addresses` so the
+    /// pairing reconciler has somewhere to replicate.
+    pub addresses: Vec<String>,
+    /// Collection profiles the peer offers. Expanded into the desired row's
+    /// `collections` so the pairing reconciler has something to subscribe.
+    pub profiles: Vec<String>,
     /// Effective liveness: `status == "online"` AND heartbeat within
     /// [`REGISTRY_STALE_AFTER`].
     pub live: bool,
@@ -68,6 +79,9 @@ impl DiscoveredEntry {
     /// bit: the reader computes it; the derivation takes it as given.
     pub fn from_row(
         peer_id: String,
+        agent_did: String,
+        addresses: Vec<String>,
+        profiles: Vec<String>,
         status: Option<&str>,
         updated_at: Option<&str>,
         now: DateTime<Utc>,
@@ -86,7 +100,38 @@ impl DiscoveredEntry {
             .unwrap_or(false);
         Self {
             peer_id,
+            agent_did,
+            addresses,
+            profiles,
             live: status_online && fresh,
+        }
+    }
+
+    /// The collection set this entry's offered profiles expand to, for the
+    /// materialized desired row's `collections`.
+    ///
+    /// When the entry offers no profiles we fall back to the `chat-requests`
+    /// profile rather than materializing an inert (empty-collection) row: a
+    /// registry peer that advertised itself but listed no profiles is still
+    /// reachable for the request/response collections, which is the useful
+    /// default for auto-pair. This keeps auto-pair from producing a row the
+    /// pairing reconciler can't act on. (`expand_p2p_collection_profile_ids`
+    /// errors on an empty input, so this fallback also guarantees a non-empty,
+    /// well-formed set.)
+    pub fn desired_collections(&self) -> Result<BTreeSet<String>> {
+        let offered: Vec<&str> = self
+            .profiles
+            .iter()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if offered.is_empty() {
+            expand_p2p_collection_profile_ids(
+                [],
+                [super::profiles::P2pCollectionProfile::ChatRequests.id()],
+            )
+        } else {
+            expand_p2p_collection_profile_ids([], offered)
         }
     }
 }
@@ -139,8 +184,11 @@ pub trait DiscoveryStore: Send + Sync {
     /// materialized in the registry partition.
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>>;
 
-    /// Upsert a **registry-owned** desired row for `peer_id`.
-    async fn upsert_registry_desired(&self, peer_id: &str) -> Result<()>;
+    /// Upsert a **registry-owned** desired row for `entry`, populating it with
+    /// the collections (expanded from the entry's offered profiles) and
+    /// replicator addresses the peer advertised, so the pairing reconciler has
+    /// something concrete to subscribe and replicate.
+    async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()>;
 
     /// Delete the **registry-owned** desired row for `peer_id`. Must not touch
     /// an operator-owned row for the same peer.
@@ -159,6 +207,12 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
     let self_peer = store.self_peer_id().await.context("read self peer id")?;
     let registry = store.load_registry().await.context("load registry")?;
     let derived = derive_registry_desired(&self_peer, &registry);
+    // Index the entries by peer id so the upsert can populate the materialized
+    // row's collections/addresses from the entry the peer advertised.
+    let entry_by_peer: std::collections::BTreeMap<&str, &DiscoveredEntry> = registry
+        .iter()
+        .map(|entry| (entry.peer_id.as_str(), entry))
+        .collect();
     let operator_owned = store
         .list_operator_owned_peers()
         .await
@@ -178,10 +232,15 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
 
     let mut outcome = DiscoveryTickOutcome::default();
 
-    // Materialize: registry-owned rows for newly-derived peers.
+    // Materialize: registry-owned rows for newly-derived peers, each populated
+    // from the registry entry it was derived from.
     for peer in desired.difference(&existing) {
+        let entry = entry_by_peer
+            .get(peer.as_str())
+            .copied()
+            .with_context(|| format!("derived peer {peer} missing from registry entries"))?;
         store
-            .upsert_registry_desired(peer)
+            .upsert_registry_desired(entry)
             .await
             .with_context(|| format!("upsert registry-owned desired row for {peer}"))?;
         outcome.upserted.insert(peer.clone());
@@ -345,6 +404,9 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
         let query = r#"{
             PeerRegistry {
                 peer_id
+                agent_did
+                addresses
+                profiles
                 status
                 updated_at
             }
@@ -361,6 +423,9 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
                 }
                 Some(DiscoveredEntry::from_row(
                     peer_id,
+                    row.agent_did.unwrap_or_default(),
+                    row.addresses.unwrap_or_default(),
+                    row.profiles.unwrap_or_default(),
                     row.status.as_deref(),
                     row.updated_at.as_deref(),
                     now,
@@ -377,9 +442,12 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
         self.list_peers_by_source(SOURCE_OPERATOR).await
     }
 
-    async fn upsert_registry_desired(&self, peer_id: &str) -> Result<()> {
+    async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mutation = upsert_registry_desired_mutation(peer_id, &now);
+        let collections = entry
+            .desired_collections()
+            .with_context(|| format!("expand collections for registry peer {}", entry.peer_id))?;
+        let mutation = upsert_registry_desired_mutation(entry, &collections, &now);
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(&response, "upsert registry-owned PeerPairingDesired")
     }
@@ -391,40 +459,84 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
     }
 }
 
-/// Upsert a registry-owned `PeerPairingDesired` row. The `source` field pins it
-/// to the registry partition so the discovery step never blends with operator
-/// intent. Empty lists are emitted as `null` (never `[]`).
-pub fn upsert_registry_desired_mutation(peer_id: &str, now: &str) -> String {
-    let peer_id = escape_graphql_string(peer_id);
+/// Upsert a registry-owned `PeerPairingDesired` row, populated from the registry
+/// `entry` the peer advertised. The `source` field pins it to the registry
+/// partition so the discovery step never blends with operator intent.
+///
+/// The row carries:
+/// - `collections`: the expanded profile collection set (passed in, guaranteed
+///   non-empty — see [`DiscoveredEntry::desired_collections`]),
+/// - `replicator_addresses`: the entry's advertised addresses,
+/// - `agent_did` / `profiles`: copied from the entry,
+///
+/// so the pairing reconciler downstream has concrete collections to subscribe
+/// and addresses to replicate (without this, auto-pair produced an inert row).
+///
+/// Genuinely-empty lists are emitted as `null` (never `[]`, which corrupts the
+/// nillable array columns). The filter is on `peer_id` alone (the unique index):
+/// the tick only ever upserts peers that have no operator-owned row, so this
+/// never collides with operator intent.
+pub fn upsert_registry_desired_mutation(
+    entry: &DiscoveredEntry,
+    collections: &BTreeSet<String>,
+    now: &str,
+) -> String {
+    let peer_id = escape_graphql_string(&entry.peer_id);
+    let agent_did = graphql_nullable_string_literal(Some(entry.agent_did.as_str()));
     let source = escape_graphql_string(SOURCE_REGISTRY);
+    let collections = graphql_string_list_literal(collections.iter().map(String::as_str));
+    let replicator_addresses =
+        graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
+    let profiles = graphql_string_list_literal(entry.profiles.iter().map(String::as_str));
     let now = escape_graphql_string(now);
-    // The discovery reconciler only materializes the peer membership; collections
-    // and replicator addresses come from the registry profiles in a later pass.
-    // We emit `null` (never `[]`) for the nillable array columns. The filter is
-    // on `peer_id` alone (the unique index): the tick only ever upserts peers
-    // that have no operator-owned row, so this never collides with operator
-    // intent, and the `source` value pins the materialized row to the registry
-    // partition.
     format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
+                    agent_did: {agent_did},
                     source: "{source}",
-                    collections: null,
-                    replicator_addresses: null,
-                    profiles: null,
+                    collections: {collections},
+                    replicator_addresses: {replicator_addresses},
+                    profiles: {profiles},
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
+                    agent_did: {agent_did},
                     source: "{source}",
+                    collections: {collections},
+                    replicator_addresses: {replicator_addresses},
+                    profiles: {profiles},
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
         }}"#
     )
+}
+
+/// Render a GraphQL string-list literal, emitting `null` for an empty list
+/// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
+fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let items: Vec<String> = values
+        .into_iter()
+        .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
+        .collect();
+    if items.is_empty() {
+        "null".to_string()
+    } else {
+        format!("[{}]", items.join(", "))
+    }
+}
+
+/// Render a nullable GraphQL string literal, emitting `null` for absent/blank.
+fn graphql_nullable_string_literal(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
+        .unwrap_or_else(|| "null".to_string())
 }
 
 /// Delete the registry-owned `PeerPairingDesired` row for `peer_id`. The
@@ -462,6 +574,9 @@ where
 #[derive(Deserialize)]
 struct RegistryRow {
     peer_id: String,
+    agent_did: Option<String>,
+    addresses: Option<Vec<String>>,
+    profiles: Option<Vec<String>>,
     status: Option<String>,
     updated_at: Option<String>,
 }
@@ -480,6 +595,9 @@ mod tests {
     fn entry(peer: &str, live: bool) -> DiscoveredEntry {
         DiscoveredEntry {
             peer_id: peer.to_string(),
+            agent_did: format!("did:key:{peer}"),
+            addresses: vec![format!("/ip4/1/tcp/1/p2p/{peer}")],
+            profiles: vec!["chat-requests".to_string()],
             live,
         }
     }
@@ -517,6 +635,9 @@ mod tests {
         // online + fresh (40s ago, under 90s stale window) => live
         let fresh = DiscoveredEntry::from_row(
             "p".into(),
+            "did:key:p".into(),
+            vec![],
+            vec![],
             Some("online"),
             Some("2026-06-13T00:01:00Z"),
             now,
@@ -525,6 +646,9 @@ mod tests {
         // online but stale (>90s ago) => not live
         let stale = DiscoveredEntry::from_row(
             "p".into(),
+            "did:key:p".into(),
+            vec![],
+            vec![],
             Some("online"),
             Some("2026-06-13T00:00:00Z"),
             now,
@@ -533,26 +657,92 @@ mod tests {
         // offline status, fresh heartbeat => not live
         let offline = DiscoveredEntry::from_row(
             "p".into(),
+            "did:key:p".into(),
+            vec![],
+            vec![],
             Some("offline"),
             Some("2026-06-13T00:01:00Z"),
             now,
         );
         assert!(!offline.live);
         // missing heartbeat => not live
-        let no_hb = DiscoveredEntry::from_row("p".into(), Some("online"), None, now);
+        let no_hb = DiscoveredEntry::from_row(
+            "p".into(),
+            "did:key:p".into(),
+            vec![],
+            vec![],
+            Some("online"),
+            None,
+            now,
+        );
         assert!(!no_hb.live);
     }
 
     // ---- mutation shapes ----
 
     #[test]
-    fn upsert_mutation_pins_source_to_registry_and_emits_null_not_empty_lists() {
-        let m = upsert_registry_desired_mutation(r#"peer"a"#, "2026-06-13T00:00:00Z");
+    fn upsert_mutation_pins_source_to_registry_and_escapes_peer() {
+        let mut e = entry(r#"peer"a"#, true);
+        e.addresses = vec![];
+        e.profiles = vec![];
+        let collections = e.desired_collections().unwrap();
+        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
         assert!(m.contains(r#"peer_id: { _eq: "peer\"a" }"#));
         assert!(m.contains(r#"source: "registry""#));
-        assert!(m.contains("collections: null"));
-        assert!(m.contains("replicator_addresses: null"));
+        // No raw empty-list literal is ever emitted (corrupts nillable cols).
         assert!(!m.contains("[]"));
+    }
+
+    #[test]
+    fn upsert_mutation_emits_null_for_genuinely_empty_address_and_profile_lists() {
+        // An entry with no advertised addresses and no offered profiles still
+        // gets a non-empty `collections` (the chat-requests fallback), but its
+        // empty address/profile lists must render as `null`, never `[]`.
+        let mut e = entry("peerEmpty", true);
+        e.addresses = vec![];
+        e.profiles = vec![];
+        let collections = e.desired_collections().unwrap();
+        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
+        assert!(m.contains("replicator_addresses: null"));
+        assert!(m.contains("profiles: null"));
+        assert!(m.contains(r#"collections: ["#)); // non-empty
+        assert!(!m.contains("[]"));
+    }
+
+    #[test]
+    fn materialized_registry_row_carries_entry_collections_and_address() {
+        // A registry entry for peerA offering profile "chat-requests" with
+        // address "/ip4/1/tcp/1/p2p/peerA" → the registry-owned desired upsert
+        // for peerA includes the chat-requests collection set (contains
+        // "AgentRequest") and replicator_addresses contains the entry's
+        // address, NOT null.
+        let e = DiscoveredEntry::from_row(
+            "peerA".into(),
+            "did:key:peerA".into(),
+            vec!["/ip4/1/tcp/1/p2p/peerA".into()],
+            vec!["chat-requests".into()],
+            Some("online"),
+            Some("2026-06-13T00:00:00Z"),
+            DateTime::parse_from_rfc3339("2026-06-13T00:00:01Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let collections = e.desired_collections().expect("expand collections");
+        assert!(
+            collections.contains("AgentRequest"),
+            "chat-requests must expand to AgentRequest: {collections:?}"
+        );
+
+        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
+        // collections is a non-null, non-empty list containing AgentRequest.
+        assert!(m.contains(r#""AgentRequest""#), "mutation: {m}");
+        assert!(!m.contains("collections: null"), "mutation: {m}");
+        // replicator_addresses carries the entry's advertised address, not null.
+        assert!(m.contains(r#""/ip4/1/tcp/1/p2p/peerA""#), "mutation: {m}");
+        assert!(!m.contains("replicator_addresses: null"), "mutation: {m}");
+        // agent_did and source are stamped from the entry / partition.
+        assert!(m.contains(r#"agent_did: "did:key:peerA""#), "mutation: {m}");
+        assert!(m.contains(r#"source: "registry""#), "mutation: {m}");
     }
 
     #[test]
@@ -616,12 +806,12 @@ mod tests {
             // used for exclusion (operator intent wins).
             Ok(self.operator_owned.clone())
         }
-        async fn upsert_registry_desired(&self, peer_id: &str) -> Result<()> {
+        async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
             self.registry_owned
                 .lock()
                 .unwrap()
-                .insert(peer_id.to_string());
-            self.upserts.lock().unwrap().push(peer_id.to_string());
+                .insert(entry.peer_id.clone());
+            self.upserts.lock().unwrap().push(entry.peer_id.clone());
             Ok(())
         }
         async fn delete_registry_desired(&self, peer_id: &str) -> Result<()> {
