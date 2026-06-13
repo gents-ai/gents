@@ -220,10 +220,10 @@ gossip replication.
 
 The split matters. The reconciler only ever tears down wiring it finds in
 `PeerPairingApplied` — so collections or replicators you added by hand with
-the low-level `p2p collections`/`p2p replicators` commands are never touched,
-and deleting a pairing removes exactly what the pairing introduced and nothing
-else. You declare intent; the runtime owns the consequences and can always
-undo precisely its own work.
+the low-level `p2p admin` commands are never touched, and deleting a pairing
+removes exactly what the pairing introduced and nothing else. You declare
+intent; the runtime owns the consequences and can always undo precisely its
+own work.
 
 ## 1. Start a second runtime
 
@@ -326,9 +326,10 @@ Any wiring you had added by hand survives — the reconciler never owned it.
   `--address`, and `--collection`/`--profile` directly. `--did` is required —
   a pairing always names the identity it trusts. `--peer` is optional when an
   `--address` is a shareable ticket the peer id can be derived from.
-- **`p2p connect` / `p2p collections` / `p2p replicators`** are imperative
-  surgery on live state, for non-paired topologies and debugging. They do not
-  write desired documents, so the reconciler leaves their wiring alone.
+- **`p2p admin`** (`connect`, `collections`, `replicators`, `documents`) is
+  the escape hatch: imperative surgery on live state, for non-paired
+  topologies and debugging. It does not write desired documents, so the
+  reconciler leaves its wiring alone.
 
 One last boundary: replication moves *documents*, not *permission*. A child
 node replicating a parent's requests still cannot act as a delegated subagent

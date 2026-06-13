@@ -89,9 +89,9 @@ For the narrated, end-to-end version of this flow — what each document means
 and how to watch the runtime reconcile it — see [Part 2 of the getting-started
 walkthrough](demo.md#part-2--pair-a-second-node).
 
-The low-level `p2p connect`, `p2p collections`, and `p2p replicators`
-commands remain available for diagnostics and repair. They mutate live P2P
-state directly; normal pairing should go through `p2p pairings`
+The low-level `p2p admin` commands (`connect`, `collections`, `replicators`,
+`documents`) remain available for diagnostics and repair. They mutate live
+P2P state directly; normal pairing should go through `p2p pairings`
 (invite/join or `pairings set`).
 
 ## Remote Codex clients

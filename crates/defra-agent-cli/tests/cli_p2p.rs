@@ -184,7 +184,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("Amy readiness JSON missing P2P listen address: {readiness_a}"))?;
 
-    let connect = run_cli_json(&home_b, &["p2p", "connect", "--peer", peer_addr_a])?;
+    let connect = run_cli_json(&home_b, &["p2p", "admin", "connect", "--peer", peer_addr_a])?;
     assert_eq!(
         connect.get("status").and_then(Value::as_str),
         Some("connect_requested")
@@ -212,7 +212,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
 
     let collections_add = run_cli_json(
         &home_b,
-        &["p2p", "collections", "add", "--profile", "chat-requests"],
+        &["p2p", "admin", "collections", "add", "--profile", "chat-requests"],
     )?;
     assert_eq!(
         collections_add.get("status").and_then(Value::as_str),
@@ -227,6 +227,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         &home_b,
         &[
             "p2p",
+            "admin",
             "replicators",
             "add",
             "--peer",

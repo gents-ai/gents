@@ -1749,23 +1749,6 @@ pub(crate) enum P2pCommand {
     Status(P2pAccessArgs),
     #[command(about = "List connected peers for the running runtime")]
     Peers(P2pAccessArgs),
-    #[command(about = "Connect the running runtime to another peer")]
-    Connect(P2pConnectArgs),
-    #[command(about = "Manage collection subscriptions for the running runtime")]
-    Collections {
-        #[command(subcommand)]
-        command: P2pCollectionsCommand,
-    },
-    #[command(about = "Manage push replicators for the running runtime")]
-    Replicators {
-        #[command(subcommand)]
-        command: P2pReplicatorsCommand,
-    },
-    #[command(about = "Manage document subscriptions and document sync")]
-    Documents {
-        #[command(subcommand)]
-        command: P2pDocumentsCommand,
-    },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
     #[command(
@@ -1773,12 +1756,49 @@ pub(crate) enum P2pCommand {
         after_help = "\
 Pairings are declarative: every subcommand here writes or reads \
 PeerPairingDesired documents, and the running runtime reconciles live P2P \
-state toward them. The imperative `p2p connect/collections/replicators` \
-commands are the low-level surgery layer for non-paired topologies."
+state toward them. This is the normal way to configure P2P. The imperative \
+`p2p admin` commands mutate live wiring directly and are an escape hatch for \
+diagnostics, break-glass repair, and non-paired topologies."
     )]
     Pairings {
         #[command(subcommand)]
         command: P2pPairingsCommand,
+    },
+    #[command(
+        about = "Low-level live P2P admin (escape hatch — prefer `p2p pairings`)",
+        after_help = "\
+These commands mutate live P2P state on the running runtime directly, without \
+writing PeerPairingDesired documents — so the pairing reconciler does not own \
+or manage what they install. Use them for diagnostics, break-glass repair when \
+the reconciler is the suspect component, and intentionally ad-hoc topologies \
+(one-off document fetches, test connectivity). For normal pairing, use \
+`p2p pairings`."
+    )]
+    Admin {
+        #[command(subcommand)]
+        command: P2pAdminCommand,
+    },
+}
+
+/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
+#[derive(Subcommand)]
+pub(crate) enum P2pAdminCommand {
+    #[command(about = "Connect the running runtime to another peer")]
+    Connect(P2pConnectArgs),
+    #[command(about = "Manage live collection subscriptions on the running runtime")]
+    Collections {
+        #[command(subcommand)]
+        command: P2pCollectionsCommand,
+    },
+    #[command(about = "Manage live push replicators on the running runtime")]
+    Replicators {
+        #[command(subcommand)]
+        command: P2pReplicatorsCommand,
+    },
+    #[command(about = "Manage live document subscriptions and document sync")]
+    Documents {
+        #[command(subcommand)]
+        command: P2pDocumentsCommand,
     },
 }
 
