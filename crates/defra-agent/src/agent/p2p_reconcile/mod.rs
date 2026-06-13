@@ -5,6 +5,7 @@ pub mod embedded_impl;
 pub mod engine;
 pub mod error_class;
 pub mod profiles;
+pub mod registry;
 pub mod trait_def;
 
 pub use diff::{
@@ -18,6 +19,7 @@ pub use engine::{
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
+pub use registry::{registry_upsert_mutation, run_registry_heartbeat, RegistryEntry, REGISTRY_HEARTBEAT_INTERVAL};
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,
 };
