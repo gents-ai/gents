@@ -19,6 +19,14 @@ structure ResponseTransitionCase where
   postStatus                 : String
   preLiveTail                : String
   postLiveTail               : String
+  /-- Issue #492: reasoning-presence of the live tail before/after the step. -/
+  preTailReasoning           : String := "empty"
+  postTailReasoning          : String := "empty"
+  /-- Issue #492: durable reasoning-presence persisted into the materialized
+  `AgentMessage.reasoning` field before/after the step. Only a
+  `finalize_complete` materialize step copies `tailReasoning` here. -/
+  preDurableReasoning        : String := "empty"
+  postDurableReasoning       : String := "empty"
   preTokenCount              : Nat
   postTokenCount             : Nat
   errorReason                : Option String
@@ -93,6 +101,8 @@ def writeReasoningNoTokenBump : ResponseTransitionCase :=
   , postStatus := "streaming"
   , preLiveTail := "empty"
   , postLiveTail := "nonEmpty"
+  , preTailReasoning := "empty"
+  , postTailReasoning := "nonEmpty"
   , preTokenCount := 0
   , postTokenCount := 0
   , errorReason := none
@@ -147,6 +157,12 @@ def finalizeCompleteClearsAndMaterializes : ResponseTransitionCase :=
   , postStatus := "complete"
   , preLiveTail := "nonEmpty"
   , postLiveTail := "empty"
+  -- issue #492: reasoning present in the live tail is durably copied into
+  -- the materialized message while the live tail still clears to empty.
+  , preTailReasoning := "nonEmpty"
+  , postTailReasoning := "nonEmpty"
+  , preDurableReasoning := "empty"
+  , postDurableReasoning := "nonEmpty"
   , preTokenCount := 10
   , postTokenCount := 10
   , errorReason := none
@@ -255,6 +271,10 @@ def bridgeCompletedPairsRequestCommitted : ResponseTransitionCase :=
   , postStatus := "complete"
   , preLiveTail := "nonEmpty"
   , postLiveTail := "empty"
+  , preTailReasoning := "nonEmpty"
+  , postTailReasoning := "nonEmpty"
+  , preDurableReasoning := "empty"
+  , postDurableReasoning := "nonEmpty"
   , preTokenCount := 15
   , postTokenCount := 15
   , errorReason := none

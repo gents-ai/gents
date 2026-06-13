@@ -30,7 +30,10 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
   | writeReasoning
       {pre post : ResponseContext} :
       pre.status = .streaming →
-      post = { pre with liveTail := .nonEmpty, lastProgressAt := pre.now } →
+      post = { pre with
+        liveTail := .nonEmpty
+      , tailReasoning := .nonEmpty
+      , lastProgressAt := pre.now } →
       Transition pre post
   | flushPending
       {pre post : ResponseContext} :
@@ -40,7 +43,7 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
   | resetTail
       {pre post : ResponseContext} :
       pre.status = .streaming →
-      post = { pre with liveTail := .empty } →
+      post = { pre with liveTail := .empty, tailReasoning := .empty } →
       Transition pre post
   | setInterruptedAt
       {pre post : ResponseContext} {t : Time} :
@@ -54,6 +57,11 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
       post = { pre with
         status := .completed
       , liveTail := .empty
+      -- issue #492: copy-then-clear. The reasoning present in the live tail
+      -- is durably persisted into the materialized message BEFORE the live
+      -- tail is cleared. `durableReasoning` captures that copy; `liveTail`
+      -- still clears to `.empty` (issue #64 invariant preserved).
+      , durableReasoning := pre.tailReasoning
       , materializedMessageSequence := some seq } →
       Transition pre post
   | finalizeError
@@ -92,6 +100,7 @@ inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge →
       post.response = { pre.response with
         status := .completed
       , liveTail := .empty
+      , durableReasoning := pre.response.tailReasoning
       , materializedMessageSequence := some seq } →
       pre.requestState = .processing →
       post.requestState = .completed →

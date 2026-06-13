@@ -113,6 +113,13 @@ crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc9
 ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+# rig-core fork: upstream rig's OpenAI provider drops reasoning from vLLM-style
+# servers. The Responses streaming decoder only handles OpenAI's hosted
+# `response.reasoning_summary_text.delta`; vLLM streams the raw chain-of-thought
+# as `response.reasoning_text.delta`, which rig has no variant for (also a
+# `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
+# fork our Responses-API reasoning capture is silently empty.
+rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "564359a62d6354ff474f9564f03d0e5be3011695" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }

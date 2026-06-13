@@ -201,6 +201,17 @@ pub(crate) struct LeanResponseTransitionCase {
     pub(crate) post_status: String,
     pub(crate) pre_live_tail: String,
     pub(crate) post_live_tail: String,
+    /// #492 reasoning-presence in the live tail before/after the step.
+    #[serde(default)]
+    pub(crate) pre_tail_reasoning: String,
+    #[serde(default)]
+    pub(crate) post_tail_reasoning: String,
+    /// #492 durable reasoning-presence persisted into the materialized
+    /// `AgentMessage.reasoning` field before/after the step.
+    #[serde(default)]
+    pub(crate) pre_durable_reasoning: String,
+    #[serde(default)]
+    pub(crate) post_durable_reasoning: String,
     pub(crate) pre_token_count: usize,
     pub(crate) post_token_count: usize,
     pub(crate) error_reason: Option<String>,

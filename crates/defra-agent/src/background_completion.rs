@@ -683,7 +683,8 @@ pub(crate) async fn append_background_tool_completion(
                 let notification =
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
                 let sequence =
-                    session::append_message(node, parent_session_id, "user", &notification).await?;
+                    session::append_message(node, parent_session_id, "user", &notification, None)
+                        .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
                 (timestamp, true)
             }
@@ -740,7 +741,8 @@ async fn ensure_projection_side_effects(
             None => {
                 let notification = render_notification(edge, status, summary);
                 let sequence =
-                    session::append_message(node, parent_session_id, "user", &notification).await?;
+                    session::append_message(node, parent_session_id, "user", &notification, None)
+                        .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
                 (sequence, timestamp, true)
             }

@@ -93,6 +93,68 @@ theorem recovery_path_preserves_liveTail
     rw [h_post] at h_reason
     exact absurd h_reason h_pre_no_recovery
 
+/-- Issue #492 durable-reasoning persistence, co-held with the #64
+live-tail clear. On a `finalizeComplete` materialize step, BOTH invariants
+hold simultaneously:
+
+* the live `liveTail` STILL clears to `.empty` (issue #64 contract), and
+* the reasoning present in the live tail (`pre.tailReasoning`) is durably
+  copied into `post.durableReasoning` — the formal model of writing the
+  reasoning into the materialized `AgentMessage.reasoning` field.
+
+This is the load-bearing proof for PR #492: the durable copy is a NEW,
+separate persistence captured AT materialize time (`durableReasoning :=
+pre.tailReasoning`), NOT a relaxation of the tail-clear. -/
+theorem finalize_persists_durable_reasoning_and_clears_tail
+    {pre post : ResponseContext} {seq : Transcript.Sequence}
+    (_h : Transition pre post)
+    (h_finalize : post = { pre with
+        status := .completed
+      , liveTail := .empty
+      , durableReasoning := pre.tailReasoning
+      , materializedMessageSequence := some seq }) :
+    post.liveTail = .empty ∧ post.durableReasoning = pre.tailReasoning := by
+  rw [h_finalize]
+  exact ⟨rfl, rfl⟩
+
+/-- The reachable form: any `finalizeComplete` step both clears the live
+tail to `.empty` and persists the durable reasoning copy. Stated directly
+over the `Transition.finalizeComplete` constructor so the contract is tied
+to the actual transition relation, not just a record shape. -/
+theorem finalizeComplete_copies_reasoning_then_clears
+    {pre post : ResponseContext}
+    (h_streaming : pre.status = .streaming)
+    (h : Transition pre post)
+    (h_completed : post.status = .completed) :
+    post.liveTail = .empty ∧ post.durableReasoning = pre.tailReasoning := by
+  cases h with
+  | begin _ _ _ _ h_post =>
+    rw [h_post] at h_completed; rw [h_streaming] at h_completed; cases h_completed
+  | writeTokens _ _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | writeReasoning _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | flushPending _ h_post =>
+    rw [h_post] at h_completed; rw [h_streaming] at h_completed; cases h_completed
+  | resetTail _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | setInterruptedAt _ _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | finalizeComplete _ h_post =>
+    rw [h_post]; exact ⟨rfl, rfl⟩
+  | finalizeError _ _ _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+  | recoverInterrupted _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+  | observeIdempotentFinalize h_pre_term h_post =>
+    cases h_pre_term with
+    | inl h => rw [h] at h_streaming; cases h_streaming
+    | inr h => rw [h] at h_streaming; cases h_streaming
+
 theorem completed_liveTail_is_empty_one_step
     {pre post : ResponseContext}
     (h : Transition pre post)

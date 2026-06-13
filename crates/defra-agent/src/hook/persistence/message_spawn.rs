@@ -3,6 +3,15 @@ use super::*;
 impl DefraSessionHook {
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
         let content = serde_json::to_string(message)?;
+        // #492: durably persist the assistant turn's chain-of-thought reasoning
+        // into `AgentMessage.reasoning` at materialize time. The reasoning is
+        // already embedded in the serialized `content` blob, but we extract a
+        // readable copy into the dedicated field so a post-finalize reader (our
+        // offline harvest) can recover it even though the live
+        // `AgentResponse.reasoning` tail is cleared on finalize (#64). Only
+        // assistant messages carry reasoning; users/tool-results yield `None`.
+        let reasoning = defra_agent_protocol::transcript::extract_message_reasoning(message);
+        let reasoning = reasoning.as_deref();
         let (session_id, turn_state, message_key, existing_sequence) = {
             let state = self.state.lock().await;
             let session_id = state
@@ -34,7 +43,8 @@ impl DefraSessionHook {
                     anyhow::bail!("system messages are not persisted in session history");
                 }
             };
-            let sequence = session::append_message(&self.node, &session_id, role, &content).await?;
+            let sequence =
+                session::append_message(&self.node, &session_id, role, &content, reasoning).await?;
             let mut state = self.state.lock().await;
             if state.session_id.as_deref() == Some(session_id.as_str()) {
                 state.sequence = state.sequence.max(sequence);
@@ -104,12 +114,14 @@ impl DefraSessionHook {
                     sequence,
                     role,
                     &content,
+                    reasoning,
                     &message_key,
                 )
                 .await?;
             }
             None => {
-                session::save_message(&self.node, &session_id, sequence, role, &content).await?;
+                session::save_message(&self.node, &session_id, sequence, role, &content, reasoning)
+                    .await?;
             }
         }
         Ok(sequence)
