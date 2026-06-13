@@ -16,6 +16,19 @@ use crate::retry::RetryPolicy;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::watcher::AgentRequest;
 
+/// Force the legacy Chat Completions client for OpenAI-compatible backends
+/// (`DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1`). Default (unset) is the Responses
+/// API. Used by backends that don't serve `/v1/responses` and by the CLI
+/// integration tests whose mock + assertions are chat-format.
+fn force_chat_completions() -> bool {
+    matches!(
+        std::env::var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true")
+    )
+}
+
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
@@ -135,25 +148,53 @@ impl RuntimeContext {
                 // (`build_responses_client`), so this swap reuses that machinery. The
                 // Responses API gives first-class, round-trippable structured reasoning
                 // (`encrypted_content`) instead of the unstandardized chat side-channel.
-                let client: rig::providers::openai::Client<
-                    crate::inference_http::SessionTaggingHttpClient,
-                > = rig::providers::openai::Client::builder()
-                    .api_key(&api_key)
-                    .base_url(&behavior.backend_endpoint)
-                    .http_client(crate::inference_http::SessionTaggingHttpClient::default())
-                    .build()
-                    .with_context(|| build_context.clone())?;
-                self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    client,
-                )
-                .await
+                //
+                // `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1` forces the legacy Chat
+                // Completions client (`CompletionsClient`) — for OpenAI-compatible
+                // backends that don't serve `/v1/responses`, and for the CLI
+                // integration tests whose mock + assertions are chat-format. The
+                // owned loop is identical for both, so this only changes the wire API.
+                if force_chat_completions() {
+                    let client: rig::providers::openai::CompletionsClient<
+                        crate::inference_http::SessionTaggingHttpClient,
+                    > = rig::providers::openai::CompletionsClient::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .http_client(crate::inference_http::SessionTaggingHttpClient::default())
+                        .build()
+                        .with_context(|| build_context.clone())?;
+                    self.run_behavior_with_client(
+                        behavior,
+                        request_rx,
+                        shutdown,
+                        prompt_builder,
+                        preamble,
+                        loop_tools.clone(),
+                        background_tool_registry,
+                        client,
+                    )
+                    .await
+                } else {
+                    let client: rig::providers::openai::Client<
+                        crate::inference_http::SessionTaggingHttpClient,
+                    > = rig::providers::openai::Client::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .http_client(crate::inference_http::SessionTaggingHttpClient::default())
+                        .build()
+                        .with_context(|| build_context.clone())?;
+                    self.run_behavior_with_client(
+                        behavior,
+                        request_rx,
+                        shutdown,
+                        prompt_builder,
+                        preamble,
+                        loop_tools.clone(),
+                        background_tool_registry,
+                        client,
+                    )
+                    .await
+                }
             }
             BackendProviderKind::OpenRouter => {
                 let build_context = format!(
