@@ -13,8 +13,8 @@ pub use diff::{
 };
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use engine::{
-    reconcile_peer_tick, run_pairing_reconciler, GraphqlPairingStateStore, PairingStateStore,
-    PairingTickOutcome, PAIRING_SWEEP_INTERVAL,
+    reconcile_peer_tick, run_pairing_reconciler, update_applied_after_success,
+    GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome, PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};

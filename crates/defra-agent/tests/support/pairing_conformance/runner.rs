@@ -10,6 +10,10 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use defra_agent::agent::p2p_reconcile::{
+    compute_owned_pairing_diff, update_applied_after_success, DiffOp,
+    PairingActual as RuntimePairingActual,
+};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
 
@@ -117,8 +121,10 @@ impl Harness {
                     .await?;
             }
             Action::ReadFailure { node } => {
-                let _ = self.node(node)?;
-                self.record_observation_with_read_failed(true).await?;
+                self.node_mut(node)?.drop_next_reconcile = true;
+                let read_failed = self.reconcile_node(node).await?.read_failed();
+                self.record_observation_with_read_failed(read_failed)
+                    .await?;
             }
             Action::PreseedActual {
                 node,
@@ -141,7 +147,7 @@ impl Harness {
                 self.node_mut(node)?.drop_next_reconcile = true;
             }
             Action::Crash { node } => {
-                self.node_mut(node)?.drop_next_reconcile = false;
+                self.crash_node(node).await?;
                 self.record_observation().await?;
             }
             Action::WaitForConvergence { timeout_secs } => {
@@ -169,9 +175,9 @@ impl Harness {
             read_desired_state(node, peer_id).await?
         };
         if node_id == "A" {
-            apply_desired_state(&mut self.a, &mut self.b, &desired);
+            apply_desired_state(&mut self.a, &mut self.b, &desired, peer_id).await?;
         } else {
-            apply_desired_state(&mut self.b, &mut self.a, &desired);
+            apply_desired_state(&mut self.b, &mut self.a, &desired, peer_id).await?;
         }
         Ok(ReconcileOutcome::Applied)
     }
@@ -220,6 +226,18 @@ impl Harness {
         }
     }
 
+    async fn crash_node(&mut self, id: &NodeId) -> Result<()> {
+        let peer_id = peer_id_for_reconciler(id)?;
+        let node = self.node_mut(id)?;
+        node.drop_next_reconcile = false;
+        node.applied_collections.clear();
+        node.applied_replicator_addresses.clear();
+        let applied = read_peer_pairing_applied(node, peer_id).await?;
+        node.applied_collections = applied.collections;
+        node.applied_replicator_addresses = applied.replicator_addresses;
+        Ok(())
+    }
+
     async fn current_snapshot(&self) -> Result<ObservedSnapshot> {
         Ok(ObservedSnapshot {
             desired: read_desired_state(&self.a, "B").await?,
@@ -250,51 +268,59 @@ impl Harness {
     }
 }
 
-fn apply_desired_state(
+async fn apply_desired_state(
     reconciler: &mut HarnessNode,
     peer: &mut HarnessNode,
     desired: &PairingDesired,
-) {
+    peer_id: &str,
+) -> Result<()> {
     if desired.has_wiring() && !peer.actual_connected {
         peer.actual_connected = true;
     }
 
-    for collection in desired.collections.iter() {
-        if peer.actual_collections.insert(collection.clone()) {
-            reconciler.applied_collections.insert(collection.clone());
-        }
+    let actual = RuntimePairingActual {
+        collections: peer.actual_collections.clone(),
+        replicator_addresses: peer.actual_replicator_addresses.clone(),
+    };
+    let mut applied = PairingApplied {
+        collections: reconciler.applied_collections.clone(),
+        replicator_addresses: reconciler.applied_replicator_addresses.clone(),
+    };
+    for op in compute_owned_pairing_diff(desired, &actual, &applied) {
+        apply_op_to_actual(peer, &op);
+        update_applied_after_success(&mut applied, &op);
+        reconciler.applied_collections = applied.collections.clone();
+        reconciler.applied_replicator_addresses = applied.replicator_addresses.clone();
+        write_peer_pairing_applied(reconciler, peer_id, &applied).await?;
     }
-    for replicator in desired.replicator_addresses.iter() {
-        if peer.actual_replicator_addresses.insert(replicator.clone()) {
-            reconciler
-                .applied_replicator_addresses
-                .insert(replicator.clone());
-        }
-    }
+    Ok(())
+}
 
-    let collections_to_remove = reconciler
-        .applied_collections
-        .difference(&desired.collections)
-        .cloned()
-        .collect::<Vec<_>>();
-    for collection in collections_to_remove {
-        peer.actual_collections.remove(&collection);
-        reconciler.applied_collections.remove(&collection);
-    }
-
-    let replicators_to_remove = reconciler
-        .applied_replicator_addresses
-        .difference(&desired.replicator_addresses)
-        .cloned()
-        .collect::<Vec<_>>();
-    for replicator in replicators_to_remove {
-        peer.actual_replicator_addresses.remove(&replicator);
-        reconciler.applied_replicator_addresses.remove(&replicator);
+fn apply_op_to_actual(peer: &mut HarnessNode, op: &DiffOp) {
+    match op {
+        DiffOp::InstallCollection(collection) => {
+            peer.actual_collections.insert(collection.clone());
+        }
+        DiffOp::TeardownCollection(collection) => {
+            peer.actual_collections.remove(collection);
+        }
+        DiffOp::InstallReplicator(address) => {
+            peer.actual_replicator_addresses.insert(address.clone());
+        }
+        DiffOp::TeardownReplicator(address) => {
+            peer.actual_replicator_addresses.remove(address);
+        }
     }
 }
 
 #[derive(Deserialize)]
 struct DesiredRow {
+    collections: Option<Vec<String>>,
+    replicator_addresses: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct AppliedRow {
     collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
 }
@@ -410,7 +436,108 @@ async fn delete_peer_pairing_desired(node: &HarnessNode, peer: &str) -> Result<(
     Ok(())
 }
 
+async fn read_peer_pairing_applied(node: &HarnessNode, peer: &str) -> Result<PairingApplied> {
+    let peer = escape_graphql_string(peer);
+    let query = format!(
+        r#"{{
+            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{
+                collections
+                replicator_addresses
+            }}
+        }}"#
+    );
+    let resp = node.db.node.execute(&query).await;
+    if resp.has_errors() {
+        bail!("read PeerPairingApplied failed: {:?}", resp.errors);
+    }
+    let row = first_optional_row::<AppliedRow>(&resp, "PeerPairingApplied");
+    Ok(PairingApplied {
+        collections: row
+            .as_ref()
+            .and_then(|row| row.collections.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        replicator_addresses: row
+            .and_then(|row| row.replicator_addresses)
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+    })
+}
+
+async fn write_peer_pairing_applied(
+    node: &HarnessNode,
+    peer: &str,
+    applied: &PairingApplied,
+) -> Result<()> {
+    let peer = escape_graphql_string(peer);
+    let mutation = if applied.is_empty() {
+        format!(
+            r#"mutation {{
+                delete_PeerPairingApplied(
+                    filter: {{ peer_id: {{ _eq: "{peer}" }} }}
+                ) {{ _docID }}
+            }}"#
+        )
+    } else {
+        let collections = graphql_string_set_literal(&applied.collections);
+        let replicator_addresses = graphql_string_set_literal(&applied.replicator_addresses);
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let now = escape_graphql_string(&now);
+        format!(
+            r#"mutation {{
+                upsert_PeerPairingApplied(
+                    filter: {{ peer_id: {{ _eq: "{peer}" }} }},
+                    add: {{
+                        peer_id: "{peer}",
+                        collections: {collections},
+                        replicator_addresses: {replicator_addresses},
+                        created_at: "{now}",
+                        updated_at: "{now}"
+                    }},
+                    update: {{
+                        collections: {collections},
+                        replicator_addresses: {replicator_addresses},
+                        updated_at: "{now}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        )
+    };
+    let resp = node.db.node.execute(&mutation).await;
+    if resp.has_errors() {
+        bail!("write PeerPairingApplied failed: {:?}", resp.errors);
+    }
+    Ok(())
+}
+
+fn peer_id_for_reconciler(node: &NodeId) -> Result<&'static str> {
+    if node == "A" {
+        Ok("B")
+    } else if node == "B" {
+        Ok("A")
+    } else {
+        bail!("unknown node {node}")
+    }
+}
+
 fn graphql_string_array(values: &[String]) -> String {
+    if values.is_empty() {
+        return "null".to_string();
+    }
+
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn graphql_string_set_literal(values: &BTreeSet<String>) -> String {
     if values.is_empty() {
         return "null".to_string();
     }

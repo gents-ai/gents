@@ -41,7 +41,26 @@ fn command_words(argv: &[String]) -> Vec<&str> {
             continue;
         }
         words.push(s);
-        words.extend(iter.map(String::as_str).filter(|arg| !arg.starts_with('-')));
+        while let Some(arg) = iter.next() {
+            let s = arg.as_str();
+            if s == "--" {
+                break;
+            }
+            if s.starts_with("--") {
+                if !s.contains('=') {
+                    if let Some(next) = iter.peek() {
+                        if !next.starts_with('-') {
+                            iter.next();
+                        }
+                    }
+                }
+                continue;
+            }
+            if s.starts_with('-') {
+                continue;
+            }
+            words.push(s);
+        }
         break;
     }
 
@@ -136,6 +155,21 @@ mod tests {
                 "warning: `defra-agent p2p pairings remove` is deprecated; use `defra-agent p2p pairings rm`"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn trailing_option_values_are_skipped() {
+        assert_eq!(
+            command_words(&argv(&[
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "remove",
+                "--peer",
+                "peer-1",
+            ])),
+            vec!["p2p", "pairings", "remove"]
         );
     }
 }

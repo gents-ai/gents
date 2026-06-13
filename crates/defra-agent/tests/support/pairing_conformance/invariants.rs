@@ -2,6 +2,10 @@
 
 use std::collections::BTreeSet;
 
+use defra_agent::agent::p2p_reconcile::{
+    compute_owned_pairing_diff, PairingActual as RuntimePairingActual,
+};
+
 use super::{PairingActual, PairingApplied, PairingDesired};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +22,8 @@ pub enum SafetyViolation {
     AppliedReplicatorWithoutPriorDesired { replicator: String },
     ReadFailureChangedActual,
     ReadFailureChangedApplied,
+    ConvergedSnapshotHasPendingOps,
+    ConvergedStableDesiredFlapped,
     UnmanagedCollectionRemoved { collection: String },
     UnmanagedReplicatorRemoved { replicator: String },
 }
@@ -45,11 +51,23 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
             }
         }
 
+        if check_liveness(snapshot) && !pending_owned_ops(snapshot).is_empty() {
+            return Err(SafetyViolation::ConvergedSnapshotHasPendingOps);
+        }
+
         if index == 0 {
             continue;
         }
 
         let previous = &history[index - 1];
+        if check_liveness(previous)
+            && previous.desired == snapshot.desired
+            && !snapshot.read_failed
+            && managed_or_desired_wiring_changed(previous, snapshot)
+        {
+            return Err(SafetyViolation::ConvergedStableDesiredFlapped);
+        }
+
         if snapshot.read_failed {
             if snapshot.actual != previous.actual {
                 return Err(SafetyViolation::ReadFailureChangedActual);
@@ -84,6 +102,34 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
         }
     }
     Ok(())
+}
+
+fn pending_owned_ops(
+    snapshot: &ObservedSnapshot,
+) -> Vec<defra_agent::agent::p2p_reconcile::DiffOp> {
+    compute_owned_pairing_diff(
+        &snapshot.desired,
+        &RuntimePairingActual {
+            collections: snapshot.actual.collections.clone(),
+            replicator_addresses: snapshot.actual.replicator_addresses.clone(),
+        },
+        &snapshot.applied,
+    )
+}
+
+fn managed_or_desired_wiring_changed(
+    previous: &ObservedSnapshot,
+    snapshot: &ObservedSnapshot,
+) -> bool {
+    previous.applied != snapshot.applied
+        || previous.desired.collections.iter().any(|collection| {
+            previous.actual.collections.contains(collection)
+                != snapshot.actual.collections.contains(collection)
+        })
+        || previous.desired.replicator_addresses.iter().any(|address| {
+            previous.actual.replicator_addresses.contains(address)
+                != snapshot.actual.replicator_addresses.contains(address)
+        })
 }
 
 pub fn check_liveness(final_snapshot: &ObservedSnapshot) -> bool {
@@ -200,5 +246,21 @@ mod tests {
 
         let connected = snap_with_replicators(&["/ip4/1"], &["/ip4/1"], &["/ip4/1"], true);
         assert!(check_liveness(&connected));
+    }
+
+    #[test]
+    fn converged_snapshot_has_no_pending_owned_ops() {
+        let snapshot = snap(&["c1"], &["c1"], &["c1"]);
+        assert_eq!(check_safety(&[snapshot]), Ok(()));
+    }
+
+    #[test]
+    fn stable_desired_does_not_flap_after_convergence() {
+        let before = snap(&["c1"], &["c1"], &["c1"]);
+        let after = snap(&["c1"], &[], &[]);
+        assert!(matches!(
+            check_safety(&[before, after]),
+            Err(SafetyViolation::ConvergedStableDesiredFlapped)
+        ));
     }
 }

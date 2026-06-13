@@ -244,7 +244,7 @@ async fn apply_op(
     }
 }
 
-fn update_applied_after_success(applied: &mut PairingApplied, op: &DiffOp) {
+pub fn update_applied_after_success(applied: &mut PairingApplied, op: &DiffOp) {
     match op {
         DiffOp::InstallCollection(collection) => {
             applied.collections.insert(collection.clone());

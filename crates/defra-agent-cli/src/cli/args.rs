@@ -1872,7 +1872,11 @@ defra-agent runtime applies desired rows on its pairing sweep. Use \
 immediately."
     )]
     Set(P2pPairingSetArgs),
-    #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
+    #[command(
+        name = "rm",
+        about = "Remove a desired out-of-band P2P pairing",
+        aliases = ["remove", "unpair"]
+    )]
     Remove(P2pPairingRefArgs),
 }
 
@@ -2708,6 +2712,7 @@ mod tests {
         for argv in [
             vec!["defra-agent", "config", "task", "list"],
             vec!["defra-agent", "p2p", "unpair", "--peer", "p1"],
+            vec!["defra-agent", "p2p", "pairings", "rm", "--peer", "p1"],
             vec!["defra-agent", "show", "request", "req-1"],
         ] {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
