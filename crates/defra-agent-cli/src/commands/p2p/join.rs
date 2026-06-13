@@ -3,17 +3,44 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::expand_p2p_collection_profile_ids;
+use defra_agent_protocol::pairing_token::{decode, signing_payload};
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pJoinArgs;
 use crate::request_helpers::parse_duration_suffix;
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
-use super::invite::{current_invite_token, decode, encode, profile_ids_or_default};
+use super::invite::{current_invite_token, encode_token, profile_ids_or_default, resolve_home_identity};
 use super::pairings::{peer_pairing_exists, wait_for_pairing_connected, write_pairing_desired};
 
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let remote = decode(&args.token)?;
+
+    // Verify the issuer's signature over the token payload (TOFU).
+    // TODO(R5): registry membership check — verify issuer_did is a registered peer-registry member.
+    let identity = resolve_home_identity(args.home.as_deref())
+        .context("resolving local agent identity for invite verification")?;
+    let payload = signing_payload(&remote);
+    let valid = identity
+        .verify(&remote.issuer_did, &payload, &remote.sig)
+        .await
+        .with_context(|| {
+            format!(
+                "verifying pairing invite signature for issuer {}",
+                remote.issuer_did
+            )
+        })?;
+    if !valid {
+        anyhow::bail!(
+            "pairing invite signature invalid for issuer {}",
+            remote.issuer_did
+        );
+    }
+    tracing::debug!(
+        issuer_did = %remote.issuer_did,
+        "pairing invite signature verified"
+    );
+
     let profiles = accepted_profiles(&remote.profiles, &args)?;
     let collections = expand_p2p_collection_profile_ids(
         std::iter::empty::<&str>(),
@@ -28,10 +55,11 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    // Thread issuer_did through as the `invited_by` value on the desired row.
     let doc_id = write_pairing_desired(
         &access,
         &remote.peer_id,
-        Some(&remote.did),
+        Some(&remote.issuer_did),
         &collections,
         &addresses,
         &profiles,
@@ -53,7 +81,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         None
     } else {
         let token = current_invite_token(args.home.as_deref(), &graphql, profiles.clone()).await?;
-        Some(encode(&token)?)
+        Some(encode_token(&token)?)
     };
 
     let mut output = json!({
@@ -62,7 +90,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         "graphql": graphql,
         "access_mode": access.mode(),
         "peer_id": remote.peer_id,
-        "agent_did": remote.did,
+        "agent_did": remote.issuer_did,
         "profiles": profiles,
         "collections": collections,
         "replicator_addresses": addresses,

@@ -7,7 +7,9 @@ description = "Shared schemas, client turn-observation protocol, and collection 
 
 [dependencies]
 anyhow = { workspace = true }
+bs58 = "0.5"
 chrono = { workspace = true }
+ciborium = "0.2"
 defra-agent-schemas = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true, features = ["derive"] }
