@@ -163,6 +163,10 @@ fn rig_vocabulary_confined_to_the_seam() {
         "crates/defra-agent/src/agent/loop_stream/tests.rs",
         "crates/defra-agent/src/agent/stream_processor/tests.rs",
         "crates/defra-agent/src/compaction/tests.rs",
+        // Constructs a rig `Message` to drive the real OpenAI request-body
+        // conversion and assert the default additional_params (reasoning effort /
+        // enable_thinking) serialize correctly — feeds the seam like the tests above.
+        "crates/defra-agent/src/completion_factory/tests.rs",
         "crates/defra-agent-protocol/src/message.rs",
     ]
     .into_iter()
