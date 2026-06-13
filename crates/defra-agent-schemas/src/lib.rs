@@ -50,6 +50,8 @@ pub const PEER_PAIRING_DESIRED: &str =
 pub const PEER_PAIRING_APPLIED_NAME: &str = "PeerPairingApplied";
 pub const PEER_PAIRING_APPLIED: &str =
     include_str!("../schemas/agent/peer_pairing_applied.graphql");
+pub const PEER_REGISTRY_NAME: &str = "PeerRegistry";
+pub const PEER_REGISTRY: &str = include_str!("../schemas/agent/peer_registry.graphql");
 
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
@@ -74,6 +76,7 @@ pub const ALL: &[&str] = &[
     EVENT_TRIGGER,
     PEER_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
+    PEER_REGISTRY,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -99,6 +102,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_TRIGGER_NAME,
     PEER_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
+    PEER_REGISTRY_NAME,
 ];
 
 /// Agent-domain collections that can be replicated across desktop branches.
@@ -127,7 +131,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 21);
+        assert_eq!(ALL.len(), 22);
     }
 
     #[test]

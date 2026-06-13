@@ -1,0 +1,12 @@
+type PeerRegistry {
+    peer_id: String @index(unique: true)
+    agent_did: String @index
+    addresses: [String!]!
+    profiles: [String!]
+    display_name: String
+    status: String
+    network_id: String @index
+    invited_by: String
+    registered_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}

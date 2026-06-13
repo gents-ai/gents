@@ -62,6 +62,14 @@ pub(in crate::agent) async fn run_agent(
         return Err(error);
     }
     if let Err(error) =
+        crate::migration::ensure_peer_registry_migrations(agent.node.clone())
+            .await
+            .context("ensure PeerRegistry migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
+    if let Err(error) =
         crate::migration::ensure_tool_service_registry_migrations(agent.node.clone())
             .await
             .context("ensure ToolServiceRegistry migrations")

@@ -626,6 +626,28 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
     Ok(())
 }
 
+/// Idempotent migration for PeerRegistry: registers the collection schema if
+/// it does not yet exist. PeerRegistry is a new collection introduced for
+/// service-discovery; no field patches are needed on fresh installs.
+pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("PeerRegistry")
+        .context("get PeerRegistry collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::PEER_REGISTRY)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PeerRegistry schema"),
+    }
+}
+
 async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
     if node
         .get_collection("PeerPairingApplied")
@@ -1035,5 +1057,42 @@ mod patch_kind_tests {
             Some(&["/ip4/127.0.0.1/tcp/4101/p2p/peer-b".to_string()][..])
         );
         assert!(rows[0].profiles.is_none());
+    }
+
+    #[tokio::test]
+    async fn peer_registry_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_peer_registry_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_peer_registry_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("PeerRegistry")
+            .unwrap()
+            .expect("PeerRegistry collection must exist after migration");
+
+        for field in &[
+            "peer_id",
+            "agent_did",
+            "addresses",
+            "profiles",
+            "display_name",
+            "status",
+            "network_id",
+            "invited_by",
+            "registered_at",
+            "updated_at",
+        ] {
+            assert!(
+                collection_has_field(&collection, field),
+                "PeerRegistry must have field '{field}'"
+            );
+        }
     }
 }
