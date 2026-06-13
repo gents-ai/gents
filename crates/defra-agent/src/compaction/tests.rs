@@ -615,6 +615,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             sequence,
             "user",
             &serde_json::to_string(&user).unwrap(),
+            None,
         )
         .await
         .unwrap();
@@ -626,6 +627,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             sequence,
             "assistant",
             &serde_json::to_string(&assistant_tool_call).unwrap(),
+            None,
         )
         .await
         .unwrap();
@@ -637,6 +639,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             sequence,
             "user",
             &serde_json::to_string(&tool_result).unwrap(),
+            None,
         )
         .await
         .unwrap();
@@ -648,6 +651,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             sequence,
             "assistant",
             &serde_json::to_string(&assistant).unwrap(),
+            None,
         )
         .await
         .unwrap();

@@ -710,6 +710,7 @@ pub fn session_shape_query(session_id: &str) -> String {
                 sequence
                 role
                 content
+                reasoning
                 timestamp
             }}
             AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ message_sequence: ASC }}) {{

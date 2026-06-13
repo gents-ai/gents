@@ -63,6 +63,40 @@ pub(super) async fn generated_streaming_response_cases_pin_lifecycle_contract() 
         expected_names
     );
 
+    // #492 durable-reasoning contract: on a finalize-complete materialize step
+    // the live tail STILL clears (`post_live_tail == "empty"`, #64) WHILE the
+    // reasoning present in the tail is durably copied
+    // (`pre_durable_reasoning == "empty"`, `post_durable_reasoning ==
+    // "nonEmpty"`). Both the direct and bridge finalize-complete cases encode
+    // this co-held invariant. The durable copy itself lands in `AgentMessage`
+    // and is exercised end-to-end by
+    // `hook::tests::assistant_turn_materializes_durable_reasoning_into_agent_message`.
+    for finalize_name in [
+        "finalize_complete_clears_and_materializes",
+        "bridge_completed_pairs_request_committed",
+    ] {
+        let case = lean_response_transition_cases()
+            .iter()
+            .find(|case| case.name == finalize_name)
+            .unwrap_or_else(|| panic!("{finalize_name} contract case should be emitted"));
+        assert_eq!(
+            case.post_live_tail, "empty",
+            "{finalize_name}: #64 live-tail clear preserved"
+        );
+        assert_eq!(
+            case.pre_tail_reasoning, "nonEmpty",
+            "{finalize_name}: reasoning present in the live tail pre-finalize"
+        );
+        assert_eq!(
+            case.pre_durable_reasoning, "empty",
+            "{finalize_name}: no durable reasoning before materialize"
+        );
+        assert_eq!(
+            case.post_durable_reasoning, "nonEmpty",
+            "{finalize_name}: reasoning durably copied at materialize (#492)"
+        );
+    }
+
     for case in cases {
         drive_streaming_response_case(case).await;
     }

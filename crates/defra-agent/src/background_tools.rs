@@ -1063,7 +1063,7 @@ pub(crate) async fn append_steering_request(
     interrupted_request_id: Option<String>,
     drained_wake_up_request_ids: Vec<String>,
 ) -> Result<SteerSubagentResponse> {
-    session::append_message(node, &edge.child_session_id, "user", message).await?;
+    session::append_message(node, &edge.child_session_id, "user", message, None).await?;
     let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
         .await?
         .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
