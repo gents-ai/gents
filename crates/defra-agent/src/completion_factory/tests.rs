@@ -116,11 +116,9 @@ fn thinking_default_serializes_top_level_into_openai_body() {
 
     // Same conversion the live OpenAI CompletionsClient performs before POSTing
     // to `/chat/completions`.
-    let openai_req = rig::providers::openai::CompletionRequest::try_from((
-        "d4f".to_string(),
-        core_req,
-    ))
-    .expect("openai request conversion should succeed");
+    let openai_req =
+        rig::providers::openai::CompletionRequest::try_from(("d4f".to_string(), core_req))
+            .expect("openai request conversion should succeed");
     let body = serde_json::to_value(&openai_req).expect("serializing openai request");
 
     // Flattened to the top level of the request body — NOT nested under any

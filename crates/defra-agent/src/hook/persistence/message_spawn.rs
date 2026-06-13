@@ -120,15 +120,8 @@ impl DefraSessionHook {
                 .await?;
             }
             None => {
-                session::save_message(
-                    &self.node,
-                    &session_id,
-                    sequence,
-                    role,
-                    &content,
-                    reasoning,
-                )
-                .await?;
+                session::save_message(&self.node, &session_id, sequence, role, &content, reasoning)
+                    .await?;
             }
         }
         Ok(sequence)

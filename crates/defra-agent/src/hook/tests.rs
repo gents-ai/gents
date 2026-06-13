@@ -1124,9 +1124,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     hook.persist_message(&Message::Assistant {
         id: None,
         content: vec![
-            AssistantContent::Reasoning(Reasoning::new(
-                "First weigh the trade-offs, then answer.",
-            )),
+            AssistantContent::Reasoning(Reasoning::new("First weigh the trade-offs, then answer.")),
             AssistantContent::Text(Text {
                 text: "Here is the plan.".to_string(),
             }),
