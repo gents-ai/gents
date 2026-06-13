@@ -62,16 +62,28 @@ replicator (today's behavior, retained for whole-collection cases).
 
 ### Built-in templates (initial catalog)
 
+Hardcoded in Rust for the prototype (a small `&[ScopeTemplate]` catalog), not a
+DefraDB collection — document-driven operator-defined templates are the eventual
+end state but out of scope now (keep the data shapes clean so it can migrate
+later without a surface change).
+
 | id | collections | scope | delivery | use case |
 |---|---|---|---|---|
-| `conversation` | AgentRequest, AgentResponse, AgentMessage, AgentToolCall, AgentToolResult, AgentSession, AgentConversation, CompactionEntry, CodexThreadProjection | `PeerDid{agent_did}` | Push | **default** — a peer agent's conversation slice (subagent delegation) |
-| `agent-config` | AgentPrincipal, AgentBehavior, ToolSelection, InferenceBackend, InferenceProfile | Unscoped | Replicate | share config so a node can run a behavior defined elsewhere |
-| `backup` | conversation collections | Unscoped | Replicate | a backup server holding ALL agents' logs (admin) |
+| `conversation` | AgentRequest, AgentResponse, AgentMessage, AgentToolCall, AgentToolResult, AgentSession, AgentConversation, CompactionEntry (8) | `PeerDid{agent_did}` | Push | **default** — a peer agent's conversation slice (subagent delegation) |
+| `agent-config` | AgentBehavior, ToolSelection, InferenceBackend, InferenceProfile, ToolServiceRegistry, Skill | Unscoped | Replicate | share a runnable behavior + its inference/tool config + tool services/skills so another node can run it |
+| `backup` | the `conversation` collections | Unscoped | Replicate | a backup/observability node holding ALL agents' logs (admin) |
 
 `conversation` is the default for `pairings invite`/`join`/`set`. `backup` is
 the explicit "I want everything" path (and `p2p admin` raw commands remain for
-ad-hoc surgery). The catalog is data, not hardcoded call sites — adding a
-template is adding a row, not threading a new flag.
+ad-hoc surgery). `agent-config` deliberately **excludes** `AgentPrincipal`
+(identity/DID is per-deployment, not shared); it includes `AgentBehavior` so the
+shared inference/tool config is actually runnable on the receiving node.
+
+`CodexThreadProjection` is intentionally **excluded** from `conversation`: it is
+Codex-TUI-local session state (cwd/name/archived/goal/git/rollback), not data a
+delegating peer needs. It is also a refactor candidate (derive from loaded
+tools/runtime state instead of a dedicated collection) — tracked in
+**issue #494**, separate from this work.
 
 ### What this retires
 
@@ -87,26 +99,35 @@ template is adding a row, not threading a new flag.
   delivery (config/backup) is the only path that still subscribes, and raw
   subscription stays in `p2p admin`.
 
-## Schema: `@immutable` scope keys
+## Schema: `@immutable agent_did` scope key (Task 0, gating)
 
-Filtering the conversation collections on `agent_did` requires `agent_did` to be
-`@immutable` on each. These fields are logically write-once (a document's owning
-agent never changes), so the constraint is correct — but it is a real invariant
-and a migration concern.
+The `conversation` template scopes every collection by `agent_did`, so
+`agent_did` must exist and be `@immutable` on all 8. Decided (2026-06-13): mark
+the existing `agent_did` immutable directly (it is logically write-once; no new
+`owner_did` field, in-place is acceptable). But **5 of the 8 conversation
+collections key on `session_id` and have no `agent_did` at all** — so the scope
+key has to be added there. Inventory:
 
-- **Task 0 (longest pole, do first):** audit that `agent_did` is never mutated
-  after create on AgentRequest/Response/Message/ToolCall/ToolResult/Session/
-  Conversation (grep every writer; the runtime sets it at create and the
-  lifecycle never rewrites it). Confirm the same for any other field a built-in
-  template scopes on.
-- **Migration feasibility:** determine whether `@immutable` can be ADDED to an
-  existing field via defradb migration, or whether it requires a collection
-  version bump / new field. #1033's `FieldDescription::as_immutable()` +
-  `@immutable` SDL is the declaration; the open question is the *migration* of an
-  existing collection. If additive migration isn't supported, fall back to: mark
-  immutable at collection definition for fresh homes + a documented
-  reindex/migration path. **This gates the filtered path and must be settled
-  before reconciler work.**
+- **Already have `agent_did` → mark `@immutable`:** AgentRequest, AgentResponse,
+  AgentToolResult, AgentConversation.
+- **Lack `agent_did` → add it as a new `@immutable` field, stamped at create:**
+  AgentMessage, AgentToolCall, AgentSession, CompactionEntry. These are all
+  created inside a session that belongs to exactly one agent, so the owning
+  `agent_did` is known and fixed at create — denormalizing it is correct and the
+  add is an ordinary additive migration (a brand-new field has no prior values to
+  violate immutability).
+
+Task 0 work:
+1. Audit that `agent_did` is never rewritten after create on the 4 that have it
+   (grep every writer; lifecycle must not mutate it).
+2. Mark `@immutable` on those 4.
+3. Add `agent_did @immutable` to the 4 session-keyed collections; stamp the
+   owning agent at every create site (the session owner is in scope there).
+4. One guard test: a scoped collection rejects an `agent_did` rewrite.
+
+This gates the filtered reconciler path and is the longest pole — do it first.
+(`@immutable` enforcement itself — local-write + remote-merge — is #1033's;
+we only declare it and stamp correctly.)
 
 ## PeerPairingDesired / registry
 
@@ -178,9 +199,10 @@ and a migration concern.
 
 ## Sequencing (stacked commits; #1033 pin bump lands at merge)
 
-0. **`@immutable` audit + migration feasibility** (gating; no #1033 dep) — verify
-   `agent_did` write-once; settle how immutability is applied to the conversation
-   collections. Mark the fields `@immutable`.
+0. **`@immutable agent_did` scope key** (gating; no #1033 dep) — audit
+   `agent_did` write-once on the 4 that have it + mark `@immutable`; add
+   `agent_did @immutable` to the 4 session-keyed conversation collections and
+   stamp the owning agent at every create site; guard test for rejected rewrite.
 1. Scope-template model + built-in catalog (data + resolution fn) + Lean
    resolution proof + `p2p templates list`.
 2. `RemoteP2pAdmin::add_replicator` filter param + adapter passthrough (against
@@ -193,15 +215,21 @@ and a migration concern.
    add --filter`; demo + docs (Part 3 update: "pair by intent, not by schema").
 7. Integration tests (scoped replication, backup, filter-change reinstall).
 
-## Open questions
+## Resolved (2026-06-13)
 
-- Templates as a hardcoded catalog vs. a `ScopeTemplate` DefraDB collection
-  (operator-defined templates, replicated like everything else). Proposed: start
-  with a built-in catalog (code), design the collection shape so it can become
-  document-driven later without surface change. (Jack's "we'll build and deploy
-  more of these" suggests document-driven templates are the end state —
-  worth deciding now whether to start there.)
-- Whether `agent-config` delivery should be `Replicate` (bidirectional config
-  sync) or a scoped push; depends on whether config needs to flow both ways.
-- Multi-field scope (e.g. `agent_did` AND `behavior_id`) — #1033 filter is
-  single-field per collection; defer multi-field until needed.
+- **Catalog location:** hardcoded Rust catalog for the prototype (3 templates).
+  Document-driven operator-defined templates are the end state; keep the shapes
+  clean to migrate later without a surface change. Not now.
+- **`agent-config` membership:** includes `AgentBehavior` (so shared config is
+  runnable); excludes `AgentPrincipal` (identity is per-deployment).
+- **Scope key:** mark existing `agent_did` `@immutable` + denormalize it onto the
+  4 session-keyed conversation collections (no `owner_did`); in-place is fine.
+- **`CodexThreadProjection`:** excluded from `conversation`; refactor tracked in
+  issue #494.
+
+## Open questions (deferred, non-blocking)
+
+- `agent-config` delivery `Replicate` (whole-collection) is assumed; revisit if
+  config needs scoped/bidirectional treatment.
+- Multi-field scope (`agent_did` AND `behavior_id`) — #1033 filter is single-
+  field per collection; defer until a use case needs it.
