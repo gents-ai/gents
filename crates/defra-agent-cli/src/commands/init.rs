@@ -152,12 +152,12 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             .context("building embedded defra node for init")?,
     );
     ensure_config_bootstrap_schemas(node_arc.as_ref()).await?;
-    // Run the AgentBehavior migration BEFORE the first load_agent_behavior
-    // call below. On an upgraded DB (created before #377), the AgentBehavior
-    // collection lacks description/summary; ensure_config_bootstrap_schemas
-    // silently skips adding them to an existing collection. Without this call
-    // re-running init against a pre-#377 DB crashes with "unknown field".
-    defra_agent::migration::ensure_agent_behavior_migrations(node_arc.clone()).await?;
+    // Single sanctioned migration entry point: run the FULL set BEFORE the first
+    // load_agent_behavior call below. On an upgraded DB (e.g. created before
+    // #377, or before the conversation scope key), bootstrap schema-adds silently
+    // skip patching existing collections; without the full migration set,
+    // re-running init against such a DB crashes with "unknown field" errors.
+    defra_agent::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
     let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
         unreachable!("node_arc had exactly one strong reference at this point")
     });

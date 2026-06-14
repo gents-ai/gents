@@ -138,11 +138,10 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             .context("building embedded defra node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
-    defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
-    defra_agent::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
-    // ensure_agent_behavior_migrations is now called inside
-    // DefraAgent::from_default_behavior_documents (below), so the explicit
-    // call that was here (added in commit b13d7cd8) is no longer needed.
+    // Single sanctioned migration entry point: run the FULL set so the CLI
+    // `server` path can never drift from the daemon/desktop hosts on which
+    // migrations have run.
+    defra_agent::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(

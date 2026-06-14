@@ -1156,6 +1156,16 @@ pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -
 /// upgraded desktop databases without the `@immutable` conversation scope keys
 /// (and without the PeerRegistry / AgentRuntime-status collections), silently
 /// disabling filtered replication there.
+//
+// THIS IS THE ONLY SANCTIONED MIGRATION ENTRY POINT. Every host (daemon,
+// desktop, and ALL CLI-local paths: `init`, `server`, `subagent`, oneshot, and
+// offline config diff/apply/export via `resolve_config_access`) must call this
+// and nothing else. Do NOT hand-enumerate a SUBSET of the individual `ensure_*`
+// migrations at a new call site: that is exactly the host-drift bug (Finding #3
+// / Pattern 3) where some paths skipped `ensure_conversation_scope_key_migrations`
+// and an upgraded DB failed reads with `Cannot query field "agent_did"`. The
+// individual `ensure_*` fns exist only as the building blocks of this function
+// (and the migration unit tests); new code adds a step HERE.
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     ensure_agent_runtime_executor_status_migrations(node.clone())
         .await
@@ -1822,5 +1832,83 @@ mod patch_kind_tests {
                 "ConsumedInviteNonce must have field '{field}'"
             );
         }
+    }
+
+    /// Regression for the host-drift bug (Finding #3 / Pattern 3): CLI-local
+    /// paths used to hand-enumerate a SUBSET of migrations
+    /// (`ensure_tool_call_migrations` + `ensure_subagent_extensions_migrations`)
+    /// that does NOT add the `agent_did` scope key. On a database upgraded from
+    /// a pre-scope-key schema, that left AgentToolCall without `agent_did` —
+    /// while `ToolCallLifecycle::load` unconditionally SELECTs it, so
+    /// `subagent cancel` (and other config-read paths) failed with
+    /// `Cannot query field "agent_did"`.
+    ///
+    /// This test pins the consolidation: starting from a pre-scope-key DB,
+    /// `ensure_all_runtime_migrations` (the single sanctioned entry point every
+    /// host now calls) makes `agent_did` queryable on all four session-keyed
+    /// conversation collections AND creates the ConsumedInviteNonce ledger
+    /// (Task C2). It also pins the drift it fixes: the old subset leaves
+    /// `agent_did` absent.
+    #[tokio::test]
+    async fn ensure_all_runtime_migrations_adds_scope_key_the_subset_misses() {
+        let node = test_node().await;
+        // Simulate a database upgraded from a schema version that predates the
+        // immutable scope key: AgentToolCall (and its session-keyed siblings)
+        // exist but lack `agent_did`.
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+
+        const SCOPE_KEYED: [&str; 4] = [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentSession",
+            "CompactionEntry",
+        ];
+
+        // Drift pin: the hand-enumerated subset the CLI-local paths used to run
+        // never adds the scope key, so AgentToolCall stays without `agent_did`.
+        ensure_tool_call_migrations(node.clone()).await.unwrap();
+        ensure_subagent_extensions_migrations(node.clone())
+            .await
+            .unwrap();
+        let atc = node.get_collection("AgentToolCall").unwrap().unwrap();
+        assert!(
+            !collection_has_field(&atc, "agent_did"),
+            "the old subset must NOT add agent_did (this is the drift the fix closes)"
+        );
+
+        // The single sanctioned entry point: idempotent, run twice.
+        ensure_all_runtime_migrations(node.clone()).await.unwrap();
+        ensure_all_runtime_migrations(node.clone()).await.unwrap();
+
+        for collection in SCOPE_KEYED {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                collection_has_field(&cv, "agent_did"),
+                "{collection}.agent_did must exist after ensure_all_runtime_migrations"
+            );
+        }
+
+        // ...and the field is actually QUERYABLE — exactly the SELECT that
+        // `ToolCallLifecycle::load` issues and that used to fail.
+        let read = node
+            .execute(r#"query { AgentToolCall { _docID agent_did } }"#)
+            .await;
+        assert!(
+            !read.has_errors(),
+            "querying agent_did on AgentToolCall must succeed after the full migration set, \
+             got: {:?}",
+            read.errors
+        );
+
+        // Task C2 ledger is part of the sanctioned set too.
+        assert!(
+            node.get_collection("ConsumedInviteNonce")
+                .unwrap()
+                .is_some(),
+            "ConsumedInviteNonce ledger must exist after ensure_all_runtime_migrations"
+        );
     }
 }

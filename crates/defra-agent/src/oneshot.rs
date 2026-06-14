@@ -36,10 +36,10 @@ pub async fn run_openai_oneshot_with_tools(
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     ensure_schemas(node.as_ref()).await?;
-    crate::migration::ensure_tool_call_migrations(node.clone()).await?;
-    crate::migration::ensure_tool_service_registry_migrations(node.clone()).await?;
-    crate::migration::ensure_tool_service_health_state_migrations(node.clone()).await?;
-    crate::migration::ensure_agent_behavior_migrations(node.clone()).await?;
+    // Single sanctioned migration entry point: run the FULL set so the oneshot
+    // path can never drift on which migrations have run (e.g. the `agent_did`
+    // scope key that `ToolCallLifecycle::load` selects on an upgraded DB).
+    crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime =

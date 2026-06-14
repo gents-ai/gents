@@ -64,8 +64,12 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
         }
         ConfigAccess::Local(node) => {
             let node = Arc::new(node);
-            defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
-            defra_agent::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
+            // Migrations already ran via the single sanctioned entry point inside
+            // `resolve_config_access` (it calls
+            // `migration::ensure_all_runtime_migrations` for every Local node,
+            // including the `agent_did` scope key that `ToolCallLifecycle::load`
+            // selects). Running them again here would be a redundant double-run in
+            // this path.
             let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
                 .context("resolving local agent_did for cascade ownership checks")?;
             let affected =

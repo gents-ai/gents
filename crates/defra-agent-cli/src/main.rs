@@ -568,10 +568,12 @@ pub(crate) async fn resolve_config_access(
         if ensure_local_schemas {
             ensure_runtime_schemas(&node_arc).await?;
         }
-        // Run the AgentBehavior migration so that offline config diff/apply/export
-        // against an upgraded DB does not fail with "unknown field" errors when
-        // querying description/summary (introduced in #377). Idempotent and cheap.
-        defra_agent::migration::ensure_agent_behavior_migrations(node_arc.clone()).await?;
+        // Single sanctioned migration entry point: run the FULL set so offline
+        // config diff/apply/export/subagent paths against an upgraded DB never
+        // drift on which migrations have run (e.g. the `agent_did` scope key that
+        // `ToolCallLifecycle::load` selects, or description/summary from #377).
+        // Idempotent check-then-add, so the cost is bounded per invocation.
+        defra_agent::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
         // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
         // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable
         // but required by the type system.
