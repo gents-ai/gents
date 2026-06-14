@@ -145,21 +145,43 @@ const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
 // historically lacked it (AgentMessage, AgentToolCall, AgentSession,
 // CompactionEntry). The field is `@immutable` in the SDL: it is logically
 // write-once (stamped from the session owner at create), which lets filtered
-// replication (#1033) scope each collection to one agent's DID. Adding a brand-
-// new field has no prior values to violate immutability, so this is an ordinary
-// additive patch. `@immutable` enforcement is upstream's (#1033); we declare it.
+// replication (#1033) scope each collection to one agent's DID — and #1033
+// REJECTS any replication-filter field that is not immutable. The patch must
+// therefore carry `"Immutable":true`: `FieldDescription.immutable` deserializes
+// from that key, and adding a brand-new field has no prior values to violate
+// immutability, so this stays an ordinary additive patch.
 const ADD_AGENT_MESSAGE_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":11}}
+    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
 ]"#;
 const ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":11}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
 ]"#;
 const ADD_AGENT_SESSION_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":11}}
+    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
 ]"#;
 const ADD_COMPACTION_ENTRY_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":11}}
+    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
 ]"#;
+
+// The other four conversation collections (AgentRequest, AgentResponse,
+// AgentToolResult, AgentConversation) already carried `agent_did` as a plain
+// `@index` field; this version's SDL adds `@immutable`. A FRESH database is
+// created immutable from the SDL, but an UPGRADED database keeps the existing
+// MUTABLE field — `add_schema` short-circuits on an existing collection, and
+// defradb's schema patcher REJECTS changing any property of an existing field
+// (`validate_field_not_mutated`: `new_field != old_field` ⇒ "mutating an existing
+// field is not supported"). There is therefore no in-place way to flip these
+// fields to immutable on the current pin; doing so safely needs an upstream
+// defradb change (a monotonic immutable-flip). Until then the migration only
+// DETECTS the stale shape and warns, so the operator can see that filtered
+// replication of the conversation template is unavailable on this upgraded node
+// (defradb would reject the non-immutable scope filter at `add_replicator`).
+const PRE_EXISTING_AGENT_DID_COLLECTIONS: [&str; 4] = [
+    "AgentRequest",
+    "AgentResponse",
+    "AgentToolResult",
+    "AgentConversation",
+];
 
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
@@ -343,6 +365,12 @@ fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
 
 fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
     cv.fields.iter().any(|f| f.name == field_name)
+}
+
+fn field_is_immutable(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
+    cv.fields
+        .iter()
+        .any(|f| f.name == field_name && f.immutable)
 }
 
 /// WASM lens bytes for the v2->v3 subagent extension. Embedded at compile time
@@ -960,18 +988,30 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
     Ok(())
 }
 
-/// Idempotent migration adding the `agent_did` immutable scope key to the four
-/// conversation collections that key on `session_id` and historically lacked it
-/// (AgentMessage, AgentToolCall, AgentSession, CompactionEntry). The other four
-/// conversation collections (AgentRequest, AgentResponse, AgentToolResult,
-/// AgentConversation) already declare `agent_did`; their SDL gains `@immutable`
-/// directly with no row transform.
+/// Idempotent migration ensuring every conversation collection carries an
+/// `@immutable` `agent_did` scope key, the field filtered replication (#1033)
+/// scopes on (and rejects unless immutable).
+///
+/// Two groups, both required on an UPGRADED database:
+///
+/// 1. The four collections that key on `session_id` and historically lacked
+///    `agent_did` entirely (AgentMessage, AgentToolCall, AgentSession,
+///    CompactionEntry) get the field ADDED as an immutable nullable String. No
+///    lens is required: a row written before the migration reads back
+///    `agent_did: null` until it is rewritten or recreated.
+/// 2. The four that already carried `agent_did` as a plain `@index` field
+///    (AgentRequest, AgentResponse, AgentToolResult, AgentConversation) cannot
+///    be flipped to immutable on the current pin — defradb rejects any property
+///    change to an existing field. These are only DETECTED: a mutable field on an
+///    upgraded node is warned about (filtered replication of the conversation
+///    template is unavailable there until an upstream immutable-flip lands).
 ///
 /// Each collection is checked independently so a partial failure resumes at the
-/// un-migrated collection on the next run. The patch is a pure additive field
-/// add (nullable String), so no lens is required: a row written before the
-/// migration reads back `agent_did: null` until it is rewritten or recreated.
+/// un-migrated collection on the next run, and each step is a no-op once its
+/// target shape is already present (so fresh databases, created immutable from
+/// the SDL, skip every patch and warning).
 pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    // Group 1: add the immutable scope key where it is missing entirely.
     for (collection_name, patch) in [
         ("AgentMessage", ADD_AGENT_MESSAGE_AGENT_DID_PATCH),
         ("AgentToolCall", ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH),
@@ -1013,6 +1053,60 @@ pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -
         );
     }
 
+    // Group 2: detect (cannot fix in place) a pre-existing mutable agent_did.
+    for collection_name in PRE_EXISTING_AGENT_DID_COLLECTIONS {
+        let Some(collection) = node
+            .get_collection(collection_name)
+            .with_context(|| format!("get {collection_name} collection"))?
+        else {
+            continue;
+        };
+
+        if collection_has_field(&collection, "agent_did")
+            && !field_is_immutable(&collection, "agent_did")
+        {
+            tracing::warn!(
+                collection = collection_name,
+                "agent_did exists but is not immutable on this upgraded database; \
+                 defradb cannot flip an existing field to immutable, so filtered \
+                 replication of the conversation template is unavailable here until \
+                 an upstream immutable-flip migration lands (a fresh database is \
+                 created immutable from the SDL and is unaffected)"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Run every idempotent runtime schema migration in dependency order. The daemon
+/// (`run_agent`) and the desktop bootstrap both call this so the two hosts can
+/// never drift on which migrations have run — a drift that previously left
+/// upgraded desktop databases without the `@immutable` conversation scope keys
+/// (and without the PeerRegistry / AgentRuntime-status collections), silently
+/// disabling filtered replication there.
+pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    ensure_agent_runtime_executor_status_migrations(node.clone())
+        .await
+        .context("ensure AgentRuntime executor status migrations")?;
+    ensure_peer_pairing_desired_migrations(node.clone())
+        .await
+        .context("ensure PeerPairingDesired migrations")?;
+    ensure_peer_registry_migrations(node.clone())
+        .await
+        .context("ensure PeerRegistry migrations")?;
+    ensure_tool_service_registry_migrations(node.clone())
+        .await
+        .context("ensure ToolServiceRegistry migrations")?;
+    ensure_tool_service_health_state_migrations(node.clone())
+        .await
+        .context("ensure ToolServiceHealthState migrations")?;
+    ensure_agent_behavior_migrations(node.clone())
+        .await
+        .context("ensure AgentBehavior migrations")?;
+    ensure_conversation_scope_key_migrations(node)
+        .await
+        .context("ensure conversation agent_did scope-key migrations")?;
     Ok(())
 }
 
@@ -1337,27 +1431,89 @@ mod patch_kind_tests {
         }
     "#;
 
+    // Pre-`@immutable` SDL for the four conversation collections that already
+    // carried `agent_did` but only as a plain `@index` field. Registering these
+    // simulates a database upgraded from a version before the scope key was made
+    // immutable; the migration must flip the existing field in place. These are
+    // trimmed to the fields the migration test exercises.
+    const OLD_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            status: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_RESPONSE_SCHEMA: &str = r#"
+        type AgentResponse @branchable {
+            response_key: String @index(unique: true)
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_TOOL_RESULT_SCHEMA: &str = r#"
+        type AgentToolResult @branchable {
+            agent_did: String @index
+            session_id: String @index
+            tool_name: String @index
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_CONVERSATION_SCHEMA: &str = r#"
+        type AgentConversation @branchable {
+            session_id: String @index(unique: true)
+            agent_name: String @index
+            agent_did: String @index
+            created_at: DateTime @index(direction: DESC)
+        }
+    "#;
+
     #[tokio::test]
-    async fn conversation_scope_key_migration_adds_agent_did_to_session_keyed_collections() {
+    async fn conversation_scope_key_migration_makes_agent_did_immutable_on_upgrade() {
         let node = test_node().await;
+        // Group 1: agent_did absent entirely.
         node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
         node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
         node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
         node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+        // Group 2: agent_did present but mutable (@index only).
+        node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_RESPONSE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_RESULT_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_CONVERSATION_SCHEMA).await.unwrap();
 
-        for collection in [
+        const GROUP1: [&str; 4] = [
             "AgentMessage",
             "AgentToolCall",
             "AgentSession",
             "CompactionEntry",
-        ] {
-            let cv = node
-                .get_collection(collection)
-                .unwrap()
-                .unwrap_or_else(|| panic!("{collection} collection"));
+        ];
+        const GROUP2: [&str; 4] = [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentToolResult",
+            "AgentConversation",
+        ];
+
+        // Pre-state: group 1 lacks agent_did; group 2 has it but mutable.
+        for collection in GROUP1 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
             assert!(
                 !collection_has_field(&cv, "agent_did"),
                 "{collection} should not yet have agent_did before migration"
+            );
+        }
+        for collection in GROUP2 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                collection_has_field(&cv, "agent_did") && !field_is_immutable(&cv, "agent_did"),
+                "{collection} should start with a mutable agent_did before migration"
             );
         }
 
@@ -1369,31 +1525,68 @@ mod patch_kind_tests {
             .await
             .unwrap();
 
-        for collection in [
-            "AgentMessage",
-            "AgentToolCall",
-            "AgentSession",
-            "CompactionEntry",
-        ] {
-            let cv = node
-                .get_collection(collection)
-                .unwrap()
-                .unwrap_or_else(|| panic!("{collection} collection"));
+        // Post-state, group 1 (ADDED field): agent_did is now IMMUTABLE — the
+        // property #1033 requires before it will install the scope filter.
+        for collection in GROUP1 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
             assert!(
-                collection_has_field(&cv, "agent_did"),
-                "{collection} must have agent_did after migration"
+                field_is_immutable(&cv, "agent_did"),
+                "{collection}.agent_did must be immutable after migration"
             );
         }
+
+        // Post-state, group 2 (PRE-EXISTING field): defradb refuses to flip an
+        // existing field to immutable, so the migration can only warn — the field
+        // stays mutable on an upgraded DB. This assertion pins that limitation; it
+        // should flip to `field_is_immutable` once an upstream immutable-flip
+        // migration exists (at which point this test, and the group-2 detection
+        // branch in `ensure_conversation_scope_key_migrations`, must be updated).
+        for collection in GROUP2 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                !field_is_immutable(&cv, "agent_did"),
+                "{collection}.agent_did cannot yet be made immutable on upgrade \
+                 (see ensure_conversation_scope_key_migrations group 2)"
+            );
+        }
+
+        // Enforcement actually fires on the migrated ADDED field: create a row
+        // with the original owner, then attempt to reassign the scope key — the
+        // update must error and the stored value must survive.
+        let create = node
+            .execute(
+                r#"mutation { create_AgentMessage(input: {
+                    message_key: "mig-m1", session_id: "mig-s1",
+                    agent_did: "did:defra-agent:alice", role: "user", content: "hi"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create AgentMessage with agent_did failed: {:?}",
+            create.errors
+        );
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentMessage(
+                        filter: { agent_did: { _eq: "did:defra-agent:alice" } },
+                        input: { agent_did: "did:defra-agent:mallory" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            rewrite.has_errors(),
+            "rewriting the migrated immutable agent_did on AgentMessage must be rejected"
+        );
     }
 
     /// Guard: every conversation collection must declare `agent_did` as an
-    /// `@immutable` scope key in its canonical SDL. This is the property that
-    /// filtered replication (#1033) relies on. Asserting against the SDL is what
-    /// is verifiable on the CURRENT pin (v0.14.2): the `@immutable` directive
-    /// parses and round-trips through `add_schema`, but enforcement (rejecting a
-    /// rewrite on local write / remote merge) is #1033's and lights up at the
-    /// pin bump. The companion runtime assertion below documents that today's
-    /// embedded node does NOT yet reject a rewrite.
+    /// `@immutable` scope key in its canonical SDL — the property filtered
+    /// replication (#1033) relies on. This checks the SDL source; the companion
+    /// runtime tests below verify that the pinned #1033 rev actually ENFORCES it
+    /// (rejecting a rewrite) on both the fresh-SDL and migrated-upgrade paths.
     #[test]
     fn all_conversation_collections_declare_agent_did_immutable() {
         use defra_agent_protocol::schemas;
@@ -1420,10 +1613,10 @@ mod patch_kind_tests {
         }
     }
 
-    /// Companion to the SDL guard: with the defradb.rs #1033 rev pinned,
-    /// `@immutable` enforcement is LIVE — a row is created with `agent_did`, but
-    /// any later rewrite of the immutable scope key is REJECTED. This is the
-    /// runtime half of the filtered-replication DAG-safety guarantee.
+    /// Companion to the SDL guard, FRESH-SDL path: with the defradb.rs #1033 rev
+    /// pinned, `@immutable` enforcement is LIVE — a row is created with
+    /// `agent_did`, but any later rewrite of the immutable scope key is REJECTED.
+    /// This is the runtime half of the filtered-replication DAG-safety guarantee.
     #[tokio::test]
     async fn agent_did_rewrite_is_rejected_by_immutable_enforcement() {
         let node = test_node().await;
@@ -1463,8 +1656,13 @@ mod patch_kind_tests {
             )
             .await;
 
-        // Read the stored value back: it must still be the original owner — the
-        // immutable scope key cannot be reassigned.
+        // Enforcement must REJECT the rewrite outright, not silently no-op it.
+        assert!(
+            rewrite.has_errors(),
+            "rewrite of the immutable agent_did scope key must be rejected with an error"
+        );
+
+        // ...and the stored value must still be the original owner.
         let read = node
             .execute(
                 r#"query {

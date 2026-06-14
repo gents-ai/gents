@@ -160,18 +160,13 @@ impl ClientCore {
 }
 
 async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    defra_agent::migration::ensure_peer_pairing_desired_migrations(Arc::clone(&node))
+    // Run the exact same migration set as the daemon. Enumerating migrations
+    // here previously omitted the conversation `@immutable` scope keys and the
+    // PeerRegistry collection, so upgraded desktop databases silently lost
+    // filtered replication. The shared entry point keeps the two hosts in lockstep.
+    defra_agent::migration::ensure_all_runtime_migrations(node)
         .await
-        .context("ensure desktop PeerPairingDesired migrations")?;
-    defra_agent::migration::ensure_tool_service_registry_migrations(Arc::clone(&node))
-        .await
-        .context("ensure desktop ToolServiceRegistry migrations")?;
-    defra_agent::migration::ensure_tool_service_health_state_migrations(Arc::clone(&node))
-        .await
-        .context("ensure desktop ToolServiceHealthState migrations")?;
-    defra_agent::migration::ensure_agent_behavior_migrations(node)
-        .await
-        .context("ensure desktop AgentBehavior migrations")?;
+        .context("ensure desktop runtime schema migrations")?;
     Ok(())
 }
 

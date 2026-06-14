@@ -42,9 +42,12 @@ pub(in crate::agent) async fn run_agent(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    crate::migration::ensure_agent_runtime_executor_status_migrations(agent.node.clone())
+    // AgentRuntime executor-status fields must exist before RuntimeStatusHandle
+    // writes them, so run the full migration set (shared with the desktop
+    // bootstrap so the two hosts cannot drift) before publishing any status.
+    crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
-        .context("ensure AgentRuntime executor status migrations")?;
+        .context("ensure runtime schema migrations")?;
     let runtime_status =
         RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
     runtime_status
@@ -55,51 +58,6 @@ pub(in crate::agent) async fn run_agent(
         .await;
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Recovering);
-    }
-    if let Err(error) = crate::migration::ensure_peer_pairing_desired_migrations(agent.node.clone())
-        .await
-        .context("ensure PeerPairingDesired migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) = crate::migration::ensure_peer_registry_migrations(agent.node.clone())
-        .await
-        .context("ensure PeerRegistry migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) =
-        crate::migration::ensure_tool_service_registry_migrations(agent.node.clone())
-            .await
-            .context("ensure ToolServiceRegistry migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) =
-        crate::migration::ensure_tool_service_health_state_migrations(agent.node.clone())
-            .await
-            .context("ensure ToolServiceHealthState migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) = crate::migration::ensure_agent_behavior_migrations(agent.node.clone())
-        .await
-        .context("ensure AgentBehavior migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) =
-        crate::migration::ensure_conversation_scope_key_migrations(agent.node.clone())
-            .await
-            .context("ensure conversation agent_did scope-key migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
     }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new_with_agent_did(
