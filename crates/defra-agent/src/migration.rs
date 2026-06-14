@@ -103,6 +103,14 @@ const ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
 ]"#;
 
+const ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"template","Kind":11}}
+]"#;
+
+const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
+]"#;
+
 // Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
 // fields compiles to that kind. AgentBehavior gained `description` and `summary`
 // on branch design/issue-377; existing DBs upgraded from a prior schema version
@@ -682,6 +690,41 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
         }
     }
 
+    if !collection_has_field(&collection, "template") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired template")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired template")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with template field"
+        );
+
+        // Default pre-existing rows to the `conversation` template — the default
+        // pairing intent (filtered push of a peer's conversation slice). Mirrors
+        // the `source` backfill above; an empty filter matches all rows and runs
+        // once, immediately after the field is added.
+        let backfill = r#"mutation {
+            update_PeerPairingDesired(
+                filter: {},
+                input: { template: "conversation" }
+            ) { _docID }
+        }"#;
+        let response = node.execute(backfill).await;
+        if response.has_errors() {
+            tracing::warn!(
+                errors = ?response.errors,
+                "PeerPairingDesired template backfill to \"conversation\" reported errors"
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -708,11 +751,31 @@ pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<
 }
 
 async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
-    if node
+    let existing = node
         .get_collection("PeerPairingApplied")
-        .context("get PeerPairingApplied collection")?
-        .is_some()
-    {
+        .context("get PeerPairingApplied collection")?;
+
+    if let Some(collection) = existing {
+        // Additive: existing DBs gain the `replicator_filter` field that records
+        // the scope filter last installed for this pairing's replicators, so a
+        // changed desired filter is detected as divergence (Lean
+        // `filter_change_forces_reinstall`). No backfill: null == unfiltered.
+        if !collection_has_field(&collection, "replicator_filter") {
+            let next = node
+                .patch_collection(
+                    "PeerPairingApplied",
+                    ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH,
+                )
+                .await
+                .context("patch_collection PeerPairingApplied replicator_filter")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version PeerPairingApplied replicator_filter")?;
+            tracing::info!(
+                version = %next.version_id,
+                "PeerPairingApplied patched with replicator_filter field"
+            );
+        }
         return Ok(());
     }
 
@@ -1025,6 +1088,8 @@ mod patch_kind_tests {
             ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
             ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
             ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH,
+            ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH,
+            ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
@@ -1103,6 +1168,7 @@ mod patch_kind_tests {
         assert!(collection_has_field(&desired, "agent_did"));
         assert!(collection_has_field(&desired, "profiles"));
         assert!(collection_has_field(&desired, "source"));
+        assert!(collection_has_field(&desired, "template"));
 
         let applied = node
             .get_collection("PeerPairingApplied")
@@ -1110,6 +1176,7 @@ mod patch_kind_tests {
             .expect("PeerPairingApplied collection");
         assert!(collection_has_field(&applied, "collections"));
         assert!(collection_has_field(&applied, "replicator_addresses"));
+        assert!(collection_has_field(&applied, "replicator_filter"));
     }
 
     #[derive(Debug, Deserialize)]

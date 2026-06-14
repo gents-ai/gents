@@ -2002,6 +2002,14 @@ pub(crate) struct P2pPairingSetArgs {
     /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Scope template id driving the pairing (collections + scope + delivery).
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    #[arg(
+        long = "template",
+        value_name = "TEMPLATE",
+        default_value = "conversation"
+    )]
+    pub(crate) template: String,
     /// Wait for the runtime to observe the peer as connected.
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,

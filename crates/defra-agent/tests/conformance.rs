@@ -296,6 +296,8 @@ mod prompt_assembly;
 mod r5_scenarios;
 #[path = "conformance/scheduling.rs"]
 mod scheduling;
+#[path = "conformance/scope_templates.rs"]
+mod scope_templates;
 #[path = "conformance/structure.rs"]
 mod structure;
 #[path = "conformance/subagent_source.rs"]

@@ -220,6 +220,7 @@ fn pairing_replicator_install_diff_converges() -> bool {
     let desired = PairingDesired {
         collections: BTreeSet::new(),
         replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
     };
     let actual = PairingActual::default();
     let applied = PairingApplied::default();
@@ -239,6 +240,7 @@ fn pairing_replicator_teardown_diff_converges() -> bool {
     let applied = PairingApplied {
         collections: BTreeSet::new(),
         replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
     };
     compute_owned_pairing_diff(&desired, &actual, &applied)
         == vec![DiffOp::TeardownReplicator("addr1".into())]
@@ -249,6 +251,7 @@ fn pairing_dial_is_available_for_desired_addresses() -> bool {
     PairingDesired {
         collections: BTreeSet::new(),
         replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
     }
     .has_wiring()
 }

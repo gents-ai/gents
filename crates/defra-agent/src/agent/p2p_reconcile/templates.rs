@@ -12,6 +12,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -56,7 +58,7 @@ pub struct ScopeTemplate {
 // ---------------------------------------------------------------------------
 
 /// A single-field equality predicate for one collection.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FilterPredicate {
     /// The field name to filter on.
     pub field: String,

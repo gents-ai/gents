@@ -249,6 +249,7 @@ impl Harness {
             applied: PairingApplied {
                 collections: self.a.applied_collections.clone(),
                 replicator_addresses: self.a.applied_replicator_addresses.clone(),
+                ..Default::default()
             },
             read_failed: false,
         })
@@ -285,10 +286,11 @@ async fn apply_desired_state(
     let mut applied = PairingApplied {
         collections: reconciler.applied_collections.clone(),
         replicator_addresses: reconciler.applied_replicator_addresses.clone(),
+        ..Default::default()
     };
     for op in compute_owned_pairing_diff(desired, &actual, &applied) {
         apply_op_to_actual(peer, &op);
-        update_applied_after_success(&mut applied, &op);
+        update_applied_after_success(&mut applied, &op, desired);
         reconciler.applied_collections = applied.collections.clone();
         reconciler.applied_replicator_addresses = applied.replicator_addresses.clone();
         write_peer_pairing_applied(reconciler, peer_id, &applied).await?;
@@ -356,6 +358,7 @@ async fn read_desired_state(node: &HarnessNode, peer: &str) -> Result<PairingDes
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        ..Default::default()
     })
 }
 
@@ -463,6 +466,7 @@ async fn read_peer_pairing_applied(node: &HarnessNode, peer: &str) -> Result<Pai
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        ..Default::default()
     })
 }
 

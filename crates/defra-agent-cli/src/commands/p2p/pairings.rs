@@ -75,6 +75,7 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
 
 pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let agent_did = required_trimmed(&args.agent_did, "--did")?;
+    let template = resolve_pairing_template(&args.template)?;
     let addresses = expand_nonempty_values(&args.addresses, "--address")?;
     let peer_id = resolve_set_peer_id(args.peer_id.as_deref(), &addresses)?;
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
@@ -93,6 +94,7 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         &collections,
         &addresses,
         &profiles,
+        &template,
         &now,
     )
     .await?;
@@ -113,6 +115,7 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         "collections": collections,
         "replicator_addresses": addresses,
         "profiles": profiles,
+        "template": template,
         "doc_id": doc_id,
         "waited": args.wait,
         "note": "Desired pairing written. The running runtime applies P2P wiring on its pairing sweep.",
@@ -163,6 +166,26 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
     Ok(())
 }
 
+/// Validate `--template` against the built-in scope-template catalog, returning
+/// the normalized id. An unknown template is a hard error (with the catalog
+/// listed) rather than a silent fallback, since the operator named it explicitly.
+fn resolve_pairing_template(template: &str) -> Result<String> {
+    use defra_agent::agent::p2p_reconcile::templates::{builtin_templates, resolve_template};
+    let template = template.trim();
+    if template.is_empty() {
+        return Ok("conversation".to_string());
+    }
+    if resolve_template(template).is_some() {
+        return Ok(template.to_string());
+    }
+    let known = builtin_templates()
+        .iter()
+        .map(|t| t.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!("unknown scope template {template:?}; known templates: {known}");
+}
+
 fn required_trimmed(value: &str, flag_name: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -202,10 +225,18 @@ pub(super) async fn write_pairing_desired(
     collections: &[String],
     addresses: &[String],
     profiles: &[String],
+    template: &str,
     now: &str,
 ) -> Result<String> {
-    let mutation =
-        upsert_pairing_mutation(peer_id, agent_did, collections, addresses, profiles, now);
+    let mutation = upsert_pairing_mutation(
+        peer_id,
+        agent_did,
+        collections,
+        addresses,
+        profiles,
+        template,
+        now,
+    );
     let response = access
         .execute(&mutation)
         .await
@@ -235,6 +266,7 @@ pub(super) fn upsert_pairing_mutation(
     collections: &[String],
     addresses: &[String],
     profiles: &[String],
+    template: &str,
     now: &str,
 ) -> String {
     let peer_id = escape_graphql_string(peer_id);
@@ -247,6 +279,7 @@ pub(super) fn upsert_pairing_mutation(
     let collections = graphql_string_list_literal(collections);
     let addresses = graphql_string_list_literal(addresses);
     let profiles = graphql_nullable_string_list_literal(profiles);
+    let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
 
     format!(
@@ -259,6 +292,7 @@ pub(super) fn upsert_pairing_mutation(
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
+                    template: "{template}",
                     source: "operator",
                     created_at: "{now}",
                     updated_at: "{now}"
@@ -268,6 +302,7 @@ pub(super) fn upsert_pairing_mutation(
                     collections: {collections},
                     replicator_addresses: {addresses},
                     profiles: {profiles},
+                    template: "{template}",
                     source: "operator",
                     updated_at: "{now}"
                 }}
@@ -536,6 +571,7 @@ mod tests {
             &["AgentRequest".to_string(), "AgentResponse".to_string()],
             &[r#"/ip4/127.0.0.1/tcp/4001/p2p/peer"one"#.to_string()],
             &["chat-requests".to_string()],
+            "conversation",
             "2026-06-10T00:00:00Z",
         );
 
@@ -546,6 +582,7 @@ mod tests {
             mutation.contains(r#"replicator_addresses: ["/ip4/127.0.0.1/tcp/4001/p2p/peer\"one"]"#)
         );
         assert!(mutation.contains(r#"profiles: ["chat-requests"]"#));
+        assert!(mutation.contains(r#"template: "conversation""#));
         assert!(mutation.contains(r#"created_at: "2026-06-10T00:00:00Z""#));
 
         let update_block = mutation
@@ -564,6 +601,7 @@ mod tests {
             &["AgentRequest".to_string()],
             &["addr1".to_string()],
             &[],
+            "conversation",
             "2026-06-10T00:00:00Z",
         );
 
@@ -579,6 +617,7 @@ mod tests {
             &["AgentRequest".to_string()],
             &["addr1".to_string()],
             &["chat-requests".to_string()],
+            "conversation",
             "2026-06-10T00:00:00Z",
         );
 
@@ -588,6 +627,24 @@ mod tests {
             .nth(1)
             .expect("mutation contains update block");
         assert!(!update_block.contains("agent_did"));
+    }
+
+    #[test]
+    fn resolve_pairing_template_accepts_catalog_ids_and_rejects_unknown() {
+        assert_eq!(
+            resolve_pairing_template("conversation").unwrap(),
+            "conversation"
+        );
+        assert_eq!(
+            resolve_pairing_template(" agent-config ").unwrap(),
+            "agent-config"
+        );
+        // Empty falls back to the default.
+        assert_eq!(resolve_pairing_template("").unwrap(), "conversation");
+        // Unknown is a hard error that lists the catalog.
+        let error = resolve_pairing_template("nope").unwrap_err().to_string();
+        assert!(error.contains("unknown scope template"));
+        assert!(error.contains("conversation"));
     }
 
     #[test]

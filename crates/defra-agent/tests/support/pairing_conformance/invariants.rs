@@ -161,6 +161,7 @@ mod tests {
             desired: PairingDesired {
                 collections: desired.iter().map(|s| s.to_string()).collect(),
                 replicator_addresses: Default::default(),
+                ..Default::default()
             },
             actual: PairingActual {
                 collections: actual.iter().map(|s| s.to_string()).collect(),
@@ -170,6 +171,7 @@ mod tests {
             applied: PairingApplied {
                 collections: applied.iter().map(|s| s.to_string()).collect(),
                 replicator_addresses: Default::default(),
+                ..Default::default()
             },
             read_failed: false,
         }
@@ -185,6 +187,7 @@ mod tests {
             desired: PairingDesired {
                 collections: Default::default(),
                 replicator_addresses: desired_replicators.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
             actual: PairingActual {
                 collections: Default::default(),
@@ -194,6 +197,7 @@ mod tests {
             applied: PairingApplied {
                 collections: Default::default(),
                 replicator_addresses: applied_replicators.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
             read_failed: false,
         }

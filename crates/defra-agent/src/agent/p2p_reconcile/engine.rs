@@ -12,8 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
-use super::profiles::expand_p2p_collection_profile_ids;
-use super::templates::PairingFilters;
+use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
     PairingDesired, RemoteP2pAdmin,
@@ -80,7 +79,7 @@ pub async fn reconcile_peer_tick(
 
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
-        update_applied_after_success(&mut applied, &op);
+        update_applied_after_success(&mut applied, &op, &desired_state);
         persist_applied(store, peer_id, &applied).await?;
         ops_applied.push(op);
     }
@@ -219,10 +218,22 @@ async fn apply_op(
             .with_context(|| format!("teardown P2P collection {collection}")),
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
-            let collections = desired.collections.iter().cloned().collect::<Vec<_>>();
-            // T4 will wire real filters here; for now pass empty (unfiltered, back-compat).
+            // The replicator carries the template's collection set, which is
+            // independent of the subscription set (`collections`): a `Push`
+            // template subscribes to nothing but still replicates the full set.
+            // Legacy rows with no explicit replicator set fall back to the
+            // subscription collections.
+            let collections = if desired.replicator_collections.is_empty() {
+                desired.collections.iter().cloned().collect::<Vec<_>>()
+            } else {
+                desired
+                    .replicator_collections
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
             admin
-                .add_replicator(&addresses, &collections, &PairingFilters::default())
+                .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
                 .with_context(|| format!("install P2P replicator {address}"))
         }
@@ -246,7 +257,11 @@ async fn apply_op(
     }
 }
 
-pub fn update_applied_after_success(applied: &mut PairingApplied, op: &DiffOp) {
+pub fn update_applied_after_success(
+    applied: &mut PairingApplied,
+    op: &DiffOp,
+    desired: &PairingDesired,
+) {
     match op {
         DiffOp::InstallCollection(collection) => {
             applied.collections.insert(collection.clone());
@@ -256,9 +271,18 @@ pub fn update_applied_after_success(applied: &mut PairingApplied, op: &DiffOp) {
         }
         DiffOp::InstallReplicator(address) => {
             applied.replicator_addresses.insert(address.clone());
+            // The filter is part of the replicator's applied identity: record
+            // the desired filter that was just installed so a later change is
+            // detected as divergence (Lean `filter_change_forces_reinstall`).
+            applied.replicator_filter = desired.replicator_filter.clone();
         }
         DiffOp::TeardownReplicator(address) => {
             applied.replicator_addresses.remove(address);
+            // Once no managed replicator remains, the recorded filter identity
+            // is meaningless — clear it so an empty applied state is canonical.
+            if applied.replicator_addresses.is_empty() {
+                applied.replicator_filter = PairingFilters::default();
+            }
         }
     }
 }
@@ -293,9 +317,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let query = format!(
             r#"{{
                 PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    collections
+                    agent_did
                     replicator_addresses
-                    profiles
+                    template
                 }}
             }}"#
         );
@@ -313,6 +337,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     collections
                     replicator_addresses
+                    replicator_filter
                 }}
             }}"#
         );
@@ -327,6 +352,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         .unwrap_or_default()
                         .into_iter()
                         .collect(),
+                    replicator_filter: decode_replicator_filter(row.replicator_filter.as_deref()),
                 })
                 .unwrap_or_default(),
         )
@@ -336,6 +362,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let peer_id = escape_graphql_string(peer_id);
         let collections = graphql_nullable_string_array(&applied.collections);
         let replicator_addresses = graphql_nullable_string_array(&applied.replicator_addresses);
+        let replicator_filter = graphql_nullable_filter_literal(&applied.replicator_filter);
         let now = escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
@@ -347,12 +374,14 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         peer_id: "{peer_id}",
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
+                        replicator_filter: {replicator_filter},
                         created_at: "{now}",
                         updated_at: "{now}"
                     }},
                     update: {{
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
+                        replicator_filter: {replicator_filter},
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}
@@ -399,10 +428,19 @@ impl PairingStateStore for GraphqlPairingStateStore {
 
 #[derive(Deserialize)]
 struct PairingStateRow {
+    #[serde(default)]
+    agent_did: Option<String>,
     collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
-    profiles: Option<Vec<String>>,
+    #[serde(default)]
+    template: Option<String>,
+    #[serde(default)]
+    replicator_filter: Option<String>,
 }
+
+/// The default scope template applied to rows that carry no `template` (e.g.
+/// rows written before the field existed). Mirrors the migration backfill.
+pub const DEFAULT_PAIRING_TEMPLATE: &str = "conversation";
 
 #[derive(Deserialize)]
 struct PeerIdRow {
@@ -410,26 +448,57 @@ struct PeerIdRow {
 }
 
 fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
-    let explicit_collections = row.collections.unwrap_or_default();
-    let profile_ids = row.profiles.unwrap_or_default();
-    let collections = if explicit_collections.is_empty() && profile_ids.is_empty() {
-        BTreeSet::new()
-    } else {
-        expand_p2p_collection_profile_ids(
-            explicit_collections.iter().map(String::as_str),
-            profile_ids.iter().map(String::as_str),
-        )?
+    let replicator_addresses = row
+        .replicator_addresses
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    // Template-driven resolution: the template is authoritative for the
+    // collection set, the per-peer scope filter, and the delivery mode. Rows
+    // without a `template` (pre-migration) default to `conversation`, matching
+    // the migration backfill.
+    let template_id = row
+        .template
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(DEFAULT_PAIRING_TEMPLATE);
+    let template = resolve_template(template_id).unwrap_or_else(|| {
+        tracing::warn!(
+            template = template_id,
+            "unknown pairing scope template; falling back to default \"{DEFAULT_PAIRING_TEMPLATE}\""
+        );
+        resolve_template(DEFAULT_PAIRING_TEMPLATE)
+            .expect("default pairing template is in the catalog")
+    });
+
+    // The scope filter value is the peer's agent DID. Fall back to the legacy
+    // explicit/profile collections only when a template cannot be resolved
+    // (cannot happen given the default), keeping the read total.
+    let peer_did = row.agent_did.as_deref().unwrap_or_default();
+    let replicator_collections = template
+        .collections
+        .iter()
+        .map(|&c| c.to_string())
+        .collect::<BTreeSet<_>>();
+    let replicator_filter = scope_filter(&template.scope, template.collections, peer_did);
+
+    let subscription_collections = match template.delivery {
+        // Push: never subscribe — the filtered replicator is the only channel,
+        // so the unfiltered collection never gossips.
+        Delivery::Push => BTreeSet::new(),
+        // Replicate: subscribe to the whole collection set.
+        Delivery::Replicate => replicator_collections.clone(),
     };
 
     Ok(PairingDesired {
-        collections,
-        replicator_addresses: row
-            .replicator_addresses
-            .unwrap_or_default()
-            .into_iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect(),
+        collections: subscription_collections,
+        replicator_addresses,
+        replicator_collections,
+        replicator_filter,
     })
 }
 
@@ -455,6 +524,32 @@ where
         return Ok(Vec::new());
     };
     serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+}
+
+/// Serialize the per-pairing scope filter to a GraphQL String literal (JSON),
+/// emitting `null` for the unfiltered (empty) case so the column is never an
+/// empty-list literal. The JSON round-trips through `decode_replicator_filter`.
+fn graphql_nullable_filter_literal(filter: &PairingFilters) -> String {
+    if filter.is_empty() {
+        return "null".to_string();
+    }
+    let json = serde_json::to_string(filter).unwrap_or_default();
+    format!(r#""{}""#, escape_graphql_string(&json))
+}
+
+/// Decode the persisted scope filter String (JSON) back into `PairingFilters`.
+/// Missing/empty/malformed values decode to an empty (unfiltered) filter.
+fn decode_replicator_filter(value: Option<&str>) -> PairingFilters {
+    let Some(raw) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return PairingFilters::default();
+    };
+    serde_json::from_str(raw).unwrap_or_else(|error| {
+        tracing::warn!(
+            error = %error,
+            "PeerPairingApplied.replicator_filter failed to decode; treating as unfiltered"
+        );
+        PairingFilters::default()
+    })
 }
 
 fn graphql_nullable_string_array(values: &BTreeSet<String>) -> String {
@@ -707,6 +802,7 @@ mod tests {
         let store = MockStore::with_desired(Some(PairingDesired {
             collections: set(&["c1"]),
             replicator_addresses: set(&["addr1"]),
+            ..Default::default()
         }));
         let admin = MockAdmin::default();
 
@@ -727,6 +823,7 @@ mod tests {
             PairingApplied {
                 collections: set(&["c1"]),
                 replicator_addresses: set(&["addr1"]),
+                ..Default::default()
             }
         );
     }
@@ -737,6 +834,7 @@ mod tests {
         *store.applied.lock().unwrap() = PairingApplied {
             collections: set(&["managed"]),
             replicator_addresses: set(&["managed-addr"]),
+            ..Default::default()
         };
         let admin = MockAdmin::default();
         *admin.collections.lock().unwrap() = set(&["managed", "manual"]);
@@ -782,6 +880,7 @@ mod tests {
         *store.applied.lock().unwrap() = PairingApplied {
             collections: set(&["c1"]),
             replicator_addresses: set(&["addr1"]),
+            ..Default::default()
         };
         let admin = MockAdmin::default();
         *admin.collections.lock().unwrap() = set(&["c1"]);
@@ -818,30 +917,206 @@ mod tests {
         );
     }
 
-    #[test]
-    fn desired_row_profiles_resolve_to_collections_at_load_boundary() {
-        let desired = desired_from_pairing_row(PairingStateRow {
+    fn desired_row(template: Option<&str>, agent_did: Option<&str>) -> PairingStateRow {
+        PairingStateRow {
+            agent_did: agent_did.map(str::to_string),
             collections: None,
             replicator_addresses: Some(vec!["addr1".into()]),
-            profiles: Some(vec!["chat-requests".into()]),
-        })
-        .expect("profile resolves");
-
-        assert!(desired.collections.contains("AgentRequest"));
-        assert!(desired.collections.contains("AgentResponse"));
-        assert_eq!(desired.replicator_addresses, set(&["addr1"]));
+            template: template.map(str::to_string),
+            replicator_filter: None,
+        }
     }
 
+    /// A `Push` template (conversation) resolves to NO subscription collections
+    /// (no gossip leak) and a per-peer scope filter over the template set.
     #[test]
-    fn desired_row_unknown_profile_is_load_error() {
-        let error = desired_from_pairing_row(PairingStateRow {
-            collections: None,
-            replicator_addresses: Some(vec!["addr1".into()]),
-            profiles: Some(vec!["not-a-profile".into()]),
-        })
-        .unwrap_err();
+    fn push_template_resolves_to_filter_without_subscription() {
+        let desired =
+            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
+                .expect("template resolves");
 
-        assert!(error.to_string().contains("unknown P2P collection profile"));
+        assert!(
+            desired.collections.is_empty(),
+            "Push templates must not subscribe"
+        );
+        assert!(desired.replicator_collections.contains("AgentRequest"));
+        let pred = desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("AgentRequest filter");
+        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.value, "did:key:bob");
+    }
+
+    /// A `Replicate` template (agent-config) subscribes to its collection set
+    /// and carries an EMPTY (unfiltered) replicator filter.
+    #[test]
+    fn replicate_template_resolves_to_subscription_without_filter() {
+        let desired =
+            desired_from_pairing_row(desired_row(Some("agent-config"), Some("did:key:bob")))
+                .expect("template resolves");
+
+        assert!(desired.collections.contains("AgentBehavior"));
+        assert_eq!(desired.collections, desired.replicator_collections);
+        assert!(
+            desired.replicator_filter.is_empty(),
+            "Replicate templates are unfiltered"
+        );
+    }
+
+    /// Rows without a template default to `conversation` (matches the migration
+    /// backfill), and an unknown template also falls back to the default.
+    #[test]
+    fn missing_and_unknown_template_default_to_conversation() {
+        let missing = desired_from_pairing_row(desired_row(None, Some("did:key:bob")))
+            .expect("default resolves");
+        assert!(missing.collections.is_empty());
+        assert!(missing.replicator_filter.contains_key("AgentRequest"));
+
+        let unknown =
+            desired_from_pairing_row(desired_row(Some("not-a-template"), Some("did:key:bob")))
+                .expect("default resolves");
+        assert_eq!(
+            unknown.replicator_collections,
+            missing.replicator_collections
+        );
+        assert!(unknown.replicator_filter.contains_key("AgentRequest"));
+    }
+
+    /// End-to-end reconcile of a `Push` (conversation) template: a filtered
+    /// replicator is installed and NO subscription (`add_p2p_collections`) is.
+    #[tokio::test]
+    async fn push_template_installs_filtered_replicator_without_subscription() {
+        let store = MockStore::with_desired(Some(
+            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
+                .expect("template resolves"),
+        ));
+        let admin = MockAdmin::default();
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick result");
+
+        // Only a replicator install; no collection subscription.
+        assert_eq!(
+            outcome.ops_applied,
+            vec![DiffOp::InstallReplicator("addr1".into())]
+        );
+        let emitted = admin.emitted.lock().unwrap();
+        assert!(
+            !emitted
+                .iter()
+                .any(|op| matches!(op, DiffOp::InstallCollection(_))),
+            "Push template must NOT subscribe: {emitted:?}"
+        );
+        drop(emitted);
+
+        // The recorded replicator carries the per-peer scope filter.
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let pred = calls[0]
+            .1
+            .get("AgentRequest")
+            .expect("AgentRequest filter on installed replicator");
+        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.value, "did:key:bob");
+    }
+
+    /// End-to-end reconcile of a `Replicate` (agent-config) template: it both
+    /// subscribes (`add_p2p_collections`) and installs an UNFILTERED replicator.
+    #[tokio::test]
+    async fn replicate_template_subscribes_and_replicates() {
+        let store = MockStore::with_desired(Some(
+            desired_from_pairing_row(desired_row(Some("agent-config"), Some("did:key:bob")))
+                .expect("template resolves"),
+        ));
+        let admin = MockAdmin::default();
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick result");
+
+        let emitted = admin.emitted.lock().unwrap();
+        assert!(
+            emitted
+                .iter()
+                .any(|op| matches!(op, DiffOp::InstallCollection(_))),
+            "Replicate template must subscribe: {emitted:?}"
+        );
+        assert!(emitted
+            .iter()
+            .any(|op| matches!(op, DiffOp::InstallReplicator(_))));
+        drop(emitted);
+        assert!(outcome
+            .ops_applied
+            .iter()
+            .any(|op| matches!(op, DiffOp::InstallReplicator(_))));
+
+        // The installed replicator is unfiltered.
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].1.is_empty(),
+            "Replicate template must install an unfiltered replicator"
+        );
+    }
+
+    /// End-to-end: a changed scoped DID (different filter) reinstalls the
+    /// replicator — teardown of the old filtered identity, install of the new.
+    #[tokio::test]
+    async fn changing_scoped_did_reinstalls_replicator() {
+        let store = MockStore::with_desired(Some(
+            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
+                .expect("template resolves"),
+        ));
+        // Applied state: addr1 already installed under a DIFFERENT (alice) filter.
+        let mut alice_filter = PairingFilters::default();
+        for col in resolve_template("conversation").unwrap().collections.iter() {
+            alice_filter.insert(
+                (*col).to_string(),
+                crate::agent::p2p_reconcile::templates::FilterPredicate {
+                    field: "agent_did".to_string(),
+                    value: "did:key:alice".to_string(),
+                },
+            );
+        }
+        *store.applied.lock().unwrap() = PairingApplied {
+            collections: BTreeSet::new(),
+            replicator_addresses: set(&["addr1"]),
+            replicator_filter: alice_filter,
+        };
+        let admin = MockAdmin::default();
+        // The remote already has the old replicator on addr1.
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec!["AgentRequest".into()],
+                address: Some("addr1".into()),
+            },
+        );
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick result");
+
+        assert_eq!(
+            outcome.ops_applied,
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+        // The reinstalled replicator carries the NEW (bob) filter.
+        let calls = admin.recorded_filters.lock().unwrap();
+        let last = calls.last().expect("an install happened");
+        assert_eq!(
+            last.1
+                .get("AgentRequest")
+                .expect("AgentRequest filter")
+                .value,
+            "did:key:bob"
+        );
     }
 
     // -----------------------------------------------------------------------

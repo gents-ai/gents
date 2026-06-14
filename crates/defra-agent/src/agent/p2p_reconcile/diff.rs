@@ -4,11 +4,30 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use super::templates::PairingFilters;
+
 /// Operator-set desired pairing for one peer.
+///
+/// `replicator_filter` is the per-pairing scope filter resolved from the
+/// pairing's scope template (empty == unfiltered). It is part of the
+/// *replicator identity*: every replicator in this pairing carries this filter,
+/// so a changed filter makes the `(address, filter)` identity distinct and
+/// forces a teardown+install — mirroring the Lean `PairingReconcile.ReplicatorId
+/// = (address, Option filter)` and `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
+    /// Collections to subscribe to (gossip). Empty for `Push` templates, which
+    /// deliberately do NOT subscribe — the filtered replicator is the only
+    /// channel, so the unfiltered collection never gossips.
     pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
+    /// Collections the replicator carries. For subscribe+replicate this equals
+    /// `collections`; for filtered push it is the template collection set even
+    /// though `collections` (the subscription set) is empty.
+    #[serde(default)]
+    pub replicator_collections: BTreeSet<String>,
+    #[serde(default)]
+    pub replicator_filter: PairingFilters,
 }
 
 impl PairingDesired {
@@ -25,10 +44,17 @@ pub struct PairingActual {
 }
 
 /// Reconciler-owned pairing state persisted after successful operations.
+///
+/// `replicator_filter` records the scope filter last installed for this
+/// pairing's replicators, so a subsequent desired filter that differs is
+/// detected as divergence and triggers reinstall (Lean
+/// `filter_change_forces_reinstall`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingApplied {
     pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
+    #[serde(default)]
+    pub replicator_filter: PairingFilters,
 }
 
 impl PairingApplied {
@@ -88,11 +114,28 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::TeardownCollection(c.clone()));
     }
+    // Replicator identity is (address, filter). A managed replicator whose
+    // desired filter differs from the applied filter is a *distinct* identity
+    // (Lean `filter_change_distinct_identity`): tear down the old identity and
+    // install the new one, even though the address is unchanged.
+    let filter_changed = desired.replicator_filter != applied.replicator_filter;
     for r in desired
         .replicator_addresses
         .difference(&actual.replicator_addresses)
     {
         ops.push(DiffOp::InstallReplicator(r.clone()));
+    }
+    if filter_changed {
+        // Reinstall every managed address that survives into the desired set:
+        // its identity changed, so the old filtered replicator must be replaced.
+        for r in actual
+            .replicator_addresses
+            .intersection(&applied.replicator_addresses)
+            .filter(|r| desired.replicator_addresses.contains(*r))
+        {
+            ops.push(DiffOp::TeardownReplicator(r.clone()));
+            ops.push(DiffOp::InstallReplicator(r.clone()));
+        }
     }
     for r in actual
         .replicator_addresses
@@ -149,6 +192,7 @@ mod tests {
         let desired = PairingDesired {
             collections: s(&["c1"]),
             replicator_addresses: s(&["/ip4/1/p2p/p"]),
+            ..Default::default()
         };
         let actual = PairingActual {
             collections: s(&["c1"]),
@@ -162,6 +206,7 @@ mod tests {
         let desired = PairingDesired {
             collections: s(&["c1"]),
             replicator_addresses: s(&["/ip4/1/p2p/p"]),
+            ..Default::default()
         };
         let actual = PairingActual::default();
         let ops = compute_pairing_diff(&desired, &actual);
@@ -181,6 +226,71 @@ mod tests {
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
     }
 
+    fn filter(field: &str, value: &str) -> PairingFilters {
+        let mut f = PairingFilters::new();
+        f.insert(
+            "AgentRequest".to_string(),
+            super::super::templates::FilterPredicate {
+                field: field.to_string(),
+                value: value.to_string(),
+            },
+        );
+        f
+    }
+
+    /// Mirrors Lean `filter_change_forces_reinstall`: a replicator on the same
+    /// address but a different filter is a distinct identity, so the diff tears
+    /// down the old filtered replicator and installs the new one.
+    #[test]
+    fn changing_scoped_did_reinstalls_replicator() {
+        let desired = PairingDesired {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+            replicator_filter: filter("agent_did", "did:key:bob"),
+            ..Default::default()
+        };
+        let actual = PairingActual {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+        };
+        let applied = PairingApplied {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+            replicator_filter: filter("agent_did", "did:key:alice"),
+            ..Default::default()
+        };
+        assert_eq!(
+            compute_owned_pairing_diff(&desired, &actual, &applied),
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+    }
+
+    /// An unchanged filter on a converged pairing yields no replicator churn.
+    #[test]
+    fn unchanged_filter_does_not_reinstall_replicator() {
+        let f = filter("agent_did", "did:key:bob");
+        let desired = PairingDesired {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+            replicator_filter: f.clone(),
+            ..Default::default()
+        };
+        let actual = PairingActual {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+        };
+        let applied = PairingApplied {
+            collections: BTreeSet::new(),
+            replicator_addresses: s(&["addr1"]),
+            replicator_filter: f,
+            ..Default::default()
+        };
+        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
+    }
+
     #[test]
     fn owned_diff_tears_down_only_applied_extras() {
         let desired = PairingDesired::default();
@@ -191,6 +301,7 @@ mod tests {
         let applied = PairingApplied {
             collections: s(&["managed"]),
             replicator_addresses: s(&["/ip4/managed/p2p/p"]),
+            ..Default::default()
         };
         assert_eq!(
             compute_owned_pairing_diff(&desired, &actual, &applied),

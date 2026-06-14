@@ -110,6 +110,9 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         &collections,
         &addresses,
         &profiles,
+        // Joins materialize the default `conversation` template; a dedicated
+        // join `--template` front door lands with the registry-offers slice.
+        "conversation",
         &now,
     )
     .await?;
