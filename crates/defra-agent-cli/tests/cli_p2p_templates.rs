@@ -62,6 +62,29 @@ async fn wait_for_applied_with_filter(
     }
 }
 
+/// Like `wait_for_applied_with_filter` but waits until the row also carries a
+/// replicator. A Replicate-delivery template subscribes collections first and
+/// installs the replicator second, so the applied row exists (with collections)
+/// before `replicator_addresses` is populated — poll past that window.
+async fn wait_for_applied_replicator(
+    graphql: &str,
+    peer_id: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(row) = applied_row_with_filter(graphql, peer_id).await {
+            if nonempty_replicator(&row) {
+                return Ok(row);
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for PeerPairingApplied({peer_id}) to gain a replicator");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn applied_row_with_filter(graphql: &str, peer_id: &str) -> Result<Value> {
     let peer_id = escape_graphql_string(peer_id);
     let response = graphql_query(
@@ -361,7 +384,7 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
     );
 
     let applied =
-        wait_for_applied_with_filter(&graphql_peer, &peer_id_src, APPLIED_TIMEOUT).await?;
+        wait_for_applied_replicator(&graphql_peer, &peer_id_src, APPLIED_TIMEOUT).await?;
     assert!(
         applied
             .get("collections")
