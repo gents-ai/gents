@@ -597,23 +597,28 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         Some(agent_did_b.as_str())
     );
 
+    // The `conversation` template (the invite/join default) is filtered-PUSH
+    // delivery: the reconciler installs a filtered replicator toward the peer
+    // and deliberately does NOT subscribe the collections (no gossip leak of
+    // the unfiltered collection). So the applied row carries replicator
+    // addresses, not subscribed collections.
     let applied_b =
         wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(70)).await?;
     assert!(
         applied_b
-            .get("collections")
+            .get("replicator_addresses")
             .and_then(Value::as_array)
-            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))),
-        "B applied row missing AgentRequest after joining A: {applied_b}"
+            .is_some_and(|rows| !rows.is_empty()),
+        "B applied row missing a replicator toward A after joining: {applied_b}"
     );
     let applied_a =
         wait_for_pairing_applied(&graphql_a, peer_id_b, Duration::from_secs(70)).await?;
     assert!(
         applied_a
-            .get("collections")
+            .get("replicator_addresses")
             .and_then(Value::as_array)
-            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))),
-        "A applied row missing AgentRequest after joining B: {applied_a}"
+            .is_some_and(|rows| !rows.is_empty()),
+        "A applied row missing a replicator toward B after joining: {applied_a}"
     );
 
     Ok(())
