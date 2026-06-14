@@ -1,5 +1,6 @@
 //! HTTP transport implementation for `RemoteP2pAdmin`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -120,6 +121,19 @@ struct AddReplicatorBody<'a> {
     collections: &'a [String],
     #[serde(rename = "Addresses")]
     addresses: &'a [String],
+    /// Per-collection equality predicates (defradb.rs #1033 filtered
+    /// replication). Empty map = whole-collection (unfiltered) replication.
+    #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
+    filters: BTreeMap<String, HttpReplicationFilter>,
+}
+
+/// Mirrors defradb's `ReplicationFilter` HTTP wire shape (`{Field, Value}`).
+#[derive(Debug, Serialize)]
+struct HttpReplicationFilter {
+    #[serde(rename = "Field")]
+    field: String,
+    #[serde(rename = "Value")]
+    value: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -225,10 +239,21 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         collections: &[String],
         filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
-        apply_filters_pending_1033(filters);
         let body = AddReplicatorBody {
             collections,
             addresses,
+            filters: filters
+                .iter()
+                .map(|(collection, predicate)| {
+                    (
+                        collection.clone(),
+                        HttpReplicationFilter {
+                            field: predicate.field.clone(),
+                            value: serde_json::Value::String(predicate.value.clone()),
+                        },
+                    )
+                })
+                .collect(),
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?
@@ -413,23 +438,6 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
-}
-
-/// Seam for defradb.rs #1033 filtered replication.
-///
-/// TODO(#1033 pin): once the defradb.rs filtered-replication PR is the pinned rev,
-/// translate `filters` into defradb's ReplicationFilters and pass to the filtered
-/// add_replicator.  Until then: empty filters == today's behavior; non-empty filters
-/// fall back to the unfiltered call + a warn so the path is visible, not silently
-/// dropped.
-fn apply_filters_pending_1033(filters: &PairingFilters) {
-    if !filters.is_empty() {
-        tracing::warn!(
-            filter_count = filters.len(),
-            "add_replicator called with non-empty PairingFilters but defradb.rs #1033 is not yet \
-             pinned; filters are not applied — update the pin to enable filtered replication"
-        );
-    }
 }
 
 fn map_reqwest_err(e: reqwest::Error) -> RemoteP2pAdminError {

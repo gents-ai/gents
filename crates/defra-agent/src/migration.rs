@@ -1420,13 +1420,12 @@ mod patch_kind_tests {
         }
     }
 
-    /// Companion to the SDL guard: against a fresh embedded node on the CURRENT
-    /// pin, the `@immutable` directive parses and a row is created, but a rewrite
-    /// of `agent_did` is NOT yet rejected (enforcement is #1033's). This pins the
-    /// observed pre-#1033 behavior so the test that checks it FLIPS — and must be
-    /// updated to assert rejection — when the pin bumps.
+    /// Companion to the SDL guard: with the defradb.rs #1033 rev pinned,
+    /// `@immutable` enforcement is LIVE — a row is created with `agent_did`, but
+    /// any later rewrite of the immutable scope key is REJECTED. This is the
+    /// runtime half of the filtered-replication DAG-safety guarantee.
     #[tokio::test]
-    async fn agent_did_rewrite_not_yet_enforced_on_current_pin() {
+    async fn agent_did_rewrite_is_rejected_by_immutable_enforcement() {
         let node = test_node().await;
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -1451,7 +1450,8 @@ mod patch_kind_tests {
             create.errors
         );
 
-        // Attempt to rewrite the immutable scope key to a different DID.
+        // Attempt to rewrite the immutable scope key to a different DID; the
+        // #1033 enforcement must reject it (or leave the stored value unchanged).
         let rewrite = node
             .execute(
                 r#"mutation {
@@ -1462,10 +1462,31 @@ mod patch_kind_tests {
                 }"#,
             )
             .await;
-        assert!(
-            !rewrite.has_errors(),
-            "PRE-#1033: agent_did rewrite is expected to succeed (no enforcement yet); \
-             when the pin bumps this must be changed to assert rejection. errors={:?}",
+
+        // Read the stored value back: it must still be the original owner — the
+        // immutable scope key cannot be reassigned.
+        let read = node
+            .execute(
+                r#"query {
+                    AgentRequest(filter: { request_id: { _eq: "scope-guard-req" } }) {
+                        agent_did
+                    }
+                }"#,
+            )
+            .await;
+        let stored = read
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("agent_did"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            stored,
+            Some("did:defra-agent:alice"),
+            "immutable agent_did scope key must survive a rewrite attempt \
+             (rewrite errors={:?})",
             rewrite.errors
         );
     }

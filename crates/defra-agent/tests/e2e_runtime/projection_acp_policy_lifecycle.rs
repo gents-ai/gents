@@ -152,13 +152,9 @@ async fn projection_acp_policy_resources_drive_document_decisions() -> anyhow::R
         "unrelated actors should remain denied"
     );
 
-    let relationships = acp
-        .export_actor_relationships(&policy_id, resource_name, doc_id)
-        .await?;
-    assert_eq!(relationships.len(), 1);
-    assert_eq!(relationships[0].relation, "reader");
-    assert_eq!(relationships[0].actor, reader.to_string());
-
+    // (defra.rs #1033 removed `export_actor_relationships`; the grant is fully
+    // verified above via check_doc_access — reader reads but cannot update, and
+    // strangers are denied — and below by re-checking after deletion.)
     let deleted = acp
         .delete_actor_relationship(
             &owner,

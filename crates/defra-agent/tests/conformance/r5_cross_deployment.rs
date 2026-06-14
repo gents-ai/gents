@@ -541,13 +541,20 @@ async fn install_one_way_replicator(
         .add_replicator(
             collection_names.clone(),
             Some(&sender_addr),
+            Default::default(),
             Vec::new(),
             None,
         )
         .await
         .expect("authorize sender as receiver-side replicator");
     sender_p2p
-        .add_replicator(collection_names, Some(&receiver_addr), Vec::new(), None)
+        .add_replicator(
+            collection_names,
+            Some(&receiver_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
         .await
         .expect("install sender to receiver replicator");
 }

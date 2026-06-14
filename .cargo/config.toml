@@ -1,3 +1,9 @@
+# The defradb.rs pin (#1033 merge rev) transitively depends on a private
+# backbone.git over HTTPS; cargo's built-in git fetcher can't use the local
+# credential helper, so shell out to the git CLI (which authenticates fine).
+[net]
+git-fetch-with-cli = true
+
 [target.aarch64-apple-darwin]
 linker = "./scripts/macos-clang-lld.sh"
 

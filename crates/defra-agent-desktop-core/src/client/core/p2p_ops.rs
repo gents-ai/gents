@@ -67,7 +67,15 @@ pub(super) async fn p2p_add_replicator(
 ) -> Result<()> {
     match timeout(
         P2P_OPERATION_TIMEOUT,
-        p2p.add_replicator(collections, Some(addr), Vec::new(), None),
+        // Raw desktop helper installs an unfiltered replicator; filtered
+        // (scope-template) replication flows through the shared reconcile engine.
+        p2p.add_replicator(
+            collections,
+            Some(addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        ),
     )
     .await
     {

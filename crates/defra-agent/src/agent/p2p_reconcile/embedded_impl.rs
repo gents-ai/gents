@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
+use defra_p2p_adapter::{
+    P2PError, P2PResult, P2pDocumentRequest, ReplicationFilter, ReplicationFilters,
+};
 use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
@@ -102,12 +104,12 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         collections: &[String],
         filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
-        apply_filters_pending_1033(filters);
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
+        let defra_filters = to_defra_filters(filters);
         self.run(
             "add_replicator",
-            p2p.add_replicator(collections.to_vec(), addr, Vec::new(), None),
+            p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),
         )
         .await
     }
@@ -216,14 +218,22 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
 /// add_replicator.  Until then: empty filters == today's behavior; non-empty filters
 /// fall back to the unfiltered call + a warn so the path is visible, not silently
 /// dropped.
-fn apply_filters_pending_1033(filters: &PairingFilters) {
-    if !filters.is_empty() {
-        tracing::warn!(
-            filter_count = filters.len(),
-            "add_replicator called with non-empty PairingFilters but defradb.rs #1033 is not yet \
-             pinned; filters are not applied — update the pin to enable filtered replication"
-        );
-    }
+/// Translate our `PairingFilters` seam type into defradb's `ReplicationFilters`
+/// (per-collection equality predicate). Our predicate values are agent DIDs
+/// (strings), so they map to JSON strings.
+fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
+    filters
+        .iter()
+        .map(|(collection, predicate)| {
+            (
+                collection.clone(),
+                ReplicationFilter {
+                    field: predicate.field.clone(),
+                    value: serde_json::Value::String(predicate.value.clone()),
+                },
+            )
+        })
+        .collect()
 }
 
 fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
