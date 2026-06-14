@@ -14,8 +14,46 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
+use super::templates::resolve_template;
+
 /// How often the node refreshes its `updated_at` heartbeat in `PeerRegistry`.
 pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The scope templates a node offers by default when none are explicitly
+/// configured: a node advertises that it is willing to replicate a peer's
+/// conversation slice (filtered push) and the shared agent-config set. These
+/// are the two everyday pairing intents; both resolve in the built-in catalog.
+pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
+
+/// Filter a set of offered template ids down to those that resolve in the
+/// built-in catalog, preserving order and de-duplicating. An unknown id is a
+/// node advertising something a peer could not honor, so it is dropped rather
+/// than advertised. Falls back to [`DEFAULT_OFFERED_TEMPLATES`] when the result
+/// would otherwise be empty, so a node always offers at least the defaults.
+pub fn validate_offered_templates<I, S>(offered: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for id in offered {
+        let id = id.as_ref().trim();
+        if id.is_empty() || resolve_template(id).is_none() {
+            continue;
+        }
+        if seen.insert(id.to_string()) {
+            out.push(id.to_string());
+        }
+    }
+    if out.is_empty() {
+        return DEFAULT_OFFERED_TEMPLATES
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+    }
+    out
+}
 
 /// The fields this node self-reports into `PeerRegistry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,8 +64,9 @@ pub struct RegistryEntry {
     pub agent_did: String,
     /// Shareable multiaddrs (e.g. `/ip4/.../tcp/.../p2p/<peer_id>`).
     pub addresses: Vec<String>,
-    /// Collection profiles this node offers (null when empty).
-    pub profiles: Vec<String>,
+    /// Scope templates this node offers (null when empty). A peer materializes a
+    /// scoped pairing from one of these (see the discovery reconciler).
+    pub templates: Vec<String>,
     /// Optional human-readable name for this node.
     pub display_name: Option<String>,
     /// Liveness hint: `"online"` or `"offline"`.
@@ -42,19 +81,20 @@ pub struct RegistryEntry {
 /// writes.
 ///
 /// - `Full` (operator register, `p2p network register`): the update includes
-///   all fields — `display_name`, `profiles`, `addresses`, `status`, and
+///   all fields — `display_name`, `templates`, `addresses`, `status`, and
 ///   `updated_at` — because the operator explicitly supplied them.
 /// - `Heartbeat` (daemon self-registration tick): the update writes ONLY
-///   `status`, `updated_at`, and `addresses` (network location can change),
-///   and deliberately omits `display_name` and `profiles`. This preserves any
-///   value an operator previously set via `p2p network register` rather than
-///   resetting it to null every 30 seconds.
+///   `status`, `updated_at`, `addresses` (network location can change), and
+///   `templates` (the node's offered scope-template set), and deliberately omits
+///   `display_name`. This preserves any operator-set `display_name` rather than
+///   resetting it to null every 30 seconds, while still keeping the offered
+///   templates fresh on every heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertKind {
     /// Full operator-supplied registration — update writes all fields.
     Full,
-    /// Daemon heartbeat tick — update writes only liveness fields, preserving
-    /// operator-set `display_name` and `profiles`.
+    /// Daemon heartbeat tick — update writes liveness fields plus the offered
+    /// `templates`, preserving the operator-set `display_name`.
     Heartbeat,
 }
 
@@ -62,18 +102,19 @@ pub enum UpsertKind {
 ///
 /// - Filters on `peer_id`.
 /// - The `add` branch (first registration) always sets every field from the
-///   entry, including `display_name`, `profiles`, and `registered_at`.
+///   entry, including `display_name`, `templates`, and `registered_at`.
 /// - The `update` branch behaviour depends on `kind`:
 ///   - [`UpsertKind::Full`]: updates all fields (operator register path).
-///   - [`UpsertKind::Heartbeat`]: updates only `status`, `updated_at`, and
-///     `addresses`, leaving operator-set `display_name`/`profiles` intact.
-/// - `profiles`, `invited_by`, and `display_name` emit `null` when absent to
+///   - [`UpsertKind::Heartbeat`]: updates `status`, `updated_at`, `addresses`,
+///     and `templates` (the offered scope-template set, which the heartbeat
+///     re-advertises), leaving operator-set `display_name` intact.
+/// - `templates`, `invited_by`, and `display_name` emit `null` when absent to
 ///   avoid the DefraDB empty-list / nil-column corruption (never `[]`).
 pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
     let agent_did = escape_graphql_string(&entry.agent_did);
     let addresses = graphql_nullable_string_list_literal(&entry.addresses);
-    let profiles = graphql_nullable_string_list_literal(&entry.profiles);
+    let templates = graphql_nullable_string_list_literal(&entry.templates);
     let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
     let status = escape_graphql_string(&entry.status);
     let network_id = escape_graphql_string(&entry.network_id);
@@ -81,14 +122,15 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let now = escape_graphql_string(now);
 
     // The update block differs by kind: Full rewrites every field; Heartbeat
-    // writes only the liveness fields (status, updated_at, addresses) so that
-    // operator-set display_name and profiles are never clobbered by the 30s tick.
+    // writes the liveness fields (status, updated_at, addresses) plus the offered
+    // templates, so a node re-advertises its scope offer on every tick while its
+    // operator-set display_name is never clobbered by the 30s heartbeat.
     let update_block = match kind {
         UpsertKind::Full => format!(
             r#"update: {{
                     agent_did: "{agent_did}",
                     addresses: {addresses},
-                    profiles: {profiles},
+                    templates: {templates},
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
@@ -99,6 +141,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
         UpsertKind::Heartbeat => format!(
             r#"update: {{
                     addresses: {addresses},
+                    templates: {templates},
                     status: "{status}",
                     updated_at: "{now}"
                 }}"#
@@ -113,7 +156,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                     peer_id: "{peer_id}",
                     agent_did: "{agent_did}",
                     addresses: {addresses},
-                    profiles: {profiles},
+                    templates: {templates},
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
@@ -220,7 +263,10 @@ async fn tick_registry(
         peer_id: peer_id.clone(),
         agent_did: agent_did.to_string(),
         addresses,
-        profiles: Vec::new(),
+        // A node advertises the scope templates it is willing to replicate. With
+        // no operator override, that is the default offer (conversation +
+        // agent-config), validated against the built-in catalog.
+        templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied()),
         display_name: None,
         status: status.to_string(),
         network_id: network_id.to_string(),
@@ -229,8 +275,9 @@ async fn tick_registry(
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     // Use Heartbeat variant so recurring ticks never overwrite operator-set
-    // display_name or profiles (the add branch on first registration still sets
-    // them from the entry, which is empty here — the operator path sets them).
+    // display_name (the add branch on first registration sets it from the entry,
+    // which is empty here — the operator path sets it). The heartbeat still
+    // re-advertises the offered templates so the registry offer stays fresh.
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
     let response = node.execute(&mutation).await;
 
@@ -275,13 +322,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_upsert_mutation_escapes_and_emits_null_for_empty_profiles() {
+    fn registry_upsert_mutation_escapes_and_emits_null_for_empty_templates() {
         let m = registry_upsert_mutation(
             &RegistryEntry {
                 peer_id: r#"p"1"#.into(),
                 agent_did: "did:key:a".into(),
                 addresses: vec!["/ip4/1/tcp/1".into()],
-                profiles: vec![],
+                templates: vec![],
                 display_name: Some("amy".into()),
                 status: "online".into(),
                 network_id: "default".into(),
@@ -291,21 +338,21 @@ mod tests {
             UpsertKind::Full,
         );
         assert!(m.contains(r#"peer_id: { _eq: "p\"1" }"#));
-        assert!(m.contains("profiles: null"));
-        assert!(!m.contains("profiles: []"));
+        assert!(m.contains("templates: null"));
+        assert!(!m.contains("templates: []"));
         assert!(m.contains(r#"status: "online""#));
     }
 
-    /// The heartbeat-variant `update` block must NOT contain `display_name` or
-    /// `profiles` — those fields must be absent so the operator-set values are
-    /// never overwritten by the 30-second heartbeat tick.
+    /// The heartbeat-variant `update` block must NOT contain `display_name` (it
+    /// would clobber the operator-set value), but MUST re-advertise `templates`
+    /// so the offered scope set stays fresh on every tick.
     #[test]
-    fn heartbeat_upsert_update_block_omits_display_name_and_profiles() {
+    fn heartbeat_upsert_update_block_omits_display_name_but_keeps_templates() {
         let entry = RegistryEntry {
             peer_id: "peer-hb".into(),
             agent_did: "did:key:hb".into(),
             addresses: vec!["/ip4/1/tcp/9/p2p/peer-hb".into()],
-            profiles: vec!["chat-requests".into()],
+            templates: vec!["conversation".into()],
             display_name: Some("should-not-appear-in-update".into()),
             status: "online".into(),
             network_id: "default".into(),
@@ -319,12 +366,11 @@ mod tests {
             "add branch must still set display_name on first registration: {m}"
         );
         assert!(
-            m.contains(r#"profiles: ["chat-requests"]"#),
-            "add branch must still set profiles on first registration: {m}"
+            m.contains(r#"templates: ["conversation"]"#),
+            "add branch must still set templates on first registration: {m}"
         );
 
-        // Split the mutation at `update: {` to isolate the update block, then
-        // confirm display_name and profiles do NOT appear in the update portion.
+        // Split the mutation at `update: {` to isolate the update block.
         let update_portion = m
             .split_once("update: {")
             .expect("mutation must contain an update block")
@@ -334,20 +380,20 @@ mod tests {
             "heartbeat update block must NOT contain display_name — it would clobber operator-set values: {update_portion}"
         );
         assert!(
-            !update_portion.contains("profiles"),
-            "heartbeat update block must NOT contain profiles — it would clobber operator-set values: {update_portion}"
+            update_portion.contains("templates:"),
+            "heartbeat update block must re-advertise templates: {update_portion}"
         );
     }
 
     /// The full/operator-variant `update` block MUST contain `display_name` and
-    /// `profiles` — the operator explicitly supplied them via `p2p network register`.
+    /// `templates` — the operator explicitly supplied them via `p2p network register`.
     #[test]
-    fn operator_upsert_update_block_includes_display_name_and_profiles() {
+    fn operator_upsert_update_block_includes_display_name_and_templates() {
         let entry = RegistryEntry {
             peer_id: "peer-op".into(),
             agent_did: "did:key:op".into(),
             addresses: vec!["/ip4/1/tcp/9/p2p/peer-op".into()],
-            profiles: vec!["chat-requests".into()],
+            templates: vec!["conversation".into()],
             display_name: Some("my-node".into()),
             status: "online".into(),
             network_id: "default".into(),
@@ -364,8 +410,39 @@ mod tests {
             "operator update block must contain display_name: {update_portion}"
         );
         assert!(
-            update_portion.contains("profiles:"),
-            "operator update block must contain profiles: {update_portion}"
+            update_portion.contains("templates:"),
+            "operator update block must contain templates: {update_portion}"
         );
+    }
+
+    #[test]
+    fn validate_offered_templates_keeps_known_drops_unknown_and_dedups() {
+        let out = validate_offered_templates([
+            "conversation",
+            "nope",
+            "agent-config",
+            "conversation",
+            "  ",
+        ]);
+        assert_eq!(
+            out,
+            vec!["conversation".to_string(), "agent-config".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_offered_templates_falls_back_to_defaults_when_empty() {
+        let out = validate_offered_templates(Vec::<String>::new());
+        assert_eq!(
+            out,
+            DEFAULT_OFFERED_TEMPLATES
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+        // All defaults must resolve in the catalog.
+        for id in &out {
+            assert!(resolve_template(id).is_some(), "default {id} must resolve");
+        }
     }
 }

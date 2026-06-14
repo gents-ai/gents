@@ -35,8 +35,14 @@ use serde::Deserialize;
 use crate::graphql::escape_graphql_string;
 
 use super::engine::PAIRING_SWEEP_INTERVAL;
-use super::profiles::expand_p2p_collection_profile_ids;
 use super::registry::REGISTRY_HEARTBEAT_INTERVAL;
+use super::templates::{resolve_template, ScopeTemplate};
+
+/// The scope template discovery prefers when a peer offers it: the everyday
+/// filtered-push of the peer's conversation slice. When a peer does not offer
+/// `conversation`, discovery falls back to the first offered template that
+/// resolves in the catalog.
+pub const PREFERRED_DISCOVERY_TEMPLATE: &str = "conversation";
 
 /// The `source` discriminator value for operator-authored desired rows.
 pub const SOURCE_OPERATOR: &str = "operator";
@@ -65,9 +71,11 @@ pub struct DiscoveredEntry {
     /// advertised. These become the desired row's `replicator_addresses` so the
     /// pairing reconciler has somewhere to replicate.
     pub addresses: Vec<String>,
-    /// Collection profiles the peer offers. Expanded into the desired row's
-    /// `collections` so the pairing reconciler has something to subscribe.
-    pub profiles: Vec<String>,
+    /// Scope templates the peer offers (the templates it is willing to
+    /// replicate). Discovery picks one and stamps it on the materialized
+    /// `PeerPairingDesired.template`; the pairing reconciler then resolves the
+    /// collection set, scope filter, and delivery mode from it.
+    pub templates: Vec<String>,
     /// Effective liveness: `status == "online"` AND heartbeat within
     /// [`REGISTRY_STALE_AFTER`].
     pub live: bool,
@@ -81,7 +89,7 @@ impl DiscoveredEntry {
         peer_id: String,
         agent_did: String,
         addresses: Vec<String>,
-        profiles: Vec<String>,
+        templates: Vec<String>,
         status: Option<&str>,
         updated_at: Option<&str>,
         now: DateTime<Utc>,
@@ -102,37 +110,50 @@ impl DiscoveredEntry {
             peer_id,
             agent_did,
             addresses,
-            profiles,
+            templates,
             live: status_online && fresh,
         }
     }
 
-    /// The collection set this entry's offered profiles expand to, for the
-    /// materialized desired row's `collections`.
+    /// The scope template discovery will stamp on the materialized desired row,
+    /// chosen from the peer's offered templates:
+    /// - prefer [`PREFERRED_DISCOVERY_TEMPLATE`] (`conversation`) if offered,
+    /// - else the first offered template that resolves in the built-in catalog,
+    /// - else `None` (the peer offers nothing we can honor — discovery skips it).
     ///
-    /// When the entry offers no profiles we fall back to the `chat-requests`
-    /// profile rather than materializing an inert (empty-collection) row: a
-    /// registry peer that advertised itself but listed no profiles is still
-    /// reachable for the request/response collections, which is the useful
-    /// default for auto-pair. This keeps auto-pair from producing a row the
-    /// pairing reconciler can't act on. (`expand_p2p_collection_profile_ids`
-    /// errors on an empty input, so this fallback also guarantees a non-empty,
-    /// well-formed set.)
-    pub fn desired_collections(&self) -> Result<BTreeSet<String>> {
+    /// Unknown/unresolvable offered ids are ignored, never stamped.
+    pub fn chosen_template(&self) -> Option<&'static ScopeTemplate> {
         let offered: Vec<&str> = self
-            .profiles
+            .templates
             .iter()
-            .map(|p| p.trim())
-            .filter(|p| !p.is_empty())
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
             .collect();
-        if offered.is_empty() {
-            expand_p2p_collection_profile_ids(
-                [],
-                [super::profiles::P2pCollectionProfile::ChatRequests.id()],
-            )
-        } else {
-            expand_p2p_collection_profile_ids([], offered)
+        if offered.contains(&PREFERRED_DISCOVERY_TEMPLATE) {
+            if let Some(t) = resolve_template(PREFERRED_DISCOVERY_TEMPLATE) {
+                return Some(t);
+            }
         }
+        offered.into_iter().find_map(resolve_template)
+    }
+
+    /// The collection set for the materialized desired row's `collections`,
+    /// derived from the entry's [chosen template](Self::chosen_template).
+    ///
+    /// The pairing reconciler treats the stamped `template` as authoritative for
+    /// the collection set (it re-resolves from the template at reconcile time),
+    /// so this only needs to satisfy the non-nullable `collections` column with
+    /// a coherent, non-empty set. Returns `None` when the entry offers no
+    /// resolvable template — discovery skips materializing such an entry.
+    pub fn desired_collections(&self) -> Option<BTreeSet<String>> {
+        let template = self.chosen_template()?;
+        Some(
+            template
+                .collections
+                .iter()
+                .map(|&c| c.to_string())
+                .collect(),
+        )
     }
 }
 
@@ -141,7 +162,12 @@ impl DiscoveredEntry {
 /// not self.
 ///
 /// This is a function of the registry alone, which is what makes convergence
-/// immediate (idempotent, stable across ticks for a stable registry).
+/// immediate (idempotent, stable across ticks for a stable registry). Whether a
+/// derived peer is actually *materialized* is a separate, downstream concern:
+/// the tick skips materializing a derived peer that offers no resolvable scope
+/// template (see [`reconcile_discovery_tick`]). The derivation deliberately
+/// stays the pure live∧¬self predicate so it remains a 1:1 mirror of the Lean
+/// model.
 pub fn derive_registry_desired(self_peer: &str, registry: &[DiscoveredEntry]) -> BTreeSet<String> {
     registry
         .iter()
@@ -184,10 +210,11 @@ pub trait DiscoveryStore: Send + Sync {
     /// materialized in the registry partition.
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>>;
 
-    /// Upsert a **registry-owned** desired row for `entry`, populating it with
-    /// the collections (expanded from the entry's offered profiles) and
-    /// replicator addresses the peer advertised, so the pairing reconciler has
-    /// something concrete to subscribe and replicate.
+    /// Upsert a **registry-owned** desired row for `entry`, stamping the offered
+    /// scope template (chosen by [`DiscoveredEntry::chosen_template`]) and
+    /// populating the template's collection set plus the replicator addresses the
+    /// peer advertised, so the pairing reconciler has a concrete scoped pairing
+    /// to install.
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()>;
 
     /// Delete the **registry-owned** desired row for `peer_id`. Must not touch
@@ -233,12 +260,23 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
     let mut outcome = DiscoveryTickOutcome::default();
 
     // Materialize: registry-owned rows for newly-derived peers, each populated
-    // from the registry entry it was derived from.
+    // from the registry entry it was derived from. A derived peer that offers no
+    // resolvable scope template is skipped (not materialized) — there is no
+    // pairing intent the reconciler could honor, so stamping it would produce an
+    // inert row. The skip is a no-op, so it is stable across ticks.
     for peer in desired.difference(&existing) {
         let entry = entry_by_peer
             .get(peer.as_str())
             .copied()
             .with_context(|| format!("derived peer {peer} missing from registry entries"))?;
+        if entry.chosen_template().is_none() {
+            tracing::debug!(
+                peer = %peer,
+                offered = ?entry.templates,
+                "discovery skips peer: no resolvable scope template offered"
+            );
+            continue;
+        }
         store
             .upsert_registry_desired(entry)
             .await
@@ -406,7 +444,7 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
                 peer_id
                 agent_did
                 addresses
-                profiles
+                templates
                 status
                 updated_at
             }
@@ -425,7 +463,7 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
                     peer_id,
                     row.agent_did.unwrap_or_default(),
                     row.addresses.unwrap_or_default(),
-                    row.profiles.unwrap_or_default(),
+                    row.templates.unwrap_or_default(),
                     row.status.as_deref(),
                     row.updated_at.as_deref(),
                     now,
@@ -444,10 +482,16 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let template = entry.chosen_template().with_context(|| {
+            format!(
+                "registry peer {} offers no resolvable scope template",
+                entry.peer_id
+            )
+        })?;
         let collections = entry
             .desired_collections()
-            .with_context(|| format!("expand collections for registry peer {}", entry.peer_id))?;
-        let mutation = upsert_registry_desired_mutation(entry, &collections, &now);
+            .with_context(|| format!("derive collections for registry peer {}", entry.peer_id))?;
+        let mutation = upsert_registry_desired_mutation(entry, template.id, &collections, &now);
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(&response, "upsert registry-owned PeerPairingDesired")
     }
@@ -464,13 +508,17 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 /// partition so the discovery step never blends with operator intent.
 ///
 /// The row carries:
-/// - `collections`: the expanded profile collection set (passed in, guaranteed
-///   non-empty — see [`DiscoveredEntry::desired_collections`]),
+/// - `template`: the scope template the peer offered (chosen by
+///   [`DiscoveredEntry::chosen_template`]); the reconciler resolves the
+///   collection set, scope filter, and delivery mode from it,
+/// - `collections`: the template's collection set (passed in, guaranteed
+///   non-empty — see [`DiscoveredEntry::desired_collections`]); satisfies the
+///   non-nullable column and matches what the reconciler re-resolves,
 /// - `replicator_addresses`: the entry's advertised addresses,
-/// - `agent_did` / `profiles`: copied from the entry,
+/// - `agent_did`: copied from the entry (the scope-filter value),
 ///
-/// so the pairing reconciler downstream has concrete collections to subscribe
-/// and addresses to replicate (without this, auto-pair produced an inert row).
+/// so the pairing reconciler downstream has a concrete, scoped pairing to
+/// install (without this, auto-pair produced an inert row).
 ///
 /// Genuinely-empty lists are emitted as `null` (never `[]`, which corrupts the
 /// nillable array columns). The filter is on `peer_id` alone (the unique index):
@@ -493,16 +541,17 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 /// mitigation; deferred until the tick rate justifies it.
 pub fn upsert_registry_desired_mutation(
     entry: &DiscoveredEntry,
+    template_id: &str,
     collections: &BTreeSet<String>,
     now: &str,
 ) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
     let agent_did = graphql_nullable_string_literal(Some(entry.agent_did.as_str()));
     let source = escape_graphql_string(SOURCE_REGISTRY);
+    let template = escape_graphql_string(template_id);
     let collections = graphql_string_list_literal(collections.iter().map(String::as_str));
     let replicator_addresses =
         graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
-    let profiles = graphql_string_list_literal(entry.profiles.iter().map(String::as_str));
     let now = escape_graphql_string(now);
     format!(
         r#"mutation {{
@@ -512,18 +561,18 @@ pub fn upsert_registry_desired_mutation(
                     peer_id: "{peer_id}",
                     agent_did: {agent_did},
                     source: "{source}",
+                    template: "{template}",
                     collections: {collections},
                     replicator_addresses: {replicator_addresses},
-                    profiles: {profiles},
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: {agent_did},
                     source: "{source}",
+                    template: "{template}",
                     collections: {collections},
                     replicator_addresses: {replicator_addresses},
-                    profiles: {profiles},
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -591,7 +640,7 @@ struct RegistryRow {
     peer_id: String,
     agent_did: Option<String>,
     addresses: Option<Vec<String>>,
-    profiles: Option<Vec<String>>,
+    templates: Option<Vec<String>>,
     status: Option<String>,
     updated_at: Option<String>,
 }
@@ -612,7 +661,7 @@ mod tests {
             peer_id: peer.to_string(),
             agent_did: format!("did:key:{peer}"),
             addresses: vec![format!("/ip4/1/tcp/1/p2p/{peer}")],
-            profiles: vec!["chat-requests".to_string()],
+            templates: vec!["conversation".to_string()],
             live,
         }
     }
@@ -699,9 +748,10 @@ mod tests {
     fn upsert_mutation_pins_source_to_registry_and_escapes_peer() {
         let mut e = entry(r#"peer"a"#, true);
         e.addresses = vec![];
-        e.profiles = vec![];
+        let template = e.chosen_template().unwrap();
         let collections = e.desired_collections().unwrap();
-        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
+        let m =
+            upsert_registry_desired_mutation(&e, template.id, &collections, "2026-06-13T00:00:00Z");
         assert!(m.contains(r#"peer_id: { _eq: "peer\"a" }"#));
         assert!(m.contains(r#"source: "registry""#));
         // No raw empty-list literal is ever emitted (corrupts nillable cols).
@@ -709,46 +759,51 @@ mod tests {
     }
 
     #[test]
-    fn upsert_mutation_emits_null_for_genuinely_empty_address_and_profile_lists() {
-        // An entry with no advertised addresses and no offered profiles still
-        // gets a non-empty `collections` (the chat-requests fallback), but its
-        // empty address/profile lists must render as `null`, never `[]`.
+    fn upsert_mutation_emits_null_for_genuinely_empty_address_list() {
+        // An entry with no advertised addresses still gets a non-empty
+        // `collections` (from the chosen template), but its empty address list
+        // must render as `null`, never `[]`.
         let mut e = entry("peerEmpty", true);
         e.addresses = vec![];
-        e.profiles = vec![];
+        let template = e.chosen_template().unwrap();
         let collections = e.desired_collections().unwrap();
-        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
+        let m =
+            upsert_registry_desired_mutation(&e, template.id, &collections, "2026-06-13T00:00:00Z");
         assert!(m.contains("replicator_addresses: null"));
-        assert!(m.contains("profiles: null"));
         assert!(m.contains(r#"collections: ["#)); // non-empty
         assert!(!m.contains("[]"));
     }
 
     #[test]
-    fn materialized_registry_row_carries_entry_collections_and_address() {
-        // A registry entry for peerA offering profile "chat-requests" with
+    fn materialized_registry_row_carries_template_collections_and_address() {
+        // A registry entry for peerA offering template "conversation" with
         // address "/ip4/1/tcp/1/p2p/peerA" → the registry-owned desired upsert
-        // for peerA includes the chat-requests collection set (contains
-        // "AgentRequest") and replicator_addresses contains the entry's
-        // address, NOT null.
+        // for peerA stamps template="conversation", includes the conversation
+        // collection set (contains "AgentRequest"), and replicator_addresses
+        // contains the entry's address, NOT null.
         let e = DiscoveredEntry::from_row(
             "peerA".into(),
             "did:key:peerA".into(),
             vec!["/ip4/1/tcp/1/p2p/peerA".into()],
-            vec!["chat-requests".into()],
+            vec!["conversation".into()],
             Some("online"),
             Some("2026-06-13T00:00:00Z"),
             DateTime::parse_from_rfc3339("2026-06-13T00:00:01Z")
                 .unwrap()
                 .with_timezone(&Utc),
         );
-        let collections = e.desired_collections().expect("expand collections");
+        let template = e.chosen_template().expect("resolves conversation");
+        assert_eq!(template.id, "conversation");
+        let collections = e.desired_collections().expect("template collections");
         assert!(
             collections.contains("AgentRequest"),
-            "chat-requests must expand to AgentRequest: {collections:?}"
+            "conversation must include AgentRequest: {collections:?}"
         );
 
-        let m = upsert_registry_desired_mutation(&e, &collections, "2026-06-13T00:00:00Z");
+        let m =
+            upsert_registry_desired_mutation(&e, template.id, &collections, "2026-06-13T00:00:00Z");
+        // template is stamped.
+        assert!(m.contains(r#"template: "conversation""#), "mutation: {m}");
         // collections is a non-null, non-empty list containing AgentRequest.
         assert!(m.contains(r#""AgentRequest""#), "mutation: {m}");
         assert!(!m.contains("collections: null"), "mutation: {m}");
@@ -758,6 +813,34 @@ mod tests {
         // agent_did and source are stamped from the entry / partition.
         assert!(m.contains(r#"agent_did: "did:key:peerA""#), "mutation: {m}");
         assert!(m.contains(r#"source: "registry""#), "mutation: {m}");
+    }
+
+    // ---- template selection (chosen_template) ----
+
+    #[test]
+    fn chosen_template_prefers_conversation_when_offered() {
+        let mut e = entry("p", true);
+        e.templates = vec!["agent-config".into(), "conversation".into()];
+        assert_eq!(e.chosen_template().map(|t| t.id), Some("conversation"));
+    }
+
+    #[test]
+    fn chosen_template_falls_back_to_first_resolvable() {
+        let mut e = entry("p", true);
+        e.templates = vec!["nope".into(), "agent-config".into()];
+        assert_eq!(e.chosen_template().map(|t| t.id), Some("agent-config"));
+    }
+
+    #[test]
+    fn chosen_template_is_none_for_no_resolvable_offer() {
+        let mut e = entry("p", true);
+        e.templates = vec!["nope".into(), "  ".into()];
+        assert!(e.chosen_template().is_none());
+        assert!(e.desired_collections().is_none());
+
+        let mut empty = entry("p", true);
+        empty.templates = vec![];
+        assert!(empty.chosen_template().is_none());
     }
 
     #[test]
@@ -783,6 +866,9 @@ mod tests {
         operator_owned: BTreeSet<String>,
         upserts: Mutex<Vec<String>>,
         deletes: Mutex<Vec<String>>,
+        /// (peer_id, stamped template id) for each upsert, so tests can assert
+        /// the materialized row carries the offered template.
+        upsert_templates: Mutex<Vec<(String, String)>>,
     }
 
     impl FakeStore {
@@ -799,6 +885,7 @@ mod tests {
                 operator_owned: operator_owned.iter().map(|s| s.to_string()).collect(),
                 upserts: Mutex::new(Vec::new()),
                 deletes: Mutex::new(Vec::new()),
+                upsert_templates: Mutex::new(Vec::new()),
             }
         }
     }
@@ -822,11 +909,21 @@ mod tests {
             Ok(self.operator_owned.clone())
         }
         async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
+            // Mirror the GraphQL store: stamp the chosen offered template on the
+            // materialized row (skipping an entry with no resolvable template is
+            // the derivation's job — derive_registry_desired never selects one).
+            let template = entry
+                .chosen_template()
+                .expect("derived entry must offer a resolvable template");
             self.registry_owned
                 .lock()
                 .unwrap()
                 .insert(entry.peer_id.clone());
             self.upserts.lock().unwrap().push(entry.peer_id.clone());
+            self.upsert_templates
+                .lock()
+                .unwrap()
+                .push((entry.peer_id.clone(), template.id.to_string()));
             Ok(())
         }
         async fn delete_registry_desired(&self, peer_id: &str) -> Result<()> {
@@ -894,5 +991,88 @@ mod tests {
         // The operator-owned peerB was never upserted or deleted.
         assert!(!store.upserts.lock().unwrap().contains(&"peerB".to_string()));
         assert!(!store.deletes.lock().unwrap().contains(&"peerB".to_string()));
+    }
+
+    // ---- T5: discovery stamps the offered scope template ----
+
+    #[tokio::test]
+    async fn discovery_stamps_offered_template_on_materialized_row() {
+        // A live registry entry for peerA offering ["conversation"] →
+        // discovery materializes a source="registry" desired row stamped with
+        // template="conversation".
+        let mut peer_a = entry("peerA", true);
+        peer_a.templates = vec!["conversation".into()];
+        let store = FakeStore::new(
+            "self",
+            vec![peer_a],
+            /* registry_owned */ &[],
+            /* operator_owned */ &[],
+        );
+
+        let outcome = reconcile_discovery_tick(&store).await.expect("tick");
+
+        assert_eq!(outcome.upserted, BTreeSet::from(["peerA".to_string()]));
+        let stamped = store.upsert_templates.lock().unwrap().clone();
+        assert_eq!(
+            stamped,
+            vec![("peerA".to_string(), "conversation".to_string())],
+            "materialized row must be stamped with the offered template"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_skips_entry_offering_no_resolvable_template() {
+        // peerA is live but offers only an unknown template; peerB offers
+        // nothing at all. Neither is derived, so no registry row is materialized.
+        let mut peer_a = entry("peerA", true);
+        peer_a.templates = vec!["not-a-template".into()];
+        let mut peer_b = entry("peerB", true);
+        peer_b.templates = vec![];
+        let store = FakeStore::new(
+            "self",
+            vec![peer_a, peer_b],
+            /* registry_owned */ &[],
+            /* operator_owned */ &[],
+        );
+
+        let outcome = reconcile_discovery_tick(&store).await.expect("tick");
+
+        assert!(
+            outcome.upserted.is_empty(),
+            "unknown/empty offers must not materialize a row: {outcome:?}"
+        );
+        assert!(store.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovery_still_never_touches_operator_rows() {
+        // Ownership invariant preserved under the template path: peerA is
+        // operator-owned (and offers nothing), peerB is a live registry offer.
+        // Discovery materializes peerB only and never names peerA.
+        let mut peer_b = entry("peerB", true);
+        peer_b.templates = vec!["conversation".into()];
+        let store = FakeStore::new(
+            "self",
+            vec![peer_b],
+            /* registry_owned */ &[],
+            /* operator_owned */ &["peerA"],
+        );
+
+        let outcome = reconcile_discovery_tick(&store).await.expect("tick");
+
+        assert_eq!(outcome.upserted, BTreeSet::from(["peerB".to_string()]));
+        // Operator row peerA was neither upserted nor deleted.
+        assert!(!store
+            .upserts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| store.operator_owned.contains(p)));
+        assert!(!store
+            .deletes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| store.operator_owned.contains(p)));
     }
 }

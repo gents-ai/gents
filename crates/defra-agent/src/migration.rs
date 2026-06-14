@@ -111,6 +111,10 @@ const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
 ]"#;
 
+const ADD_PEER_REGISTRY_TEMPLATES_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerRegistry/Fields/-","value":{"Name":"templates","Kind":21}}
+]"#;
+
 // Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
 // fields compiles to that kind. AgentBehavior gained `description` and `summary`
 // on branch design/issue-377; existing DBs upgraded from a prior schema version
@@ -730,13 +734,33 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
 
 /// Idempotent migration for PeerRegistry: registers the collection schema if
 /// it does not yet exist. PeerRegistry is a new collection introduced for
-/// service-discovery; no field patches are needed on fresh installs.
+/// service-discovery.
+///
+/// Additive field migration: the registry offer field was renamed `profiles` →
+/// `templates` (a node now advertises the scope templates it offers, not raw
+/// collection profiles). Existing DBs that registered PeerRegistry under the old
+/// schema gain the `templates` field via patch. No backfill — a node freshly
+/// re-advertises its offered templates on its next heartbeat, so the stale
+/// `profiles` value is simply left unread.
 pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    if node
+    let existing = node
         .get_collection("PeerRegistry")
-        .context("get PeerRegistry collection")?
-        .is_some()
-    {
+        .context("get PeerRegistry collection")?;
+
+    if let Some(collection) = existing {
+        if !collection_has_field(&collection, "templates") {
+            let next = node
+                .patch_collection("PeerRegistry", ADD_PEER_REGISTRY_TEMPLATES_PATCH)
+                .await
+                .context("patch_collection PeerRegistry templates")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version PeerRegistry templates")?;
+            tracing::info!(
+                version = %next.version_id,
+                "PeerRegistry patched with templates field"
+            );
+        }
         return Ok(());
     }
 
@@ -1464,7 +1488,7 @@ mod patch_kind_tests {
             "peer_id",
             "agent_did",
             "addresses",
-            "profiles",
+            "templates",
             "display_name",
             "status",
             "network_id",

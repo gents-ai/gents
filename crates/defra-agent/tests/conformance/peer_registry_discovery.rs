@@ -20,7 +20,7 @@ fn entry(peer: &str, live: bool) -> DiscoveredEntry {
         peer_id: peer.to_string(),
         agent_did: format!("did:key:{peer}"),
         addresses: vec![format!("/ip4/1/tcp/1/p2p/{peer}")],
-        profiles: vec!["chat-requests".to_string()],
+        templates: vec!["conversation".to_string()],
         live,
     }
 }

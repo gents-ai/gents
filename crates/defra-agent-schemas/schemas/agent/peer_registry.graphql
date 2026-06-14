@@ -2,7 +2,7 @@ type PeerRegistry {
     peer_id: String @index(unique: true)
     agent_did: String @index
     addresses: [String!]!
-    profiles: [String!]
+    templates: [String!]
     display_name: String
     status: String
     network_id: String @index

@@ -11,19 +11,16 @@ use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::discovery::REGISTRY_STALE_AFTER;
 use defra_agent::agent::p2p_reconcile::registry::{
-    registry_upsert_mutation, RegistryEntry, UpsertKind,
+    registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
 use defra_agent::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::cli::args::{
-    P2pAccessArgs, P2pCollectionProfileArg, P2pNetworkListArgs, P2pNetworkRegisterArgs,
-};
+use crate::cli::args::{P2pAccessArgs, P2pNetworkListArgs, P2pNetworkRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
-use super::collections::p2p_collection_profile_id;
 use super::output::load_live_http_p2p_status;
 
 // ---------------------------------------------------------------------------
@@ -38,7 +35,7 @@ struct PeerRegistryRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
     network_id: String,
-    profiles: Vec<String>,
+    templates: Vec<String>,
     addresses: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
@@ -91,7 +88,9 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     let agent_did = crate::resolve_agent_did(args.home.as_deref(), None)
         .context("resolving local agent DID")?;
 
-    let profiles = registry_profile_ids(&args.profiles);
+    // Validate offered templates against the built-in catalog; an empty/unknown
+    // set falls back to the default offer (conversation + agent-config).
+    let templates = validate_offered_templates(args.templates.iter().map(String::as_str));
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
     let display_name = args
         .display_name
@@ -104,7 +103,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         peer_id: peer_id.clone(),
         agent_did: agent_did.clone(),
         addresses: addresses.clone(),
-        profiles: profiles.clone(),
+        templates: templates.clone(),
         display_name: display_name.clone(),
         status: "online".to_string(),
         network_id: network_id.clone(),
@@ -132,7 +131,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         "peer_id": peer_id,
         "agent_did": agent_did,
         "display_name": display_name,
-        "profiles": profiles,
+        "templates": templates,
         "network_id": network_id,
         "addresses": addresses,
     }))?;
@@ -244,7 +243,7 @@ fn registry_list_query() -> &'static str {
             agent_did
             display_name
             network_id
-            profiles
+            templates
             addresses
             status
             updated_at
@@ -316,7 +315,7 @@ fn parse_registry_rows(
                 display_name: optional_string(&row, "display_name"),
                 network_id: optional_string(&row, "network_id")
                     .unwrap_or_else(|| "default".to_string()),
-                profiles: string_list(&row, "profiles"),
+                templates: string_list(&row, "templates"),
                 addresses: string_list(&row, "addresses"),
                 status,
                 updated_at,
@@ -369,15 +368,6 @@ fn count_deleted(response: &Value, field_name: &str) -> usize {
         .unwrap_or(0)
 }
 
-fn registry_profile_ids(profiles: &[P2pCollectionProfileArg]) -> Vec<String> {
-    profiles
-        .iter()
-        .map(|profile| p2p_collection_profile_id(*profile).to_string())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // Table rendering
 // ---------------------------------------------------------------------------
@@ -390,7 +380,7 @@ fn print_network_table(rows: &[PeerRegistryRow]) -> Result<()> {
         "NETWORK".to_string(),
         "ONLINE".to_string(),
         "PAIRED".to_string(),
-        "PROFILES".to_string(),
+        "TEMPLATES".to_string(),
     ];
     let mut widths = headers.clone().map(|h| h.len());
     let table_rows: Vec<[String; 7]> = rows
@@ -403,10 +393,10 @@ fn print_network_table(rows: &[PeerRegistryRow]) -> Result<()> {
                 row.network_id.clone(),
                 yes_no(row.online),
                 yes_no(row.paired),
-                if row.profiles.is_empty() {
+                if row.templates.is_empty() {
                     "-".to_string()
                 } else {
-                    row.profiles.join(",")
+                    row.templates.join(",")
                 },
             ]
         })
@@ -519,8 +509,8 @@ mod tests {
             "register",
             "--display-name",
             "my-node",
-            "--profile",
-            "chat-requests",
+            "--template",
+            "conversation",
             "--network",
             "staging",
         ])
@@ -531,7 +521,7 @@ mod tests {
             } => match command {
                 crate::cli::args::P2pNetworkCommand::Register(args) => {
                     assert_eq!(args.display_name.as_deref(), Some("my-node"));
-                    assert_eq!(args.profiles.len(), 1);
+                    assert_eq!(args.templates, vec!["conversation".to_string()]);
                     assert_eq!(args.network_id.as_deref(), Some("staging"));
                 }
                 _ => panic!("expected network register"),
@@ -549,8 +539,8 @@ mod tests {
             "register",
             "--display-name",
             "x",
-            "--profile",
-            "chat-requests",
+            "--template",
+            "conversation",
         ])
         .expect("p2p network register minimal should parse");
         match cli.command {
@@ -594,7 +584,7 @@ mod tests {
             "agent_did": "did:key:test",
             "display_name": serde_json::Value::Null,
             "network_id": "default",
-            "profiles": serde_json::Value::Null,
+            "templates": serde_json::Value::Null,
             "addresses": serde_json::Value::Null,
             "status": status,
             "updated_at": updated_at,
@@ -704,7 +694,7 @@ mod tests {
             peer_id: "test-peer-1".to_string(),
             agent_did: "did:key:test".to_string(),
             addresses: vec!["/ip4/127.0.0.1/tcp/4001/p2p/test-peer-1".to_string()],
-            profiles: vec!["chat-requests".to_string()],
+            templates: vec!["conversation".to_string()],
             display_name: Some("my-node".to_string()),
             status: "online".to_string(),
             network_id: "default".to_string(),
@@ -718,8 +708,8 @@ mod tests {
         assert!(mutation.contains(r#"status: "online""#));
         assert!(mutation.contains(r#"network_id: "default""#));
         assert!(mutation.contains(r#"display_name: "my-node""#));
-        assert!(mutation.contains(r#"profiles: ["chat-requests"]"#));
-        assert!(!mutation.contains("profiles: []"));
+        assert!(mutation.contains(r#"templates: ["conversation"]"#));
+        assert!(!mutation.contains("templates: []"));
         assert!(mutation.contains(r#"registered_at: "2026-06-13T00:00:00Z""#));
     }
 

@@ -1831,10 +1831,12 @@ pub(crate) struct P2pNetworkRegisterArgs {
     /// Human-readable display name for this node in the registry.
     #[arg(long, value_name = "NAME")]
     pub(crate) display_name: Option<String>,
-    /// Collection profile to advertise (repeatable). Maps to the same profile
-    /// enum as `p2p pairings set --profile`.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Scope template this node offers (repeatable). A node advertises the
+    /// templates it is willing to replicate; a discovering peer materializes a
+    /// scoped pairing from one of them. Defaults to `conversation` (filtered
+    /// push of the peer's conversation slice) when none are given.
+    #[arg(long = "template", value_name = "TEMPLATE")]
+    pub(crate) templates: Vec<String>,
     /// Network / fleet id. Defaults to "default".
     #[arg(long = "network", value_name = "NETWORK_ID")]
     pub(crate) network_id: Option<String>,
