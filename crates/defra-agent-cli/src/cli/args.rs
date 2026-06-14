@@ -1793,6 +1793,18 @@ the reconciler is the suspect component, and intentionally ad-hoc topologies \
         #[command(subcommand)]
         command: P2pAdminCommand,
     },
+    #[command(
+        about = "Inspect the built-in scope-template catalog",
+        after_help = "\
+Scope templates are named pairing intents that bundle a fixed collection set, \
+a per-peer scoping policy (agent_did equality or unscoped), and a delivery \
+mode (push or replicate).  Use them as the --template argument when creating \
+PeerPairingDesired rows."
+    )]
+    Templates {
+        #[command(subcommand)]
+        command: P2pTemplatesCommand,
+    },
 }
 
 /// Subcommands for `p2p network` — the peer-registry front door.
@@ -1834,6 +1846,19 @@ pub(crate) struct P2pNetworkListArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+/// Subcommands for `p2p templates`.
+#[derive(Subcommand)]
+pub(crate) enum P2pTemplatesCommand {
+    #[command(about = "List all built-in scope templates")]
+    List(P2pTemplatesListArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pTemplatesListArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub(crate) output: OutputFormat,
 }
