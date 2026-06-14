@@ -1,4 +1,4 @@
-//! Signed pairing-invite token (current version: v3).
+//! Signed pairing-invite token (current version: v4).
 //!
 //! The token carries everything the joining peer needs to connect plus a
 //! signature over that payload by the issuer's DID key.  The join command
@@ -7,13 +7,16 @@
 //! Encoding: CBOR (ciborium) → base58 → `"dapair1-"` prefix.
 //!
 //! Signing payload: CBOR of a copy of the token with `sig = []`.  This means
-//! the signature covers `v`, `issuer_did`, `peer_id`, `ticket`, `profiles`,
+//! the signature covers `v`, `issuer_did`, `peer_id`, `ticket`, `nonce`,
 //! `network_id`, `issued_at`, and `template` — every field that matters for
 //! correctness — while remaining stable across sig values.
 //!
 //! Version history:
 //!   v2 — original release (profiles, no template)
 //!   v3 — adds `template: String`; older tokens rejected with a re-issue hint
+//!   v4 — drops the now-dead `profiles` field (scope comes solely from
+//!        `template`) and adds a single-use `nonce: String`; older tokens
+//!        rejected with a re-issue hint
 
 use std::io::Cursor;
 
@@ -23,19 +26,25 @@ use serde::{Deserialize, Serialize};
 
 /// Versioned pairing-invite envelope.  CBOR-encoded, bs58-encoded, prefixed.
 ///
-/// Current version: v3.  The `template` field was added in v3; v2 tokens are
-/// rejected on decode with a re-issue hint.
+/// Current version: v4.  The `nonce` field was added (and the dead `profiles`
+/// field dropped) in v4; v3 and earlier tokens are rejected on decode with a
+/// re-issue hint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteToken {
     pub v: u8,
     pub issuer_did: String,
     pub peer_id: String,
     pub ticket: String,
-    pub profiles: Vec<String>,
+    /// Single-use invite nonce. Generated fresh at mint; the join path records it
+    /// in a consumed-nonce ledger and rejects any token whose nonce was already
+    /// redeemed (the runtime ledger lands in Task C2). Mirrors the Lean
+    /// `Token.nonce` modeled in `Proofs/PeerRegistryDiscovery`.
+    pub nonce: String,
     pub network_id: String,
     pub issued_at: String,
     /// Scope template id (e.g. `"conversation"`) selected by the invite issuer.
-    /// Added in v3; the `join` command writes this as the desired row's template.
+    /// Added in v3; the `join` command writes this as the desired row's template
+    /// and (since v4) is the sole source of the pairing's collection scope.
     pub template: String,
     /// Ed25519 (or other) signature over `signing_payload(self)`.
     /// Empty when computing the payload itself (circular-dependency break).
@@ -58,9 +67,9 @@ pub fn encode(token: &InviteToken) -> Result<String> {
 /// Decode a `TOKEN_PREFIX`-prefixed invite token string.
 ///
 /// Returns an error (mentioning "re-issue with a newer defra-agent") for any
-/// token whose `v` field is not `3`.  v2 tokens (from before the `template`
-/// field was added) are rejected so the issuer must re-mint with a current
-/// `defra-agent` binary.
+/// token whose `v` field is not `4`.  v3 and earlier tokens (from before the
+/// `nonce` field was added / the `profiles` field dropped) are rejected so the
+/// issuer must re-mint with a current `defra-agent` binary.
 pub fn decode(raw: &str) -> Result<InviteToken> {
     let encoded = raw
         .trim()
@@ -72,7 +81,7 @@ pub fn decode(raw: &str) -> Result<InviteToken> {
     let token: InviteToken =
         ciborium::de::from_reader(Cursor::new(bytes)).context("parsing pairing invite token")?;
     match token.v {
-        3 => Ok(token),
+        4 => Ok(token),
         version => anyhow::bail!(
             "pairing invite token version {version} is not supported; \
              re-issue with a newer defra-agent"
@@ -151,7 +160,7 @@ mod tests {
             issuer_did: "did:key:a".into(),
             peer_id: "p".into(),
             ticket: "/ip4/1".into(),
-            profiles: vec!["chat-requests".into()],
+            nonce: "nonce-a".into(),
             network_id: "default".into(),
             issued_at: "2026-06-13T00:00:00Z".into(),
             template: "conversation".into(),
@@ -160,13 +169,13 @@ mod tests {
     }
 
     #[test]
-    fn token_v3_round_trips_and_signing_payload_ignores_sig() {
+    fn token_v4_round_trips_and_signing_payload_ignores_sig() {
         let t = InviteToken {
-            v: 3,
+            v: 4,
             issuer_did: "did:key:a".into(),
             peer_id: "p".into(),
             ticket: "/ip4/1".into(),
-            profiles: vec!["chat-requests".into()],
+            nonce: "nonce-a".into(),
             network_id: "default".into(),
             issued_at: "2026-06-13T00:00:00Z".into(),
             template: "conversation".into(),
@@ -181,8 +190,40 @@ mod tests {
     }
 
     #[test]
+    fn token_v4_signing_payload_covers_nonce() {
+        // Two tokens identical except nonce → different signing payloads.
+        let mut a = sample_token(4);
+        a.nonce = "nonce-a".into();
+        a.sig = vec![];
+        let mut b = sample_token(4);
+        b.nonce = "nonce-b".into();
+        b.sig = vec![];
+        assert_ne!(
+            signing_payload(&a),
+            signing_payload(&b),
+            "nonce change must produce different signing payload"
+        );
+    }
+
+    #[test]
+    fn token_v4_signing_payload_covers_network_id() {
+        // Two tokens identical except network_id → different signing payloads.
+        let mut a = sample_token(4);
+        a.network_id = "default".into();
+        a.sig = vec![];
+        let mut b = sample_token(4);
+        b.network_id = "staging".into();
+        b.sig = vec![];
+        assert_ne!(
+            signing_payload(&a),
+            signing_payload(&b),
+            "network_id change must produce different signing payload"
+        );
+    }
+
+    #[test]
     fn check_freshness_accepts_recent_and_rejects_stale_or_future() {
-        let mut t = sample_token(3);
+        let mut t = sample_token(4);
         let now = DateTime::parse_from_rfc3339("2026-06-13T01:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -208,12 +249,12 @@ mod tests {
     }
 
     #[test]
-    fn token_v3_signing_payload_covers_template() {
+    fn token_v4_signing_payload_covers_template() {
         // Two tokens identical except template → different signing payloads.
-        let mut a = sample_token(3);
+        let mut a = sample_token(4);
         a.template = "conversation".into();
         a.sig = vec![];
-        let mut b = sample_token(3);
+        let mut b = sample_token(4);
         b.template = "backup".into();
         b.sig = vec![];
         assert_ne!(
@@ -224,22 +265,11 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_non_v3() {
-        // v=1 (old schema — no template field): CBOR decode succeeds but version check fails.
-        // We can only encode a v1 token if it has a template field (same struct), but
-        // the decode gate is on the version number, so encode v=1 with the new struct
-        // and verify we get a re-issue error.
-        let t = InviteToken {
-            v: 1,
-            issuer_did: "did:key:a".into(),
-            peer_id: "p".into(),
-            ticket: "/ip4/1".into(),
-            profiles: vec![],
-            network_id: "default".into(),
-            issued_at: "t".into(),
-            template: "conversation".into(),
-            sig: vec![],
-        };
+    fn decode_rejects_non_v4() {
+        // v=1 (old schema): the decode gate is on the version number, so encode
+        // v=1 with the current struct and verify we get a re-issue error.
+        let mut t = sample_token(1);
+        t.sig = vec![];
         let enc = encode(&t).unwrap();
         let err = decode(&enc).unwrap_err().to_string();
         assert!(
@@ -249,24 +279,16 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_v2() {
-        // v2 tokens (no template field) must be rejected so the issuer re-mints.
-        let t = InviteToken {
-            v: 2,
-            issuer_did: "did:key:a".into(),
-            peer_id: "p".into(),
-            ticket: "/ip4/1".into(),
-            profiles: vec!["chat-requests".into()],
-            network_id: "default".into(),
-            issued_at: "t".into(),
-            template: "conversation".into(), // present in struct but token is v=2
-            sig: vec![],
-        };
+    fn decode_rejects_v3() {
+        // v3 tokens (with the now-dead profiles field, no nonce) must be rejected
+        // so the issuer re-mints with a current binary.
+        let mut t = sample_token(3);
+        t.sig = vec![];
         let enc = encode(&t).unwrap();
         let err = decode(&enc).unwrap_err().to_string();
         assert!(
             err.contains("re-issue") || err.contains("newer"),
-            "expected re-issue/newer in error for v2, got: {err}"
+            "expected re-issue/newer in error for v3, got: {err}"
         );
     }
 
@@ -278,7 +300,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_truncated_base58() {
-        let enc = encode(&sample_token(3)).unwrap();
+        let enc = encode(&sample_token(4)).unwrap();
         let truncated = &enc[..enc.len() - 4];
         let err = decode(truncated).unwrap_err().to_string();
         assert!(
@@ -290,9 +312,9 @@ mod tests {
 
     #[test]
     fn signing_payload_is_stable_across_sig_changes() {
-        let mut a = sample_token(3);
+        let mut a = sample_token(4);
         a.sig = vec![0xAA; 64];
-        let mut b = sample_token(3);
+        let mut b = sample_token(4);
         b.sig = vec![0xBB; 64];
         assert_eq!(signing_payload(&a), signing_payload(&b));
     }

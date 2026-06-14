@@ -7,13 +7,14 @@ use defra_agent::{AgentIdentity, KeyIdentity};
 use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
 use serde_json::json;
 
-use crate::cli::args::{P2pCollectionProfileArg, P2pInviteArgs};
+use defra_agent::agent::p2p_reconcile::resolve_network_id;
+
+use crate::cli::args::P2pInviteArgs;
 use crate::{
     http_get_json, normalize_optional_string, print_json, read_init_config, read_runtime_state,
     resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir,
 };
 
-use super::collections::p2p_collection_profile_id;
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
 
@@ -23,19 +24,13 @@ pub(super) use defra_agent_protocol::pairing_token::encode as encode_token;
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let profiles = profile_ids_or_default(&args.profiles);
     let template = resolve_pairing_template(&args.template)?;
 
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for invite signing")?;
-    let token = current_invite_token_signed(
-        args.home.as_deref(),
-        &graphql,
-        profiles.clone(),
-        &template,
-        identity.as_ref(),
-    )
-    .await?;
+    let token =
+        current_invite_token_signed(args.home.as_deref(), &graphql, &template, identity.as_ref())
+            .await?;
     let encoded = encode_invite(&token)?;
 
     print_json(&json!({
@@ -50,39 +45,35 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "did": token.issuer_did,
         "network_id": token.network_id,
         "template": token.template,
-        "profiles": token.profiles,
         "ticket": token.ticket,
         "join_command": format!("defra-agent p2p pairings join {encoded}"),
     }))?;
     Ok(())
 }
 
-/// Build a signed v3 invite token for the current node.
+/// Build a signed v4 invite token for the current node.
 pub(super) async fn current_invite_token(
     home: Option<&Path>,
     graphql: &str,
-    profiles: Vec<String>,
     template: &str,
 ) -> Result<InviteToken> {
     let identity =
         resolve_home_identity(home).context("resolving local agent identity for invite signing")?;
-    current_invite_token_signed(home, graphql, profiles, template, identity.as_ref()).await
+    current_invite_token_signed(home, graphql, template, identity.as_ref()).await
 }
 
 async fn current_invite_token_signed(
     home: Option<&Path>,
     graphql: &str,
-    profiles: Vec<String>,
     template: &str,
     identity: &dyn AgentIdentity,
 ) -> Result<InviteToken> {
     let home_dir = resolve_home_dir(home);
-    let mut token = if let Some(t) =
-        build_persisted_token(&home_dir, graphql, profiles.clone(), template, identity)?
+    let mut token = if let Some(t) = build_persisted_token(&home_dir, graphql, template, identity)?
     {
         t
     } else {
-        build_live_token(home, graphql, profiles, template, identity).await?
+        build_live_token(home, graphql, template, identity).await?
     };
 
     // Sign: compute payload over token with sig=[] then fill in the signature.
@@ -95,10 +86,16 @@ async fn current_invite_token_signed(
     Ok(token)
 }
 
+/// Generate a fresh single-use invite nonce. A v4 UUID is the established
+/// random-id primitive in this crate (see `request_helpers`); the join path
+/// records it in a consumed-nonce ledger to make a token single-use (Task C2).
+fn mint_nonce() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 fn build_persisted_token(
     home_dir: &Path,
     graphql: &str,
-    profiles: Vec<String>,
     template: &str,
     identity: &dyn AgentIdentity,
 ) -> Result<Option<InviteToken>> {
@@ -120,12 +117,12 @@ fn build_persisted_token(
     };
 
     Ok(Some(InviteToken {
-        v: 3,
+        v: 4,
         issuer_did: identity.did().to_string(),
         peer_id,
         ticket,
-        profiles,
-        network_id: "default".to_string(),
+        nonce: mint_nonce(),
+        network_id: resolve_network_id(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         template: template.to_string(),
         sig: Vec::new(), // filled in by caller
@@ -135,7 +132,6 @@ fn build_persisted_token(
 async fn build_live_token(
     home: Option<&Path>,
     graphql: &str,
-    profiles: Vec<String>,
     template: &str,
     identity: &dyn AgentIdentity,
 ) -> Result<InviteToken> {
@@ -175,12 +171,12 @@ async fn build_live_token(
     };
 
     Ok(InviteToken {
-        v: 3,
+        v: 4,
         issuer_did,
         peer_id,
         ticket,
-        profiles,
-        network_id: "default".to_string(),
+        nonce: mint_nonce(),
+        network_id: resolve_network_id(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         template: template.to_string(),
         sig: Vec::new(), // filled in by caller
@@ -228,33 +224,19 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
     }
 }
 
-pub(super) fn profile_ids_or_default(profiles: &[P2pCollectionProfileArg]) -> Vec<String> {
-    let profiles = if profiles.is_empty() {
-        vec![P2pCollectionProfileArg::ChatRequests]
-    } else {
-        profiles.to_vec()
-    };
-    profiles
-        .into_iter()
-        .map(|profile| p2p_collection_profile_id(profile).to_string())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use defra_agent_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
     use super::*;
 
-    fn v3_token() -> InviteToken {
+    fn v4_token() -> InviteToken {
         InviteToken {
-            v: 3,
+            v: 4,
             issuer_did: "did:key:agent-a".to_string(),
             peer_id: "peer-a".to_string(),
             ticket: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
-            profiles: vec!["chat-requests".to_string()],
+            nonce: "nonce-a".to_string(),
             network_id: "default".to_string(),
             issued_at: "2026-06-13T00:00:00Z".to_string(),
             template: "conversation".to_string(),
@@ -263,13 +245,14 @@ mod tests {
     }
 
     #[test]
-    fn invite_token_v3_round_trips_with_template() {
-        let original = v3_token();
+    fn invite_token_v4_round_trips_with_template_and_nonce() {
+        let original = v4_token();
         let encoded = encode(&original).expect("encode");
         assert!(encoded.starts_with(TOKEN_PREFIX));
         let decoded = decode(&encoded).expect("decode");
         assert_eq!(decoded, original);
         assert_eq!(decoded.template, "conversation");
+        assert_eq!(decoded.nonce, "nonce-a");
     }
 
     #[test]
@@ -279,42 +262,12 @@ mod tests {
     }
 
     #[test]
-    fn invite_token_rejects_v1_token() {
-        // Encode a v=1 shaped token; decode must reject with a re-issue hint.
-        let old = InviteToken {
-            v: 1,
-            issuer_did: "did:key:agent-a".to_string(),
-            peer_id: "peer-a".to_string(),
-            ticket: "/ip4/1".to_string(),
-            profiles: vec![],
-            network_id: "default".to_string(),
-            issued_at: "t".to_string(),
-            template: "conversation".to_string(),
-            sig: vec![],
-        };
-        let encoded = encode(&old).expect("encode v1");
-        let err = decode(&encoded).unwrap_err().to_string();
-        assert!(
-            err.contains("re-issue") || err.contains("newer"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn invite_token_rejects_v2_token() {
-        // Encode a v=2 token; decode must reject (template field was added in v3).
-        let old = InviteToken {
-            v: 2,
-            issuer_did: "did:key:agent-a".to_string(),
-            peer_id: "peer-a".to_string(),
-            ticket: "/ip4/1".to_string(),
-            profiles: vec!["chat-requests".to_string()],
-            network_id: "default".to_string(),
-            issued_at: "t".to_string(),
-            template: "conversation".to_string(),
-            sig: vec![],
-        };
-        let encoded = encode(&old).expect("encode v2");
+    fn invite_token_rejects_v3_token() {
+        // Encode a v=3 shaped token; decode must reject with a re-issue hint
+        // (profiles dropped / nonce added in v4).
+        let mut old = v4_token();
+        old.v = 3;
+        let encoded = encode(&old).expect("encode v3");
         let err = decode(&encoded).unwrap_err().to_string();
         assert!(
             err.contains("re-issue") || err.contains("newer"),
@@ -324,7 +277,7 @@ mod tests {
 
     #[test]
     fn invite_token_rejects_truncated_base58() {
-        let encoded = encode(&v3_token()).expect("encode");
+        let encoded = encode(&v4_token()).expect("encode");
         let truncated = &encoded[..encoded.len() - 4];
         let err = decode(truncated).unwrap_err().to_string();
         assert!(

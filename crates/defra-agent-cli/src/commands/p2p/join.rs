@@ -1,10 +1,8 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::agent::p2p_reconcile::expand_p2p_collection_profile_ids;
+use defra_agent::agent::p2p_reconcile::{resolve_network_id, resolve_template};
 use defra_agent_protocol::pairing_token::{
-    check_freshness, decode, signing_payload, DEFAULT_INVITE_MAX_AGE,
+    check_freshness, decode, signing_payload, InviteToken, DEFAULT_INVITE_MAX_AGE,
 };
 use serde_json::{json, Value};
 
@@ -17,9 +15,7 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::parse_duration_suffix;
 use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_endpoint};
 
-use super::invite::{
-    current_invite_token, encode_token, profile_ids_or_default, resolve_home_identity,
-};
+use super::invite::{current_invite_token, encode_token, resolve_home_identity};
 use super::pairings::{
     peer_pairing_exists, resolve_pairing_template, wait_for_pairing_connected,
     write_pairing_desired,
@@ -58,16 +54,22 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     check_freshness(&remote, Utc::now(), DEFAULT_INVITE_MAX_AGE)
         .context("pairing invite failed the freshness check")?;
 
-    let profiles = accepted_profiles(&remote.profiles, &args)?;
-    let collections = expand_p2p_collection_profile_ids(
-        std::iter::empty::<&str>(),
-        profiles.iter().map(String::as_str),
-    )
-    .context("expanding accepted pairing profiles")?
-    .into_iter()
-    .collect::<Vec<_>>();
-    // Resolve the template: explicit --template wins; otherwise use the token's template.
+    // Network gate: the token's signed `network_id` must match the local node's
+    // resolved discovery network. A token minted for a different network is
+    // rejected so an invite cannot bridge a peer into the wrong fleet. (The
+    // value is part of the signed payload, so a mismatch is not forgeable.)
+    enforce_network_match(&remote)?;
+
+    // NOTE (Task C2): `remote.nonce` is the single-use token nonce. The
+    // consumed-nonce ledger + replay rejection lands in C2; this path only
+    // round-trips the field today.
+
+    // Resolve the template: explicit --template wins; otherwise use the token's
+    // template. The template is the sole source of the pairing's collection scope
+    // (v4 dropped the token's `profiles` field); the reconciler also resolves
+    // collections from `template`, so this set is informational on the row.
     let template = resolve_join_template(args.template.as_deref(), &remote.template)?;
+    let collections = template_collections(&template);
     let addresses = vec![remote.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
@@ -118,13 +120,16 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     // Thread issuer_did through as the `invited_by` value on the desired row.
+    // `profiles` is empty: v4 dropped the token's profiles field and the
+    // template alone scopes the pairing. The mutation renders `null` for the
+    // empty list (never `[]`, per the DefraDB nillable-array sharp edge).
     let doc_id = write_pairing_desired(
         &access,
         &remote.peer_id,
         Some(&remote.issuer_did),
         &collections,
         &addresses,
-        &profiles,
+        &[],
         &template,
         &now,
     )
@@ -143,9 +148,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let reciprocal = if existed {
         None
     } else {
-        let token =
-            current_invite_token(args.home.as_deref(), &graphql, profiles.clone(), &template)
-                .await?;
+        let token = current_invite_token(args.home.as_deref(), &graphql, &template).await?;
         Some(encode_token(&token)?)
     };
 
@@ -157,7 +160,6 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         "peer_id": remote.peer_id,
         "agent_did": remote.issuer_did,
         "template": template,
-        "profiles": profiles,
         "collections": collections,
         "replicator_addresses": addresses,
         "doc_id": doc_id,
@@ -278,34 +280,29 @@ fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Re
     resolve_pairing_template(template)
 }
 
-fn accepted_profiles(offered: &[String], args: &P2pJoinArgs) -> Result<Vec<String>> {
-    let offered_set = offered
-        .iter()
-        .map(|profile| profile.trim())
-        .filter(|profile| !profile.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
-    if offered_set.is_empty() {
-        anyhow::bail!("pairing invite did not offer any profiles");
-    }
-
-    if args.profiles.is_empty() {
-        return Ok(offered_set.into_iter().collect());
-    }
-
-    let requested = profile_ids_or_default(&args.profiles)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let accepted = offered_set
-        .intersection(&requested)
-        .cloned()
-        .collect::<Vec<_>>();
-    if accepted.is_empty() {
+/// Reject an invite whose signed `network_id` does not match the local node's
+/// resolved discovery network. The network id is part of the signed payload, so
+/// a mismatch means the token was minted for a different fleet (or tampered with,
+/// which the signature check already caught). Comparison is trimmed.
+fn enforce_network_match(remote: &InviteToken) -> Result<()> {
+    let local = resolve_network_id();
+    let token_network = remote.network_id.trim();
+    if token_network != local.trim() {
         anyhow::bail!(
-            "pairing invite does not offer any requested profiles; offered: {}; requested: {}",
-            offered.join(","),
-            requested.into_iter().collect::<Vec<_>>().join(",")
+            "pairing invite is for network {token_network:?} but this node is on network {local:?}; \
+             join rejected (set {} to match, or use an invite for this network)",
+            defra_agent::agent::p2p_reconcile::NETWORK_ID_ENV
         );
     }
-    Ok(accepted)
+    Ok(())
+}
+
+/// Resolve the collection set a template scopes, as owned strings for the
+/// `PeerPairingDesired` row. The reconciler independently resolves collections
+/// from `template`, so this is informational; the template id is authoritative.
+/// `template` is assumed already validated by `resolve_pairing_template`.
+fn template_collections(template: &str) -> Vec<String> {
+    resolve_template(template)
+        .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())
+        .unwrap_or_default()
 }
