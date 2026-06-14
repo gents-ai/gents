@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::templates::PairingFilters;
+
 /// Errors any `RemoteP2pAdmin` implementation can produce.
 #[derive(Debug, Error)]
 pub enum RemoteP2pAdminError {
@@ -55,6 +57,7 @@ pub trait RemoteP2pAdmin: Send + Sync {
         &self,
         addresses: &[String],
         collections: &[String],
+        filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()>;
 
     async fn delete_replicator(&self, id: &str, collections: &[String])

@@ -10,6 +10,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
+use super::templates::PairingFilters;
 use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -99,7 +100,9 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         &self,
         addresses: &[String],
         collections: &[String],
+        filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
+        apply_filters_pending_1033(filters);
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
         self.run(
@@ -203,6 +206,23 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
             Ok(Err(error)) => Err(map_p2p_error("sync_branchable_collection", error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
         }
+    }
+}
+
+/// Seam for defradb.rs #1033 filtered replication.
+///
+/// TODO(#1033 pin): once the defradb.rs filtered-replication PR is the pinned rev,
+/// translate `filters` into defradb's ReplicationFilters and pass to the filtered
+/// add_replicator.  Until then: empty filters == today's behavior; non-empty filters
+/// fall back to the unfiltered call + a warn so the path is visible, not silently
+/// dropped.
+fn apply_filters_pending_1033(filters: &PairingFilters) {
+    if !filters.is_empty() {
+        tracing::warn!(
+            filter_count = filters.len(),
+            "add_replicator called with non-empty PairingFilters but defradb.rs #1033 is not yet \
+             pinned; filters are not applied — update the pin to enable filtered replication"
+        );
     }
 }
 
@@ -338,7 +358,11 @@ mod tests {
             .await
             .expect("connect remote");
         local_admin
-            .add_replicator(&remote_addresses, std::slice::from_ref(&collection_name))
+            .add_replicator(
+                &remote_addresses,
+                std::slice::from_ref(&collection_name),
+                &PairingFilters::default(),
+            )
             .await
             .expect("add replicator");
 

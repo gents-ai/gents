@@ -8,7 +8,7 @@ use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use defra_agent::agent::p2p_reconcile::{
-    RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
 
 use crate::client::PrincipalIdentity;
@@ -223,7 +223,9 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         &self,
         addresses: &[String],
         collections: &[String],
+        filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
+        apply_filters_pending_1033(filters);
         let body = AddReplicatorBody {
             collections,
             addresses,
@@ -413,6 +415,23 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Seam for defradb.rs #1033 filtered replication.
+///
+/// TODO(#1033 pin): once the defradb.rs filtered-replication PR is the pinned rev,
+/// translate `filters` into defradb's ReplicationFilters and pass to the filtered
+/// add_replicator.  Until then: empty filters == today's behavior; non-empty filters
+/// fall back to the unfiltered call + a warn so the path is visible, not silently
+/// dropped.
+fn apply_filters_pending_1033(filters: &PairingFilters) {
+    if !filters.is_empty() {
+        tracing::warn!(
+            filter_count = filters.len(),
+            "add_replicator called with non-empty PairingFilters but defradb.rs #1033 is not yet \
+             pinned; filters are not applied — update the pin to enable filtered replication"
+        );
+    }
+}
+
 fn map_reqwest_err(e: reqwest::Error) -> RemoteP2pAdminError {
     if e.is_timeout() {
         RemoteP2pAdminError::RpcTimeout
@@ -567,7 +586,7 @@ mod tests {
         )
         .await;
         admin
-            .add_replicator(&addresses, &collections)
+            .add_replicator(&addresses, &collections, &PairingFilters::default())
             .await
             .expect("signed add_replicator");
 
@@ -823,7 +842,11 @@ mod tests {
 
         let admin = admin_for(&server);
         admin
-            .add_replicator(&["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()], &["c1".into()])
+            .add_replicator(
+                &["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()],
+                &["c1".into()],
+                &PairingFilters::default(),
+            )
             .await
             .expect("add_replicator");
     }

@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 
 use super::profiles::expand_p2p_collection_profile_ids;
+use super::templates::PairingFilters;
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
     PairingDesired, RemoteP2pAdmin,
@@ -219,8 +220,9 @@ async fn apply_op(
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
             let collections = desired.collections.iter().cloned().collect::<Vec<_>>();
+            // T4 will wire real filters here; for now pass empty (unfiltered, back-compat).
             admin
-                .add_replicator(&addresses, &collections)
+                .add_replicator(&addresses, &collections, &PairingFilters::default())
                 .await
                 .with_context(|| format!("install P2P replicator {address}"))
         }
@@ -546,6 +548,8 @@ mod tests {
         replicators: Mutex<BTreeMap<String, RemoteReplicator>>,
         emitted: Mutex<Vec<DiffOp>>,
         connects: Mutex<Vec<Vec<String>>>,
+        /// Filters recorded per `add_replicator` call: (addresses, filters).
+        recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
     }
 
     #[async_trait]
@@ -571,7 +575,12 @@ mod tests {
             &self,
             addresses: &[String],
             collections: &[String],
+            filters: &PairingFilters,
         ) -> RemoteP2pAdminResult<()> {
+            self.recorded_filters
+                .lock()
+                .unwrap()
+                .push((addresses.to_vec(), filters.clone()));
             for address in addresses {
                 self.replicators.lock().unwrap().insert(
                     address.clone(),
@@ -833,5 +842,57 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown P2P collection profile"));
+    }
+
+    // -----------------------------------------------------------------------
+    // T2: filters at the RemoteP2pAdmin seam
+    // -----------------------------------------------------------------------
+
+    /// Verifies that the `MockAdmin` recording captures `PairingFilters` passed
+    /// to `add_replicator`, and that an empty `PairingFilters` records as empty
+    /// (back-compat) while a non-empty one is faithfully recorded.
+    #[tokio::test]
+    async fn add_replicator_records_filters_at_seam() {
+        use crate::agent::p2p_reconcile::templates::FilterPredicate;
+
+        let admin = MockAdmin::default();
+        let addresses = vec!["addr-a".to_string()];
+        let collections: Vec<String> = vec![];
+
+        // Back-compat: empty filters record as empty.
+        admin
+            .add_replicator(&addresses, &collections, &PairingFilters::default())
+            .await
+            .expect("add_replicator empty filters");
+
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].1.is_empty(),
+            "empty filters should record as empty"
+        );
+        drop(calls);
+
+        // Non-empty filters are faithfully recorded.
+        let mut filters = PairingFilters::default();
+        filters.insert(
+            "AgentRequest".to_string(),
+            FilterPredicate {
+                field: "agent_did".to_string(),
+                value: "did:key:alice".to_string(),
+            },
+        );
+        admin
+            .add_replicator(&addresses, &collections, &filters)
+            .await
+            .expect("add_replicator non-empty filters");
+
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let recorded = &calls[1].1;
+        assert_eq!(recorded.len(), 1);
+        let pred = recorded.get("AgentRequest").expect("AgentRequest filter");
+        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.value, "did:key:alice");
     }
 }

@@ -585,6 +585,7 @@ mod pairing_reconcile_tests {
             &self,
             addresses: &[String],
             _collections: &[String],
+            _filters: &defra_agent::agent::p2p_reconcile::PairingFilters,
         ) -> RemoteP2pAdminResult<()> {
             for address in addresses {
                 self.installed_replicators
@@ -731,7 +732,13 @@ mod pairing_reconcile_tests {
                 }
                 DiffOp::InstallReplicator(address) => {
                     let addresses = vec![address.clone()];
-                    stub.add_replicator(&addresses, &[]).await.unwrap();
+                    stub.add_replicator(
+                        &addresses,
+                        &[],
+                        &defra_agent::agent::p2p_reconcile::PairingFilters::default(),
+                    )
+                    .await
+                    .unwrap();
                 }
                 DiffOp::TeardownReplicator(address) => {
                     stub.delete_replicator(address, &[]).await.unwrap();
