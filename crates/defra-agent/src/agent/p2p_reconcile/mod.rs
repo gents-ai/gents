@@ -15,9 +15,10 @@ pub use diff::{
     PairingDesired,
 };
 pub use discovery::{
-    derive_registry_desired, reconcile_discovery_tick, run_discovery_reconciler, DiscoveredEntry,
-    DiscoveryStore, DiscoveryTickOutcome, GraphqlDiscoveryStore, REGISTRY_STALE_AFTER,
-    SOURCE_OPERATOR, SOURCE_REGISTRY,
+    decide_join_admission, derive_registry_desired, reconcile_discovery_tick,
+    run_discovery_reconciler, DiscoveredEntry, DiscoveryStore, DiscoveryTickOutcome,
+    GraphqlDiscoveryStore, JoinAdmission, RegistryMemberRow, REGISTRY_STALE_AFTER, SOURCE_OPERATOR,
+    SOURCE_REGISTRY,
 };
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use engine::{

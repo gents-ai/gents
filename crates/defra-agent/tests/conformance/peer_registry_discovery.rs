@@ -8,11 +8,14 @@
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{Duration as ChronoDuration, Utc};
 use defra_agent::agent::p2p_reconcile::discovery::{
-    derive_registry_desired, reconcile_discovery_tick, DiscoveredEntry, DiscoveryStore,
+    decide_join_admission, derive_registry_desired, reconcile_discovery_tick, DiscoveredEntry,
+    DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
 
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
@@ -159,4 +162,77 @@ async fn retraction_sound_removes_only_staled_registry_row() {
     assert!(!outcome.upserted.contains("peerB"));
     assert!(!store.deletes.lock().unwrap().contains(&"peerB".to_string()));
     assert!(!store.upserts.lock().unwrap().contains(&"peerB".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// Signed-invite membership gate (Lean `signedByMember` / `isMember`).
+//
+// These fence the registry-membership half of the join authorization gate via
+// the real `decide_join_admission` engine fn — the same predicate the CLI join
+// path calls. Token signature validity (`sigValid`) is checked separately at
+// token decode (defra-agent-protocol::pairing_token) and is out of this fence.
+// ---------------------------------------------------------------------------
+
+fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow {
+    RegistryMemberRow {
+        agent_did: did.to_string(),
+        status: status.to_string(),
+        updated_at: Some(Utc::now() - age),
+    }
+}
+
+const STALE_AFTER: Duration = Duration::from_secs(90);
+const FRESH: ChronoDuration = ChronoDuration::seconds(10);
+const STALE: ChronoDuration = ChronoDuration::seconds(200);
+
+/// Mirrors the TOFU bootstrap arm: an empty registry (or one holding only our
+/// own self-registration row) admits any signed invite.
+#[test]
+fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
+    let now = Utc::now();
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &[], now, STALE_AFTER),
+        JoinAdmission::TofuBootstrap
+    );
+    let self_only = [member_row("did:key:self", "online", FRESH)];
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &self_only, now, STALE_AFTER),
+        JoinAdmission::TofuBootstrap
+    );
+}
+
+/// Mirrors `isMember`: a live (online + fresh) issuer row admits the join.
+#[test]
+fn join_gate_admits_live_member_issuer() {
+    let rows = [member_row("did:key:issuer", "online", FRESH)];
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &rows, Utc::now(), STALE_AFTER),
+        JoinAdmission::MemberAdmitted
+    );
+}
+
+/// Mirrors `non_member_invite_rejected`: with a non-empty registry, an issuer
+/// that is absent, offline, or stale is NOT a live member, so the join is
+/// rejected (the TOFU arm does not apply once peers exist).
+#[test]
+fn join_gate_rejects_non_live_member_when_registry_nonempty() {
+    let now = Utc::now();
+    // Issuer absent (a different peer is the only member).
+    let absent = [member_row("did:key:other", "online", FRESH)];
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &absent, now, STALE_AFTER),
+        JoinAdmission::Rejected
+    );
+    // Issuer present but offline.
+    let offline = [member_row("did:key:issuer", "offline", FRESH)];
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &offline, now, STALE_AFTER),
+        JoinAdmission::Rejected
+    );
+    // Issuer present and online but heartbeat is stale.
+    let stale = [member_row("did:key:issuer", "online", STALE)];
+    assert_eq!(
+        decide_join_admission("did:key:issuer", "did:key:self", &stale, now, STALE_AFTER),
+        JoinAdmission::Rejected
+    );
 }

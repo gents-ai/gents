@@ -6,7 +6,9 @@ use defra_agent::agent::p2p_reconcile::expand_p2p_collection_profile_ids;
 use defra_agent_protocol::pairing_token::{decode, signing_payload};
 use serde_json::{json, Value};
 
-use defra_agent::agent::p2p_reconcile::REGISTRY_STALE_AFTER;
+use defra_agent::agent::p2p_reconcile::{
+    decide_join_admission, JoinAdmission, RegistryMemberRow, REGISTRY_STALE_AFTER,
+};
 
 use crate::cli::args::P2pJoinArgs;
 use crate::config_writes::ConfigAccess;
@@ -205,62 +207,49 @@ async fn enforce_registry_membership(
         }
     };
 
-    let now = Utc::now();
-    let self_did = self_did.trim();
-    let mut any_members = false;
-    let mut issuer_is_live_member = false;
-    for row in &rows {
-        let did = row
-            .get("agent_did")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let Some(did) = did else { continue };
-        // This node's own self-registration row does not count as a peer member:
-        // a registry holding only ourselves is still the TOFU bootstrap arm.
-        if !self_did.is_empty() && did == self_did {
-            continue;
+    // Project the loaded rows into the membership-gate input, then delegate the
+    // decision to the shared, conformance-fenced predicate (the Rust mirror of
+    // Lean `signedByMember`). NOTE: the registry rows are read from replicated,
+    // self-asserted state and are NOT signature-bound to their claimed
+    // `agent_did` (PeerRegistry carries no per-row signature). This gate is a
+    // TRUSTED-FLEET / TOFU check, not cryptographic authorization — see #490
+    // review H4; do not treat membership here as proof of identity.
+    let member_rows: Vec<RegistryMemberRow> = rows
+        .iter()
+        .map(|row| RegistryMemberRow {
+            agent_did: row
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            status: row
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            updated_at: row
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw.trim()).ok())
+                .map(|ts| ts.with_timezone(&Utc)),
+        })
+        .collect();
+
+    match decide_join_admission(issuer_did, self_did, &member_rows, Utc::now(), REGISTRY_STALE_AFTER)
+    {
+        JoinAdmission::TofuBootstrap => {
+            tracing::debug!("PeerRegistry has no peer members; join admitted via TOFU bootstrap arm");
+            Ok(())
         }
-        any_members = true;
-
-        let status_online =
-            row.get("status").and_then(Value::as_str).map(str::trim) == Some("online");
-        let fresh = row
-            .get("updated_at")
-            .and_then(Value::as_str)
-            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw.trim()).ok())
-            .map(|ts| ts.with_timezone(&Utc))
-            .map(|ts| {
-                now.signed_duration_since(ts)
-                    .to_std()
-                    .map(|age| age <= REGISTRY_STALE_AFTER)
-                    .unwrap_or(true)
-            })
-            .unwrap_or(false);
-
-        if did == issuer_did && status_online && fresh {
-            issuer_is_live_member = true;
+        JoinAdmission::MemberAdmitted => {
+            tracing::debug!(issuer_did, "pairing invite issuer is a live registry member");
+            Ok(())
         }
-    }
-
-    // Bootstrap arm: no members yet → TOFU, allow.
-    if !any_members {
-        tracing::debug!("PeerRegistry empty; join admitted via TOFU bootstrap arm");
-        return Ok(());
-    }
-
-    if !issuer_is_live_member {
-        anyhow::bail!(
+        JoinAdmission::Rejected => anyhow::bail!(
             "pairing invite issuer {issuer_did} is not a live member of the local peer registry; \
              join rejected (registry is non-empty, so TOFU bootstrap does not apply)"
-        );
+        ),
     }
-
-    tracing::debug!(
-        issuer_did,
-        "pairing invite issuer is a live registry member"
-    );
-    Ok(())
 }
 
 /// Resolve the template for a join: explicit `--template` wins over the token's

@@ -56,6 +56,79 @@ pub const SOURCE_REGISTRY: &str = "registry";
 pub const REGISTRY_STALE_AFTER: Duration =
     Duration::from_secs(REGISTRY_HEARTBEAT_INTERVAL.as_secs() * 3);
 
+/// One `PeerRegistry` row as seen by the join-admission membership gate.
+#[derive(Debug, Clone)]
+pub struct RegistryMemberRow {
+    pub agent_did: String,
+    pub status: String,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Outcome of the signed-invite membership gate — the Rust mirror of the Lean
+/// `signedByMember` registry/TOFU arms (`Proofs/PeerRegistryDiscovery`). Token
+/// signature validity (`sigValid`) is enforced separately at token decode; this
+/// decides only the registry-membership half.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinAdmission {
+    /// Registry holds no peer members (excluding self): admit under TOFU
+    /// bootstrap. Mirrors `signedByMember … tofuBootstrap=true`.
+    TofuBootstrap,
+    /// The invite issuer is a live registry member: admit. Mirrors
+    /// `isMember tok.issuer reg`.
+    MemberAdmitted,
+    /// Registry is non-empty and the issuer is not a live member: reject.
+    /// Mirrors `non_member_invite_rejected` (the TOFU arm does not apply).
+    Rejected,
+}
+
+/// Decide whether a join invite from `issuer_did` is admissible against the
+/// loaded registry rows. Pure mirror of Lean `isMember` / `signedByMember`'s
+/// registry arm: a peer is a live member iff its row is `status == "online"` and
+/// its heartbeat is within `stale_after`. `self_did`'s own self-registration row
+/// never counts (a registry holding only ourselves is still TOFU bootstrap).
+pub fn decide_join_admission(
+    issuer_did: &str,
+    self_did: &str,
+    rows: &[RegistryMemberRow],
+    now: DateTime<Utc>,
+    stale_after: Duration,
+) -> JoinAdmission {
+    let self_did = self_did.trim();
+    let issuer_did = issuer_did.trim();
+    let mut any_members = false;
+    let mut issuer_is_live_member = false;
+    for row in rows {
+        let did = row.agent_did.trim();
+        if did.is_empty() {
+            continue;
+        }
+        if !self_did.is_empty() && did == self_did {
+            continue;
+        }
+        any_members = true;
+        let online = row.status.trim() == "online";
+        let fresh = row
+            .updated_at
+            .map(|ts| {
+                now.signed_duration_since(ts)
+                    .to_std()
+                    .map(|age| age <= stale_after)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+        if did == issuer_did && online && fresh {
+            issuer_is_live_member = true;
+        }
+    }
+    if !any_members {
+        JoinAdmission::TofuBootstrap
+    } else if issuer_is_live_member {
+        JoinAdmission::MemberAdmitted
+    } else {
+        JoinAdmission::Rejected
+    }
+}
+
 /// One `PeerRegistry` row as observed by the discovery reader, with liveness
 /// already resolved from `status` + `updated_at` age. This is the Rust analogue
 /// of the Lean `RegistryEntry` (which folds heartbeat-freshness and `status`
@@ -301,6 +374,12 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
 /// Environment variable gating the discovery reconciler. Default OFF: when
 /// unset (or not a truthy value), the registry still replicates and `p2p network
 /// list` can show peers, but no auto-pairing happens.
+///
+/// TRUST: enabling this makes the node auto-materialize pairings (and thus
+/// replication) from `PeerRegistry` rows, which are replicated, self-asserted,
+/// and NOT signature-bound to their claimed `agent_did`. It is therefore a
+/// trusted-fleet / TOFU switch: turn it on only when every node that can write
+/// the replicated registry is trusted (see #490 review H4).
 pub const DISCOVERY_AUTO_PAIR_ENV: &str = "DEFRA_AGENT_DISCOVERY_AUTO_PAIR";
 
 /// Whether `discovery_auto_pair` is enabled. Read from
@@ -351,6 +430,17 @@ pub async fn run_discovery_reconciler(
             return Ok(());
         }
     };
+
+    // Auto-pair is active: surface the trust assumption once. The registry rows
+    // that will drive pairing/replication are replicated and self-asserted (no
+    // per-row signature binding agent_did to a key), so this is a trusted-fleet
+    // decision, not cryptographic authorization (see #490 review H4).
+    tracing::warn!(
+        env = DISCOVERY_AUTO_PAIR_ENV,
+        "discovery auto-pair is ENABLED: pairings will be materialized from \
+         replicated, self-asserted PeerRegistry rows — only enable this when \
+         every node that can write the registry is trusted"
+    );
 
     let store = GraphqlDiscoveryStore::new(node.clone(), self_peer_id);
     let mut subscription = node.subscribe(&[EventName::Update]);
