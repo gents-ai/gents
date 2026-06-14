@@ -147,10 +147,10 @@ fn mint_invite_profiles(node: &Node, profiles: &[&str]) -> Result<String> {
 
 /// Explicitly self-register `node` into `PeerRegistry` for determinism (the
 /// heartbeat does this too, but the explicit command removes timing slop).
-fn network_register(node: &Node, profile: &str) -> Result<Value> {
+fn network_register(node: &Node, template: &str) -> Result<Value> {
     let out = run_cli_json(
         &node.home,
-        &["p2p", "network", "register", "--profile", profile],
+        &["p2p", "network", "register", "--template", template],
     )?;
     assert_eq!(
         out.get("status").and_then(Value::as_str),
@@ -335,8 +335,8 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     // Both nodes self-register via the explicit `p2p network register` command
     // (deterministic; the heartbeat does this too) and `p2p network list` shows
     // each its own row.
-    network_register(&seed, "discovery")?;
-    network_register(&node_a, "discovery")?;
+    network_register(&seed, "conversation")?;
+    network_register(&node_a, "conversation")?;
     let listed = run_cli_json(
         &node_a.home,
         &["p2p", "network", "list", "--output", "json"],
@@ -423,7 +423,7 @@ async fn upsert_named_registry_peer(graphql: &str, peer_id: &str, agent_did: &st
                 peer_id: "{peer_id}",
                 agent_did: "{agent_did}",
                 addresses: ["{address}"],
-                profiles: ["chat-requests"],
+                templates: ["conversation"],
                 status: "online",
                 network_id: "default",
                 registered_at: "{now}",
@@ -579,6 +579,7 @@ async fn seed_register_into(seed: &Node, target: &Node) -> Result<()> {
                 peer_id: "{peer_id}",
                 agent_did: "{agent_did}",
                 addresses: ["{addr}"],
+                templates: ["conversation"],
                 status: "online",
                 network_id: "default",
                 registered_at: "{now}",
@@ -968,6 +969,7 @@ async fn upsert_synthetic_registry_peer(graphql: &str, peer_id: &str, live: bool
                 peer_id: "{peer_id}",
                 agent_did: "did:key:zDiscovered{peer_id}",
                 addresses: ["/ip4/127.0.0.1/tcp/5001/p2p/{peer_id}"],
+                templates: ["conversation"],
                 status: "online",
                 network_id: "default",
                 registered_at: "{ts}",
