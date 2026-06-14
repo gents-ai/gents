@@ -16,7 +16,6 @@ use crate::{
     resolve_config_access,
 };
 
-use super::collections::{expand_p2p_collection_args, p2p_collection_profile_id};
 use super::output::fetch_connected_peer_ids;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,14 +74,16 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
 
 pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let agent_did = required_trimmed(&args.agent_did, "--did")?;
+    // `--template` is the sole source of the pairing's collection scope: the
+    // reconciler derives collections + delivery + the agent_did filter from the
+    // template id alone (see `p2p_reconcile::load_desired`, which never reads the
+    // row's `collections`/`profiles`). We resolve the template's collection set
+    // here only as informational data on the row; the template id is
+    // authoritative.
     let template = resolve_pairing_template(&args.template)?;
+    let collections = template_collections(&template);
     let addresses = expand_nonempty_values(&args.addresses, "--address")?;
     let peer_id = resolve_set_peer_id(args.peer_id.as_deref(), &addresses)?;
-    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    if collections.is_empty() {
-        anyhow::bail!("provide at least one --collection or --profile");
-    }
-    let profiles = pairing_profile_ids(&args.profiles);
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
@@ -93,7 +94,6 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         Some(&agent_did),
         &collections,
         &addresses,
-        &profiles,
         &template,
         &now,
     )
@@ -114,7 +114,6 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
         "agent_did": agent_did,
         "collections": collections,
         "replicator_addresses": addresses,
-        "profiles": profiles,
         "template": template,
         "doc_id": doc_id,
         "waited": args.wait,
@@ -224,19 +223,10 @@ pub(super) async fn write_pairing_desired(
     agent_did: Option<&str>,
     collections: &[String],
     addresses: &[String],
-    profiles: &[String],
     template: &str,
     now: &str,
 ) -> Result<String> {
-    let mutation = upsert_pairing_mutation(
-        peer_id,
-        agent_did,
-        collections,
-        addresses,
-        profiles,
-        template,
-        now,
-    );
+    let mutation = upsert_pairing_mutation(peer_id, agent_did, collections, addresses, template, now);
     let response = access
         .execute(&mutation)
         .await
@@ -260,12 +250,16 @@ pub(super) async fn peer_pairing_exists(access: &ConfigAccess, peer_id: &str) ->
     Ok(!rows.is_empty())
 }
 
+/// Build the upsert mutation for a desired pairing row. `--template` is the sole
+/// scope input on the pairing front door, so the now-dead `profiles` column is
+/// always written `null` (never `[]` — an empty list literal types as JsonArray
+/// and corrupts the nillable array column). The schema field is retained for
+/// backward compatibility but is no longer read by the reconciler.
 pub(super) fn upsert_pairing_mutation(
     peer_id: &str,
     agent_did: Option<&str>,
     collections: &[String],
     addresses: &[String],
-    profiles: &[String],
     template: &str,
     now: &str,
 ) -> String {
@@ -278,7 +272,6 @@ pub(super) fn upsert_pairing_mutation(
     };
     let collections = graphql_string_list_literal(collections);
     let addresses = graphql_string_list_literal(addresses);
-    let profiles = graphql_nullable_string_list_literal(profiles);
     let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
 
@@ -291,7 +284,7 @@ pub(super) fn upsert_pairing_mutation(
                     agent_did: {agent_did},
                     collections: {collections},
                     replicator_addresses: {addresses},
-                    profiles: {profiles},
+                    profiles: null,
                     template: "{template}",
                     source: "operator",
                     created_at: "{now}",
@@ -301,7 +294,7 @@ pub(super) fn upsert_pairing_mutation(
                     {agent_did_update}
                     collections: {collections},
                     replicator_addresses: {addresses},
-                    profiles: {profiles},
+                    profiles: null,
                     template: "{template}",
                     source: "operator",
                     updated_at: "{now}"
@@ -309,6 +302,18 @@ pub(super) fn upsert_pairing_mutation(
             ) {{ _docID }}
         }}"#
     )
+}
+
+/// Resolve the collection set a scope template covers, as owned strings for the
+/// informational `collections` column on the desired row. The reconciler
+/// independently derives collections from `template`, so this is purely
+/// informational; the template id is authoritative. `template` is assumed
+/// already validated by `resolve_pairing_template`.
+fn template_collections(template: &str) -> Vec<String> {
+    use defra_agent::agent::p2p_reconcile::resolve_template;
+    resolve_template(template)
+        .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())
+        .unwrap_or_default()
 }
 
 fn delete_pairing_mutation(peer_id: &str) -> String {
@@ -432,23 +437,6 @@ fn string_list(row: &Value, field: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn pairing_profile_ids(profiles: &[crate::cli::args::P2pCollectionProfileArg]) -> Vec<String> {
-    profiles
-        .iter()
-        .map(|profile| p2p_collection_profile_id(*profile).to_string())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn graphql_nullable_string_list_literal(values: &[String]) -> String {
-    if values.is_empty() {
-        "null".to_string()
-    } else {
-        graphql_string_list_literal(values)
-    }
-}
-
 fn graphql_nullable_string_literal(value: Option<&str>) -> String {
     value
         .map(str::trim)
@@ -570,7 +558,6 @@ mod tests {
             Some(r#"did:key:agent\one"#),
             &["AgentRequest".to_string(), "AgentResponse".to_string()],
             &[r#"/ip4/127.0.0.1/tcp/4001/p2p/peer"one"#.to_string()],
-            &["chat-requests".to_string()],
             "conversation",
             "2026-06-10T00:00:00Z",
         );
@@ -581,7 +568,10 @@ mod tests {
         assert!(
             mutation.contains(r#"replicator_addresses: ["/ip4/127.0.0.1/tcp/4001/p2p/peer\"one"]"#)
         );
-        assert!(mutation.contains(r#"profiles: ["chat-requests"]"#));
+        // `--template` is the sole scope source; the dead `profiles` column is
+        // always written `null` (never `[]`).
+        assert!(mutation.contains(r#"profiles: null"#));
+        assert!(!mutation.contains(r#"profiles: ["#));
         assert!(mutation.contains(r#"template: "conversation""#));
         assert!(mutation.contains(r#"created_at: "2026-06-10T00:00:00Z""#));
 
@@ -594,13 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn upsert_pairing_mutation_emits_null_for_empty_profiles() {
+    fn upsert_pairing_mutation_always_emits_null_profiles() {
         let mutation = upsert_pairing_mutation(
             "peer-one",
             Some("did:key:agent-one"),
             &["AgentRequest".to_string()],
             &["addr1".to_string()],
-            &[],
             "conversation",
             "2026-06-10T00:00:00Z",
         );
@@ -616,7 +605,6 @@ mod tests {
             None,
             &["AgentRequest".to_string()],
             &["addr1".to_string()],
-            &["chat-requests".to_string()],
             "conversation",
             "2026-06-10T00:00:00Z",
         );

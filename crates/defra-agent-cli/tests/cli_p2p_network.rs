@@ -119,20 +119,10 @@ async fn boot_node(
     })
 }
 
-/// Mint a signed v2 invite on `node` offering the given profile and return the
-/// encoded token.
-fn mint_invite(node: &Node, profile: &str) -> Result<String> {
-    mint_invite_profiles(node, &[profile])
-}
-
-/// Mint a signed v2 invite offering several profiles in one token.
-fn mint_invite_profiles(node: &Node, profiles: &[&str]) -> Result<String> {
-    let mut args = vec!["p2p", "pairings", "invite"];
-    for profile in profiles {
-        args.push("--profile");
-        args.push(profile);
-    }
-    let invite = run_cli_json(&node.home, &args)?;
+/// Mint a signed v4 invite on `node` (scope comes from `--template`, which
+/// defaults to `conversation`) and return the encoded token.
+fn mint_invite(node: &Node) -> Result<String> {
+    let invite = run_cli_json(&node.home, &["p2p", "pairings", "invite"])?;
     assert_eq!(
         invite.get("status").and_then(Value::as_str),
         Some("invite_created"),
@@ -355,7 +345,7 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     );
 
     // A pairs with S over the discovery profile (the signed-join path under test).
-    let seed_invite = mint_invite(&seed, "discovery")?;
+    let seed_invite = mint_invite(&seed)?;
     pair_bidirectional_signed(&node_a, &seed, &seed_invite)?;
     wait_for_pairing_applied(&seed.graphql, &node_a.peer_id, Duration::from_secs(120)).await?;
     wait_for_pairing_applied(&node_a.graphql, &seed.peer_id, Duration::from_secs(120)).await?;
@@ -512,7 +502,7 @@ async fn network_signed_invite_authorization() -> Result<()> {
 
     // (a) Tampered signature: mutate a base58 char in the seed's token. The CLI
     // must error with the signature-invalid message and a non-zero exit.
-    let valid_token = mint_invite(&seed, "discovery")?;
+    let valid_token = mint_invite(&seed)?;
     let tampered = tamper_token(&valid_token)?;
     let stderr = run_cli_failure_stderr(&joiner.home, &["p2p", "pairings", "join", &tampered])?;
     assert!(
@@ -541,7 +531,7 @@ async fn network_signed_invite_authorization() -> Result<()> {
     // with the OUTSIDER's validly-signed invite. The outsider is not a member of
     // the joiner's registry, so the join must be rejected.
     seed_register_into(&seed, &joiner).await?;
-    let outsider_token = mint_invite(&outsider, "discovery")?;
+    let outsider_token = mint_invite(&outsider)?;
     let stderr =
         run_cli_failure_stderr(&joiner.home, &["p2p", "pairings", "join", &outsider_token])?;
     assert!(
@@ -907,8 +897,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
             "did:key:zOperatorPeer",
             "--address",
             "/ip4/127.0.0.1/tcp/4999/p2p/operator-only-peer",
-            "--profile",
-            "chat-requests",
         ],
     )?;
     assert_eq!(

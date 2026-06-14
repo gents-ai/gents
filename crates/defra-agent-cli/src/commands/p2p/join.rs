@@ -132,17 +132,16 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
 
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    // Thread issuer_did through as the `invited_by` value on the desired row.
-    // `profiles` is empty: v4 dropped the token's profiles field and the
-    // template alone scopes the pairing. The mutation renders `null` for the
-    // empty list (never `[]`, per the DefraDB nillable-array sharp edge).
+    // Thread issuer_did through as the `invited_by` value on the desired row. The
+    // template alone scopes the pairing (v4 dropped the token's profiles field);
+    // the mutation always writes the dead `profiles` column `null` (never `[]`,
+    // per the DefraDB nillable-array sharp edge).
     let doc_id = write_pairing_desired(
         &access,
         &remote.peer_id,
         Some(&remote.issuer_did),
         &collections,
         &addresses,
-        &[],
         &template,
         &now,
     )

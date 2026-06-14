@@ -97,7 +97,7 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
     // Mint exactly ONE invite from A.
     let invite_a = run_cli_json(
         &home_a,
-        &["p2p", "pairings", "invite", "--profile", "chat-requests"],
+        &["p2p", "pairings", "invite"],
     )?;
     let token_a = invite_a
         .get("token")
@@ -147,10 +147,6 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
             "did:key:peer-one",
             "--address",
             "/ip4/127.0.0.1/tcp/4001/p2p/peer-one",
-            "--collection",
-            "AgentRequest",
-            "--profile",
-            "tool-services",
         ],
     )?;
     assert_eq!(
@@ -175,6 +171,9 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
         row.get("agent_did").and_then(Value::as_str),
         Some("did:key:peer-one")
     );
+    // Scope is derived entirely from the default `conversation` template now
+    // that `--collection`/`--profile` are gone. The informational `collections`
+    // column reflects that template's set; `profiles` is no longer written.
     assert!(row
         .get("collections")
         .and_then(Value::as_array)
@@ -182,13 +181,11 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     assert!(row
         .get("collections")
         .and_then(Value::as_array)
-        .is_some_and(|rows| rows
-            .iter()
-            .any(|row| row.as_str() == Some("ToolServiceRegistry"))));
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentResponse"))));
     assert!(row
         .get("profiles")
         .and_then(Value::as_array)
-        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("tool-services"))));
+        .is_none_or(|rows| rows.is_empty()));
     assert_eq!(row.get("connected").and_then(Value::as_bool), Some(false));
     assert_eq!(row.get("subscribed").and_then(Value::as_bool), Some(false));
     assert_eq!(row.get("replicating").and_then(Value::as_bool), Some(false));
@@ -510,8 +507,6 @@ async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<(
             agent_did_a.as_str(),
             "--address",
             peer_addr_a,
-            "--profile",
-            "chat-requests",
         ],
     )?;
     assert_eq!(
@@ -551,12 +546,12 @@ async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<(
         .is_some_and(|addresses| addresses
             .iter()
             .any(|address| address.as_str() == Some(peer_addr_a))));
+    // `--template` is the sole scope source now; the dead `profiles` column is
+    // never written (rendered `null`), so the parsed row carries no profiles.
     assert!(row
         .get("profiles")
         .and_then(Value::as_array)
-        .is_some_and(|profiles| profiles
-            .iter()
-            .any(|profile| profile.as_str() == Some("chat-requests"))));
+        .is_none_or(|profiles| profiles.is_empty()));
 
     let list = run_cli_json(&home_b, &["p2p", "pairings", "list"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
@@ -654,7 +649,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
 
     let invite_a = run_cli_json(
         &home_a,
-        &["p2p", "pairings", "invite", "--profile", "chat-requests"],
+        &["p2p", "pairings", "invite"],
     )?;
     assert_eq!(
         invite_a.get("status").and_then(Value::as_str),

@@ -1998,13 +1998,6 @@ pub(crate) struct P2pPairingSetArgs {
     /// reconcile. Repeat for multiple addresses.
     #[arg(long = "address", value_name = "ADDRESS")]
     pub(crate) addresses: Vec<String>,
-    /// Collection name to include in the desired pairing. Repeat or combine with --profile.
-    #[arg(long = "collection", value_name = "COLLECTION")]
-    pub(crate) collections: Vec<String>,
-    /// Collection profile to include in the desired pairing (legacy power-user knob).
-    /// Prefer `--template` for the normal path.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Scope template id driving the pairing (collections + scope + delivery).
     /// Defaults to `conversation` (filtered push of the peer's conversation slice).
     /// Use `p2p templates list` to see all available templates.
@@ -2059,10 +2052,6 @@ pub(crate) struct P2pInviteArgs {
         default_value = "conversation"
     )]
     pub(crate) template: String,
-    /// Collection profile offered by this invite (legacy power-user knob).
-    /// Prefer `--template` for the normal path.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
 }
 
 #[derive(clap::Args)]
@@ -2079,10 +2068,6 @@ pub(crate) struct P2pJoinArgs {
     /// template (the normal path).
     #[arg(long = "template", value_name = "TEMPLATE")]
     pub(crate) template: Option<String>,
-    /// Accepted collection profile (legacy power-user knob).
-    /// Prefer `--template` (or the token's template) for the normal path.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Mark this as a reciprocal join completing a pairing the issuer initiated
     /// (the issuer already accepted our invite and we are pairing back). The
     /// signature is still verified, but the registry-membership gate is bypassed:
@@ -2908,7 +2893,61 @@ mod tests {
     fn p2p_invite_template_defaults_to_conversation() {
         let args = parse_p2p_invite(&[]);
         assert_eq!(args.template, "conversation");
-        assert!(args.profiles.is_empty());
+    }
+
+    /// `--template` is the sole scope input on the pairing front door: the dead
+    /// `--collection`/`--profile` flags were removed, so clap must now reject
+    /// them as unknown arguments rather than silently parsing inert data.
+    #[test]
+    fn p2p_pairing_front_door_rejects_removed_scope_flags() {
+        for argv in [
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "set",
+                "--did",
+                "did:key:peer",
+                "--peer",
+                "peer-one",
+                "--collection",
+                "AgentRequest",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "set",
+                "--did",
+                "did:key:peer",
+                "--peer",
+                "peer-one",
+                "--profile",
+                "chat-requests",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "invite",
+                "--profile",
+                "chat-requests",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "join",
+                "dapair1-token",
+                "--profile",
+                "chat-requests",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&argv).is_err(),
+                "expected clap to reject removed scope flag in: {argv:?}"
+            );
+        }
     }
 
     #[test]

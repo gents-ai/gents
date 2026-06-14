@@ -260,10 +260,8 @@ async fn conversation_push_template_installs_filtered_replicator_no_subscription
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--collection` is a legacy front-door requirement; the reconciler
-            // ignores the row's collections and derives them from the template.
-            "--collection",
-            "AgentRequest",
+            // `--template` is the sole scope source; the reconciler derives the
+            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -365,10 +363,8 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--collection` is a legacy front-door requirement; the reconciler
-            // ignores the row's collections and derives them from the template.
-            "--collection",
-            "AgentRequest",
+            // `--template` is the sole scope source; the reconciler derives the
+            // collection set from the template id alone.
             "--template",
             "agent-config",
         ],
@@ -474,10 +470,8 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--collection` is a legacy front-door requirement; the reconciler
-            // ignores the row's collections and derives them from the template.
-            "--collection",
-            "AgentRequest",
+            // `--template` is the sole scope source; the reconciler derives the
+            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -521,10 +515,8 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
             new_did.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--collection` is a legacy front-door requirement; the reconciler
-            // ignores the row's collections and derives them from the template.
-            "--collection",
-            "AgentRequest",
+            // `--template` is the sole scope source; the reconciler derives the
+            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -646,10 +638,8 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
             scoped_did.as_str(),
             "--address",
             peer_addr_peer.as_str(),
-            // `--collection` is a legacy front-door requirement; the reconciler
-            // ignores the row's collections and derives them from the template.
-            "--collection",
-            "AgentRequest",
+            // `--template` is the sole scope source; the reconciler derives the
+            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
