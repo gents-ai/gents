@@ -65,6 +65,22 @@ pub trait RemoteP2pAdmin: Send + Sync {
 
     async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>>;
 
+    /// Resolve a local collection *name* to its canonical collection *id*.
+    ///
+    /// The P2P subscription set is tracked by collection id (`list_p2p_collections`
+    /// returns ids), while desired/operator state is expressed in collection names.
+    /// The reconcile diff must compare both sides in the same identifier space, so
+    /// names are resolved to ids at the read boundary via this method. Returns
+    /// `Ok(None)` when the collection does not exist locally yet (e.g. its schema
+    /// has not been created), so the caller can defer rather than churn.
+    async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>>;
+
+    /// Reverse of [`Self::resolve_collection_id`]: resolve a collection *id* back
+    /// to its local *name*. Teardown of a no-longer-desired collection only has
+    /// the id recorded in `PairingApplied`, but the unsubscribe call takes a name.
+    /// Returns `Ok(None)` when no local collection has that id.
+    async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>>;
+
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()>;
 
     async fn delete_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()>;

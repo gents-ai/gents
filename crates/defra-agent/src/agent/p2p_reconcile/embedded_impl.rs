@@ -133,6 +133,42 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         self.run("get_collections", p2p.get_collections()).await
     }
 
+    async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+        // The P2P subscription set (`get_collections`) is keyed by collection id,
+        // but desired state carries collection names; resolve via the local schema
+        // catalog so the reconcile diff compares both sides in id-space.
+        match self.node.get_collection(name) {
+            Ok(Some(def)) => Ok(Some(def.collection_id)),
+            Ok(None) => Ok(None),
+            Err(error) => Err(RemoteP2pAdminError::LocalError(format!(
+                "resolve_collection_id({name}): {error}"
+            ))),
+        }
+    }
+
+    async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+        // Walk the local catalog to invert id → name. The subscribe/unsubscribe
+        // adapter calls take names, but `PairingApplied` records ids, so teardown
+        // of a no-longer-desired collection must recover the name here.
+        let names = self.node.list_collections().map_err(|error| {
+            RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
+        })?;
+        for name in names {
+            match self.node.get_collection(&name) {
+                Ok(Some(def)) if def.collection_id == id => return Ok(Some(def.name)),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        collection_name = %name,
+                        %error,
+                        "resolve_collection_name failed to fetch a collection definition"
+                    );
+                }
+            }
+        }
+        Ok(None)
+    }
+
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
         self.run("add_collections", p2p.add_collections(collections.to_vec()))

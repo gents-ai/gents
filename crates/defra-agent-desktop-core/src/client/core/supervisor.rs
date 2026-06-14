@@ -384,7 +384,10 @@ async fn run_pairing_reconcile_for_peer(
         return;
     };
     let admin = match HttpRemoteP2pAdmin::new_with_actor(graphql_url, remote_admin_actor) {
-        Ok(admin) => admin,
+        // Collection ids are content-addressed, so the local schema resolves the
+        // same name → id the remote tracks; this lets the reconcile diff compare
+        // desired (names) against the remote subscription set (ids) correctly.
+        Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
         Err(error) => {
             tracing::warn!(
                 target: "defra_agent_desktop_core::pairing_reconcile",
@@ -621,6 +624,16 @@ mod pairing_reconcile_tests {
                 .iter()
                 .cloned()
                 .collect())
+        }
+
+        async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+            // This stub exercises `compute_pairing_diff` directly in name-space
+            // (not the engine's id-resolution), so it resolves identity.
+            Ok(Some(name.to_string()))
+        }
+
+        async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+            Ok(Some(id.to_string()))
         }
 
         async fn add_p2p_collections(&self, cols: &[String]) -> RemoteP2pAdminResult<()> {
