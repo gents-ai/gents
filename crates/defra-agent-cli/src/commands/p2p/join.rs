@@ -235,14 +235,24 @@ async fn enforce_registry_membership(
         })
         .collect();
 
-    match decide_join_admission(issuer_did, self_did, &member_rows, Utc::now(), REGISTRY_STALE_AFTER)
-    {
+    match decide_join_admission(
+        issuer_did,
+        self_did,
+        &member_rows,
+        Utc::now(),
+        REGISTRY_STALE_AFTER,
+    ) {
         JoinAdmission::TofuBootstrap => {
-            tracing::debug!("PeerRegistry has no peer members; join admitted via TOFU bootstrap arm");
+            tracing::debug!(
+                "PeerRegistry has no peer members; join admitted via TOFU bootstrap arm"
+            );
             Ok(())
         }
         JoinAdmission::MemberAdmitted => {
-            tracing::debug!(issuer_did, "pairing invite issuer is a live registry member");
+            tracing::debug!(
+                issuer_did,
+                "pairing invite issuer is a live registry member"
+            );
             Ok(())
         }
         JoinAdmission::Rejected => anyhow::bail!(

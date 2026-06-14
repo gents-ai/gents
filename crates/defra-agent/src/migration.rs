@@ -1486,7 +1486,9 @@ mod patch_kind_tests {
         node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
         node.add_schema(OLD_AGENT_RESPONSE_SCHEMA).await.unwrap();
         node.add_schema(OLD_AGENT_TOOL_RESULT_SCHEMA).await.unwrap();
-        node.add_schema(OLD_AGENT_CONVERSATION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_CONVERSATION_SCHEMA)
+            .await
+            .unwrap();
 
         const GROUP1: [&str; 4] = [
             "AgentMessage",

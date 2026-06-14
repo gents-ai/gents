@@ -196,7 +196,13 @@ fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
     );
     let self_only = [member_row("did:key:self", "online", FRESH)];
     assert_eq!(
-        decide_join_admission("did:key:issuer", "did:key:self", &self_only, now, STALE_AFTER),
+        decide_join_admission(
+            "did:key:issuer",
+            "did:key:self",
+            &self_only,
+            now,
+            STALE_AFTER
+        ),
         JoinAdmission::TofuBootstrap
     );
 }
@@ -206,7 +212,13 @@ fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
 fn join_gate_admits_live_member_issuer() {
     let rows = [member_row("did:key:issuer", "online", FRESH)];
     assert_eq!(
-        decide_join_admission("did:key:issuer", "did:key:self", &rows, Utc::now(), STALE_AFTER),
+        decide_join_admission(
+            "did:key:issuer",
+            "did:key:self",
+            &rows,
+            Utc::now(),
+            STALE_AFTER
+        ),
         JoinAdmission::MemberAdmitted
     );
 }
