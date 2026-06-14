@@ -77,6 +77,15 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Request", Module("conformance/request_lifecycle.rs")),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),
+        // Scope-template resolution model (deterministic + catalog-total
+        // resolveTemplate, pure scopeFilter). Lean-only for now; the Rust
+        // conformance that calls the real resolution/diff fns lands with the
+        // filtered-replication conformance slice (scope-templates spec, Task 3
+        // "Lean replicator-with-filter dimension + conformance").
+        (
+            "ScopeTemplates",
+            Gap("scope-templates spec Task 3 — conformance lands with the filtered-replication slice"),
+        ),
         ("SessionRecovery", Module("conformance/session_recovery.rs")),
         (
             "Skills",

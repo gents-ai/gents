@@ -14,6 +14,36 @@ namespace PairingReconcile
 
 abbrev PeerId := String
 
+/-- A per-collection scope filter key carried by a filtered replicator.
+
+Mirrors the Rust `FilterPredicate { field, value }` (the #1033 single-field
+equality predicate resolved from a `Scope::PeerDid`). The model treats it
+abstractly: only equality matters, since a filter is part of the replicator's
+*identity*, not behavior we reason about field-by-field here. A replicator is
+unfiltered when its filter is `none`. -/
+structure ScopeFilterKey where
+  field : String
+  value : String
+  deriving DecidableEq, Repr
+
+/-- A managed replicator's identity: its address plus an optional scope filter.
+
+This is the deliverable of Part A: `(address, filter)` makes "same address,
+different filter" two DISTINCT replicators, so a filter change is a teardown of
+the old identity and an install of the new one (no in-place mutate). `none`
+means an unfiltered replicator (today's `Replicate`-delivery behavior). -/
+abbrev ReplicatorId := String × Option ScopeFilterKey
+
+namespace ReplicatorId
+
+/-- The replicator's transport address (the connection target). -/
+def address (r : ReplicatorId) : String := r.1
+
+/-- The replicator's optional scope filter (`none` = unfiltered). -/
+def filter (r : ReplicatorId) : Option ScopeFilterKey := r.2
+
+end ReplicatorId
+
 /-- Per-peer-per-collection retry state. Visibility only; not part of safety. -/
 structure PairingCollectionStatus where
   collectionId : String
@@ -21,10 +51,11 @@ structure PairingCollectionStatus where
   stuck : Bool
   deriving DecidableEq, Repr
 
-/-- Operator-set desired pairing for one peer. -/
+/-- Operator-set desired pairing for one peer. Replicators are keyed on
+`(address, filter)` so a filter change is a distinct desired replicator. -/
 structure PairingDesired where
   collections : Finset String
-  replicators : Finset String
+  replicators : Finset ReplicatorId
   deriving DecidableEq
 
 namespace PairingDesired
@@ -38,22 +69,22 @@ end PairingDesired
 /-- Remote-observed actual pairing for one peer. -/
 structure PairingActual where
   collections : Finset String
-  replicators : Finset String
+  replicators : Finset ReplicatorId
   connected : Bool
   deriving DecidableEq
 
 /-- Wiring introduced by this reconciler and therefore safe to remove. -/
 structure PairingApplied where
   collections : Finset String
-  replicators : Finset String
+  replicators : Finset ReplicatorId
   deriving DecidableEq
 
 /-- One emitted RPC instruction, matching Rust `DiffOp`. -/
 inductive DiffOp where
   | installCollection (c : String)
   | teardownCollection (c : String)
-  | installReplicator (r : String)
-  | teardownReplicator (r : String)
+  | installReplicator (r : ReplicatorId)
+  | teardownReplicator (r : ReplicatorId)
   deriving DecidableEq, Repr
 
 /-- Full reconcile state for one peer. -/

@@ -15,6 +15,7 @@ import Proofs.PromptAssembly
 import Proofs.RuntimeReconcile
 import Proofs.PairingReconcile
 import Proofs.PeerRegistryDiscovery
+import Proofs.ScopeTemplates
 import Proofs.Triggers
 import Proofs.Client
 import Proofs.ClientShell
