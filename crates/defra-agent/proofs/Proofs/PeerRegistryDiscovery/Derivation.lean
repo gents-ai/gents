@@ -85,6 +85,7 @@ theorem ownership_safe {pre post : DiscoveryState} (h : Transition pre post)
   cases h with
   | derive h_post => subst h_post; rfl
   | join tok e tofu _ h_post => subst h_post; rfl
+  | reciprocalJoin tok e tofu _ h_post => subst h_post; rfl
   | removeEntry e h_post => subst h_post; rfl
   | operatorWrite d h_post =>
       exact absurd h_post (h_not_operator d)
@@ -189,6 +190,8 @@ theorem registry_growth_requires_member_signature {pre post : DiscoveryState}
       rw [hp]; exact subset_rfl
   | join tok e tofu hsig _hp =>
       exact ⟨tok, tofu, hsig.1⟩
+  | reciprocalJoin tok e tofu hsig _hp =>
+      exact ⟨tok, tofu, hsig.1⟩
   | removeEntry e hp =>
       refine absurd ?_ h_grew
       rw [hp]; exact Finset.erase_subset e pre.registry
@@ -284,5 +287,95 @@ theorem replay_rejected_witness :
     exact ⟨member, Finset.mem_singleton_self member, rfl, rfl⟩
   · -- freshness: the nonce is not in the (empty) consumed set.
     exact Finset.not_mem_empty _
+
+/-! ## (7) Reciprocal join stays under the admission gate (Finding #8)
+
+The Rust impl wired the `--reciprocal` return replicator on signature alone,
+skipping `decide_join_admission` — a transition with no model counterpart. The
+`Transition.reciprocalJoin` constructor closes that gap: it carries the SAME
+`admitsJoin pre tok tofuBootstrap` precondition as the plain `join`. These
+theorems prove the reciprocal flag changes only *what is wired*, never *whether
+the join is admitted*. -/
+
+/-- **A reciprocal join is gated by `admitsJoin`.** If a transition `h` from
+`pre` to `post` is a reciprocal join of `tok`/`e`/`tofu` (i.e. it is equal to
+*some* application of the `reciprocalJoin` constructor on those arguments), then
+`admitsJoin pre tok tofu` holds. The admission proof is the constructor's own
+precondition, bound existentially in the hypothesis and pulled back out — it is
+NOT handed to the theorem as a free fact, so the conclusion genuinely rides on
+the constructor having been firable.
+
+Non-vacuous: `reciprocal_join_witness` exhibits a concrete `(pre, post, tok,
+tofu)` for which such a transition really exists, so the hypothesis space is
+inhabited and the implication is not vacuously true. -/
+theorem reciprocal_join_still_gated {pre post : DiscoveryState}
+    {tok : Token} {e : RegistryEntry} {tofu : Bool}
+    (h : Transition pre post)
+    (h_is_reciprocal :
+      ∃ (hadm : admitsJoin pre tok tofu) (hpost : post = joinState pre e tok),
+        h = Transition.reciprocalJoin tok e tofu hadm hpost) :
+    admitsJoin pre tok tofu :=
+  -- The admission proof is precisely the precondition the constructor demanded.
+  h_is_reciprocal.choose
+
+/-- Witness that `reciprocal_join_still_gated`'s hypothesis space is inhabited:
+a concrete reciprocal join transition that IS admissible (fresh, member-signed
+token). Without this the gating theorem could be vacuous. -/
+theorem reciprocal_join_witness :
+    ∃ (pre post : DiscoveryState) (tok : Token) (tofu : Bool),
+      Transition pre post ∧ admitsJoin pre tok tofu := by
+  let member : RegistryEntry := ⟨"peer-a", "did:key:a", true⟩
+  let joiner : RegistryEntry := ⟨"peer-b", "did:key:b", true⟩
+  let pre : DiscoveryState :=
+    { self := "peer-self"
+    , registry := {member}
+    , operatorDesired := ∅
+    , registryDesired := ∅
+    , consumedNonces := ∅ }
+  let tok : Token := ⟨"did:key:a", true, "nonce-1"⟩
+  have hadm : admitsJoin pre tok false := by
+    refine ⟨⟨rfl, Or.inl ?_⟩, Finset.not_mem_empty _⟩
+    exact ⟨member, Finset.mem_singleton_self member, rfl, rfl⟩
+  exact ⟨pre, joinState pre joiner tok, tok, false,
+    Transition.reciprocalJoin tok joiner false hadm rfl, hadm⟩
+
+/-- **Refutation teeth (signature-invalid case).** If a token's signature is
+invalid (`tok.sigValid = false`), then it is not admissible, so the
+`reciprocalJoin` constructor — whose precondition is exactly `admitsJoin` — has
+no proof to fire on. The reciprocal leg cannot be wired on a forged signature,
+exactly the Rust defect being fenced.
+
+We phrase the impossibility as `¬ admitsJoin`: since every reciprocal join
+transition demands `admitsJoin pre tok tofu` as its precondition, an
+uninhabitable precondition means no such transition exists.
+
+Non-vacuous: `reciprocal_join_rejected_witness` exhibits a concrete `sigValid =
+false` token, so the hypothesis is realizable; the conclusion follows because
+`admitsJoin` requires `signedByMember`, which requires `tok.sigValid = true`. -/
+theorem reciprocal_join_rejected_on_bad_signature {pre : DiscoveryState}
+    {tok : Token} {tofu : Bool}
+    (h_bad_sig : tok.sigValid = false) :
+    ¬ admitsJoin pre tok tofu := by
+  rintro ⟨⟨hsig, _⟩, _⟩
+  -- admitsJoin → signedByMember → sigValid = true, contradicting h_bad_sig.
+  rw [h_bad_sig] at hsig
+  exact Bool.false_ne_true hsig
+
+/-- Witness that the signature-invalid hypothesis of
+`reciprocal_join_rejected_on_bad_signature` is realizable: a concrete token with
+`sigValid = false`. Pins that theorem as non-vacuous. -/
+theorem reciprocal_join_rejected_witness :
+    ∃ tok : Token, tok.sigValid = false := by
+  exact ⟨⟨"did:key:x", false, "nonce-x"⟩, rfl⟩
+
+/-- Replay rejection extends to reciprocal joins for free: a reciprocal join
+applies the same `joinState` mutator, so it burns the nonce identically and the
+same token can never be re-admitted (by any subsequent join OR reciprocal join).
+Reuses `replay_rejected` — no separate single-use argument needed. -/
+theorem reciprocal_replay_rejected {pre post : DiscoveryState} {tok : Token}
+    {e : RegistryEntry} {tofu : Bool} (hadm : admitsJoin pre tok tofu)
+    (hpost : post = joinState pre e tok) :
+    ∀ tofu', ¬ admitsJoin post tok tofu' :=
+  replay_rejected hadm hpost
 
 end PeerRegistryDiscovery

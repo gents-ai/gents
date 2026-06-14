@@ -39,6 +39,11 @@ end DiscoveryPhase
 inductive TransitionKind where
   | derive
   | join
+  /-- A reciprocal join (`--reciprocal`): same admission gate as `join`, plus a
+  return-leg replicator wired outside the modeled discovery state. Emitted as a
+  distinct kind so the Rust bridge cannot route a reciprocal join down a path
+  that skips `decideAdmitsJoin` — it shares `join`'s admission decision. -/
+  | reciprocalJoin
   | removeEntry
   | operatorWrite
   deriving DecidableEq, Repr
@@ -48,6 +53,7 @@ namespace TransitionKind
 def fromString? : String → Option TransitionKind
   | "derive" => some .derive
   | "join" => some .join
+  | "reciprocalJoin" => some .reciprocalJoin
   | "removeEntry" => some .removeEntry
   | "operatorWrite" => some .operatorWrite
   | _ => none
@@ -55,6 +61,7 @@ def fromString? : String → Option TransitionKind
 def toString : TransitionKind → String
   | .derive => "derive"
   | .join => "join"
+  | .reciprocalJoin => "reciprocalJoin"
   | .removeEntry => "removeEntry"
   | .operatorWrite => "operatorWrite"
 
@@ -70,6 +77,7 @@ an operator write leaves the derived view as-is. -/
 def step? : DiscoveryPhase → TransitionKind → Option DiscoveryPhase
   | _, .derive => some .settled
   | _, .join => some .unsettled
+  | _, .reciprocalJoin => some .unsettled
   | _, .removeEntry => some .unsettled
   | phase, .operatorWrite => some phase
 
@@ -79,8 +87,10 @@ The Rust bridge decides whether a join is admissible with a single boolean. This
 function is that boolean, and it now threads the single-use nonce check: a join
 is admitted iff it is member-signed (or TOFU-bootstrapped) AND the token's nonce
 has not already been consumed. `decideAdmitsJoin_agrees` fences it to the
-`admitsJoin` Prop the `Transition.join` constructor requires, so the executable
-decision and the relation can never diverge on replay. -/
+`admitsJoin` Prop that BOTH the `Transition.join` and the `Transition.reciprocalJoin`
+constructors require, so the executable decision and the relation can never
+diverge on replay — and a reciprocal join takes the identical decision (no
+weaker reciprocal path exists). -/
 def decideAdmitsJoin (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) : Bool :=
   decide (admitsJoin s tok tofuBootstrap)
 

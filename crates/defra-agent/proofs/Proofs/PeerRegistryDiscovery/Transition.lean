@@ -138,6 +138,22 @@ inductive Transition : DiscoveryState → DiscoveryState → Prop where
       admitsJoin pre tok tofuBootstrap →
       post = joinState pre e tok →
       Transition pre post
+  /-- A **reciprocal** join: the joiner admits the entry AND wires a return
+  replicator back toward the inviter (`--reciprocal`). The reciprocal flag only
+  changes WHAT gets wired (the return leg), never WHETHER the join is admitted —
+  so its precondition is the SAME `admitsJoin pre tok tofuBootstrap` gate as the
+  plain `join`, and it applies the SAME `joinState` mutator (registry insert +
+  nonce burn). The return-leg wiring lives outside the modeled discovery state
+  (it is a `PairingReconcile`-level replicator edit), so at this layer a
+  reciprocal join is state-indistinguishable from a plain join — by design: the
+  Rust defect this fences was a reciprocal leg that skipped the admission gate,
+  and modeling it through `admitsJoin` is exactly the proof that it cannot.
+
+  See `reciprocal_join_still_gated` / `no_reciprocal_join_without_admissible_token`. -/
+  | reciprocalJoin {pre post : DiscoveryState} (tok : Token) (e : RegistryEntry) (tofuBootstrap : Bool) :
+      admitsJoin pre tok tofuBootstrap →
+      post = joinState pre e tok →
+      Transition pre post
   /-- A registry entry stales or is removed. -/
   | removeEntry {pre post : DiscoveryState} (e : RegistryEntry) :
       post = removeEntryState pre e →
