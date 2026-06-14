@@ -37,6 +37,16 @@ impl PairingDesired {
 }
 
 /// Actual pairing state read from the remote.
+///
+/// BOUNDARY (Lean `PairingReconcile.PairingActual`): the model keys actual
+/// replicators on the full `ReplicatorId = (address, Option filter)`, but the
+/// remote read here observes the transport *address only* — the installed scope
+/// filter is not recoverable from the peer. The `(address, filter)` identity is
+/// therefore fenced on the reconciler-owned side: `PairingApplied.replicator_filter`
+/// records the filter last installed, and `compute_owned_pairing_diff` compares
+/// desired-vs-applied filter to force a reinstall on change (Lean
+/// `filter_change_forces_reinstall`). Actual carries no `replicator_filter` by
+/// design; do not add one expecting to read it back from the remote.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingActual {
     pub collections: BTreeSet<String>,

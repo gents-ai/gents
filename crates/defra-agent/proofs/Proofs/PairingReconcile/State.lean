@@ -66,7 +66,16 @@ def hasWiring (d : PairingDesired) : Bool :=
 
 end PairingDesired
 
-/-- Remote-observed actual pairing for one peer. -/
+/-- Remote-observed actual pairing for one peer.
+
+RUST BOUNDARY: the model keys actual replicators on the full `ReplicatorId =
+(address, Option filter)` so the convergence proofs can reason about the filter
+identity uniformly. The Rust `PairingActual` (`p2p_reconcile/diff.rs`) observes
+the transport *address only* — the installed filter is not recoverable from the
+peer — and recovers the `(address, filter)` identity from the reconciler-owned
+`PairingApplied.replicator_filter` instead. The two are equivalent for the
+diff's safety obligations because a managed replicator's filter is always known
+on the applied side; this abstraction gap is the intended boundary, not a hole. -/
 structure PairingActual where
   collections : Finset String
   replicators : Finset ReplicatorId
