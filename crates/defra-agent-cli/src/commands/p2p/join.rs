@@ -16,7 +16,10 @@ use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_end
 use super::invite::{
     current_invite_token, encode_token, profile_ids_or_default, resolve_home_identity,
 };
-use super::pairings::{peer_pairing_exists, wait_for_pairing_connected, write_pairing_desired};
+use super::pairings::{
+    peer_pairing_exists, resolve_pairing_template, wait_for_pairing_connected,
+    write_pairing_desired,
+};
 
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let remote = decode(&args.token)?;
@@ -53,6 +56,8 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     .context("expanding accepted pairing profiles")?
     .into_iter()
     .collect::<Vec<_>>();
+    // Resolve the template: explicit --template wins; otherwise use the token's template.
+    let template = resolve_join_template(args.template.as_deref(), &remote.template)?;
     let addresses = vec![remote.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
@@ -110,9 +115,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         &collections,
         &addresses,
         &profiles,
-        // Joins materialize the default `conversation` template; a dedicated
-        // join `--template` front door lands with the registry-offers slice.
-        "conversation",
+        &template,
         &now,
     )
     .await?;
@@ -130,7 +133,9 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let reciprocal = if existed {
         None
     } else {
-        let token = current_invite_token(args.home.as_deref(), &graphql, profiles.clone()).await?;
+        let token =
+            current_invite_token(args.home.as_deref(), &graphql, profiles.clone(), &template)
+                .await?;
         Some(encode_token(&token)?)
     };
 
@@ -141,6 +146,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         "access_mode": access.mode(),
         "peer_id": remote.peer_id,
         "agent_did": remote.issuer_did,
+        "template": template,
         "profiles": profiles,
         "collections": collections,
         "replicator_addresses": addresses,
@@ -255,6 +261,14 @@ async fn enforce_registry_membership(
         "pairing invite issuer is a live registry member"
     );
     Ok(())
+}
+
+/// Resolve the template for a join: explicit `--template` wins over the token's
+/// template. The token's template is used when `--template` is not provided.
+/// An unknown template id is a hard error.
+fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Result<String> {
+    let template = cli_template.unwrap_or(token_template);
+    resolve_pairing_template(template)
 }
 
 fn accepted_profiles(offered: &[String], args: &P2pJoinArgs) -> Result<Vec<String>> {

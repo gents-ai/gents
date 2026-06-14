@@ -94,6 +94,52 @@ The low-level `p2p admin` commands (`connect`, `collections`, `replicators`,
 P2P state directly; normal pairing should go through `p2p pairings`
 (invite/join or `pairings set`).
 
+## Scope templates
+
+Scope templates are named pairing intents that bundle a fixed collection set, a
+per-peer scoping policy (agent_did equality or unscoped), and a delivery mode
+(push or replicate). Use `--template` on `p2p pairings invite`, `join`, and
+`pairings set` instead of hand-authoring collection lists.
+
+```bash
+defra-agent p2p templates list          # print the built-in catalog
+```
+
+Built-in templates:
+
+| Template | Collections | Scope | Delivery |
+|---|---|---|---|
+| `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction | `agent_did` equality | Push |
+| `agent-config` | Behaviors, tool selections, backends, profiles, tool services, skills | Unscoped | Replicate |
+| `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
+
+Pass `--template` to `invite` and `join` to select the intent:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+# join reads the template from the token; pass --template to override
+```
+
+## Admin filtered replication
+
+The low-level `p2p admin replicators add` command accepts `--filter` to express
+per-collection field-equality predicates (repeatable). These are parsed into
+`PairingFilters` and echoed in the command output. Full forwarding to the
+DefraDB filtered-replication endpoint is pending defradb.rs #1033.
+
+```bash
+defra-agent p2p admin replicators add \
+  --home /tmp/coding \
+  --peer iroh://peer-id \
+  --collection AgentRequest \
+  --filter "AgentRequest:agent_did=did:key:alice" \
+  --filter "AgentResponse:agent_did=did:key:alice"
+```
+
+Format: `<Collection>:<field>=<value>`. Parse errors (missing `:` or `=`,
+empty component) are hard failures with a clear message.
+
 ## Service discovery — joining a network
 
 Beyond pairwise pairing, the `p2p network` commands target the replicated
@@ -104,9 +150,9 @@ network. Pairing over the `discovery` collection profile replicates
 registry-membership-checked thereafter).
 
 ```bash
-defra-agent p2p network register --home /tmp/amy --profile discovery   # self-register / refresh this node's row
-defra-agent p2p network list --home /tmp/coding --output table          # discovered members + liveness + paired/auto-pair
-defra-agent p2p network rm --home /tmp/amy                              # deregister this node's row
+defra-agent p2p network register --home /tmp/amy --template conversation   # self-register, advertise template
+defra-agent p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
+defra-agent p2p network rm --home /tmp/amy                                  # deregister this node's row
 ```
 
 Auto-pairing of discovered members is **off by default**. Set the

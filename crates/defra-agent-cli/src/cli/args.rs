@@ -2001,11 +2001,13 @@ pub(crate) struct P2pPairingSetArgs {
     /// Collection name to include in the desired pairing. Repeat or combine with --profile.
     #[arg(long = "collection", value_name = "COLLECTION")]
     pub(crate) collections: Vec<String>,
-    /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    /// Collection profile to include in the desired pairing (legacy power-user knob).
+    /// Prefer `--template` for the normal path.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Scope template id driving the pairing (collections + scope + delivery).
     /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
     #[arg(
         long = "template",
         value_name = "TEMPLATE",
@@ -2047,8 +2049,19 @@ pub(crate) struct P2pInviteArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    /// Collection profile offered by this invite. Defaults to chat-requests.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    /// Scope template id for this invite (e.g. `conversation`, `agent-config`, `backup`).
+    /// The template is encoded in the invite token and read by `p2p pairings join`.
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
+    #[arg(
+        long = "template",
+        value_name = "TEMPLATE",
+        default_value = "conversation"
+    )]
+    pub(crate) template: String,
+    /// Collection profile offered by this invite (legacy power-user knob).
+    /// Prefer `--template` for the normal path.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
 }
 
@@ -2058,11 +2071,17 @@ pub(crate) struct P2pJoinArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    /// Invite token produced by `defra-agent p2p invite`.
+    /// Invite token produced by `defra-agent p2p pairings invite`.
     #[arg(value_name = "TOKEN")]
     pub(crate) token: String,
-    /// Accepted collection profile. Defaults to the profiles offered by the token.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    /// Override the scope template from the token. When both `--template` and a
+    /// token template are present, `--template` wins. Omit to use the token's
+    /// template (the normal path).
+    #[arg(long = "template", value_name = "TEMPLATE")]
+    pub(crate) template: Option<String>,
+    /// Accepted collection profile (legacy power-user knob).
+    /// Prefer `--template` (or the token's template) for the normal path.
+    #[arg(long = "profile", value_enum, value_name = "PROFILE", hide = true)]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Mark this as a reciprocal join completing a pairing the issuer initiated
     /// (the issuer already accepted our invite and we are pairing back). The
@@ -2124,6 +2143,12 @@ pub(crate) struct P2pReplicatorAddArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Per-collection field-equality filter for filtered replication (repeatable).
+    /// Format: `<collection>:<field>=<value>`, e.g.
+    /// `AgentRequest:agent_did=did:key:alice`.
+    /// Applied as `PairingFilters` through the `add_replicator` seam.
+    #[arg(long = "filter", value_name = "COLLECTION:FIELD=VALUE")]
+    pub(crate) filters: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -2818,6 +2843,112 @@ mod tests {
         ] {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
         }
+    }
+
+    fn parse_p2p_invite(extra: &[&str]) -> P2pInviteArgs {
+        let mut argv = vec!["defra-agent", "p2p", "pairings", "invite"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p pairings invite should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Pairings {
+                        command: P2pPairingsCommand::Invite(args),
+                    },
+            } => args,
+            _ => panic!("expected `p2p pairings invite`"),
+        }
+    }
+
+    fn parse_p2p_join(extra: &[&str]) -> P2pJoinArgs {
+        let mut argv = vec!["defra-agent", "p2p", "pairings", "join", "dapair1-token"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p pairings join should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Pairings {
+                        command: P2pPairingsCommand::Join(args),
+                    },
+            } => args,
+            _ => panic!("expected `p2p pairings join`"),
+        }
+    }
+
+    fn parse_p2p_replicator_add(extra: &[&str]) -> P2pReplicatorAddArgs {
+        let mut argv = vec![
+            "defra-agent",
+            "p2p",
+            "admin",
+            "replicators",
+            "add",
+            "--peer",
+            "peer-a",
+            "--collection",
+            "AgentRequest",
+        ];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p admin replicators add should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Admin {
+                        command:
+                            P2pAdminCommand::Replicators {
+                                command: P2pReplicatorsCommand::Add(args),
+                            },
+                    },
+            } => args,
+            _ => panic!("expected `p2p admin replicators add`"),
+        }
+    }
+
+    #[test]
+    fn p2p_invite_template_defaults_to_conversation() {
+        let args = parse_p2p_invite(&[]);
+        assert_eq!(args.template, "conversation");
+        assert!(args.profiles.is_empty());
+    }
+
+    #[test]
+    fn p2p_invite_template_accepts_known_templates() {
+        assert_eq!(
+            parse_p2p_invite(&["--template", "backup"]).template,
+            "backup"
+        );
+        assert_eq!(
+            parse_p2p_invite(&["--template", "agent-config"]).template,
+            "agent-config"
+        );
+    }
+
+    #[test]
+    fn p2p_join_template_is_optional_override() {
+        // Without --template, field is None (uses token's template).
+        let no_override = parse_p2p_join(&[]);
+        assert_eq!(no_override.template, None);
+        // With --template, field is Some.
+        let with_override = parse_p2p_join(&["--template", "backup"]);
+        assert_eq!(with_override.template.as_deref(), Some("backup"));
+    }
+
+    #[test]
+    fn p2p_replicator_add_filter_parses() {
+        let args = parse_p2p_replicator_add(&[
+            "--filter",
+            "AgentRequest:agent_did=did:key:alice",
+            "--filter",
+            "AgentResponse:agent_did=did:key:bob",
+        ]);
+        assert_eq!(args.filters.len(), 2);
+        assert_eq!(args.filters[0], "AgentRequest:agent_did=did:key:alice");
+        assert_eq!(args.filters[1], "AgentResponse:agent_did=did:key:bob");
+    }
+
+    #[test]
+    fn p2p_replicator_add_no_filter_is_empty() {
+        let args = parse_p2p_replicator_add(&[]);
+        assert!(args.filters.is_empty());
     }
 
     #[test]

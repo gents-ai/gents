@@ -169,7 +169,7 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
 /// Validate `--template` against the built-in scope-template catalog, returning
 /// the normalized id. An unknown template is a hard error (with the catalog
 /// listed) rather than a silent fallback, since the operator named it explicitly.
-fn resolve_pairing_template(template: &str) -> Result<String> {
+pub(super) fn resolve_pairing_template(template: &str) -> Result<String> {
     use defra_agent::agent::p2p_reconcile::templates::{builtin_templates, resolve_template};
     let template = template.trim();
     if template.is_empty() {

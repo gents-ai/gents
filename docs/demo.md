@@ -372,17 +372,34 @@ member that member already knows.
 
 In Part 2 any reachable node could join. A network gates membership on a
 member's cryptographic say-so. `p2p pairings invite` now signs the token with
-the local agent's DID:
+the local agent's DID and **carries the chosen scope template** (default:
+`conversation`) so the joining peer knows exactly what to replicate:
 
 ```bash
-AMY_INVITE=$(defra-agent p2p pairings invite --profile discovery | jq -r .token)
+AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
 ```
 
-`p2p pairings join` verifies that signature. Because a `did:key` embeds its own
-public key, verification needs nothing but the token — no lookup, no registry:
+Pair by intent, not by schema: `--template` selects a named bundle of
+collections, scoping policy, and delivery mode. The runtime resolves the
+collections and filtering at reconcile time so operators never hand-author
+collection lists. Use `defra-agent p2p templates list` to see the built-in
+catalog (`conversation`, `agent-config`, `backup`).
+
+`p2p pairings join` verifies that signature and reads the template from the
+token. Because a `did:key` embeds its own public key, verification needs
+nothing but the token — no lookup, no registry:
 
 ```bash
 defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+```
+
+`join` reads the template from the token and writes it as the desired pairing's
+template. If both `--template` and a token template are present, the explicit
+`--template` wins (document it in your script if you override):
+
+```bash
+# Override to backup template regardless of what the token offers:
+defra-agent p2p pairings join --home /tmp/coding --template backup "$AMY_INVITE"
 ```
 
 The rule has two arms:
