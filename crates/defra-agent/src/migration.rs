@@ -843,6 +843,36 @@ pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<
     }
 }
 
+/// Idempotent migration ensuring the `ConsumedInviteNonce` ledger collection
+/// exists. This is the runtime backing for single-use pairing invites (Task C2,
+/// Finding #16): the join path records each redeemed token's `nonce` here and
+/// rejects any token whose nonce is already present, mirroring the Lean
+/// `consumedNonces` ledger and the `replay_rejected` theorem. The `nonce` field
+/// carries a unique index (declared in the SDL) so a concurrent double-redeem
+/// loses the race at insert time rather than slipping through.
+///
+/// A fresh database created from `schemas::ALL` already has this collection, so
+/// the migration is a no-op there; it only adds the schema on a database
+/// upgraded from before C2 landed (mirrors `ensure_peer_registry_migrations`).
+pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("ConsumedInviteNonce")
+        .context("get ConsumedInviteNonce collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::CONSUMED_INVITE_NONCE)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add ConsumedInviteNonce schema"),
+    }
+}
+
 async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
     let existing = node
         .get_collection("PeerPairingApplied")
@@ -1136,6 +1166,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_peer_registry_migrations(node.clone())
         .await
         .context("ensure PeerRegistry migrations")?;
+    ensure_consumed_invite_nonce_migrations(node.clone())
+        .await
+        .context("ensure ConsumedInviteNonce migrations")?;
     ensure_tool_service_registry_migrations(node.clone())
         .await
         .context("ensure ToolServiceRegistry migrations")?;
@@ -1761,6 +1794,32 @@ mod patch_kind_tests {
             assert!(
                 collection_has_field(&collection, field),
                 "PeerRegistry must have field '{field}'"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn consumed_invite_nonce_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("ConsumedInviteNonce")
+            .unwrap()
+            .expect("ConsumedInviteNonce collection must exist after migration");
+
+        for field in &["nonce", "issuer_did", "consumed_at"] {
+            assert!(
+                collection_has_field(&collection, field),
+                "ConsumedInviteNonce must have field '{field}'"
             );
         }
     }

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::{resolve_network_id, resolve_template};
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent_protocol::pairing_token::{
     check_freshness, decode, signing_payload, InviteToken, DEFAULT_INVITE_MAX_AGE,
 };
@@ -60,9 +61,11 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     // value is part of the signed payload, so a mismatch is not forgeable.)
     enforce_network_match(&remote)?;
 
-    // NOTE (Task C2): `remote.nonce` is the single-use token nonce. The
-    // consumed-nonce ledger + replay rejection lands in C2; this path only
-    // round-trips the field today.
+    // Single-use gate (Task C2 / #16): `remote.nonce` is the token's single-use
+    // nonce. The replay check + nonce burn happen below, after `access` is
+    // resolved and the membership gate has run — atomically with admission, so a
+    // replayed token can never be wired twice (mirrors Lean `admitsJoin` +
+    // `replay_rejected`, which consume the nonce in the admit transition).
 
     // Resolve the template: explicit --template wins; otherwise use the token's
     // template. The template is the sole source of the pairing's collection scope
@@ -116,6 +119,16 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     } else {
         enforce_registry_membership(&access, &remote.issuer_did, identity.did()).await?;
     }
+
+    // Single-use enforcement (Task C2 / #16): consume the token's nonce against
+    // the `ConsumedInviteNonce` ledger. This runs AFTER signature + freshness +
+    // network + membership gates and BEFORE writing the desired pairing row, so a
+    // token's nonce is burned as part of the same admission that wires it. The
+    // first join records the nonce and proceeds; any later join presenting the
+    // same token finds the nonce already consumed (or loses the unique-index race
+    // at insert) and is rejected. Mirrors Lean `admitsJoin` (`nonce ∉
+    // consumedNonces`) and the `replay_rejected` theorem.
+    consume_invite_nonce(&access, &remote.nonce, &remote.issuer_did).await?;
 
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -270,6 +283,93 @@ async fn enforce_registry_membership(
              join rejected (registry is non-empty, so TOFU bootstrap does not apply)"
         ),
     }
+}
+
+/// Single-use invite enforcement (Task C2 / #16). Consume `nonce` against the
+/// `ConsumedInviteNonce` ledger: reject the join if the nonce was already
+/// redeemed, otherwise record it and let the join proceed.
+///
+/// Ordering is record-then-wire: this runs before the `PeerPairingDesired` row is
+/// written, so a replayed token cannot be wired a second time. Two backstops
+/// against a concurrent double-redeem:
+///   1. a presence query (clear "already used" error in the common case), and
+///   2. the unique index on `nonce` (declared in the SDL) — if two joins race
+///      past the query, the second insert fails the unique constraint and we
+///      treat that as a replay rejection.
+///
+/// Mirrors the Lean `admitsJoin` precondition (`tok.nonce ∉ s.consumedNonces`)
+/// and the nonce burn in the admit transition (`replay_rejected`).
+async fn consume_invite_nonce(access: &ConfigAccess, nonce: &str, issuer_did: &str) -> Result<()> {
+    let nonce = nonce.trim();
+    if nonce.is_empty() {
+        anyhow::bail!(
+            "pairing invite is missing its single-use nonce; join rejected (re-issue the invite)"
+        );
+    }
+
+    // 1) Presence check: a nonce already in the ledger is a replay.
+    let escaped = escape_graphql_string(nonce);
+    let query = format!(
+        r#"query {{
+            ConsumedInviteNonce(filter: {{ nonce: {{ _eq: "{escaped}" }} }}, limit: 1) {{
+                nonce
+            }}
+        }}"#
+    );
+    let existing = graphql_rows(access, "ConsumedInviteNonce", &query)
+        .await
+        .context("checking ConsumedInviteNonce ledger for a replayed nonce")?;
+    if !existing.is_empty() {
+        anyhow::bail!(
+            "pairing invite already used (replay rejected): this invite's single-use \
+             nonce was already redeemed; ask the issuer for a fresh invite"
+        );
+    }
+
+    // 2) Record the nonce. The unique index on `nonce` is the race backstop: a
+    //    concurrent second redeem that slipped past the query above fails here.
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let mutation = create_consumed_invite_nonce_mutation(nonce, issuer_did, &now);
+    match access.execute(&mutation).await {
+        Ok(_) => {
+            tracing::debug!(
+                issuer_did = %issuer_did,
+                "recorded consumed invite nonce; invite is now single-use spent"
+            );
+            Ok(())
+        }
+        Err(error) if is_unique_nonce_violation(&error) => anyhow::bail!(
+            "pairing invite already used (replay rejected): this invite's single-use \
+             nonce was redeemed concurrently; ask the issuer for a fresh invite"
+        ),
+        Err(error) => Err(error).context("recording consumed invite nonce in the ledger"),
+    }
+}
+
+/// Build the `ConsumedInviteNonce` create mutation. Every interpolated value is
+/// escaped; there are no list fields, so the empty-list-`[]` sharp edge does not
+/// apply here.
+fn create_consumed_invite_nonce_mutation(nonce: &str, issuer_did: &str, now: &str) -> String {
+    let nonce = escape_graphql_string(nonce);
+    let issuer_did = escape_graphql_string(issuer_did);
+    let now = escape_graphql_string(now);
+    format!(
+        r#"mutation {{
+            create_ConsumedInviteNonce(input: {{
+                nonce: "{nonce}",
+                issuer_did: "{issuer_did}",
+                consumed_at: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    )
+}
+
+/// Recognise a unique-index violation on the `nonce` field, the race backstop for
+/// concurrent invite redemption. DefraDB surfaces this as a "unique" error
+/// mentioning the index/field; match conservatively on either marker.
+fn is_unique_nonce_violation(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_lowercase();
+    message.contains("unique") && (message.contains("nonce") || message.contains("index"))
 }
 
 /// Resolve the template for a join: explicit `--template` wins over the token's

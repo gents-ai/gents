@@ -8,6 +8,127 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Task C2 (#16): an invite token is single-use. The first join consuming its
+/// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
+/// join presenting the *same* token (same nonce) is rejected as a replay, even
+/// though it is still inside the freshness window. Mirrors the Lean
+/// `replay_rejected` theorem (the admit transition burns the nonce atomically).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("replay-a");
+    let home_b = tempdir.path().join("replay-b");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-replay-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let port_b = allocate_port()?;
+    let agent_name_a = format!("cli-replay-a-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-replay-b-{}", Uuid::new_v4().simple());
+    let graphql_a = graphql_url(port_a);
+    let graphql_b = graphql_url(port_b);
+
+    let init_a = run_init_json(
+        &home_a,
+        &[
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
+
+    let (mut serve_a, readiness_a) = spawn_server_with_ready_json(
+        &home_a,
+        port_a,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    let (mut serve_b, _readiness_b) = spawn_server_with_ready_json(
+        &home_b,
+        port_b,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_port(port_b, &mut serve_b)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
+
+    let peer_id_a = readiness_a
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
+
+    // Mint exactly ONE invite from A.
+    let invite_a = run_cli_json(
+        &home_a,
+        &["p2p", "pairings", "invite", "--profile", "chat-requests"],
+    )?;
+    let token_a = invite_a
+        .get("token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("invite A missing token: {invite_a}"))?
+        .to_string();
+
+    // First join consumes the nonce → succeeds.
+    let join_one = run_cli_json(&home_b, &["p2p", "pairings", "join", &token_a])?;
+    assert_eq!(
+        join_one.get("status").and_then(Value::as_str),
+        Some("pairing_joined"),
+        "first join should succeed: {join_one}"
+    );
+    assert_eq!(
+        join_one.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_a)
+    );
+
+    // Second join with the SAME token → rejected as a replay (nonce already
+    // consumed), despite still being inside the freshness window.
+    let stderr = run_cli_failure_stderr(&home_b, &["p2p", "pairings", "join", &token_a])?;
+    let lowered = stderr.to_lowercase();
+    assert!(
+        lowered.contains("replay") || lowered.contains("already used"),
+        "second join should be rejected as a replay; stderr was:\n{stderr}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
