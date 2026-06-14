@@ -211,16 +211,11 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 }
 
-/// Seam for defradb.rs #1033 filtered replication.
-///
-/// TODO(#1033 pin): once the defradb.rs filtered-replication PR is the pinned rev,
-/// translate `filters` into defradb's ReplicationFilters and pass to the filtered
-/// add_replicator.  Until then: empty filters == today's behavior; non-empty filters
-/// fall back to the unfiltered call + a warn so the path is visible, not silently
-/// dropped.
 /// Translate our `PairingFilters` seam type into defradb's `ReplicationFilters`
-/// (per-collection equality predicate). Our predicate values are agent DIDs
-/// (strings), so they map to JSON strings.
+/// (per-collection equality predicate), passed straight to the filtered
+/// `add_replicator` on the pinned #1033 rev. Filters are translated 1:1 and
+/// validated (fail-closed) by defradb — there is no unfiltered fallback. Our
+/// predicate values are agent DIDs (strings), so they map to JSON strings.
 fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
     filters
         .iter()

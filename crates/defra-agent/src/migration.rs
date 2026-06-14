@@ -170,12 +170,19 @@ const ADD_COMPACTION_ENTRY_AGENT_DID_PATCH: &str = r#"[
 // MUTABLE field — `add_schema` short-circuits on an existing collection, and
 // defradb's schema patcher REJECTS changing any property of an existing field
 // (`validate_field_not_mutated`: `new_field != old_field` ⇒ "mutating an existing
-// field is not supported"). There is therefore no in-place way to flip these
-// fields to immutable on the current pin; doing so safely needs an upstream
-// defradb change (a monotonic immutable-flip). Until then the migration only
-// DETECTS the stale shape and warns, so the operator can see that filtered
-// replication of the conversation template is unavailable on this upgraded node
-// (defradb would reject the non-immutable scope filter at `add_replicator`).
+// field is not supported"; this mirrors Go DefraDB's `validateFieldNotMutated`,
+// which `reflect.DeepEqual`s the whole field).
+//
+// Flipping a field to immutable is NOT an additive change: `@immutable` (a
+// defradb.rs-only concept — Go DefraDB has no write-once field) is enforced at
+// DAG-merge time, so an existing document that already has multiple writes to
+// the field in its history would retroactively violate the invariant. A safe
+// flip therefore needs defradb to scan each document's history and prove a
+// single write first — an upstream feature, not an in-place patch. Until that
+// lands, the migration only DETECTS the stale shape and warns, so the operator
+// can see that filtered replication of the conversation template is unavailable
+// on this upgraded node (defradb rejects the non-immutable scope filter at
+// `add_replicator`). Fresh databases are immutable from the SDL and unaffected.
 const PRE_EXISTING_AGENT_DID_COLLECTIONS: [&str; 4] = [
     "AgentRequest",
     "AgentResponse",

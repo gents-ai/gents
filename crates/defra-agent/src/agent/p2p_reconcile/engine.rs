@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
-use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters};
+use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters, Scope};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
     PairingDesired, RemoteP2pAdmin,
@@ -117,7 +117,7 @@ pub async fn run_pairing_reconciler(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                sweep_pairings(&admin, &store).await?;
+                sweep_pairings_logged(&admin, &store).await;
             }
             message = subscription.recv() => {
                 if message.is_none() {
@@ -128,9 +128,19 @@ pub async fn run_pairing_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
-                sweep_pairings(&admin, &store).await?;
+                sweep_pairings_logged(&admin, &store).await;
             }
         }
+    }
+}
+
+/// Run a sweep, logging (not propagating) a transient failure. A failed sweep —
+/// e.g. a momentary `list_peer_ids` read error — must not tear down the whole
+/// reconciler; the next tick retries. Mirrors the discovery / heartbeat daemons,
+/// which also log-and-continue rather than aborting the runtime task.
+async fn sweep_pairings_logged(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStore) {
+    if let Err(error) = sweep_pairings(admin, store).await {
+        tracing::warn!(error = %error, "pairing reconciler sweep failed; retrying on next tick");
     }
 }
 
@@ -475,10 +485,18 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
             .expect("default pairing template is in the catalog")
     });
 
-    // The scope filter value is the peer's agent DID. Fall back to the legacy
-    // explicit/profile collections only when a template cannot be resolved
-    // (cannot happen given the default), keeping the read total.
-    let peer_did = row.agent_did.as_deref().unwrap_or_default();
+    // The scope filter value is the peer's agent DID. A peer-DID-scoped template
+    // with a blank agent_did cannot be honored: it would build an `agent_did == ""`
+    // predicate (matches nothing) or, worse, an unscoped replicator. Refuse the
+    // row and skip this peer (caught per-peer by the sweep), mirroring the
+    // discovery-side skip of blank-DID registry entries.
+    let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
+    if peer_did.is_empty() && matches!(template.scope, Scope::PeerDid { .. }) {
+        anyhow::bail!(
+            "pairing row for peer-DID-scoped template {template_id:?} has a blank \
+             agent_did; refusing to install an unscoped replicator (skipping peer)"
+        );
+    }
     let replicator_collections = template
         .collections
         .iter()

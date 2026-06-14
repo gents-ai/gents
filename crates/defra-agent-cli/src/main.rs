@@ -171,16 +171,24 @@ const P2P_AFTER_HELP: &str = "\
 Examples:
   defra-agent p2p status
   defra-agent p2p peers --home /path/to/home
-  defra-agent p2p connect --graphql http://127.0.0.1:9191/api/v0/graphql --peer <peer-id-or-address>
-  defra-agent p2p collections add --profile chat-requests
-  defra-agent p2p collections sync-versions --version-id <collection-version-id>
-  defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
-  defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
-  defra-agent p2p pairings set --peer <peer-id> --did <agent-did> --address <multiaddr> --profile chat-requests
+  defra-agent p2p diagnose
+
+  # Declarative pairing (the normal path — the runtime reconciles these):
+  defra-agent p2p pairings set --did <agent-did> --address <ticket-or-multiaddr> --template conversation
   defra-agent p2p pairings list
   defra-agent p2p pairings rm --peer <peer-id>
-  defra-agent p2p pair --peer <multiaddr> --profile chat-requests
-  defra-agent p2p diagnose";
+  defra-agent p2p pairings invite --template conversation
+  defra-agent p2p pairings join <invite-token>
+
+  # Service discovery:
+  defra-agent p2p network register
+  defra-agent p2p network list
+  defra-agent p2p templates list
+
+  # Low-level live wiring (escape hatch — prefer `p2p pairings`):
+  defra-agent p2p admin connect --peer <peer-id-or-address>
+  defra-agent p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
+  defra-agent p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 

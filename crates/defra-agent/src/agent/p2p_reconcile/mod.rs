@@ -15,7 +15,7 @@ pub use diff::{
     PairingDesired,
 };
 pub use discovery::{
-    decide_join_admission, derive_registry_desired, reconcile_discovery_tick,
+    decide_join_admission, derive_registry_desired, heartbeat_is_fresh, reconcile_discovery_tick,
     run_discovery_reconciler, DiscoveredEntry, DiscoveryStore, DiscoveryTickOutcome,
     GraphqlDiscoveryStore, JoinAdmission, RegistryMemberRow, REGISTRY_STALE_AFTER, SOURCE_OPERATOR,
     SOURCE_REGISTRY,
@@ -28,8 +28,8 @@ pub use engine::{
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 pub use registry::{
-    registry_upsert_mutation, run_registry_heartbeat, RegistryEntry, UpsertKind,
-    REGISTRY_HEARTBEAT_INTERVAL,
+    registry_upsert_mutation, resolve_network_id, run_registry_heartbeat, RegistryEntry,
+    UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
 };
 pub use templates::{
     builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, PairingFilters,

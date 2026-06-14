@@ -9,7 +9,7 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::agent::p2p_reconcile::discovery::REGISTRY_STALE_AFTER;
+use defra_agent::agent::p2p_reconcile::discovery::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
 use defra_agent::agent::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
@@ -299,12 +299,7 @@ fn parse_registry_rows(
                 .as_deref()
                 .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw.trim()).ok())
                 .map(|ts| ts.with_timezone(&Utc))
-                .map(|ts| {
-                    now.signed_duration_since(ts)
-                        .to_std()
-                        .map(|age| age <= REGISTRY_STALE_AFTER)
-                        .unwrap_or(true) // future = treat as fresh (clock skew)
-                })
+                .map(|ts| heartbeat_is_fresh(ts, now, REGISTRY_STALE_AFTER))
                 .unwrap_or(false);
             let online = status_online && fresh;
             let paired = paired_peers.contains(&peer_id);

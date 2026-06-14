@@ -1817,7 +1817,7 @@ pub(crate) enum P2pNetworkCommand {
     #[command(
         name = "rm",
         about = "Deregister this node from the peer discovery registry",
-        alias = "deregister"
+        aliases = ["deregister", "remove"]
     )]
     Rm(P2pAccessArgs),
 }
@@ -1972,7 +1972,7 @@ true` on the relevant behaviors' tool selections on BOTH servers \
     #[command(
         name = "rm",
         about = "Remove a desired pairing row (runtime tears down only what it applied)",
-        alias = "unpair"
+        aliases = ["unpair", "remove"]
     )]
     Remove(P2pPairingRefArgs),
     #[command(about = "Create a shareable, DID-carrying pairing invite token")]

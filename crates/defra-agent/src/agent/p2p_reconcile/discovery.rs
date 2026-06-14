@@ -56,6 +56,25 @@ pub const SOURCE_REGISTRY: &str = "registry";
 pub const REGISTRY_STALE_AFTER: Duration =
     Duration::from_secs(REGISTRY_HEARTBEAT_INTERVAL.as_secs() * 3);
 
+/// Whether a heartbeat timestamp `ts` is fresh relative to `now`: within
+/// `stale_after` in the past, OR within `stale_after` in the future. A timestamp
+/// further than `stale_after` ahead of `now` is treated as NOT fresh — a
+/// far-future stamp is more likely a bad clock or a bogus row than a live peer,
+/// and must not pin a dead peer alive indefinitely. Small future skew (clocks
+/// slightly out of sync) is still tolerated as fresh.
+pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
+    match now.signed_duration_since(ts).to_std() {
+        // ts is in the past: fresh iff the age is within the window.
+        Ok(age) => age <= stale_after,
+        // ts is in the future (clock skew): fresh iff within the window ahead.
+        Err(_) => ts
+            .signed_duration_since(now)
+            .to_std()
+            .map(|ahead| ahead <= stale_after)
+            .unwrap_or(false),
+    }
+}
+
 /// One `PeerRegistry` row as seen by the join-admission membership gate.
 #[derive(Debug, Clone)]
 pub struct RegistryMemberRow {
@@ -109,12 +128,7 @@ pub fn decide_join_admission(
         let online = row.status.trim() == "online";
         let fresh = row
             .updated_at
-            .map(|ts| {
-                now.signed_duration_since(ts)
-                    .to_std()
-                    .map(|age| age <= stale_after)
-                    .unwrap_or(true)
-            })
+            .map(|ts| heartbeat_is_fresh(ts, now, stale_after))
             .unwrap_or(false);
         if did == issuer_did && online && fresh {
             issuer_is_live_member = true;
@@ -171,13 +185,7 @@ impl DiscoveredEntry {
         let fresh = updated_at
             .and_then(|raw| DateTime::parse_from_rfc3339(raw.trim()).ok())
             .map(|ts| ts.with_timezone(&Utc))
-            .map(|ts| {
-                now.signed_duration_since(ts)
-                    .to_std()
-                    // A future timestamp (clock skew) is treated as fresh.
-                    .map(|age| age <= REGISTRY_STALE_AFTER)
-                    .unwrap_or(true)
-            })
+            .map(|ts| heartbeat_is_fresh(ts, now, REGISTRY_STALE_AFTER))
             .unwrap_or(false);
         Self {
             peer_id,

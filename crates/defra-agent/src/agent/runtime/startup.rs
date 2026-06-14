@@ -288,7 +288,7 @@ pub(in crate::agent) async fn run_agent(
             crate::agent::p2p_reconcile::run_registry_heartbeat(
                 registry_node,
                 registry_agent_did,
-                "default".to_string(),
+                crate::agent::p2p_reconcile::resolve_network_id(),
                 registry_cancel,
             )
             .await,

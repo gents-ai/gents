@@ -19,6 +19,26 @@ use super::templates::resolve_template;
 /// How often the node refreshes its `updated_at` heartbeat in `PeerRegistry`.
 pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Default discovery network id a node self-registers under. A single logical
+/// network is the prototype default; multiple networks are not yet a first-class
+/// configuration surface (see #490 review L4).
+pub const DEFAULT_NETWORK_ID: &str = "default";
+
+/// Environment variable overriding [`DEFAULT_NETWORK_ID`]. A seam so multiple
+/// discovery networks can coexist without a code change until network id becomes
+/// a first-class config field.
+pub const NETWORK_ID_ENV: &str = "DEFRA_AGENT_NETWORK_ID";
+
+/// Resolve the discovery network id from [`NETWORK_ID_ENV`], falling back to
+/// [`DEFAULT_NETWORK_ID`].
+pub fn resolve_network_id() -> String {
+    std::env::var(NETWORK_ID_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
+}
+
 /// The scope templates a node offers by default when none are explicitly
 /// configured: a node advertises that it is willing to replicate a peer's
 /// conversation slice (filtered push) and the shared agent-config set. These
