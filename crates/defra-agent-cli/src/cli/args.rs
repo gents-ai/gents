@@ -2145,8 +2145,9 @@ pub(crate) struct P2pReplicatorAddArgs {
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Per-collection field-equality filter for filtered replication (repeatable).
     /// Format: `<collection>:<field>=<value>`, e.g.
-    /// `AgentRequest:agent_did=did:key:alice`.
-    /// Applied as `PairingFilters` through the `add_replicator` seam.
+    /// `AgentRequest:agent_did=did:key:alice`. Forwarded to the node as the
+    /// replicator's `Filters`, which installs a filtered (push-only) replicator
+    /// that sends only matching documents. The filter field must be `@immutable`.
     #[arg(long = "filter", value_name = "COLLECTION:FIELD=VALUE")]
     pub(crate) filters: Vec<String>,
 }

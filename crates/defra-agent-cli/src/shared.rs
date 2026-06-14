@@ -126,6 +126,26 @@ pub(crate) struct P2pReplicatorRequest {
     pub(crate) collections: Vec<String>,
     #[serde(rename = "Addresses")]
     pub(crate) addresses: Vec<String>,
+    /// Per-collection replication filters. Serialized to defradb's
+    /// `ReplicatorRequest.Filters` shape (`{Collection: {Field, Value}}`); the
+    /// node installs a filtered replicator that pushes only matching documents.
+    /// Omitted entirely when empty so an unfiltered replicator is requested.
+    #[serde(
+        rename = "Filters",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub(crate) filters: std::collections::BTreeMap<String, P2pReplicatorFilter>,
+}
+
+/// One field-equality predicate in a [`P2pReplicatorRequest`]. Mirrors defradb's
+/// `ReplicationFilter`: `Value` is JSON, and a bare string scopes by equality
+/// (e.g. `agent_did == "did:key:alice"`).
+#[derive(Debug, Serialize)]
+pub(crate) struct P2pReplicatorFilter {
+    #[serde(rename = "Field")]
+    pub(crate) field: String,
+    #[serde(rename = "Value")]
+    pub(crate) value: Value,
 }
 
 #[derive(Debug, Serialize)]

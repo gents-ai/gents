@@ -41,17 +41,32 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
+    // Translate the parsed PairingFilters into defradb's wire shape and forward
+    // them in the request body. The node installs a filtered replicator (#1033)
+    // that pushes only matching documents; an empty map requests an unfiltered
+    // replicator (the field is omitted on the wire).
+    let wire_filters: std::collections::BTreeMap<String, crate::shared::P2pReplicatorFilter> =
+        filters
+            .iter()
+            .map(|(col, pred)| {
+                (
+                    col.clone(),
+                    crate::shared::P2pReplicatorFilter {
+                        field: pred.field.clone(),
+                        value: Value::String(pred.value.clone()),
+                    },
+                )
+            })
+            .collect();
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],
+        filters: wire_filters,
     };
     http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
     let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    // Serialise the parsed PairingFilters for output so callers can verify the
-    // parse result. The filters are not yet forwarded to the HTTP endpoint
-    // (pending defradb.rs #1033 filter API); they will be wired through
-    // `add_replicator(.., &filters)` once the upstream pin includes that surface.
+    // Echo the filters that were forwarded so callers can confirm what was applied.
     let filters_json: serde_json::Map<String, Value> = filters
         .iter()
         .map(|(col, pred)| {
