@@ -182,7 +182,7 @@ TOFU model, so this does not claim `e.did` is bound to the token issuer. -/
 theorem registry_growth_requires_member_signature {pre post : DiscoveryState}
     (h : Transition pre post)
     (h_grew : ¬ post.registry ⊆ pre.registry) :
-    ∃ (tok : Token) (tofu : Bool), signedByMember tok pre.registry tofu := by
+    ∃ (tok : Token) (tofu : Bool), signedByMember tok pre.registry pre.self tofu := by
   cases h with
   | derive hp =>
       refine absurd ?_ h_grew
@@ -200,10 +200,10 @@ theorem registry_growth_requires_member_signature {pre post : DiscoveryState}
 token is from a non-member and TOFU bootstrap is off), then NO join transition
 out of `pre` exists. "Non-member invite rejected" as a refutation. -/
 theorem no_join_without_admissible_token {pre post : DiscoveryState}
-    (h_none : ∀ (tok : Token) (tofu : Bool), ¬ signedByMember tok pre.registry tofu)
+    (h_none : ∀ (tok : Token) (tofu : Bool), ¬ signedByMember tok pre.registry pre.self tofu)
     (h : Transition pre post) :
     ∀ (tok : Token) (e : RegistryEntry) (tofu : Bool)
-      (hsig : signedByMember tok pre.registry tofu)
+      (hsig : signedByMember tok pre.registry pre.self tofu)
       (hpost : post = joinState pre e),
       h ≠ Transition.join tok e tofu hsig hpost := by
   intro tok e tofu hsig _ _
@@ -212,15 +212,15 @@ theorem no_join_without_admissible_token {pre post : DiscoveryState}
 /-- A non-member, signature-invalid, non-bootstrap token is never admissible:
 the join guard rejects it. This is the leaf "forged/non-member invite" fact. -/
 theorem non_member_invite_rejected
-    {tok : Token} {reg : Registry}
+    {tok : Token} {reg : Registry} {self : PeerId}
     (h_unsigned_or_nonmember : tok.sigValid = false ∨ ¬ isMember tok.issuer reg) :
-    ¬ signedByMember tok reg false := by
+    ¬ signedByMember tok reg self false := by
   unfold signedByMember
   rintro ⟨hsig, hor⟩
   rcases h_unsigned_or_nonmember with h_unsig | h_nonmem
   · exact absurd hsig (by simp [h_unsig])
-  · rcases hor with h_tofu | h_mem
-    · exact absurd h_tofu (by simp)
+  · rcases hor with h_mem | h_boot
     · exact h_nonmem h_mem
+    · exact absurd h_boot.1 (by simp)
 
 end PeerRegistryDiscovery

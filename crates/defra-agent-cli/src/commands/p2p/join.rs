@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::expand_p2p_collection_profile_ids;
-use defra_agent_protocol::pairing_token::{decode, signing_payload};
+use defra_agent_protocol::pairing_token::{
+    check_freshness, decode, signing_payload, DEFAULT_INVITE_MAX_AGE,
+};
 use serde_json::{json, Value};
 
 use defra_agent::agent::p2p_reconcile::{
@@ -49,6 +51,12 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         issuer_did = %remote.issuer_did,
         "pairing invite signature verified"
     );
+
+    // Freshness gate: reject a token whose signed `issued_at` is outside the max
+    // age, bounding the replay window of a leaked invite. (Coarse — not single-use;
+    // see check_freshness.)
+    check_freshness(&remote, Utc::now(), DEFAULT_INVITE_MAX_AGE)
+        .context("pairing invite failed the freshness check")?;
 
     let profiles = accepted_profiles(&remote.profiles, &args)?;
     let collections = expand_p2p_collection_profile_ids(

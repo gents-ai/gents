@@ -18,6 +18,7 @@
 use std::io::Cursor;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Versioned pairing-invite envelope.  CBOR-encoded, bs58-encoded, prefixed.
@@ -93,6 +94,53 @@ pub fn signing_payload(token: &InviteToken) -> Vec<u8> {
     bytes
 }
 
+/// Default maximum age of a pairing invite before it is rejected at join.
+///
+/// `issued_at` is part of the signed payload, so this bounds the replay window of
+/// a leaked or intercepted token without any token-format change. It is a coarse
+/// freshness gate, NOT a single-use guarantee — a token can still be replayed
+/// within the window; true single-use needs a server-tracked nonce (deferred).
+pub const DEFAULT_INVITE_MAX_AGE: Duration = Duration::hours(1);
+
+/// Verify that a token's signed `issued_at` is fresh relative to `now`: not older
+/// than `max_age`, and not more than `max_age` in the future (clock-skew bound).
+/// A malformed `issued_at` is rejected. This is the replay-window check the join
+/// path runs after verifying the signature.
+pub fn check_freshness(token: &InviteToken, now: DateTime<Utc>, max_age: Duration) -> Result<()> {
+    let issued_at = DateTime::parse_from_rfc3339(token.issued_at.trim())
+        .with_context(|| {
+            format!(
+                "pairing invite has an unparseable issued_at {:?}",
+                token.issued_at
+            )
+        })?
+        .with_timezone(&Utc);
+    let age = now.signed_duration_since(issued_at);
+    if age > max_age {
+        anyhow::bail!(
+            "pairing invite expired: issued {issued_at} is older than the {} max age (re-issue the invite)",
+            humantime_max_age(max_age)
+        );
+    }
+    if age < -max_age {
+        anyhow::bail!(
+            "pairing invite issued_at {issued_at} is too far in the future (clock skew or forged); rejected"
+        );
+    }
+    Ok(())
+}
+
+fn humantime_max_age(max_age: Duration) -> String {
+    let secs = max_age.num_seconds();
+    if secs % 3600 == 0 {
+        format!("{}h", secs / 3600)
+    } else if secs % 60 == 0 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +178,33 @@ mod tests {
         let mut t2 = t.clone();
         t2.sig = vec![9, 9, 9];
         assert_eq!(signing_payload(&t), signing_payload(&t2)); // payload excludes sig
+    }
+
+    #[test]
+    fn check_freshness_accepts_recent_and_rejects_stale_or_future() {
+        let mut t = sample_token(3);
+        let now = DateTime::parse_from_rfc3339("2026-06-13T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let max_age = Duration::hours(1);
+
+        // issued 30m ago — fresh.
+        t.issued_at = "2026-06-13T00:30:00Z".into();
+        assert!(check_freshness(&t, now, max_age).is_ok());
+
+        // issued 2h ago — expired.
+        t.issued_at = "2026-06-12T23:00:00Z".into();
+        let err = check_freshness(&t, now, max_age).unwrap_err().to_string();
+        assert!(err.contains("expired"), "unexpected error: {err}");
+
+        // issued 2h in the future — rejected (skew/forgery).
+        t.issued_at = "2026-06-13T03:00:00Z".into();
+        let err = check_freshness(&t, now, max_age).unwrap_err().to_string();
+        assert!(err.contains("future"), "unexpected error: {err}");
+
+        // unparseable issued_at — rejected.
+        t.issued_at = "not-a-timestamp".into();
+        assert!(check_freshness(&t, now, max_age).is_err());
     }
 
     #[test]

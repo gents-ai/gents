@@ -42,15 +42,35 @@ instance (issuer : Did) (reg : Registry) : Decidable (isMember issuer reg) := by
   unfold isMember
   infer_instance
 
-/-- Admission predicate on a join. A join is authorized iff the token's
-signature verifies AND either (registry-checked arm) the issuer is a live
-member, or (TOFU bootstrap arm) the first-join flag holds — the operator
-handed the token out-of-band and there is no registry yet to check against. -/
-def signedByMember (tok : Token) (reg : Registry) (tofuBootstrap : Bool) : Prop :=
-  tok.sigValid = true ∧ (tofuBootstrap = true ∨ isMember tok.issuer reg)
+/-- The registry holds a live member OTHER than `self`. The TOFU bootstrap arm is
+only legitimate when this is false: an empty registry — or one holding only this
+node's own self-registration row — has no peer trust set to check an invite
+against. Without this guard `tofuBootstrap` would be a free flag a caller could
+set to bypass `isMember` on a populated registry, draining the membership check.
+Self is identified by `peer` here (the model's convention, matching
+`deriveRegistryDesired`'s self-exclusion); the Rust `decide_join_admission`
+excludes self by DID — the same intent under the per-node peer↔did identity. -/
+def hasPeerMember (reg : Registry) (self : PeerId) : Prop :=
+  ∃ e ∈ reg, e.live = true ∧ e.peer ≠ self
 
-instance (tok : Token) (reg : Registry) (tofuBootstrap : Bool) :
-    Decidable (signedByMember tok reg tofuBootstrap) := by
+instance (reg : Registry) (self : PeerId) : Decidable (hasPeerMember reg self) := by
+  unfold hasPeerMember
+  infer_instance
+
+/-- Admission predicate on a join. Authorized iff the token's signature verifies
+AND either (registry-checked arm) the issuer is a live member, or (TOFU bootstrap
+arm) the bootstrap flag is set AND the registry has no peer members besides
+`self`. The bootstrap conjunct with `¬ hasPeerMember` is what stops the flag from
+bypassing `isMember` on a populated registry. At runtime the bootstrap bit is not
+attacker-chosen: it is computed from registry state by the conformance-fenced
+`decide_join_admission` (Rust), which takes the bootstrap arm only when no peer
+members exist. -/
+def signedByMember (tok : Token) (reg : Registry) (self : PeerId) (tofuBootstrap : Bool) : Prop :=
+  tok.sigValid = true ∧
+    (isMember tok.issuer reg ∨ (tofuBootstrap = true ∧ ¬ hasPeerMember reg self))
+
+instance (tok : Token) (reg : Registry) (self : PeerId) (tofuBootstrap : Bool) :
+    Decidable (signedByMember tok reg self tofuBootstrap) := by
   unfold signedByMember
   infer_instance
 
@@ -91,7 +111,7 @@ inductive Transition : DiscoveryState → DiscoveryState → Prop where
   joining node; binding `e.did` to a token-authorized invitee is intentionally
   not modeled (the `Token` has no invitee field — see its docstring). -/
   | join {pre post : DiscoveryState} (tok : Token) (e : RegistryEntry) (tofuBootstrap : Bool) :
-      signedByMember tok pre.registry tofuBootstrap →
+      signedByMember tok pre.registry pre.self tofuBootstrap →
       post = joinState pre e →
       Transition pre post
   /-- A registry entry stales or is removed. -/

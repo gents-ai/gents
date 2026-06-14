@@ -708,25 +708,6 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
             version = %next.version_id,
             "PeerPairingDesired patched with source field"
         );
-
-        // Default pre-existing rows (all operator-authored, since registry-owned
-        // rows only exist once this field does) to `source: "operator"` so the
-        // operator/registry ownership partition is well-formed: any row written
-        // before this migration is operator intent. An empty filter matches all
-        // rows; this runs once, immediately after the field is added.
-        let backfill = r#"mutation {
-            update_PeerPairingDesired(
-                filter: {},
-                input: { source: "operator" }
-            ) { _docID }
-        }"#;
-        let response = node.execute(backfill).await;
-        if response.has_errors() {
-            tracing::warn!(
-                errors = ?response.errors,
-                "PeerPairingDesired source backfill to \"operator\" reported errors"
-            );
-        }
     }
 
     if !collection_has_field(&collection, "template") {
@@ -744,27 +725,80 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
             version = %next.version_id,
             "PeerPairingDesired patched with template field"
         );
+    }
 
-        // Default pre-existing rows to the `conversation` template — the default
-        // pairing intent (filtered push of a peer's conversation slice). Mirrors
-        // the `source` backfill above; an empty filter matches all rows and runs
-        // once, immediately after the field is added.
-        let backfill = r#"mutation {
-            update_PeerPairingDesired(
-                filter: {},
-                input: { template: "conversation" }
-            ) { _docID }
-        }"#;
-        let response = node.execute(backfill).await;
-        if response.has_errors() {
+    // Self-healing backfill (gated on ROW STATE, runs every startup): default any
+    // row still missing `source`/`template` to the operator partition and the
+    // `conversation` template. Previously the backfill lived inside the
+    // field-add branch, so a crash between adding the field and running the
+    // backfill left rows at `source: null` forever — invisible to BOTH the
+    // operator (`source _eq "operator"`) and registry (`source _eq "registry"`)
+    // partition queries, and reconciled by neither. Reading rows and updating
+    // by `_docID` (rather than an `_eq: null` filter) also avoids clobbering
+    // legitimate registry-owned rows.
+    backfill_pairing_desired_defaults(&node).await;
+
+    Ok(())
+}
+
+/// Fill any `PeerPairingDesired` row still missing `source` or `template` with
+/// the operator-partition / `conversation` defaults. Idempotent and convergent:
+/// once every row carries both fields it updates nothing, so it is safe to run on
+/// every startup and self-heals a migration that crashed mid-backfill.
+async fn backfill_pairing_desired_defaults(node: &EmbeddedNode) {
+    let response = node
+        .execute(r#"query { PeerPairingDesired { _docID source template } }"#)
+        .await;
+    if response.has_errors() {
+        tracing::warn!(errors = ?response.errors, "PeerPairingDesired backfill read failed");
+        return;
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("PeerPairingDesired"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for row in rows {
+        let Some(doc_id) = row.get("_docID").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let is_blank = |field: &str| {
+            row.get(field)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .map(str::is_empty)
+                .unwrap_or(true)
+        };
+        let mut assignments = Vec::new();
+        if is_blank("source") {
+            assignments.push("source: \"operator\"".to_string());
+        }
+        if is_blank("template") {
+            assignments.push("template: \"conversation\"".to_string());
+        }
+        if assignments.is_empty() {
+            continue;
+        }
+        let mutation = format!(
+            r#"mutation {{ update_PeerPairingDesired(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ {} }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+            assignments.join(", ")
+        );
+        let update = node.execute(&mutation).await;
+        if update.has_errors() {
             tracing::warn!(
-                errors = ?response.errors,
-                "PeerPairingDesired template backfill to \"conversation\" reported errors"
+                doc_id,
+                errors = ?update.errors,
+                "PeerPairingDesired default backfill update failed"
             );
         }
     }
-
-    Ok(())
 }
 
 /// Idempotent migration for PeerRegistry: registers the collection schema if
