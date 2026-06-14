@@ -383,8 +383,7 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
         Some("agent-config")
     );
 
-    let applied =
-        wait_for_applied_replicator(&graphql_peer, &peer_id_src, APPLIED_TIMEOUT).await?;
+    let applied = wait_for_applied_replicator(&graphql_peer, &peer_id_src, APPLIED_TIMEOUT).await?;
     assert!(
         applied
             .get("collections")
