@@ -18,7 +18,14 @@ namespace PeerRegistryDiscovery
 /-! ## Signed-invite authorization (abstract) -/
 
 /-- Opaque invite token. Concretely a v2 signed `InviteToken`; the model only
-needs its issuer and whether its signature verifies. -/
+needs its issuer and whether its signature verifies.
+
+SCOPE: the token carries no *invitee* field. It authorizes WHETHER a join may
+happen (a live member sanctioned it), not WHICH identity is admitted — see
+`Transition.join`. This matches the trusted-fleet TOFU model where the admitted
+entry is self-asserted; binding the inserted entry to a token-authorized invitee
+would require adding an `invitee` field here (and to the wire `InviteToken`) and
+is deliberately out of scope. -/
 structure Token where
   issuer : Did
   /-- The signature over the canonical payload verifies against `issuer`'s
@@ -76,7 +83,13 @@ inductive Transition : DiscoveryState → DiscoveryState → Prop where
       post = deriveStep pre →
       Transition pre post
   /-- A node joins the trust set. ENABLED ONLY when the invite is signed by a
-  member (or TOFU bootstrap). This is the fenced authorization gate. -/
+  member (or TOFU bootstrap). This is the fenced authorization gate.
+
+  The admitted entry `e` is unconstrained relative to `tok.issuer`: the gate
+  fences WHETHER a join is admitted (a member sanctioned it), not WHICH identity
+  `e` carries. Under the trusted-fleet TOFU model `e` is self-asserted by the
+  joining node; binding `e.did` to a token-authorized invitee is intentionally
+  not modeled (the `Token` has no invitee field — see its docstring). -/
   | join {pre post : DiscoveryState} (tok : Token) (e : RegistryEntry) (tofuBootstrap : Bool) :
       signedByMember tok pre.registry tofuBootstrap →
       post = joinState pre e →

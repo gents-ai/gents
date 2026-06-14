@@ -161,24 +161,40 @@ theorem retraction_sound {pre post post' : DiscoveryState} {e : RegistryEntry}
 A `join` step is enabled only when the issuer is a live member, or the
 TOFU-bootstrap flag holds. This fences "non-member invite rejected". -/
 
-/-- A `Join` transition is enabled only when signed by a member (or TOFU
-bootstrap). Quantified over ALL transitions: we case on the relation and the
-hypothesis selects the join witness; every non-join transition is refuted by
-the `joinState`-shape hypothesis, so the theorem is not vacuous and cannot be
-satisfied by a non-member invite.
+/-- A `join` is the ONLY transition that can grow the registry, and it can fire
+only with a member-signed token. So any step that admitted a new entry — its
+post-state registry is not a subset of the pre-state registry — must have
+carried a member signature.
 
-Concretely: for any transition `pre → post` whose post-state is `joinState pre e`
-*via the join constructor*, the admission predicate held in `pre`. We expose the
-witnessing token/flag existentially because the constructor carries them. -/
-theorem join_requires_member_signature {pre post : DiscoveryState}
+This is the positive authorization fact, and it is genuinely non-vacuous: we
+case on the relation and read the signature witness out of the `join`
+constructor itself (it is NOT supplied as a hypothesis the caller had to already
+prove), while `derive` / `removeEntry` / `operatorWrite` never grow the registry
+and so are refuted by `h_grew`. The hypothesis is satisfiable — a real join of a
+fresh entry makes the registry grow — and the conclusion is not contained in it.
+Together with `no_join_without_admissible_token` (the refutation direction) and
+`non_member_invite_rejected` (the leaf guard), this fences "a node enters the
+trust set only via a member-signed invite".
+
+Scope (see `Transition.join`): the signature gates WHETHER a node is admitted,
+not WHICH identity — the inserted entry is self-asserted under the trusted-fleet
+TOFU model, so this does not claim `e.did` is bound to the token issuer. -/
+theorem registry_growth_requires_member_signature {pre post : DiscoveryState}
     (h : Transition pre post)
-    (h_is_join : ∃ (tok : Token) (e : RegistryEntry) (tofu : Bool)
-        (hsig : signedByMember tok pre.registry tofu)
-        (hpost : post = joinState pre e),
-        h = Transition.join tok e tofu hsig hpost) :
+    (h_grew : ¬ post.registry ⊆ pre.registry) :
     ∃ (tok : Token) (tofu : Bool), signedByMember tok pre.registry tofu := by
-  obtain ⟨tok, e, tofu, hsig, _hpost, _heq⟩ := h_is_join
-  exact ⟨tok, tofu, hsig⟩
+  cases h with
+  | derive hp =>
+      refine absurd ?_ h_grew
+      rw [hp]; exact subset_rfl
+  | join tok e tofu hsig _hp =>
+      exact ⟨tok, tofu, hsig⟩
+  | removeEntry e hp =>
+      refine absurd ?_ h_grew
+      rw [hp]; exact Finset.erase_subset e pre.registry
+  | operatorWrite d hp =>
+      refine absurd ?_ h_grew
+      rw [hp]; exact subset_rfl
 
 /-- The contrapositive teeth: if NO token is admissible in `pre` (every signed
 token is from a non-member and TOFU bootstrap is off), then NO join transition
