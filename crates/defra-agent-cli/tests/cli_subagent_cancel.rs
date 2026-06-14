@@ -404,6 +404,7 @@ async fn create_running_subagent_bridge(
         node,
         request_id.to_string(),
         session_id.to_string(),
+        "did:key:test-subagent-bridge".to_string(),
         tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
