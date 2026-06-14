@@ -45,7 +45,7 @@ theorem derive_idempotent (s : DiscoveryState) :
 
 /-- The function-level idempotence the Rust derivation mirrors. -/
 theorem deriveRegistryDesired_idempotent (self : PeerId) (reg : Registry) :
-    deriveRegistryDesired self (deriveStep ⟨self, reg, ∅, ∅⟩).registry
+    deriveRegistryDesired self (deriveStep ⟨self, reg, ∅, ∅, ∅⟩).registry
       = deriveRegistryDesired self reg := rfl
 
 /-! ## (2) Convergence
@@ -188,7 +188,7 @@ theorem registry_growth_requires_member_signature {pre post : DiscoveryState}
       refine absurd ?_ h_grew
       rw [hp]; exact subset_rfl
   | join tok e tofu hsig _hp =>
-      exact ⟨tok, tofu, hsig⟩
+      exact ⟨tok, tofu, hsig.1⟩
   | removeEntry e hp =>
       refine absurd ?_ h_grew
       rw [hp]; exact Finset.erase_subset e pre.registry
@@ -203,11 +203,11 @@ theorem no_join_without_admissible_token {pre post : DiscoveryState}
     (h_none : ∀ (tok : Token) (tofu : Bool), ¬ signedByMember tok pre.registry pre.self tofu)
     (h : Transition pre post) :
     ∀ (tok : Token) (e : RegistryEntry) (tofu : Bool)
-      (hsig : signedByMember tok pre.registry pre.self tofu)
-      (hpost : post = joinState pre e),
-      h ≠ Transition.join tok e tofu hsig hpost := by
-  intro tok e tofu hsig _ _
-  exact absurd hsig (h_none tok tofu)
+      (hadm : admitsJoin pre tok tofu)
+      (hpost : post = joinState pre e tok),
+      h ≠ Transition.join tok e tofu hadm hpost := by
+  intro tok e tofu hadm _ _
+  exact absurd hadm.1 (h_none tok tofu)
 
 /-- A non-member, signature-invalid, non-bootstrap token is never admissible:
 the join guard rejects it. This is the leaf "forged/non-member invite" fact. -/
@@ -222,5 +222,67 @@ theorem non_member_invite_rejected
   · rcases hor with h_mem | h_boot
     · exact h_nonmem h_mem
     · exact absurd h_boot.1 (by simp)
+
+/-! ## (6) Single-use invite (replay rejection)
+
+A join consumes its token's nonce. Because admission additionally requires the
+nonce to be *fresh*, the same physical token can never be admitted twice: the
+first join burns the nonce, and the second admission fails on exactly that fact.
+This upgrades the runtime's 1h freshness window from "time-bounded" to
+"single-use within the window". -/
+
+/-- The join mutator does record the nonce as consumed. (The structural fact
+`replay_rejected` leans on.) -/
+theorem joinState_consumes_nonce (s : DiscoveryState) (e : RegistryEntry) (tok : Token) :
+    tok.nonce ∈ (joinState s e tok).consumedNonces := by
+  unfold joinState
+  simp
+
+/-- **Replay rejected.** If a join with token `tok` is admitted from `pre`
+(`hadm : admitsJoin pre tok tofu`) and steps to `post = joinState pre e tok`,
+then the SAME token can no longer be admitted from `post`: `admitsJoin post tok`
+is false for every bootstrap choice.
+
+Non-vacuous: the hypothesis `admitsJoin pre tok tofu` is satisfiable — it is
+exactly the precondition discharged by the `Transition.join` constructor, and is
+witnessed below in `replay_rejected_witness` by a concrete first join that IS
+admitted. The conclusion is a genuine consequence, not a restatement: we prove
+`¬ admitsJoin post tok` by unfolding `admitsJoin` and refuting its freshness
+conjunct using `joinState_consumes_nonce` — i.e. the second admission fails
+*because* the first join consumed the nonce, never touching the signature arm. -/
+theorem replay_rejected {pre post : DiscoveryState} {tok : Token} {e : RegistryEntry}
+    {tofu : Bool} (_hadm : admitsJoin pre tok tofu)
+    (hpost : post = joinState pre e tok) :
+    ∀ tofu', ¬ admitsJoin post tok tofu' := by
+  intro tofu' hadm'
+  -- `admitsJoin post tok` requires `tok.nonce ∉ post.consumedNonces`,
+  -- but the join that produced `post` consumed exactly `tok.nonce`.
+  have h_consumed : tok.nonce ∈ post.consumedNonces := by
+    rw [hpost]; exact joinState_consumes_nonce pre e tok
+  exact hadm'.2 h_consumed
+
+/-- Witness that `replay_rejected`'s hypothesis is satisfiable: a concrete state
+in which a fresh, member-signed token IS admitted for a first join. This pins the
+theorem as non-vacuous — there really is a `(pre, tok, tofu)` with
+`admitsJoin pre tok tofu`. -/
+theorem replay_rejected_witness :
+    ∃ (pre : DiscoveryState) (tok : Token) (tofu : Bool),
+      admitsJoin pre tok tofu := by
+  -- A registry holding one live member; a token signed by that member with a
+  -- never-before-seen nonce; no consumed nonces yet.
+  let member : RegistryEntry := ⟨"peer-a", "did:key:a", true⟩
+  let pre : DiscoveryState :=
+    { self := "peer-self"
+    , registry := {member}
+    , operatorDesired := ∅
+    , registryDesired := ∅
+    , consumedNonces := ∅ }
+  let tok : Token := ⟨"did:key:a", true, "nonce-1"⟩
+  refine ⟨pre, tok, false, ?_, ?_⟩
+  · -- signedByMember: signature valid and issuer is the live member.
+    refine ⟨rfl, Or.inl ?_⟩
+    exact ⟨member, Finset.mem_singleton_self member, rfl, rfl⟩
+  · -- freshness: the nonce is not in the (empty) consumed set.
+    exact Finset.not_mem_empty _
 
 end PeerRegistryDiscovery

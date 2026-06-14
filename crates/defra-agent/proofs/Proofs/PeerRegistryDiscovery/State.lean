@@ -43,6 +43,10 @@ namespace PeerRegistryDiscovery
 
 abbrev Did := String
 abbrev PeerId := String
+/-- A single-use invite nonce. Concretely the unique `nonce` field carried by a
+v2 signed `InviteToken`; the model only needs to compare equality and track which
+ones have been consumed, so a `String` is enough. -/
+abbrev Nonce := String
 
 /-- One self-registered registry row. `live` folds the heartbeat-freshness and
 `status` hint that the runtime computes into a single observed-liveness bit
@@ -76,6 +80,10 @@ structure DiscoveryState where
   operatorDesired : Finset PeerId
   /-- Registry-derived desired peers, owned by the discovery step. -/
   registryDesired : Finset PeerId
+  /-- Nonces of invite tokens already redeemed by a join. A join is admitted only
+  if its token's nonce is NOT in this set; the join inserts it, so the same token
+  cannot be redeemed twice (single-use enforcement — see `replay_rejected`). -/
+  consumedNonces : Finset Nonce
   deriving DecidableEq
 
 namespace DiscoveryState

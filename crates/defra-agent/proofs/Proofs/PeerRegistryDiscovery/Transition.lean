@@ -31,6 +31,11 @@ structure Token where
   /-- The signature over the canonical payload verifies against `issuer`'s
   `did:key`. A forged/absent signature is `false`. -/
   sigValid : Bool
+  /-- The token's single-use nonce. Two redemptions of the *same* physical invite
+  carry the same nonce; the join admission rejects a nonce already in
+  `consumedNonces`, which is what makes the freshness window single-use rather
+  than merely time-bounded. -/
+  nonce : Nonce
   deriving DecidableEq, Repr
 
 /-- `issuer` is a live member of the registry. This is the registry-checked
@@ -74,16 +79,35 @@ instance (tok : Token) (reg : Registry) (self : PeerId) (tofuBootstrap : Bool) :
   unfold signedByMember
   infer_instance
 
+/-- Full join admission. Wraps the existing `signedByMember` authorization with
+the single-use freshness check: the token's nonce must not already have been
+redeemed. Deliberately a *wrapper* — `signedByMember` is left intact so the
+existing authorization theorems (`registry_growth_requires_member_signature`,
+`non_member_invite_rejected`, …) keep holding; replay rejection is the strictly
+additional `tok.nonce ∉ s.consumedNonces` conjunct. -/
+def admitsJoin (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) : Prop :=
+  signedByMember tok s.registry s.self tofuBootstrap ∧ tok.nonce ∉ s.consumedNonces
+
+instance (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) :
+    Decidable (admitsJoin s tok tofuBootstrap) := by
+  unfold admitsJoin
+  infer_instance
+
 /-! ## State mutators -/
 
 /-- Run the derivation: materialize registry-owned rows. Operator rows untouched. -/
 def deriveStep (s : DiscoveryState) : DiscoveryState :=
   { s with registryDesired := deriveRegistryDesired s.self s.registry }
 
-/-- A member joins: its self-registered row enters the registry. Gated by
-`signedByMember` in the transition relation below. -/
-def joinState (s : DiscoveryState) (e : RegistryEntry) : DiscoveryState :=
-  { s with registry := insert e s.registry }
+/-- A member joins: its self-registered row enters the registry AND the redeemed
+token's nonce is consumed. Gated by `admitsJoin` in the transition relation
+below. Consuming the nonce here (not in a separate step) is what makes the join
+atomic with respect to replay: the very transition that admits `tok` also burns
+`tok.nonce`, so `admitsJoin post tok` can never hold again (see
+`replay_rejected`). -/
+def joinState (s : DiscoveryState) (e : RegistryEntry) (tok : Token) : DiscoveryState :=
+  { s with registry := insert e s.registry
+         , consumedNonces := insert tok.nonce s.consumedNonces }
 
 /-- A registry entry is removed or staled (heartbeat lapsed / deregistered).
 Staling is modeled as removal of the live row; a stale row contributes nothing
@@ -111,8 +135,8 @@ inductive Transition : DiscoveryState → DiscoveryState → Prop where
   joining node; binding `e.did` to a token-authorized invitee is intentionally
   not modeled (the `Token` has no invitee field — see its docstring). -/
   | join {pre post : DiscoveryState} (tok : Token) (e : RegistryEntry) (tofuBootstrap : Bool) :
-      signedByMember tok pre.registry pre.self tofuBootstrap →
-      post = joinState pre e →
+      admitsJoin pre tok tofuBootstrap →
+      post = joinState pre e tok →
       Transition pre post
   /-- A registry entry stales or is removed. -/
   | removeEntry {pre post : DiscoveryState} (e : RegistryEntry) :

@@ -73,4 +73,24 @@ def step? : DiscoveryPhase → TransitionKind → Option DiscoveryPhase
   | _, .removeEntry => some .unsettled
   | phase, .operatorWrite => some phase
 
+/-! ## Executable join-admission decision (mirrors Rust `decide_join_admission`)
+
+The Rust bridge decides whether a join is admissible with a single boolean. This
+function is that boolean, and it now threads the single-use nonce check: a join
+is admitted iff it is member-signed (or TOFU-bootstrapped) AND the token's nonce
+has not already been consumed. `decideAdmitsJoin_agrees` fences it to the
+`admitsJoin` Prop the `Transition.join` constructor requires, so the executable
+decision and the relation can never diverge on replay. -/
+def decideAdmitsJoin (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) : Bool :=
+  decide (admitsJoin s tok tofuBootstrap)
+
+/-- The executable decision agrees exactly with the `admitsJoin` relation that
+gates `Transition.join`. The freshness conjunct is inside `admitsJoin`, so the
+nonce check is threaded by construction — a replayed token (`tok.nonce ∈
+s.consumedNonces`) makes both the Bool `false` and the Prop unprovable. -/
+theorem decideAdmitsJoin_agrees (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) :
+    decideAdmitsJoin s tok tofuBootstrap = true ↔ admitsJoin s tok tofuBootstrap := by
+  unfold decideAdmitsJoin
+  exact decide_eq_true_iff
+
 end PeerRegistryDiscovery
