@@ -619,24 +619,27 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 /// install (without this, auto-pair produced an inert row).
 ///
 /// Genuinely-empty lists are emitted as `null` (never `[]`, which corrupts the
-/// nillable array columns). The filter is on `peer_id` alone (the unique index):
-/// the tick only ever upserts peers that have no operator-owned row, so this
-/// never collides with operator intent.
+/// nillable array columns).
 ///
-/// Narrow TOCTOU note: the filter here is `peer_id`-only (the unique index).
-/// Within a single tick, [`reconcile_discovery_tick`] reads operator-owned peers
-/// first, subtracts them from the derived set, then calls this upsert for the
-/// remaining registry-derived peers. If an operator writes a new desired row for
-/// the *same* peer between that operator-owned-peers read and this upsert (within
-/// the same tick), the update branch of this mutation could flip a freshly
-/// operator-authored row's `source` field from `"operator"` to `"registry"`,
-/// silently reassigning ownership.
+/// Ownership safety: the match filter is scoped to
+/// `peer_id ∧ source = "registry"` (mirroring [`delete_registry_desired_mutation`]
+/// and Lean `ownership_safe`), so the `update` branch can only ever name a
+/// registry-owned row. The convergence case still holds: a registry-owned row
+/// for the peer carries `source = "registry"`, so it matches and is updated in
+/// place on subsequent ticks (no duplicate registry rows — `peer_id` is the
+/// unique index). When no registry row matches, the upsert CREATES one from the
+/// `add` branch.
 ///
-/// This window is narrow in practice because the discovery reconciler is single-
-/// threaded per process (per-process serialization means no concurrent tick can
-/// be racing), and operator writes are human/CLI-initiated. A guarded read-back
-/// (re-check `source` after the upsert and retract if it flipped) is the correct
-/// mitigation; deferred until the tick rate justifies it.
+/// TOCTOU is now fail-safe rather than silently corrupting. Within a single
+/// tick, [`reconcile_discovery_tick`] reads operator-owned peers first,
+/// subtracts them from the derived set, then upserts the remaining
+/// registry-derived peers. If an operator writes a desired row for the *same*
+/// peer between that read and this upsert, the scoped filter matches no row, so
+/// the upsert attempts a CREATE — which the unique index on `peer_id` rejects
+/// (the operator row already occupies it). The tick errors loudly and retries;
+/// the next tick excludes the now-operator-owned peer. The previous
+/// `peer_id`-only filter would instead have flipped the operator row's `source`
+/// to `"registry"`, silently reassigning ownership.
 pub fn upsert_registry_desired_mutation(
     entry: &DiscoveredEntry,
     template_id: &str,
@@ -654,7 +657,7 @@ pub fn upsert_registry_desired_mutation(
     format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "{source}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: {agent_did},
@@ -946,6 +949,35 @@ mod tests {
         let m = delete_registry_desired_mutation("peerA");
         assert!(m.contains(r#"peer_id: { _eq: "peerA" }"#));
         assert!(m.contains(r#"source: { _eq: "registry" }"#));
+    }
+
+    /// The upsert's match filter must be scoped to `source = "registry"` (not
+    /// `peer_id` alone). With `peer_id` unique, an operator-owned row for the
+    /// same peer cannot be named by the update branch, so discovery can never
+    /// flip its `source` from `"operator"` to `"registry"` (mirrors the
+    /// `delete_*` predicate and Lean `ownership_safe`). When no registry row
+    /// matches, the filter still matches nothing → upsert CREATES a registry
+    /// row (the create branch carries the full row). Regression for #2/#15.
+    #[test]
+    fn upsert_mutation_filter_restricts_to_registry_source() {
+        let e = entry("peerA", true);
+        let template = e.chosen_template().unwrap();
+        let collections = e.desired_collections().unwrap();
+        let m =
+            upsert_registry_desired_mutation(&e, template.id, &collections, "2026-06-13T00:00:00Z");
+        // The match filter is scoped to the registry partition, not peer_id
+        // alone, so the update branch can never name an operator-owned row.
+        assert!(
+            m.contains(r#"source: { _eq: "registry" }"#),
+            "upsert filter must scope to source=registry: {m}"
+        );
+        assert!(
+            m.contains(r#"peer_id: { _eq: "peerA" }"#),
+            "upsert filter still keyed on peer_id: {m}"
+        );
+        // The create branch (`add`) still carries the registry source so a
+        // brand-new peer is materialized when the filter matches nothing.
+        assert!(m.contains(r#"source: "registry""#), "mutation: {m}");
     }
 
     // ---- ownership invariant via the store seam (mirrors Lean ownership_safe /
