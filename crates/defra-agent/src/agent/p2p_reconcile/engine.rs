@@ -75,29 +75,17 @@ pub async fn reconcile_peer_tick(
     let mut applied = store.load_applied(peer_id).await?;
     let actual = read_actual(admin).await?;
 
-    // The subscription set is tracked in collection-*id* space on both the remote
-    // (`list_p2p_collections` returns ids, filling `actual.collections`) and in
-    // persisted `applied`. Desired state carries collection *names*, so resolve
-    // them to ids at this boundary; the diff then compares like with like (review
-    // Finding #1). Names that don't resolve locally yet are deferred, not churned.
-    let collection_ids = resolve_collection_ids(admin, &desired_state.collections).await?;
-    let diff_desired = PairingDesired {
-        collections: collection_ids.ids,
-        ..desired_state.clone()
-    };
-    let ops = compute_owned_pairing_diff(&diff_desired, &actual.state, &applied);
+    // All three collection sets are in name-space: `desired_state` carries names,
+    // `read_actual` reverse-resolves the remote subscription ids back to names, and
+    // the persisted `applied` row records names. The diff therefore compares like
+    // with like, and `PeerPairingApplied.collections` stays human-readable for CLI
+    // display and health (review Finding #1).
+    let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied);
     let mut ops_applied = Vec::new();
 
     for op in ops {
-        apply_op(
-            admin,
-            &op,
-            &desired_state,
-            &actual,
-            &collection_ids.name_by_id,
-        )
-        .await?;
-        update_applied_after_success(&mut applied, &op, &diff_desired);
+        apply_op(admin, &op, &desired_state, &actual).await?;
+        update_applied_after_success(&mut applied, &op, &desired_state);
         persist_applied(store, peer_id, &applied).await?;
         ops_applied.push(op);
     }
@@ -196,12 +184,38 @@ struct ActualSnapshot {
 }
 
 async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
-    let collections = admin
+    // `list_p2p_collections` returns the remote subscription set in collection-*id*
+    // space, but desired/operator state and the persisted `PeerPairingApplied` row
+    // are in collection-*name* space (the human-readable, observable contract). The
+    // reconcile diff must compare both sides in one space, so normalize the read
+    // boundary by reverse-resolving each id back to its name. Every collection the
+    // remote is subscribed to is one this node also subscribed and therefore has
+    // locally, so its name is always resolvable; if an id somehow can't be resolved
+    // we degrade gracefully (keep the id and warn) rather than churn or panic.
+    let mut collections = BTreeSet::new();
+    for id in admin
         .list_p2p_collections()
         .await
         .context("list remote P2P collections")?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    {
+        match admin
+            .resolve_collection_name(&id)
+            .await
+            .with_context(|| format!("resolve collection name for id {id}"))?
+        {
+            Some(name) => {
+                collections.insert(name);
+            }
+            None => {
+                tracing::warn!(
+                    collection_id = %id,
+                    "remote P2P collection id has no local name; keeping the id in \
+                     the actual set"
+                );
+                collections.insert(id);
+            }
+        }
+    }
     let remote_replicators = admin
         .list_replicators()
         .await
@@ -229,92 +243,24 @@ async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
     })
 }
 
-/// Desired subscription collections resolved into id-space for the diff, with a
-/// reverse map back to names for the admin calls (which subscribe/unsubscribe by
-/// name) and for human-facing logs.
-struct ResolvedCollections {
-    /// Resolved collection ids — the diff identifier space.
-    ids: BTreeSet<String>,
-    /// id → name, so collection ops can call the admin (which takes names) and
-    /// emit name-bearing logs.
-    name_by_id: BTreeMap<String, String>,
-}
-
-/// Resolve desired collection *names* to collection *ids* via the admin seam.
-///
-/// A name that does not resolve locally yet (collection schema not created) is
-/// skipped with a tracing log rather than installed under a mismatched token —
-/// mirroring the surrounding per-peer skip patterns. It will resolve and
-/// converge on a later sweep once the schema exists.
-async fn resolve_collection_ids(
-    admin: &dyn RemoteP2pAdmin,
-    names: &BTreeSet<String>,
-) -> Result<ResolvedCollections> {
-    let mut ids = BTreeSet::new();
-    let mut name_by_id = BTreeMap::new();
-    for name in names {
-        match admin
-            .resolve_collection_id(name)
-            .await
-            .with_context(|| format!("resolve collection id for {name}"))?
-        {
-            Some(id) => {
-                ids.insert(id.clone());
-                name_by_id.insert(id, name.clone());
-            }
-            None => {
-                tracing::warn!(
-                    collection = %name,
-                    "desired P2P collection not found locally yet; deferring \
-                     subscription until its schema exists"
-                );
-            }
-        }
-    }
-    Ok(ResolvedCollections { ids, name_by_id })
-}
-
 async fn apply_op(
     admin: &dyn RemoteP2pAdmin,
     op: &DiffOp,
     desired: &PairingDesired,
     actual: &ActualSnapshot,
-    collection_name_by_id: &BTreeMap<String, String>,
 ) -> Result<()> {
     match op {
-        // The op carries a collection *id* (the diff space), but the admin
-        // subscribes/unsubscribes by *name*. Map id → name; an unmapped id can
-        // only be an actual extra we are tearing down (never installing), so fall
-        // back to the id token, which the admin resolves the same way.
-        DiffOp::InstallCollection(collection) => {
-            let name = collection_name_by_id
-                .get(collection)
-                .map(String::as_str)
-                .unwrap_or(collection.as_str());
-            admin
-                .add_p2p_collections(&[name.to_string()])
-                .await
-                .with_context(|| format!("install P2P collection {name}"))
-        }
-        DiffOp::TeardownCollection(collection) => {
-            // A teardown id is an actual extra recorded in `applied`, so it is
-            // unlikely to be in `collection_name_by_id` (built from desired).
-            // Prefer that map, then fall back to a reverse catalog lookup; if the
-            // local collection is gone we pass the id as a last resort.
-            let resolved = if let Some(name) = collection_name_by_id.get(collection) {
-                Some(name.clone())
-            } else {
-                admin
-                    .resolve_collection_name(collection)
-                    .await
-                    .with_context(|| format!("resolve collection name for id {collection}"))?
-            };
-            let name = resolved.as_deref().unwrap_or(collection.as_str());
-            admin
-                .delete_p2p_collections(&[name.to_string()])
-                .await
-                .with_context(|| format!("teardown P2P collection {name}"))
-        }
+        // The diff runs entirely in collection-*name* space, and the admin
+        // subscribes/unsubscribes by name, so the op token is already the name —
+        // pass it straight through.
+        DiffOp::InstallCollection(collection) => admin
+            .add_p2p_collections(std::slice::from_ref(collection))
+            .await
+            .with_context(|| format!("install P2P collection {collection}")),
+        DiffOp::TeardownCollection(collection) => admin
+            .delete_p2p_collections(std::slice::from_ref(collection))
+            .await
+            .with_context(|| format!("teardown P2P collection {collection}")),
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
             // The replicator carries the template's collection set, which is
@@ -952,12 +898,14 @@ mod tests {
             .await
             .expect("tick result");
 
-        // The subscription op and persisted Applied are in collection-id space;
-        // the replicator path stays in address space.
+        // The subscription op and persisted Applied are in collection-*name*
+        // space (the observable contract); the replicator path stays in address
+        // space. The mock still stores a distinct id internally, but `read_actual`
+        // reverse-resolves it to the name.
         assert_eq!(
             outcome.ops_applied,
             vec![
-                DiffOp::InstallCollection(mock_collection_id("c1")),
+                DiffOp::InstallCollection("c1".into()),
                 DiffOp::InstallReplicator("addr1".into())
             ]
         );
@@ -965,18 +913,25 @@ mod tests {
         assert_eq!(
             *store.applied.lock().unwrap(),
             PairingApplied {
-                collections: set(&[&mock_collection_id("c1")]),
+                collections: set(&["c1"]),
                 replicator_addresses: set(&["addr1"]),
                 ..Default::default()
             }
         );
     }
 
-    /// Review Finding #1: the subscription set is tracked in *id*-space by the
-    /// adapter, while desired state is in *name*-space. A first tick installs the
-    /// collection; a SECOND tick must observe convergence (zero ops). With the
-    /// pre-fix code the desired name never matched the actual id, so every sweep
-    /// re-emitted `InstallCollection` forever.
+    /// Review Finding #1: the remote subscription set is tracked in *id*-space by
+    /// the adapter (`list_p2p_collections` returns ids), while desired state and
+    /// the persisted `PeerPairingApplied` row are in *name*-space. `read_actual`
+    /// reverse-resolves the ids to names so the diff compares like with like. A
+    /// first tick installs the collection; a SECOND tick must observe convergence
+    /// (zero ops). With the pre-fix code the desired name never matched the actual
+    /// id, so every sweep re-emitted `InstallCollection` forever.
+    ///
+    /// The teeth: the mock's `list_p2p_collections` returns a distinct id
+    /// (`col_<name>_id`), so convergence only holds because reverse-resolution
+    /// maps that id back to the name. If `resolve_collection_name` echoed the id,
+    /// actual(id) would never equal desired(name) and this test would fail.
     #[tokio::test]
     async fn second_tick_converges_across_name_and_id_spaces() {
         let store = MockStore::with_desired(Some(PairingDesired {
@@ -998,11 +953,12 @@ mod tests {
             first.ops_applied
         );
 
-        // Applied must persist the collection *id*, not the name.
+        // Applied must persist the collection *name* (the observable contract),
+        // not the internal id.
         assert_eq!(
             store.applied.lock().unwrap().collections,
-            set(&[&mock_collection_id("AgentRequest")]),
-            "Applied persists the collection id"
+            set(&["AgentRequest"]),
+            "Applied persists the collection name"
         );
 
         let second = reconcile_peer_tick(&admin, &store, "peer-a")
@@ -1017,10 +973,12 @@ mod tests {
 
     #[tokio::test]
     async fn teardown_is_restricted_to_applied_actual_extras() {
-        // Applied and the remote subscription set are both in collection-id space.
+        // Applied holds collection *names* (the observable contract). The remote
+        // subscription set is tracked in id-space internally by the mock, but
+        // `read_actual` reverse-resolves it to names for the diff.
         let store = MockStore::with_desired(Some(PairingDesired::default()));
         *store.applied.lock().unwrap() = PairingApplied {
-            collections: set(&[&mock_collection_id("managed")]),
+            collections: set(&["managed"]),
             replicator_addresses: set(&["managed-addr"]),
             ..Default::default()
         };
@@ -1053,7 +1011,7 @@ mod tests {
         assert_eq!(
             outcome.ops_applied,
             vec![
-                DiffOp::TeardownCollection(mock_collection_id("managed")),
+                DiffOp::TeardownCollection("managed".into()),
                 DiffOp::TeardownReplicator("managed-addr".into())
             ]
         );
@@ -1072,7 +1030,7 @@ mod tests {
     async fn desired_absent_tears_down_managed_state_and_deletes_applied_row() {
         let store = MockStore::with_desired(None);
         *store.applied.lock().unwrap() = PairingApplied {
-            collections: set(&[&mock_collection_id("c1")]),
+            collections: set(&["c1"]),
             replicator_addresses: set(&["addr1"]),
             ..Default::default()
         };
@@ -1094,7 +1052,7 @@ mod tests {
         assert_eq!(
             outcome.ops_applied,
             vec![
-                DiffOp::TeardownCollection(mock_collection_id("c1")),
+                DiffOp::TeardownCollection("c1".into()),
                 DiffOp::TeardownReplicator("addr1".into())
             ]
         );
