@@ -113,7 +113,14 @@ In the `impl ShimState` block (same file):
     }
 
     pub(crate) async fn loaded_thread_ids(&self) -> Vec<String> {
-        self.sidecar.lock().await.loaded.iter().cloned().collect()
+        // Mirrors the old query's `loaded == true && archived == false`.
+        let guard = self.sidecar.lock().await;
+        guard
+            .loaded
+            .iter()
+            .filter(|id| !guard.archived.contains(*id))
+            .cloned()
+            .collect()
     }
 
     pub(crate) async fn is_thread_archived(&self, thread_id: &str) -> bool {
@@ -686,9 +693,16 @@ pub(super) async fn resume_codex_thread(
     ensure_agent_session(state, thread_id).await?;
     state.set_thread_cwd(thread_id, cwd).await;
     state.set_thread_loaded(thread_id, true).await;
-    load_codex_thread(state, thread_id).await
+    let record = load_codex_thread(state, thread_id).await?;
+    if record.is_none() {
+        // Scoped miss (pre-upgrade / foreign id): don't leave a ghost in the
+        // loaded set / ThreadLoadedList.
+        state.set_thread_loaded(thread_id, false).await;
+    }
+    Ok(record)
 }
 ```
+(`set_thread_loaded(.., true)` is called before the load so the returned record reflects `loaded: true`; it is reverted only on a scoped miss.)
 
 `list_codex_threads_by_archived`:
 ```rust
@@ -889,16 +903,22 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_git_info(
 ```
 Remove now-unused imports (`escape_graphql_string`, `query_node_json`, `absolute_path`, `Value`) if they become dead — let the compiler guide.
 
-- [ ] **Step 2: `set_codex_thread_name` upserts the conversation (create-if-absent)**
+- [ ] **Step 2: `set_codex_thread_name` upserts the conversation (create-if-absent, scoped)**
 
-A freshly-started thread has no `AgentConversation` row; the runtime's update-only title helper would no-op. Upsert directly from the shim with full identity so an early rename persists:
+A freshly-started thread has no `AgentConversation` row; the runtime's update-only title helper would no-op. Upsert directly from the shim with full identity so an early rename persists — but **only if a scoped `AgentSession` exists**, so an unknown or pre-upgrade (foreign/`agent_did`-less) id cannot create a durable orphan conversation. Returns `Ok(false)` on a scoped miss so the handler can answer `JSONRPC_INVALID_PARAMS` (consistent with `ThreadResume`); fresh zero-turn renames still work because `ThreadStart` eagerly created the scoped `AgentSession`.
 
 ```rust
 pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
     state: &ShimState,
     thread_id: &str,
     name: &str,
-) -> Result<()> {
+) -> Result<bool> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(thread_id);
     let escaped_name = escape_graphql_string(name.trim());
@@ -928,21 +948,39 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
         }}"#
     );
     query_node_json(&state.node, &mutation).await?;
-    Ok(())
+    Ok(true)
 }
 ```
 Keep the `escape_graphql_string` and `query_node_json` imports for this function.
 
-- [ ] **Step 3: Build**
+- [ ] **Step 3: Handle the `set_codex_thread_name` bool in the `ThreadSetName` handler**
+
+`handlers/thread.rs` `ThreadSetName` (~:263) currently does `set_codex_thread_name(...).await?;` then unconditionally sends success. Update to surface a scoped miss:
+
+```rust
+            if set_codex_thread_name(state, &params.thread_id, &params.name).await? {
+                send_result(outbound, request_id, codex::ThreadSetNameResponse {}).await
+            } else {
+                send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await
+            }
+```
+
+- [ ] **Step 4: Build**
 
 Run: `cargo build -p defra-agent-cli`
 Expected: compiles.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent-cli/src/commands/codex_shim/thread_projection/mutations.rs
-git commit -m "refactor(codex): thread setters write sidecar; rename upserts AgentConversation.title"
+git add crates/defra-agent-cli/src/commands/codex_shim/thread_projection/mutations.rs crates/defra-agent-cli/src/commands/codex_shim/handlers/thread.rs
+git commit -m "refactor(codex): thread setters write sidecar; scoped rename upserts AgentConversation.title"
 ```
 
 ---
@@ -1077,7 +1115,7 @@ pub(in crate::commands::codex_shim) struct StoredGoal {
 ```
 Delete `into_codex`, `decode_stored_goal`, `update_goal_json`, and the `load_projection` import (no longer used).
 
-- [ ] **Step 3: Delete the now-unused projection read storage (deferred from Task 6)**
+- [ ] **Step 3: Delete the now-unused projection read storage (deferred from Task 5)**
 
 `goal.rs` was the last consumer of `load_projection`. Now delete from `storage.rs`: `load_projection`, `ProjectionRow`, `default_memory_mode`, `empty_json_object`. After this, `storage.rs` contains only `ensure_agent_session`, `ensure_agent_session_pinning`, `load_conversation`, `load_scoped_session`, `list_scoped_sessions`, `SessionRow` (+ their imports). Drop any now-unused imports (`absolute_path`, `serde::Deserialize` if unreferenced — let the compiler guide).
 
@@ -1281,7 +1319,7 @@ Adapt variable names to the surrounding test. For any assertion that checked `cw
 
 - [ ] **Step 1b: Migrate the `ThreadMetadataUpdate` git-echo assertions**
 
-Two existing tests send `ThreadMetadataUpdate` with a fake client git sha and assert the response echoes it back (`cli_codex_shim.rs:405` → `git.sha == Some("abc123")`; `:1787` → `git.sha == Some(git_sha)`). Task 7 makes `set_codex_thread_git_info` **ignore** client-supplied git and derive from cwd, so these assertions will fail.
+Two existing tests send `ThreadMetadataUpdate` with a fake client git sha and assert the response echoes it back (`cli_codex_shim.rs:405` → `git.sha == Some("abc123")`; `:1787` → `git.sha == Some(git_sha)`). Task 6 makes `set_codex_thread_git_info` **ignore** client-supplied git and derive from cwd, so these assertions will fail.
 
 Migrate each: run the thread under a temp git repo with a known HEAD sha (init + commit), then assert the response's `git_info.sha` equals the **real** repo sha (and `branch` the real branch), not the client-sent value. Concretely, for each test:
 - Set the thread's cwd (via `ThreadStart`/`ThreadSettingsUpdate` `cwd`) to a `tempfile::TempDir` where you've run `git init`, `git commit --allow-empty -m x`, and captured `git rev-parse HEAD`.
@@ -1301,7 +1339,7 @@ async fn codex_zero_turn_thread_is_listed() -> anyhow::Result<()> {
     // assert the started thread_id is present in the list response.
 }
 ```
-Model the harness on the existing `ThreadStart` + `ThreadList` tests in the same file (reuse their websocket/shim setup helpers). Assert the new `thread_id` is in the `threads` array.
+Model the harness on the existing `ThreadStart` + `ThreadList` tests in the same file (reuse their websocket/shim setup helpers). Assert the new `thread_id` is present in the `ThreadListResponse` `data` array (the response field is `data: Vec<Thread>`, not `threads`).
 
 - [ ] **Step 3: Add — early rename persists**
 
@@ -1347,11 +1385,10 @@ async fn codex_git_info_derived_from_cwd() -> anyhow::Result<()> {
 async fn codex_resume_replays_token_usage() -> anyhow::Result<()> {
     // Run a turn on a thread (so AgentResponse/InferenceCall rows exist),
     // then ThreadResume; assert a ThreadTokenUsageUpdated notification arrives
-    // with token_usage.total.total_tokens >= 0 (and > 0 if the stub provider
-    // records usage).
+    // with token_usage.total.total_tokens > 0.
 }
 ```
-If the test harness uses a stub provider that returns no `Usage`, assert the proxy path (`total_tokens` reflects `AgentResponse.token_count`). Check how existing turn tests assert response content to know which provider the harness uses.
+The normal `MockChatEndpoint::start` path records usage, so assert `total_tokens > 0` (or the exact mock total if the mock is deterministic) — `>= 0` would pass even with a still-dark counter, defeating the test. Use the same `MockChatEndpoint::start(&model_name, &expected_reply)` setup as the existing turn tests (e.g. `cli_codex_shim.rs:83`).
 
 - [ ] **Step 7: Run the full gate**
 
