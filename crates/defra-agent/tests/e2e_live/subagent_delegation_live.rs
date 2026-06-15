@@ -612,6 +612,8 @@ async fn configure_behavior(
             description: None,
             summary: None,
             system_prompt: None,
+            system_context_template: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: None,

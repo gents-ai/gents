@@ -305,6 +305,16 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
+        if let Err(error) = defra_agent::prompt_context::PromptContextTemplates::new(
+            behavior.system_context_template.as_deref(),
+            behavior.request_context_template.as_deref(),
+        ) {
+            errors.push(format!(
+                "behavior {} has invalid prompt context template: {error:#}",
+                behavior.behavior_id
+            ));
+        }
+
         if let Some(backend_id) = non_empty(&behavior.backend_id) {
             if !backend_ids.contains(backend_id) {
                 errors.push(format!(
@@ -1547,6 +1557,8 @@ mod live_tests {
                     ),
                     summary: Some("Research assistant".to_string()),
                     system_prompt: None,
+                    system_context_template: Some("Agent: {{ agent.did }}".to_string()),
+                    request_context_template: Some("Request: {{ request.id }}".to_string()),
                     backend_id: None,
                     model_name: None,
                     tool_selection_id: None,
@@ -1609,6 +1621,16 @@ mod live_tests {
             live_behavior.summary,
             Some("Research assistant".to_string()),
             "summary must persist through apply"
+        );
+        assert_eq!(
+            live_behavior.system_context_template,
+            Some("Agent: {{ agent.did }}".to_string()),
+            "system_context_template must persist through apply"
+        );
+        assert_eq!(
+            live_behavior.request_context_template,
+            Some("Request: {{ request.id }}".to_string()),
+            "request_context_template must persist through apply"
         );
 
         // ── (b) Re-diff: behavior must show as UNCHANGED ─────────────────────

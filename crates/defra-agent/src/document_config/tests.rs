@@ -516,6 +516,8 @@ async fn agent_behavior_description_and_summary_round_trip() {
         description: Some("A general-purpose assistant for research and writing.".to_string()),
         summary: Some("General assistant".to_string()),
         system_prompt: Some("You are a helpful assistant.".to_string()),
+        system_context_template: None,
+        request_context_template: None,
         backend_id: None,
         model_name: None,
         tool_selection_id: None,

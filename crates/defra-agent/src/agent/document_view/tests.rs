@@ -341,6 +341,7 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
     // The preamble holds the CATALOG (name + description + load_skill mandate),
     // NOT the skill body (progressive disclosure).
     let preamble = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &[])
+        .unwrap()
         .preamble()
         .to_string();
     assert!(

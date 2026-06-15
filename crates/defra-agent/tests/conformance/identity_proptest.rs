@@ -44,6 +44,7 @@ fn build_stub_behavior_factory(
             max_output_tokens: defra_agent::DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: defra_agent::DEFAULT_MAX_TURNS,
             system_prompt: String::new(),
+            prompt_context: Default::default(),
             tools: defra_agent::BehaviorToolConfig::default(),
             compaction_threshold: defra_agent::DEFAULT_COMPACTION_THRESHOLD,
             compaction_strategy: defra_agent::CompactionStrategy::StripThenSummarize,

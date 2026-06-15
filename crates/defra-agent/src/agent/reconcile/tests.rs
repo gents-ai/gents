@@ -993,6 +993,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: "initial".to_string(),
+        prompt_context: Default::default(),
         tools: BehaviorToolConfig::meta_only(),
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
@@ -1017,6 +1018,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: "initial".to_string(),
+        prompt_context: Default::default(),
         tools: BehaviorToolConfig::from_selection(
             "general",
             ToolSelection {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
@@ -305,6 +306,16 @@ pub(crate) fn behavior_config_from_documents(
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_TURNS),
         system_prompt: behavior.system_prompt.clone().unwrap_or_default(),
+        prompt_context: crate::prompt_context::PromptContextTemplates::new(
+            behavior.system_context_template.as_deref(),
+            behavior.request_context_template.as_deref(),
+        )
+        .with_context(|| {
+            format!(
+                "behavior {} has invalid prompt context template",
+                behavior.behavior_id
+            )
+        })?,
         tools: BehaviorToolConfig::from_selection_with_subagent_tools(
             &behavior.behavior_id,
             tool_selection,

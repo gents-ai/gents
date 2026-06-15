@@ -1,6 +1,21 @@
 use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
 use crate::llm::message::AssistantContent;
 use crate::test_support::first_content;
+use crate::{
+    config::{
+        AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
+        DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    },
+    identity::{AgentPrincipal, KeyIdentity},
+    prompt_context::PromptContextTemplates,
+    tool_surface::BehaviorToolConfig,
+    watcher::AgentRequest,
+    BackendProviderKind, CompactionStrategy,
+};
 
 fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_behavior(
@@ -28,6 +43,54 @@ fn assistant_msg(text: &str) -> Message {
         content: vec![AssistantContent::Text(Text {
             text: text.to_string(),
         })],
+    }
+}
+
+fn test_identity(name: &str) -> KeyIdentity {
+    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
+    KeyIdentity::load_or_create(path, None).unwrap()
+}
+
+fn behavior_with_prompt_context(
+    system_context_template: &str,
+    request_context_template: &str,
+) -> AgentBehavior {
+    let identity: Arc<dyn crate::identity::AgentIdentity> =
+        Arc::new(test_identity("prompt-context"));
+    let agent_did = identity.did().to_string();
+    let principal = Arc::new(AgentPrincipal {
+        agent_did,
+        identity,
+        default_behavior_id: "general".to_string(),
+        display_name: None,
+        enabled: true,
+    });
+    AgentBehavior {
+        skills: Vec::new(),
+        behavior_id: "general".to_string(),
+        principal,
+        backend_id: None,
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+        backend_endpoint: "http://localhost:8000/v1".to_string(),
+        backend_api_key: None,
+        backend_api_key_env_var: None,
+        model_name: "test-model".to_string(),
+        context_window: DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: DEFAULT_MAX_TURNS,
+        system_prompt: "Be helpful.".to_string(),
+        prompt_context: PromptContextTemplates::new(
+            Some(system_context_template),
+            Some(request_context_template),
+        )
+        .unwrap(),
+        tools: BehaviorToolConfig::meta_only(),
+        compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+        deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: SamplingConfig::default(),
     }
 }
 
@@ -83,6 +146,61 @@ fn preamble_is_frozen() {
 
     assert_eq!(builder.preamble(), builder.preamble());
     assert!(builder.preamble().contains("System prompt v1."));
+}
+
+#[tokio::test]
+async fn prompt_context_keeps_dynamic_values_out_of_cached_preamble() {
+    let behavior = behavior_with_prompt_context(
+        "Agent {{ agent.did }} runs {{ behavior.id }} on {{ model.name }}.",
+        "Request {{ request.id }} has {{ request.metadata.kind }} at {{ time.utc_now }}.",
+    );
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let tool_surface = behavior.tools.resolve(&node).await.unwrap();
+    let builder = LayeredPromptBuilder::new(&behavior, &tool_surface, &[]).unwrap();
+
+    assert!(builder.preamble().contains("## Runtime Context"));
+    assert!(builder.preamble().contains(behavior.agent_did()));
+    assert!(builder.preamble().contains("runs general on test-model"));
+    assert!(!builder.preamble().contains("req-123"));
+
+    let request = AgentRequest {
+        doc_id: "doc-1".to_string(),
+        request_id: "req-123".to_string(),
+        agent_did: behavior.agent_did().to_string(),
+        behavior_id: Some(behavior.behavior_id.clone()),
+        session_id: "session-1".to_string(),
+        content: "hello".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: Some(r#"{"kind":"manual"}"#.to_string()),
+        execution_origin: None,
+        created_at: "2026-01-02T03:04:00Z".to_string(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let now = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let reminders = builder
+        .request_context_reminders_at(&request, now)
+        .expect("request context should render");
+
+    assert_eq!(reminders.len(), 1);
+    let Message::User { content } = &reminders[0] else {
+        panic!("expected user message");
+    };
+    let UserContent::Text(text) = first_content(content) else {
+        panic!("expected text");
+    };
+    assert!(text.text.contains("<system-reminder>"));
+    assert!(text.text.contains("Request context:"));
+    assert!(text.text.contains("Request req-123 has manual"));
+    assert!(text.text.contains("2026-01-02T03:04:05+00:00"));
 }
 
 #[tokio::test]

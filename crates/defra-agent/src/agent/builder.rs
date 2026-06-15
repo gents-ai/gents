@@ -554,6 +554,7 @@ impl PendingAgentBehavior {
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
             system_prompt: self.system_prompt,
+            prompt_context: Default::default(),
             tools: BehaviorToolConfig::from_selection(
                 &behavior_name,
                 self.tool_selection,

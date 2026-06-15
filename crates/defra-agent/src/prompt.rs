@@ -21,6 +21,8 @@
 //! Behavior updates flow through `<system-reminder>` tags injected into
 //! conversation messages — never by mutating the preamble.
 
+use chrono::{DateTime, Utc};
+
 use crate::llm::message::{Message, Text, UserContent};
 use anyhow::Result;
 
@@ -95,6 +97,15 @@ pub struct LayeredPromptBuilder {
     /// Empty for non-behavior builders (e.g. title generation).
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
+    prompt_context: Option<PromptContextBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PromptContextBinding {
+    agent_did: String,
+    behavior_id: String,
+    model_name: String,
+    templates: crate::prompt_context::PromptContextTemplates,
 }
 
 impl LayeredPromptBuilder {
@@ -109,7 +120,7 @@ impl LayeredPromptBuilder {
         behavior: &AgentBehavior,
         tool_surface: &ToolSurface,
         allowed_targets: &[(String, String)],
-    ) -> Self {
+    ) -> Result<Self> {
         let tool_names = tool_surface.tool_names();
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = Self::for_behavior(
@@ -121,6 +132,10 @@ impl LayeredPromptBuilder {
             behavior.max_output_tokens,
             allowed_targets,
         );
+        if let Some(system_context) = behavior.prompt_context.render_system_context(behavior)? {
+            builder.preamble.push_str("\n\n## Runtime Context\n\n");
+            builder.preamble.push_str(&system_context);
+        }
         // Progressive disclosure (D2): the behavior's effective skills (D5) go
         // into the cached preamble as a CATALOG (name + description) only. The
         // model loads a skill's full body on demand via the `load_skill` tool
@@ -139,7 +154,13 @@ impl LayeredPromptBuilder {
             tool_surface.allowed_mcp_service_ids(),
             tool_surface.includes_meta_tools(),
         );
-        builder
+        builder.prompt_context = Some(PromptContextBinding {
+            agent_did: behavior.agent_did().to_string(),
+            behavior_id: behavior.behavior_id.clone(),
+            model_name: behavior.model_name.clone(),
+            templates: behavior.prompt_context.clone(),
+        });
+        Ok(builder)
     }
 
     /// Render per-turn system reminders for explicitly-selected skills.
@@ -167,6 +188,36 @@ impl LayeredPromptBuilder {
         reminders
     }
 
+    pub fn request_context_reminders(
+        &self,
+        request: &crate::watcher::AgentRequest,
+    ) -> Result<Vec<Message>> {
+        self.request_context_reminders_at(request, Utc::now())
+    }
+
+    pub(crate) fn request_context_reminders_at(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<Message>> {
+        let Some(binding) = self.prompt_context.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let Some(rendered) = binding.templates.render_request_context_values(
+            binding.agent_did.as_str(),
+            binding.behavior_id.as_str(),
+            binding.model_name.as_str(),
+            request,
+            now,
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(vec![Self::system_reminder(&format!(
+            "Request context:\n\n{rendered}"
+        ))])
+    }
+
     pub fn for_behavior(
         system_prompt: &str,
         behavior_name: &str,
@@ -189,6 +240,7 @@ impl LayeredPromptBuilder {
             max_output_tokens,
             skills: Vec::new(),
             skill_ceiling: crate::skills::SkillToolCeiling::default(),
+            prompt_context: None,
         }
     }
 

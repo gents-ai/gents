@@ -126,6 +126,12 @@ const ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH: &str = r#"[
     {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_AGENT_BEHAVIOR_PROMPT_CONTEXT_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"system_context_template","Kind":11}},
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":11}}
+]"#;
+
 const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":2}}
 ]"#;
@@ -940,12 +946,12 @@ pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) ->
     Ok(())
 }
 
-/// Idempotent migration for AgentBehavior: adds `description` and `summary`
-/// fields (Kind 11, nullable String) introduced on branch issue-377, plus
-/// `skill_refs` and `skill_excludes` (Kind 21, `[String]`) introduced by the
-/// Skills feature (#340). Existing DBs upgraded from a prior schema version
-/// need these fields patched in so that GraphQL reads/writes referencing them
-/// do not fail.
+/// Idempotent migration for AgentBehavior: adds nullable string fields
+/// introduced after the initial schema (`description`, `summary`, prompt
+/// context templates), plus `skill_refs` and `skill_excludes` (Kind 21,
+/// `[String]`) introduced by the Skills feature (#340). Existing DBs upgraded
+/// from a prior schema version need these fields patched in so that GraphQL
+/// reads/writes referencing them do not fail.
 pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     let Some(collection) = node
         .get_collection("AgentBehavior")
@@ -966,6 +972,16 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
             r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}"#,
         );
     }
+    if !collection_has_field(&collection, "system_context_template") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"system_context_template","Kind":11}}"#,
+        );
+    }
+    if !collection_has_field(&collection, "request_context_template") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":11}}"#,
+        );
+    }
     // `skill_refs` and `skill_excludes` are selected by the AgentBehavior load
     // query; an old-schema DB missing either fails reads with
     // `Cannot query field "..."`. Kind 21 is `[String]`, matching
@@ -983,7 +999,7 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
 
     if field_patches.is_empty() {
         tracing::debug!(
-            "AgentBehavior already has description, summary, skill_refs, and skill_excludes fields; migration no-op"
+            "AgentBehavior already has nullable text, prompt-context, and skill fields; migration no-op"
         );
         return Ok(());
     }
@@ -992,14 +1008,16 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
     let next = node
         .patch_collection("AgentBehavior", &patch)
         .await
-        .context("patch_collection AgentBehavior description+summary+skill fields")?;
+        .context(
+            "patch_collection AgentBehavior nullable text, prompt-context, and skill fields",
+        )?;
     node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version AgentBehavior description+summary+skill fields")?;
+        .context("set_active_collection_version AgentBehavior nullable text, prompt-context, and skill fields")?;
     tracing::info!(
         version = %next.version_id,
         fields = ?field_patches,
-        "AgentBehavior patched with description, summary, skill_refs, and skill_excludes fields"
+        "AgentBehavior patched with nullable text, prompt-context, and skill fields"
     );
     Ok(())
 }
@@ -1558,6 +1576,7 @@ mod patch_kind_tests {
             ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH,
             ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
+            ADD_AGENT_BEHAVIOR_PROMPT_CONTEXT_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
             ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
@@ -1591,15 +1610,20 @@ mod patch_kind_tests {
     }
 
     #[test]
-    fn agent_behavior_description_summary_use_nillable_string_kind() {
-        // Kind 11 == NillableString. Both `description` and `summary` are
-        // nullable String fields in the AgentBehavior SDL; patches must match.
+    fn agent_behavior_text_fields_use_nillable_string_kind() {
+        // Kind 11 == NillableString. These are nullable String fields in the
+        // AgentBehavior SDL; patches must match.
         const NILLABLE_STRING_KIND: i64 = 11;
-        for (name, kind) in field_kinds(ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH) {
-            assert_eq!(
-                kind, NILLABLE_STRING_KIND,
-                "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
-            );
+        for patch in [
+            ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
+            ADD_AGENT_BEHAVIOR_PROMPT_CONTEXT_PATCH,
+        ] {
+            for (name, kind) in field_kinds(patch) {
+                assert_eq!(
+                    kind, NILLABLE_STRING_KIND,
+                    "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
+                );
+            }
         }
     }
 

@@ -18,6 +18,19 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         ),
         None => None,
     };
+    let system_context_template =
+        match args.system_context_template_file {
+            Some(ref path) => Some(std::fs::read_to_string(path).with_context(|| {
+                format!("reading system context template from {}", path.display())
+            })?),
+            None => None,
+        };
+    let request_context_template = match args.request_context_template_file {
+        Some(ref path) => Some(std::fs::read_to_string(path).with_context(|| {
+            format!("reading request context template from {}", path.display())
+        })?),
+        None => None,
+    };
     let access = ConfigAccess::Graphql(args.graphql.clone());
     let behavior = AgentBehavior {
         behavior_id: behavior_id.clone(),
@@ -26,6 +39,8 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         description: None,
         summary: None,
         system_prompt,
+        system_context_template,
+        request_context_template,
         backend_id: args.backend_id.clone(),
         model_name: args.model_name.clone(),
         tool_selection_id: args.tool_selection_id.clone(),

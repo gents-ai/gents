@@ -127,6 +127,8 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
             description: None,
             summary: None,
             system_prompt: None,
+            system_context_template: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: None,

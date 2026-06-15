@@ -105,6 +105,10 @@ pub struct AgentBehaviorRow {
     #[serde(default)]
     pub system_prompt: Option<String>,
     #[serde(default)]
+    pub system_context_template: Option<String>,
+    #[serde(default)]
+    pub request_context_template: Option<String>,
+    #[serde(default)]
     pub backend_id: Option<String>,
     #[serde(default)]
     pub model_name: Option<String>,

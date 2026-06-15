@@ -1237,6 +1237,10 @@ pub(crate) struct BehaviorUpsertArgs {
     #[arg(long)]
     pub(crate) system_prompt_file: Option<PathBuf>,
     #[arg(long)]
+    pub(crate) system_context_template_file: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) request_context_template_file: Option<PathBuf>,
+    #[arg(long)]
     pub(crate) backend_id: Option<String>,
     #[arg(long)]
     pub(crate) model_name: Option<String>,

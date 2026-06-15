@@ -219,7 +219,19 @@ fn no_sidecar(_dir: &Path, _value: &mut Value) -> Result<(), String> {
 }
 
 fn spill_behavior_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
-    spill_string_field(doc_dir, body, "system_prompt", "system_prompt.md")
+    spill_string_field(doc_dir, body, "system_prompt", "system_prompt.md")?;
+    spill_string_field(
+        doc_dir,
+        body,
+        "system_context_template",
+        "system_context_template.md",
+    )?;
+    spill_string_field(
+        doc_dir,
+        body,
+        "request_context_template",
+        "request_context_template.md",
+    )
 }
 
 fn spill_task_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {

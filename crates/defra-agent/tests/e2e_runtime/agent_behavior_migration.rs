@@ -1,12 +1,12 @@
-//! Upgrade-path integration test for the AgentBehavior description+summary
-//! migration (ensure_agent_behavior_migrations).
+//! Upgrade-path integration test for AgentBehavior additive-field migrations
+//! (ensure_agent_behavior_migrations).
 //!
-//! Scenario: a DB that was created on a pre-#377 schema version does not have
-//! the `description` or `summary` fields on `AgentBehavior`. When the server
-//! starts up and calls `from_default_behavior_documents` (which issues a
-//! GraphQL query selecting those fields), it must NOT crash with an "unknown
-//! field" error. The fix is that `ensure_agent_behavior_migrations` runs
-//! BEFORE the first behavior read on the serve path.
+//! Scenario: a DB created on an older schema does not have newer nullable
+//! fields on `AgentBehavior`. When the server starts up and calls
+//! `from_default_behavior_documents` (which issues a GraphQL query selecting
+//! those fields), it must NOT crash with an "unknown field" error. The fix is
+//! that `ensure_agent_behavior_migrations` runs BEFORE the first behavior read
+//! on the serve path.
 //!
 //! This test reproduces the upgrade path by:
 //!   1. Adding the OLD AgentBehavior schema (without description/summary).
@@ -14,7 +14,7 @@
 //!      `add_schema` call for it is a no-op — exactly what happens on upgrade).
 //!   3. Creating an AgentBehavior row with only old-schema fields.
 //!   4. Running ensure_agent_behavior_migrations.
-//!   5. Querying AgentBehavior selecting description + summary — must succeed.
+//!   5. Querying AgentBehavior selecting the new nullable fields — must succeed.
 //!
 //! Without the serve.rs fix this test still passes (the migration itself is
 //! correct), but it validates that the migration+read ordering works end-to-end
@@ -49,9 +49,8 @@ use defra_agent::DefraAgent;
 
 use crate::support::fixtures::test_identity;
 
-/// Old-schema AgentBehavior SDL — identical to the current schema except that
-/// `description` and `summary` are absent. This represents the schema state of
-/// any DB created before branch #377 landed.
+/// Old-schema AgentBehavior SDL without later nullable text fields. This
+/// represents the schema state of DBs created before those fields landed.
 const AGENT_BEHAVIOR_OLD_SDL: &str = r#"type AgentBehavior {
     behavior_id: String @index(unique: true)
     agent_did: String @index
@@ -110,8 +109,8 @@ async fn old_schema_db(name: &str) -> OldSchemaDb {
 }
 
 /// Verify that after running ensure_agent_behavior_migrations on an
-/// old-schema DB, a GraphQL query that selects description + summary
-/// succeeds rather than failing with "unknown field".
+/// old-schema DB, a GraphQL query that selects newer nullable fields succeeds
+/// rather than failing with "unknown field".
 #[tokio::test]
 async fn migration_adds_description_and_summary_to_old_schema_db() {
     let db = old_schema_db("description_summary_add").await;
@@ -179,8 +178,22 @@ async fn migration_adds_description_and_summary_to_old_schema_db() {
         collection_after.fields.iter().any(|f| f.name == "summary"),
         "post-migration collection must have summary field"
     );
+    assert!(
+        collection_after
+            .fields
+            .iter()
+            .any(|f| f.name == "system_context_template"),
+        "post-migration collection must have system_context_template field"
+    );
+    assert!(
+        collection_after
+            .fields
+            .iter()
+            .any(|f| f.name == "request_context_template"),
+        "post-migration collection must have request_context_template field"
+    );
 
-    // Crucially: query selecting description + summary must succeed.
+    // Crucially: query selecting new nullable fields must succeed.
     // This is the exact query issued by list_agent_behavior_records (and
     // transitively by from_default_behavior_documents on the serve path).
     let query = r#"{
@@ -191,6 +204,8 @@ async fn migration_adds_description_and_summary_to_old_schema_db() {
             description
             summary
             system_prompt
+            system_context_template
+            request_context_template
             backend_id
             model_name
             tool_selection_id
@@ -223,8 +238,8 @@ async fn migration_adds_description_and_summary_to_old_schema_db() {
         Some("test:default"),
         "behavior_id must match"
     );
-    // description and summary are absent in old rows — they should come back
-    // as null rather than causing an error.
+    // New nullable fields are absent in old rows — they should come back as
+    // null rather than causing an error.
     assert!(
         row.get("description").map(|v| v.is_null()).unwrap_or(true),
         "description must be null for pre-migration row"
@@ -232,6 +247,18 @@ async fn migration_adds_description_and_summary_to_old_schema_db() {
     assert!(
         row.get("summary").map(|v| v.is_null()).unwrap_or(true),
         "summary must be null for pre-migration row"
+    );
+    assert!(
+        row.get("system_context_template")
+            .map(|v| v.is_null())
+            .unwrap_or(true),
+        "system_context_template must be null for pre-migration row"
+    );
+    assert!(
+        row.get("request_context_template")
+            .map(|v| v.is_null())
+            .unwrap_or(true),
+        "request_context_template must be null for pre-migration row"
     );
 }
 
@@ -264,7 +291,7 @@ async fn migration_is_noop_on_fresh_current_schema_db() {
         .expect("migration on fresh DB must succeed");
 
     // A subsequent query must still work.
-    let query = r#"{ AgentBehavior { behavior_id description summary } }"#;
+    let query = r#"{ AgentBehavior { behavior_id description summary system_context_template request_context_template } }"#;
     let resp = db.node.execute(query).await;
     assert!(
         !resp.has_errors(),
@@ -397,7 +424,7 @@ async fn from_default_behavior_documents_succeeds_on_old_schema_db() {
 // ─── H2(b): offline config read path on an old-schema DB ────────────────────
 
 /// Verify that the GraphQL query issued by the offline config diff/apply/export
-/// path (selecting `description` and `summary`) succeeds on an old-schema DB
+/// path (selecting newer nullable fields) succeeds on an old-schema DB
 /// after the migration has been applied.
 ///
 /// The offline path (`resolve_config_access` → `build_desired_state_live_bundle`)
@@ -439,7 +466,8 @@ async fn config_read_path_succeeds_on_old_schema_db() {
         .expect("migration must succeed on old-schema DB");
 
     // Issue exactly the query that EXPORT_AGENT_BEHAVIOR_FIELDS drives:
-    // behavior_id agent_did display_name description summary system_prompt ...
+    // behavior_id agent_did display_name description summary system_prompt
+    // system_context_template request_context_template ...
     let query = r#"{
         AgentBehavior(filter: { agent_did: { _eq: "did:key:config-read-test" } }) {
             behavior_id
@@ -448,6 +476,8 @@ async fn config_read_path_succeeds_on_old_schema_db() {
             description
             summary
             system_prompt
+            system_context_template
+            request_context_template
             backend_id
             model_name
             tool_selection_id
@@ -461,7 +491,7 @@ async fn config_read_path_succeeds_on_old_schema_db() {
     let resp = node.execute(query).await;
     assert!(
         !resp.has_errors(),
-        "offline config read selecting description+summary must NOT error after migration: {:?}",
+        "offline config read selecting AgentBehavior nullable fields must NOT error after migration: {:?}",
         resp.errors
     );
 
@@ -477,7 +507,7 @@ async fn config_read_path_succeeds_on_old_schema_db() {
         "expected exactly one AgentBehavior row, got {}",
         rows.len()
     );
-    // Pre-#377 rows have null description/summary — not an error.
+    // Old rows have null newer nullable fields — not an error.
     let row = &rows[0];
     assert!(
         row.get("description").map(|v| v.is_null()).unwrap_or(true),
@@ -486,6 +516,18 @@ async fn config_read_path_succeeds_on_old_schema_db() {
     assert!(
         row.get("summary").map(|v| v.is_null()).unwrap_or(true),
         "summary must be null for pre-migration row"
+    );
+    assert!(
+        row.get("system_context_template")
+            .map(|v| v.is_null())
+            .unwrap_or(true),
+        "system_context_template must be null for pre-migration row"
+    );
+    assert!(
+        row.get("request_context_template")
+            .map(|v| v.is_null())
+            .unwrap_or(true),
+        "request_context_template must be null for pre-migration row"
     );
 }
 

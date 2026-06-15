@@ -47,6 +47,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .prompt_builder
                 .selected_skill_reminders(&selected_skill_ids);
             let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
+            let request_context_reminders = self.prompt_builder.request_context_reminders(&request)?;
+            let request_context_tokens =
+                crate::prompt::estimate_message_tokens(&request_context_reminders);
+            let extra_reminder_tokens =
+                skill_reminder_tokens.saturating_add(request_context_tokens);
 
             let mut built = async {
                 let full_history = session::load_history(&self.node, &request.session_id)
@@ -113,8 +118,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     ))
                     .await?;
                 // Count the to-be-injected skill bodies toward the threshold.
-                built.estimated_tokens =
-                    built.estimated_tokens.saturating_add(skill_reminder_tokens);
+                built.estimated_tokens = built
+                    .estimated_tokens
+                    .saturating_add(extra_reminder_tokens);
                 if prompt_exceeds_compaction_threshold(
                     built.estimated_tokens,
                     &request.content,
@@ -169,8 +175,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             compacted = true,
                         ))
                         .await?;
-                    built.estimated_tokens =
-                        built.estimated_tokens.saturating_add(skill_reminder_tokens);
+                    built.estimated_tokens = built
+                        .estimated_tokens
+                        .saturating_add(extra_reminder_tokens);
                 }
 
                 Ok::<_, anyhow::Error>(built)
@@ -193,8 +200,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             // Inject the rendered skill reminders ahead of the conversation so
             // they're in context for the turn (their tokens were already folded
             // into the compaction decision above).
-            if !skill_reminders.is_empty() {
-                let mut reminders = skill_reminders;
+            if !request_context_reminders.is_empty() || !skill_reminders.is_empty() {
+                let mut reminders = request_context_reminders;
+                reminders.extend(skill_reminders);
                 reminders.append(&mut built.messages);
                 built.messages = reminders;
             }

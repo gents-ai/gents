@@ -50,6 +50,7 @@ pub mod migration;
 pub mod native_executor_status;
 pub mod oneshot;
 pub mod prompt;
+pub mod prompt_context;
 pub(crate) mod registry;
 pub mod retry;
 pub mod run_timeline;

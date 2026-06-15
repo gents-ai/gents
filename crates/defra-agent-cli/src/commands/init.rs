@@ -517,6 +517,8 @@ async fn initialize_runtime_home(
         description: None,
         summary: None,
         system_prompt: Some(standard_system_prompt(tool_package).to_string()),
+        system_context_template: None,
+        request_context_template: None,
         backend_id: Some(backend_id.clone()),
         model_name: Some(model_name.to_string()),
         tool_selection_id: Some(tool_selection_id.clone()),

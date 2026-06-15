@@ -41,6 +41,8 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
         description: None,
         summary: None,
         system_prompt: None,
+        system_context_template: None,
+        request_context_template: None,
         backend_id: None,
         model_name: None,
         tool_selection_id: None,
@@ -62,6 +64,8 @@ fn behavior_with(id: &str, backend_id: Option<&str>) -> DesiredAgentBehavior {
         description: None,
         summary: None,
         system_prompt: None,
+        system_context_template: None,
+        request_context_template: None,
         backend_id: backend_id.map(|s| s.to_string()),
         model_name: None,
         tool_selection_id: None,
@@ -621,17 +625,37 @@ mod load_manifest_root {
                 "behavior_id": "default",
                 "agent_did": "did:key:example",
                 "system_prompt": "./system_prompt.md",
+                "system_context_template": "./system_context_template.md",
+                "request_context_template": "./request_context_template.md",
                 "enabled": true,
             }))
             .unwrap(),
         )
         .unwrap();
         fs::write(behavior_dir.join("system_prompt.md"), "You are helpful.").unwrap();
+        fs::write(
+            behavior_dir.join("system_context_template.md"),
+            "Agent: {{ agent.did }}",
+        )
+        .unwrap();
+        fs::write(
+            behavior_dir.join("request_context_template.md"),
+            "Request: {{ request.id }}",
+        )
+        .unwrap();
 
         let (manifest, report) = load_manifest_root(tmp.path());
         assert!(report.ok, "errors: {:?}", report.errors);
         let behavior = &manifest.unwrap().agent_behaviors[0];
         assert_eq!(behavior.system_prompt.as_deref(), Some("You are helpful."));
+        assert_eq!(
+            behavior.system_context_template.as_deref(),
+            Some("Agent: {{ agent.did }}")
+        );
+        assert_eq!(
+            behavior.request_context_template.as_deref(),
+            Some("Request: {{ request.id }}")
+        );
     }
 
     #[test]
@@ -1180,6 +1204,22 @@ fn validate_rejects_non_positive_stream_liveness_timeout() {
             .iter()
             .any(|message| message.contains("stream_liveness_timeout_secs must be positive")),
         "expected stream_liveness_timeout_secs validation error, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_request_context_in_system_context_template() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.agent_behaviors[0].system_context_template =
+        Some("Request {{ request.id }}".to_string());
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("invalid prompt context template") && message.contains("per-request")
+        }),
+        "expected prompt-context validation error, got {errors:?}"
     );
 }
 
@@ -2360,6 +2400,8 @@ pub(super) mod write_manifest_root {
                 description: None,
                 summary: None,
                 system_prompt: Some("You are helpful.".to_string()),
+                system_context_template: Some("Agent: {{ agent.did }}".to_string()),
+                request_context_template: Some("Request: {{ request.id }}".to_string()),
                 backend_id: None,
                 model_name: None,
                 tool_selection_id: None,
@@ -2401,15 +2443,43 @@ pub(super) mod write_manifest_root {
         assert!(behavior_object.is_file());
         let behavior_sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
         assert!(behavior_sidecar.is_file());
+        let system_context_sidecar = tmp
+            .path()
+            .join("agent-behaviors/default/system_context_template.md");
+        assert!(system_context_sidecar.is_file());
+        let request_context_sidecar = tmp
+            .path()
+            .join("agent-behaviors/default/request_context_template.md");
+        assert!(request_context_sidecar.is_file());
         assert_eq!(
             fs::read_to_string(&behavior_sidecar).unwrap(),
             "You are helpful."
+        );
+        assert_eq!(
+            fs::read_to_string(&system_context_sidecar).unwrap(),
+            "Agent: {{ agent.did }}"
+        );
+        assert_eq!(
+            fs::read_to_string(&request_context_sidecar).unwrap(),
+            "Request: {{ request.id }}"
         );
         let behavior_body: serde_json::Value =
             serde_json::from_slice(&fs::read(&behavior_object).unwrap()).unwrap();
         assert_eq!(
             behavior_body.get("system_prompt").and_then(|v| v.as_str()),
             Some("./system_prompt.md")
+        );
+        assert_eq!(
+            behavior_body
+                .get("system_context_template")
+                .and_then(|v| v.as_str()),
+            Some("./system_context_template.md")
+        );
+        assert_eq!(
+            behavior_body
+                .get("request_context_template")
+                .and_then(|v| v.as_str()),
+            Some("./request_context_template.md")
         );
 
         let task_object = tmp.path().join("tasks/seed-health/object.json");
@@ -2501,6 +2571,8 @@ pub(super) mod write_manifest_root {
             description: None,
             summary: None,
             system_prompt: None,
+            system_context_template: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: None,
