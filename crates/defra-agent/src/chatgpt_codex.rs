@@ -392,13 +392,14 @@ pub async fn build_responses_client(
         )
     })?;
     let headers = build_chatgpt_codex_headers(&auth)?;
-    rig::providers::openai::Client::builder()
-        .api_key(access_token)
-        .base_url(normalize_endpoint(endpoint))
-        .http_headers(headers)
-        .http_client(ChatGptCodexHttpClient::default())
-        .build()
-        .context("building ChatGPT Codex Responses client")
+    let endpoint = normalize_endpoint(endpoint);
+    crate::inference_http::build_openai_responses_client(
+        &access_token,
+        &endpoint,
+        ChatGptCodexHttpClient::default(),
+        headers,
+    )
+    .context("building ChatGPT Codex Responses client")
 }
 
 #[cfg(test)]

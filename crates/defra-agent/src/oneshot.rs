@@ -69,23 +69,48 @@ pub async fn run_openai_oneshot_with_tools(
                 "building OpenAI-compatible completion client for behavior {} against {}",
                 behavior.behavior_id, behavior.backend_endpoint
             );
-            let client: rig::providers::openai::CompletionsClient =
-                rig::providers::openai::CompletionsClient::builder()
-                    .api_key(&api_key)
-                    .base_url(&behavior.backend_endpoint)
-                    .build()
-                    .with_context(|| build_context.clone())?;
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                client,
-            )
-            .await
+            if crate::inference_http::force_openai_chat_completions() {
+                let client: rig::providers::openai::CompletionsClient<
+                    crate::inference_http::SessionTaggingHttpClient,
+                > = crate::inference_http::build_openai_chat_completions_client(
+                    &api_key,
+                    &behavior.backend_endpoint,
+                    crate::inference_http::SessionTaggingHttpClient::default(),
+                )
+                .with_context(|| build_context.clone())?;
+                run_oneshot_with_completion_client(
+                    node,
+                    behavior,
+                    prompt,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    background_tool_registry,
+                    client,
+                )
+                .await
+            } else {
+                let client: rig::providers::openai::Client<
+                    crate::inference_http::SessionTaggingHttpClient,
+                > = crate::inference_http::build_openai_responses_client(
+                    &api_key,
+                    &behavior.backend_endpoint,
+                    crate::inference_http::SessionTaggingHttpClient::default(),
+                    Default::default(),
+                )
+                .with_context(|| build_context.clone())?;
+                run_oneshot_with_completion_client(
+                    node,
+                    behavior,
+                    prompt,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    background_tool_registry,
+                    client,
+                )
+                .await
+            }
         }
         BackendProviderKind::OpenRouter => {
             let build_context = format!(
