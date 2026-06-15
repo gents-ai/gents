@@ -118,6 +118,12 @@ pub struct AgentBehaviorRow {
     pub compaction_threshold: Option<f64>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Behavior-scoped skills this behavior opts into (decision D5).
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub skill_refs: Vec<String>,
+    /// Inherited principal-scoped skills this behavior opts out of (decision D5).
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub skill_excludes: Vec<String>,
     #[serde(default)]
     pub created_at: Option<String>,
 }
@@ -451,6 +457,40 @@ pub struct TaskRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+/// Serde mirror of the `Skill` replicated document.
+///
+/// Mirrors `crates/defra-agent-schemas/schemas/agent/skill.graphql`.
+/// A skill is a reusable instruction + tool-dependency fragment owned by a
+/// principal (`agent_did`) and composed into a behavior's prompt/tool surface
+/// at activation time (decision D1). `tool_refs` are *declared* dependencies,
+/// intersected with the behavior ceiling and never granted (decision D3);
+/// `scope` (`principal` | `behavior`) drives the D5 effective-set inheritance.
+/// Skills are apply-owned; the runtime never writes them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkillRow {
+    pub skill_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub tool_refs: Vec<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub interface_json: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// Serde mirror of the `Schedule` replicated document.

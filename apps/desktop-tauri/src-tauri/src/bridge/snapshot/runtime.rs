@@ -5,7 +5,7 @@ use defra_agent_desktop_core::client::{ClientCore, ClientPeerStatus};
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorView, ConversationSummary,
     DeploymentView, DesktopRuntimeSnapshot, EventTriggerView, InferenceBackendView,
-    InferenceProfileView, RuntimeView, ScheduleView, TaskView, ToolSelectionView,
+    InferenceProfileView, RuntimeView, ScheduleView, SkillView, TaskView, ToolSelectionView,
     ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
@@ -81,6 +81,8 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     compaction_threshold: row.compaction_threshold,
                     enabled: row.enabled.unwrap_or(true),
                     is_default: default_behavior_id.as_deref() == Some(row.behavior_id.as_str()),
+                    skill_refs: row.skill_refs.clone(),
+                    skill_excludes: row.skill_excludes.clone(),
                 })
                 .collect::<Vec<_>>();
             behaviors.sort_by(|left, right| {
@@ -211,6 +213,33 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 })
                 .collect::<Vec<_>>();
             tool_service_registries.sort_by(|left, right| left.service_id.cmp(&right.service_id));
+
+            let mut skills = store
+                .skills
+                .iter()
+                .enumerate()
+                .filter(|(index, row)| {
+                    source_matches_agent(
+                        &store.skill_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    ) && row.agent_did.as_deref() == Some(peer.agent_did.as_str())
+                })
+                .map(|(_index, row)| SkillView {
+                    skill_id: row.skill_id.clone(),
+                    agent_did: normalize_optional(row.agent_did.as_deref()),
+                    scope: normalize_optional(row.scope.as_deref()),
+                    name: normalize_optional(row.name.as_deref()),
+                    description: normalize_optional(row.description.as_deref()),
+                    instructions: normalize_optional(row.instructions.as_deref()),
+                    tool_refs: row.tool_refs.clone(),
+                    display_name: normalize_optional(row.display_name.as_deref()),
+                    enabled: row.enabled,
+                    created_at: normalize_optional(row.created_at.as_deref()),
+                })
+                .collect::<Vec<_>>();
+            skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
 
             let scoped_task_rows = store
                 .tasks
@@ -396,6 +425,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 inference_profiles,
                 tool_selections,
                 tool_service_registries,
+                skills,
                 tasks,
                 schedules,
                 event_triggers,

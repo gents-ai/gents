@@ -103,6 +103,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         compaction_strategy: Some("rolling-summary".to_string()),
         compaction_threshold: Some(0.7),
         enabled: Some(true),
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: Some("2026-04-14T00:00:00Z".to_string()),
     })
     .await?;

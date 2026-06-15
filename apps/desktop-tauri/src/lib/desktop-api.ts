@@ -21,6 +21,7 @@ import type {
   PeerAddRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
+  SkillSaveRequest,
   SubagentTreeView,
   TaskRunRequest,
   TaskRunResult,
@@ -121,6 +122,7 @@ export type DesktopApiAdapter = {
   renameConversation: (request: { sessionId: string; title: string }) => Promise<void>;
   saveAgentConfig: (request: AgentConfigSaveRequest) => Promise<DesktopClientSnapshot>;
   saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
+  saveSkillConfig: (request: SkillSaveRequest) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
@@ -203,6 +205,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   saveBehaviorConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", { request });
+  },
+  saveSkillConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_skill_save", { request });
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
@@ -359,6 +364,10 @@ export async function saveAgentConfig(request: AgentConfigSaveRequest) {
 
 export async function saveBehaviorConfig(request: BehaviorSaveRequest) {
   return desktopApiAdapter().saveBehaviorConfig(request);
+}
+
+export async function saveSkillConfig(request: SkillSaveRequest) {
+  return desktopApiAdapter().saveSkillConfig(request);
 }
 
 export async function saveBackendConfig(request: BackendSaveRequest) {

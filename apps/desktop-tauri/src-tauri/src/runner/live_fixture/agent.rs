@@ -215,6 +215,8 @@ async fn seed_live_behavior_documents(
         compaction_strategy: Some("StripThenSummarize".to_string()),
         compaction_threshold: Some(0.95),
         enabled: Some(true),
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: Some(Utc::now().to_rfc3339()),
     })
     .await?;
@@ -236,6 +238,8 @@ async fn seed_live_behavior_documents(
         compaction_strategy: Some("StripThenSummarize".to_string()),
         compaction_threshold: Some(0.95),
         enabled: Some(true),
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
         created_at: Some(Utc::now().to_rfc3339()),
     })
     .await?;

@@ -109,6 +109,7 @@ function App() {
             onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
             onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
             onSaveScheduleConfig={shell.onSaveScheduleConfig}
+            onSaveSkillConfig={shell.onSaveSkillConfig}
             onSaveTaskConfig={shell.onSaveTaskConfig}
             onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
             onSaveToolServiceConfig={shell.onSaveToolServiceConfig}

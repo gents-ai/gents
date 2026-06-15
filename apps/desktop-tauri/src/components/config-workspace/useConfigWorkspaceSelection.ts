@@ -19,6 +19,7 @@ export function useConfigWorkspaceSelection(
   const [selectedToolServiceId, setSelectedToolServiceId] = useState<string | null>(
     null,
   );
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(null);
   const [selectedEventTriggerId, setSelectedEventTriggerId] = useState<string | null>(
@@ -50,6 +51,7 @@ export function useConfigWorkspaceSelection(
       setSelectedProfileId(null);
       setSelectedToolSelectionId(null);
       setSelectedToolServiceId(null);
+      setSelectedSkillId(null);
       setSelectedTaskId(null);
       setSelectedScheduleId(null);
       setSelectedEventTriggerId(null);
@@ -111,6 +113,12 @@ export function useConfigWorkspaceSelection(
       setSelectedToolServiceId,
     );
     ensureSelection(
+      selectedSkillId,
+      (selectedDeployment.skills ?? [])[0]?.skillId ?? null,
+      (id) => (selectedDeployment.skills ?? []).some((skill) => skill.skillId === id),
+      setSelectedSkillId,
+    );
+    ensureSelection(
       selectedTaskId,
       selectedDeployment.tasks[0]?.taskId ?? null,
       (id) => selectedDeployment.tasks.some((task) => task.taskId === id),
@@ -139,6 +147,7 @@ export function useConfigWorkspaceSelection(
     selectedEventTriggerId,
     selectedProfileId,
     selectedScheduleId,
+    selectedSkillId,
     selectedTaskId,
     selectedToolSelectionId,
     selectedToolServiceId,
@@ -188,6 +197,7 @@ export function useConfigWorkspaceSelection(
     selectedEventTriggerId,
     selectedProfileId,
     selectedScheduleId,
+    selectedSkillId,
     selectedTaskId,
     selectedToolSelectionId,
     selectedToolServiceId,
@@ -198,6 +208,7 @@ export function useConfigWorkspaceSelection(
     setSelectedEventTriggerId,
     setSelectedProfileId,
     setSelectedScheduleId,
+    setSelectedSkillId,
     setSelectedTaskId,
     setSelectedToolSelectionId,
     setSelectedToolServiceId,

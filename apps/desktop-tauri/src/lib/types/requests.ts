@@ -16,6 +16,8 @@ export type BehaviorSaveRequest = {
   compactionStrategy?: string | null;
   compactionThreshold?: number | null;
   enabled?: boolean | null;
+  skillRefs: string[];
+  skillExcludes: string[];
 };
 
 export type BackendSaveRequest = {
@@ -104,6 +106,18 @@ export type ToolServiceTestResult = {
   toolCount: number;
   tools: ToolServiceToolView[];
   error?: string | null;
+};
+
+export type SkillSaveRequest = {
+  skillId: string;
+  agentDid: string;
+  scope: string;
+  name: string;
+  description?: string | null;
+  instructions: string;
+  toolRefs: string[];
+  displayName?: string | null;
+  enabled?: boolean | null;
 };
 
 export type TaskSaveRequest = {

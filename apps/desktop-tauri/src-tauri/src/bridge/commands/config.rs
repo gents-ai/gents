@@ -1,14 +1,15 @@
 use anyhow::{anyhow, bail, Result};
 use defra_agent_desktop_core::client::ClientCore;
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, AgentPrincipalRow, InferenceBackendRow, InferenceProfileRow, ToolSelectionRow,
+    AgentBehaviorRow, AgentPrincipalRow, InferenceBackendRow, InferenceProfileRow, SkillRow,
+    ToolSelectionRow,
 };
 
 use super::super::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, InferenceProfileSaveRequest,
-    ToolSelectionSaveRequest,
+    SkillSaveRequest, ToolSelectionSaveRequest,
 };
-use super::util::{require_trimmed, trim_optional};
+use super::util::{require_trimmed, sanitize_id_list, trim_optional};
 
 pub(crate) async fn save_agent_config(
     core: &ClientCore,
@@ -70,6 +71,8 @@ pub(crate) async fn save_behavior_config(
             compaction_strategy: None,
             compaction_threshold: None,
             enabled: Some(true),
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
             created_at: None,
         });
     let inference_profile_id = trim_optional(request.inference_profile_id)
@@ -90,6 +93,8 @@ pub(crate) async fn save_behavior_config(
     row.compaction_strategy = trim_optional(request.compaction_strategy);
     row.compaction_threshold = request.compaction_threshold;
     row.enabled = request.enabled.or(row.enabled).or(Some(true));
+    row.skill_refs = sanitize_id_list(request.skill_refs);
+    row.skill_excludes = sanitize_id_list(request.skill_excludes);
     if let Some(backend_id) = row.backend_id.as_deref() {
         if let Some(model_name) = store
             .inference_backends
@@ -102,6 +107,47 @@ pub(crate) async fn save_behavior_config(
         }
     }
     core.save_behavior(&row).await?;
+    Ok(())
+}
+
+pub(crate) async fn save_skill_config(core: &ClientCore, request: SkillSaveRequest) -> Result<()> {
+    let skill_id = require_trimmed("skill_id", request.skill_id)?;
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    let name = require_trimmed("name", request.name)?;
+    let scope = require_trimmed("scope", request.scope)?;
+    if scope != "principal" && scope != "behavior" {
+        bail!("scope must be \"principal\" or \"behavior\", got {scope:?}");
+    }
+    let instructions = require_trimmed("instructions", request.instructions)?;
+
+    let store = core.store().snapshot();
+    let mut row = store
+        .skills
+        .iter()
+        .find(|row| row.skill_id == skill_id)
+        .cloned()
+        .unwrap_or_else(|| SkillRow {
+            skill_id: skill_id.clone(),
+            agent_did: Some(agent_did.clone()),
+            scope: None,
+            name: None,
+            description: None,
+            instructions: None,
+            tool_refs: Vec::new(),
+            display_name: None,
+            interface_json: None,
+            enabled: Some(true),
+            created_at: None,
+        });
+    row.agent_did = Some(agent_did);
+    row.scope = Some(scope);
+    row.name = Some(name);
+    row.description = trim_optional(request.description);
+    row.instructions = Some(instructions);
+    row.tool_refs = sanitize_id_list(request.tool_refs);
+    row.display_name = trim_optional(request.display_name);
+    row.enabled = request.enabled.or(row.enabled).or(Some(true));
+    core.save_skill(&row).await?;
     Ok(())
 }
 

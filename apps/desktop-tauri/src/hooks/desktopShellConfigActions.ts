@@ -5,6 +5,7 @@ import {
   saveBackendConfig,
   saveBehaviorConfig,
   saveInferenceProfileConfig,
+  saveSkillConfig,
   saveToolSelectionConfig,
   saveToolServiceConfig,
   testToolService,
@@ -15,6 +16,7 @@ import type {
   BehaviorSaveRequest,
   DesktopClientSnapshot,
   InferenceProfileSaveRequest,
+  SkillSaveRequest,
   ToolSelectionSaveRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
@@ -70,6 +72,22 @@ export function createDesktopShellConfigActions({
       throw err;
     } finally {
       setSavingBehaviorConfig(false);
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveSkillConfig(request: SkillSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveSkillConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
       setSavingConfig(false);
     }
   }
@@ -152,6 +170,7 @@ export function createDesktopShellConfigActions({
     onSaveBackendConfig,
     onSaveBehaviorConfig,
     onSaveInferenceProfileConfig,
+    onSaveSkillConfig,
     onSaveToolSelectionConfig,
     onSaveToolServiceConfig,
     onTestToolService,

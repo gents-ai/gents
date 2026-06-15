@@ -79,6 +79,7 @@ impl ClientStore {
             &mut rows.event_trigger_source_agent_dids,
             rows.event_triggers.len(),
         );
+        normalize_source_agent_dids(&mut rows.skill_source_agent_dids, rows.skills.len());
         normalize_source_agent_dids(
             &mut rows.inference_backend_source_agent_dids,
             rows.inference_backends.len(),
@@ -168,6 +169,8 @@ impl ClientStore {
             task_source_agent_dids: rows.task_source_agent_dids,
             schedule_source_agent_dids: rows.schedule_source_agent_dids,
             event_trigger_source_agent_dids: rows.event_trigger_source_agent_dids,
+            skills: rows.skills,
+            skill_source_agent_dids: rows.skill_source_agent_dids,
             tool_selections: rows.tool_selections,
             inference_backends: rows.inference_backends,
             inference_profiles: rows.inference_profiles,

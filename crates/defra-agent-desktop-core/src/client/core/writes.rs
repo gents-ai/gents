@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
-    InferenceProfileRow, ScheduleRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 
 use super::super::mutations::{
@@ -799,6 +799,26 @@ impl ClientCore {
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save task", error)),
+        }
+    }
+
+    /// Persist a `Skill` document. Skills are apply-owned and globally
+    /// addressed by `skill_id`; every field is operator-authored, so the
+    /// upsert projects all of them (the runtime never writes skills back).
+    pub async fn save_skill(&self, row: &SkillRow) -> Result<()> {
+        match mutations::upsert_skill(self.node.as_ref(), row).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    doc_type = "skill",
+                    row_id = %row.skill_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save skill", error)),
         }
     }
 
