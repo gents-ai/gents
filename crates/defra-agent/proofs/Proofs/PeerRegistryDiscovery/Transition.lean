@@ -136,25 +136,29 @@ structure Token where
   nonce : Nonce
   deriving DecidableEq, Repr
 
-/-- The network has an admitted member OTHER than `self`. The TOFU bootstrap arm
-is only legitimate when this is false: an empty membership set has no peer trust
-set to check an invite against. Without this guard `tofuBootstrap` would be a free
-flag bypassing the membership check on a populated network. -/
-def hasPeerMember (s : DiscoveryState) : Prop :=
-  ∃ ep ∈ s.endpoints, admittedMember ep.did s ∧ ep.peer ≠ s.self
-
-instance (s : DiscoveryState) : Decidable (hasPeerMember s) := by
-  unfold hasPeerMember admittedMember adminSignedMembership validNetwork
-  infer_instance
-
 /-- Admission predicate on a join. Authorized iff the token's signature verifies
 AND either (membership-checked arm) the issuer is an admitted member, or (TOFU
-bootstrap arm) the bootstrap flag is set AND the network has no memberships yet.
-The bootstrap conjunct (`s.memberships = ∅`) is what stops the flag from bypassing
-the membership check on a populated network. -/
+bootstrap arm) the bootstrap flag is set, the network has no memberships yet, AND
+the token's issuer is the network admin.
+
+The bootstrap guard is `s.memberships = ∅`: an empty membership set has no peer
+trust set to check an invite against, so a one-time admin-issued invite seeds the
+network. The conjunct stops `tofuBootstrap` from being a free flag that bypasses
+the membership check on a populated network — once a single membership row exists,
+the TOFU arm is dead and admission falls back to `admittedMember`.
+
+Bootstrap is admin-only: the `tok.issuer = s.network.adminDid` conjunct means only
+the network admin can seed an empty network; a non-admin cannot use the bootstrap
+flag to inject the first membership-less join.
+
+FORWARD-NOTE (cut 5): the membership reconciler's join-gate (the successor to the
+registry-era `decide_join_admission` in `discovery.rs`, which keyed bootstrap off
+`!any_members`) must mirror THIS guard — `s.memberships = ∅` AND issuer = admin —
+not the registry-era `!any_members` shape it supersedes. -/
 def signedByMember (tok : Token) (s : DiscoveryState) (tofuBootstrap : Bool) : Prop :=
   tok.sigValid = true ∧
-    (admittedMember tok.issuer s ∨ (tofuBootstrap = true ∧ s.memberships = ∅))
+    (admittedMember tok.issuer s ∨
+      (tofuBootstrap = true ∧ s.memberships = ∅ ∧ tok.issuer = s.network.adminDid))
 
 instance (tok : Token) (s : DiscoveryState) (tofuBootstrap : Bool) :
     Decidable (signedByMember tok s tofuBootstrap) := by
