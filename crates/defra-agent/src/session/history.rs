@@ -54,6 +54,7 @@ pub(crate) async fn save_message(
     sequence: u32,
     role: &str,
     content: &str,
+    reasoning: Option<&str>,
 ) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let message_key = format!("{escaped_session_id}:{sequence}");
@@ -64,6 +65,7 @@ pub(crate) async fn save_message(
         sequence,
         role,
         content,
+        reasoning,
         &message_key,
     )
     .await
@@ -76,6 +78,7 @@ pub(crate) async fn save_message_with_key(
     sequence: u32,
     role: &str,
     content: &str,
+    reasoning: Option<&str>,
     message_key: &str,
 ) -> Result<()> {
     let escaped_message_key = escape_graphql_string(message_key);
@@ -86,6 +89,7 @@ pub(crate) async fn save_message_with_key(
         sequence,
         role,
         content,
+        reasoning,
         &escaped_message_key,
     )
     .await
@@ -99,6 +103,7 @@ async fn save_message_inner(
     sequence: u32,
     role: &str,
     content: &str,
+    reasoning: Option<&str>,
     escaped_message_key: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -106,6 +111,9 @@ async fn save_message_inner(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_role = escape_graphql_string(role);
+    // #492: persist the durable reasoning copy alongside content. Empty/absent
+    // reasoning is written as "" so the field round-trips deterministically.
+    let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
 
     // `agent_did` is only written in the `add` branch: it is the immutable scope
     // key, stamped once at create. The `update` branch must not rewrite it.
@@ -120,10 +128,12 @@ async fn save_message_inner(
                     sequence: {sequence},
                     role: "{escaped_role}",
                     content: "{escaped}",
+                    reasoning: "{escaped_reasoning}",
                     timestamp: "{now}"
                 }},
                 update: {{
                     content: "{escaped}",
+                    reasoning: "{escaped_reasoning}",
                     timestamp: "{now}"
                 }}
             ) {{ _docID }}
@@ -140,12 +150,17 @@ pub(crate) async fn append_message(
     agent_did: &str,
     role: &str,
     content: &str,
+    reasoning: Option<&str>,
 ) -> Result<u32> {
     let mut attempts = 0;
     loop {
         attempts += 1;
         let sequence = next_append_sequence(node, session_id).await?;
-        match create_message(node, session_id, agent_did, sequence, role, content).await {
+        match create_message(
+            node, session_id, agent_did, sequence, role, content, reasoning,
+        )
+        .await
+        {
             Ok(()) => return Ok(sequence),
             Err(error) if attempts < 5 => {
                 tracing::debug!(
@@ -215,12 +230,15 @@ async fn create_message(
     sequence: u32,
     role: &str,
     content: &str,
+    reasoning: Option<&str>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_role = escape_graphql_string(role);
+    // #492: durable reasoning copy written at materialize time (see save_message).
+    let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
     let message_key = format!("{escaped_session_id}:{sequence}");
 
     let mutation = format!(
@@ -232,6 +250,7 @@ async fn create_message(
                 sequence: {sequence},
                 role: "{escaped_role}",
                 content: "{escaped}",
+                reasoning: "{escaped_reasoning}",
                 timestamp: "{now}"
             }}) {{ _docID }}
         }}"#

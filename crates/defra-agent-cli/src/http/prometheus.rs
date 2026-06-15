@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -10,6 +10,9 @@ use crate::http::liveness::{
     LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
+
+const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
+const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
@@ -65,8 +68,16 @@ pub(crate) struct MetricsBackendRow {
     pub(crate) last_probe: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct InferenceMetricsQueryData {
+    principals: Vec<InferencePrincipalRow>,
+    behaviors: Vec<InferenceBehaviorRow>,
+    calls: Vec<InferenceCallMetricRow>,
+    window_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct InferenceMetricsPageData {
     #[serde(rename = "AgentPrincipal", default)]
     principals: Vec<InferencePrincipalRow>,
     #[serde(rename = "AgentBehavior", default)]
@@ -107,6 +118,8 @@ struct InferenceCallMetricRow {
     backend_id: String,
     #[serde(default)]
     call_state: String,
+    #[serde(default)]
+    ended_at: String,
     #[serde(default)]
     prompt_tokens: Option<i64>,
     #[serde(default)]
@@ -408,7 +421,46 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
 }
 
 async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMetricsQueryData> {
-    let response = post_graphql(graphql, inference_metrics_query()).await?;
+    let window_started_at = Utc::now() - Duration::seconds(INFERENCE_METRICS_WINDOW_SECS);
+    let mut result = InferenceMetricsQueryData {
+        principals: Vec::new(),
+        behaviors: Vec::new(),
+        calls: Vec::new(),
+        window_seconds: INFERENCE_METRICS_WINDOW_SECS,
+    };
+    let mut offset = 0usize;
+
+    // InferenceCall timestamps are persisted as strings today, so the Rust
+    // DefraDB GraphQL schema does not expose range filters for ended_at. Keep
+    // the scrape bounded by paging newest terminal calls and stopping once the
+    // ordered page crosses the local cutoff.
+    loop {
+        let query = inference_metrics_query(INFERENCE_METRICS_PAGE_SIZE, offset, offset == 0);
+        let page = load_inference_metrics_page(graphql, &query).await?;
+        if offset == 0 {
+            result.principals = page.principals;
+            result.behaviors = page.behaviors;
+        }
+
+        let page_len = page.calls.len();
+        let (recent_calls, reached_window_start) =
+            retain_windowed_inference_calls(page.calls, &window_started_at);
+        result.calls.extend(recent_calls);
+
+        if page_len < INFERENCE_METRICS_PAGE_SIZE || reached_window_start {
+            break;
+        }
+        offset += INFERENCE_METRICS_PAGE_SIZE;
+    }
+
+    Ok(result)
+}
+
+async fn load_inference_metrics_page(
+    graphql: &str,
+    query: &str,
+) -> Result<InferenceMetricsPageData> {
+    let response = post_graphql(graphql, query).await?;
     let data = response
         .get("data")
         .cloned()
@@ -416,8 +468,9 @@ async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMet
     serde_json::from_value(data).context("decoding inference metrics query response")
 }
 
-fn inference_metrics_query() -> &'static str {
-    r#"{
+fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) -> String {
+    let metadata = if include_metadata {
+        r#"
         AgentPrincipal {
             agent_did
             display_name
@@ -429,32 +482,59 @@ fn inference_metrics_query() -> &'static str {
             backend_id
             model_name
         }
-        InferenceCall(filter: {
-            call_kind: { _eq: "inference" },
-            call_state: { _in: ["completed", "failed", "cancelled"] }
-        }) {
+"#
+    } else {
+        ""
+    };
+
+    format!(
+        r#"{{
+        {metadata}
+        InferenceCall(
+            filter: {{
+                call_kind: {{ _eq: "inference" }},
+                call_state: {{ _in: ["completed", "failed", "cancelled"] }}
+            }},
+            order: [{{ ended_at: DESC }}, {{ call_id: DESC }}],
+            limit: {limit},
+            offset: {offset}
+        ) {{
             agent_did
             behavior_id
             backend_id
             call_state
+            ended_at
             prompt_tokens
             completion_tokens
-        }
-    }"#
+        }}
+    }}"#
+    )
 }
 
 fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQueryData) {
     let families = build_inference_metric_families(data);
 
-    push_metric_counter_prelude(
+    push_metric_prelude(
         lines,
-        "defra_agent_inference_requests_total",
-        "Cumulative terminal inference calls grouped by agent, backend, model, and terminal status.",
+        "defra_agent_inference_metrics_window_seconds",
+        "Trailing scrape window, in seconds, used for inference request and token gauges.",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_inference_metrics_window_seconds",
+        &[],
+        data.window_seconds,
+    );
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_inference_requests_window_count",
+        "Terminal inference calls ended inside the trailing scrape window, grouped by agent, backend, model, and terminal status; this gauge is not cumulative.",
     );
     for (key, total) in families.request_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_requests_total",
+            "defra_agent_inference_requests_window_count",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -466,15 +546,15 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
         );
     }
 
-    push_metric_counter_prelude(
+    push_metric_prelude(
         lines,
-        "defra_agent_inference_prompt_tokens_total",
-        "Cumulative prompt tokens reported by terminal inference calls.",
+        "defra_agent_inference_prompt_tokens_window_sum",
+        "Prompt tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
     );
     for (key, total) in families.prompt_token_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_prompt_tokens_total",
+            "defra_agent_inference_prompt_tokens_window_sum",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -485,15 +565,15 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
         );
     }
 
-    push_metric_counter_prelude(
+    push_metric_prelude(
         lines,
-        "defra_agent_inference_completion_tokens_total",
-        "Cumulative completion tokens reported by terminal inference calls.",
+        "defra_agent_inference_completion_tokens_window_sum",
+        "Completion tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
     );
     for (key, total) in families.completion_token_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_completion_tokens_total",
+            "defra_agent_inference_completion_tokens_window_sum",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -503,6 +583,26 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
             total,
         );
     }
+}
+
+fn retain_windowed_inference_calls(
+    calls: Vec<InferenceCallMetricRow>,
+    window_started_at: &DateTime<Utc>,
+) -> (Vec<InferenceCallMetricRow>, bool) {
+    let mut recent = Vec::new();
+    let mut reached_window_start = false;
+    for call in calls {
+        let Some(ended_at) = rfc3339_timestamp(&call.ended_at) else {
+            reached_window_start = true;
+            continue;
+        };
+        if ended_at < *window_started_at {
+            reached_window_start = true;
+        } else {
+            recent.push(call);
+        }
+    }
+    (recent, reached_window_start)
 }
 
 fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> InferenceMetricFamilies {
@@ -666,10 +766,6 @@ fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
     push_metric_prelude_with_type(lines, name, help, "gauge");
 }
 
-fn push_metric_counter_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
-    push_metric_prelude_with_type(lines, name, help, "counter");
-}
-
 fn push_metric_prelude_with_type(lines: &mut Vec<String>, name: &str, help: &str, kind: &str) {
     lines.push(format!("# HELP {name} {help}"));
     lines.push(format!("# TYPE {name} {kind}"));
@@ -704,13 +800,17 @@ fn escape_prometheus_label(value: &str) -> String {
 }
 
 fn rfc3339_timestamp_seconds(value: &str) -> Option<i64> {
+    rfc3339_timestamp(value).map(|timestamp| timestamp.timestamp())
+}
+
+fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
     let value = value.trim();
     if value.is_empty() {
         return None;
     }
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
-        .map(|timestamp| timestamp.timestamp())
+        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 #[cfg(test)]
@@ -757,6 +857,7 @@ mod tests {
                     behavior_id: "behavior-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
+                    ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
                     prompt_tokens: Some(10),
                     completion_tokens: Some(4),
                 },
@@ -765,6 +866,7 @@ mod tests {
                     behavior_id: "behavior-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
+                    ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
                     prompt_tokens: Some(7),
                     completion_tokens: Some(3),
                 },
@@ -773,6 +875,7 @@ mod tests {
                     behavior_id: "behavior-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "failed".to_string(),
+                    ended_at: "2026-06-13T10:00:02.000000000+00:00".to_string(),
                     prompt_tokens: Some(5),
                     completion_tokens: None,
                 },
@@ -781,10 +884,12 @@ mod tests {
                     behavior_id: "behavior-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "running".to_string(),
+                    ended_at: "2026-06-13T10:00:03.000000000+00:00".to_string(),
                     prompt_tokens: Some(99),
                     completion_tokens: Some(99),
                 },
             ],
+            window_seconds: INFERENCE_METRICS_WINDOW_SECS,
         };
 
         let families = build_inference_metric_families(&data);
@@ -813,7 +918,54 @@ mod tests {
     }
 
     #[test]
-    fn render_inference_metrics_emits_counter_families() {
+    fn inference_metrics_query_pages_terminal_calls_by_newest_end_time() {
+        let first_page = inference_metrics_query(500, 0, true);
+        assert!(first_page.contains("AgentPrincipal"));
+        assert!(first_page.contains("AgentBehavior"));
+        assert!(first_page.contains("order: [{ ended_at: DESC }, { call_id: DESC }]"));
+        assert!(first_page.contains("limit: 500"));
+        assert!(first_page.contains("offset: 0"));
+
+        let later_page = inference_metrics_query(500, 500, false);
+        assert!(!later_page.contains("AgentPrincipal"));
+        assert!(!later_page.contains("AgentBehavior"));
+        assert!(later_page.contains("offset: 500"));
+    }
+
+    #[test]
+    fn retain_windowed_inference_calls_keeps_recent_and_stops_on_old_rows() {
+        let window_started_at = rfc3339_timestamp("2026-06-13T10:00:00.000000000+00:00").unwrap();
+        let calls = vec![
+            InferenceCallMetricRow {
+                agent_did: String::new(),
+                behavior_id: String::new(),
+                backend_id: String::new(),
+                call_state: "completed".to_string(),
+                ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
+                prompt_tokens: None,
+                completion_tokens: None,
+            },
+            InferenceCallMetricRow {
+                agent_did: String::new(),
+                behavior_id: String::new(),
+                backend_id: String::new(),
+                call_state: "completed".to_string(),
+                ended_at: "2026-06-13T09:59:59.999999999+00:00".to_string(),
+                prompt_tokens: None,
+                completion_tokens: None,
+            },
+        ];
+
+        let (recent, reached_window_start) =
+            retain_windowed_inference_calls(calls, &window_started_at);
+
+        assert_eq!(recent.len(), 1);
+        assert!(reached_window_start);
+        assert_eq!(recent[0].ended_at, "2026-06-13T10:00:01.000000000+00:00");
+    }
+
+    #[test]
+    fn render_inference_metrics_emits_windowed_gauge_families() {
         let data = InferenceMetricsQueryData {
             principals: vec![],
             behaviors: vec![InferenceBehaviorRow {
@@ -828,24 +980,28 @@ mod tests {
                 behavior_id: "behavior-1".to_string(),
                 backend_id: String::new(),
                 call_state: "completed".to_string(),
+                ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
                 prompt_tokens: Some(10),
                 completion_tokens: Some(3),
             }],
+            window_seconds: INFERENCE_METRICS_WINDOW_SECS,
         };
 
         let mut lines = Vec::new();
         render_inference_metrics(&mut lines, &data);
         let body = lines.join("\n");
 
-        assert!(body.contains("# TYPE defra_agent_inference_requests_total counter"));
+        assert!(body.contains("# TYPE defra_agent_inference_metrics_window_seconds gauge"));
+        assert!(body.contains("defra_agent_inference_metrics_window_seconds 300"));
+        assert!(body.contains("# TYPE defra_agent_inference_requests_window_count gauge"));
         assert!(body.contains(
-            "defra_agent_inference_requests_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
+            "defra_agent_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
         ));
         assert!(body.contains(
-            "defra_agent_inference_prompt_tokens_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
+            "defra_agent_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
         ));
         assert!(body.contains(
-            "defra_agent_inference_completion_tokens_total{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
+            "defra_agent_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
         ));
     }
 }

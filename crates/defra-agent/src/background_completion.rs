@@ -694,6 +694,7 @@ pub(crate) async fn append_background_tool_completion(
                     &parent_request.agent_did,
                     "user",
                     &notification,
+                    None,
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
@@ -760,6 +761,7 @@ async fn ensure_projection_side_effects(
                     &parent_request.agent_did,
                     "user",
                     &notification,
+                    None,
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;

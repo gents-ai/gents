@@ -9,14 +9,16 @@ machine.
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 
-cargo install --profile dev-install --locked --path crates/defra-agent-cli
+gh release download v0.4.0 --repo sourcenetwork/defra-agent -p 'defra-agent-aarch64-apple-darwin.tar.gz'
+tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
+sudo install defra-agent-aarch64-apple-darwin/defra-agent /usr/local/bin/defra-agent
 
 defra-agent init
 defra-agent server
 defra-agent codex
 ```
 
-The rest of this document walks those six commands, then the permission
+The rest of this document walks those commands, then the permission
 presets, then the paths off the happy path. Desktop app, fleet bring-up, and
 P2P pairing live in [operations.md](operations.md).
 
@@ -24,7 +26,9 @@ P2P pairing live in [operations.md](operations.md).
 
 - macOS on Apple silicon
 - [Homebrew](https://brew.sh)
-- A Rust toolchain (`rustup`), for `cargo install`
+- The [GitHub CLI](https://cli.github.com) (`brew install gh`), authenticated
+  with access to this repository (`gh auth login`) — releases live on a
+  private repo
 
 ## 1. Start local inference
 
@@ -47,11 +51,24 @@ curl -s http://127.0.0.1:8080/v1/models | head -c 200
 
 ## 2. Install defra-agent
 
+Download the signed, notarized binary from the release:
+
+```bash
+gh release download v0.4.0 --repo sourcenetwork/defra-agent -p 'defra-agent-aarch64-apple-darwin.tar.gz'
+tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
+sudo install defra-agent-aarch64-apple-darwin/defra-agent /usr/local/bin/defra-agent
+```
+
+To verify the download, fetch the matching `.sha256` asset and run
+`shasum -a 256 -c` against it.
+
+Building from source instead (needs a Rust toolchain and a checkout):
+
 ```bash
 cargo install --profile dev-install --locked --path crates/defra-agent-cli
 ```
 
-This installs the `defra-agent` binary into `~/.cargo/bin`.
+That installs the `defra-agent` binary into `~/.cargo/bin`.
 
 ## 3. Initialize the agent
 

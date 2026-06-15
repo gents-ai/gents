@@ -1087,6 +1087,111 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
+/// #492 durable reasoning: an assistant turn that carries chain-of-thought
+/// reasoning persists that reasoning into the DURABLE `AgentMessage.reasoning`
+/// field at materialize time. This is the Rust realization of the Lean
+/// `finalizeComplete_copies_reasoning_then_clears` contract
+/// (`durableReasoning := tailReasoning`): the durable copy is captured at
+/// materialize independent of the live `AgentResponse.reasoning` tail, which
+/// the #64 contract still clears on finalize (asserted separately by
+/// `streaming::tests::write_reasoning_persists_on_response`).
+#[tokio::test]
+async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-durable-reasoning-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let user_prompt = user_text_message("Explain the plan");
+    assert!(matches!(
+        hook.on_completion_call(&user_prompt, &[]).await,
+        HookAction::Continue
+    ));
+
+    // Assistant turn WITH reasoning + visible text.
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![
+            AssistantContent::Reasoning(Reasoning::new("First weigh the trade-offs, then answer.")),
+            AssistantContent::Text(Text {
+                text: "Here is the plan.".to_string(),
+            }),
+        ],
+    })
+    .await
+    .unwrap();
+
+    let session_id = hook.session_id().await.expect("session id");
+
+    // Read the DURABLE AgentMessage rows directly (load_history decodes only
+    // `content`; here we assert the dedicated `reasoning` column).
+    let resp = node
+        .execute(&format!(
+            r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    order: {{ sequence: ASC }}
+                ) {{ role content reasoning }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query AgentMessage failed: {:?}",
+        resp.errors
+    );
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("agent message rows");
+
+    let assistant = rows
+        .iter()
+        .find(|row| row.get("role").and_then(|v| v.as_str()) == Some("assistant"))
+        .expect("assistant row");
+
+    // Durable reasoning persisted into the dedicated field.
+    let reasoning = assistant
+        .get("reasoning")
+        .and_then(|value| value.as_str())
+        .expect("reasoning field present");
+    assert_eq!(
+        reasoning, "First weigh the trade-offs, then answer.",
+        "durable AgentMessage.reasoning must carry the assistant turn's reasoning"
+    );
+
+    // The user turn carries no reasoning (empty, not null) so the field
+    // round-trips deterministically.
+    let user = rows
+        .iter()
+        .find(|row| row.get("role").and_then(|v| v.as_str()) == Some("user"))
+        .expect("user row");
+    assert_eq!(
+        user.get("reasoning").and_then(|value| value.as_str()),
+        Some(""),
+        "non-assistant rows carry empty durable reasoning"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
 #[tokio::test]
 async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let data_path = std::env::temp_dir().join(format!(

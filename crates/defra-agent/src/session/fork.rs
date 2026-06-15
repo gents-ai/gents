@@ -473,7 +473,7 @@ async fn copy_messages(
                     sequence: {{ _lt: {cut_seq} }}
                 }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role content timestamp }}
+            ) {{ sequence role content reasoning timestamp }}
         }}"#
     );
     let resp = executor.execute_graphql(&query).await?;
@@ -494,6 +494,8 @@ async fn copy_messages(
             .ok_or_else(|| anyhow::anyhow!("sequence missing"))?;
         let role = row.get("role").and_then(|v| v.as_str()).unwrap_or("");
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        // #492: carry the durable reasoning copy across forks.
+        let reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
         let message_key = format!("{child_session_escaped}:{sequence}");
         mutation_fields.push(format!(
@@ -504,11 +506,13 @@ async fn copy_messages(
                     sequence: {sequence},
                     role: "{role_escaped}",
                     content: "{content_escaped}",
+                    reasoning: "{reasoning_escaped}",
                     timestamp: "{timestamp_escaped}"
                 }}) {{ _docID }}
             "#,
             role_escaped = escape_graphql_string(role),
             content_escaped = escape_graphql_string(content),
+            reasoning_escaped = escape_graphql_string(reasoning),
             timestamp_escaped = escape_graphql_string(timestamp),
         ));
     }

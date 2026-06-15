@@ -298,6 +298,12 @@ pub struct AgentMessageRow {
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
+    /// Durable chain-of-thought reasoning for an assistant turn (#492). Copied
+    /// from the finalized `AgentResponse` live tail at materialize time so a
+    /// post-finalize reader can recover the reasoning even though the live
+    /// `AgentResponse.reasoning` tail is cleared on finalize (#64).
+    #[serde(default)]
+    pub reasoning: Option<String>,
     #[serde(default)]
     pub timestamp: Option<String>,
 }
