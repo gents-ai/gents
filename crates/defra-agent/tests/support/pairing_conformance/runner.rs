@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use defra_agent::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
 use defra_agent::agent::p2p_reconcile::{
     compute_owned_pairing_diff, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
@@ -31,13 +32,24 @@ pub struct HarnessNode {
     actual_connected: bool,
     applied_collections: BTreeSet<String>,
     applied_replicator_addresses: BTreeSet<String>,
+    /// Scope filter last installed for this node's managed replicators. Tracked
+    /// alongside the applied address set so the next reconcile can detect a
+    /// desired filter change as divergence (Lean `filter_change_forces_reinstall`).
+    applied_replicator_filter: PairingFilters,
     drop_next_reconcile: bool,
+    /// Operator-set scope filter for this node's outbound pairing. The
+    /// `PeerPairingDesired` schema has no filter column (production resolves it
+    /// from the template + peer DID), so the harness carries the operator's
+    /// chosen filter in-memory and merges it into the desired state it reads
+    /// back. Part of the replicator identity: a change forces reinstall.
+    desired_replicator_filter: PairingFilters,
 }
 
 pub struct Harness {
     a: HarnessNode,
     b: HarnessNode,
     history: Vec<ObservedSnapshot>,
+    emitted_ops: Vec<DiffOp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +74,9 @@ impl Harness {
             actual_connected: false,
             applied_collections: BTreeSet::new(),
             applied_replicator_addresses: BTreeSet::new(),
+            applied_replicator_filter: PairingFilters::default(),
             drop_next_reconcile: false,
+            desired_replicator_filter: PairingFilters::default(),
         };
         let b = HarnessNode {
             id: "B".to_string(),
@@ -72,12 +86,15 @@ impl Harness {
             actual_connected: false,
             applied_collections: BTreeSet::new(),
             applied_replicator_addresses: BTreeSet::new(),
+            applied_replicator_filter: PairingFilters::default(),
             drop_next_reconcile: false,
+            desired_replicator_filter: PairingFilters::default(),
         };
         let mut harness = Self {
             a,
             b,
             history: Vec::new(),
+            emitted_ops: Vec::new(),
         };
         harness.record_observation().await?;
         Ok(harness)
@@ -94,6 +111,13 @@ impl Harness {
         self.history.clone()
     }
 
+    /// Every reconcile op the harness emitted, in order. Used by scenario tests
+    /// to assert the *shape* of reconciliation (e.g. a filter change really
+    /// tears down then reinstalls the replicator rather than mutating in place).
+    pub fn emitted_ops(&self) -> &[DiffOp] {
+        &self.emitted_ops
+    }
+
     async fn apply_action(&mut self, action: &Action) -> Result<()> {
         match action {
             Action::OperatorWrite {
@@ -101,7 +125,13 @@ impl Harness {
                 peer,
                 collections,
                 replicator_addresses,
+                replicator_filter,
             } => {
+                // The scope filter is part of the replicator identity but has no
+                // column in PeerPairingDesired; carry the operator's choice
+                // in-memory so a later filter change is detected as divergence.
+                self.node_mut(node)?.desired_replicator_filter =
+                    scenario_filter_to_pairing_filters(replicator_filter);
                 write_peer_pairing_desired(
                     self.node(node)?,
                     peer,
@@ -174,11 +204,12 @@ impl Harness {
             }
             read_desired_state(node, peer_id).await?
         };
-        if node_id == "A" {
-            apply_desired_state(&mut self.a, &mut self.b, &desired, peer_id).await?;
+        let ops = if node_id == "A" {
+            apply_desired_state(&mut self.a, &mut self.b, &desired, peer_id).await?
         } else {
-            apply_desired_state(&mut self.b, &mut self.a, &desired, peer_id).await?;
-        }
+            apply_desired_state(&mut self.b, &mut self.a, &desired, peer_id).await?
+        };
+        self.emitted_ops.extend(ops);
         Ok(ReconcileOutcome::Applied)
     }
 
@@ -249,7 +280,7 @@ impl Harness {
             applied: PairingApplied {
                 collections: self.a.applied_collections.clone(),
                 replicator_addresses: self.a.applied_replicator_addresses.clone(),
-                ..Default::default()
+                replicator_filter: self.a.applied_replicator_filter.clone(),
             },
             read_failed: false,
         })
@@ -274,7 +305,7 @@ async fn apply_desired_state(
     peer: &mut HarnessNode,
     desired: &PairingDesired,
     peer_id: &str,
-) -> Result<()> {
+) -> Result<Vec<DiffOp>> {
     if desired.has_wiring() && !peer.actual_connected {
         peer.actual_connected = true;
     }
@@ -286,16 +317,18 @@ async fn apply_desired_state(
     let mut applied = PairingApplied {
         collections: reconciler.applied_collections.clone(),
         replicator_addresses: reconciler.applied_replicator_addresses.clone(),
-        ..Default::default()
+        replicator_filter: reconciler.applied_replicator_filter.clone(),
     };
-    for op in compute_owned_pairing_diff(desired, &actual, &applied) {
-        apply_op_to_actual(peer, &op);
-        update_applied_after_success(&mut applied, &op, desired);
+    let ops = compute_owned_pairing_diff(desired, &actual, &applied);
+    for op in &ops {
+        apply_op_to_actual(peer, op);
+        update_applied_after_success(&mut applied, op, desired);
+        reconciler.applied_replicator_filter = applied.replicator_filter.clone();
         reconciler.applied_collections = applied.collections.clone();
         reconciler.applied_replicator_addresses = applied.replicator_addresses.clone();
         write_peer_pairing_applied(reconciler, peer_id, &applied).await?;
     }
-    Ok(())
+    Ok(ops)
 }
 
 fn apply_op_to_actual(peer: &mut HarnessNode, op: &DiffOp) {
@@ -358,8 +391,29 @@ async fn read_desired_state(node: &HarnessNode, peer: &str) -> Result<PairingDes
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        // Merge the operator-set scope filter the harness carries in-memory:
+        // the schema has no filter column, but the filter is part of the
+        // replicator identity the reconciler diffs against `applied`.
+        replicator_filter: node.desired_replicator_filter.clone(),
         ..Default::default()
     })
+}
+
+fn scenario_filter_to_pairing_filters(
+    filter: &std::collections::BTreeMap<String, super::scenario::ScenarioFilterPredicate>,
+) -> PairingFilters {
+    filter
+        .iter()
+        .map(|(collection, predicate)| {
+            (
+                collection.clone(),
+                FilterPredicate {
+                    field: predicate.field.clone(),
+                    value: predicate.value.clone(),
+                },
+            )
+        })
+        .collect()
 }
 
 async fn write_peer_pairing_desired(

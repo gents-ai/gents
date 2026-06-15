@@ -2,6 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A single-field equality predicate carried by a scenario's `OperatorWrite`.
+///
+/// Mirrors the production `FilterPredicate`: the scope filter is part of the
+/// replicator's identity, so changing it forces a teardown+install of the
+/// affected replicator (Lean `PairingReconcile.filter_change_forces_reinstall`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioFilterPredicate {
+    pub field: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "PascalCase")]
 pub enum Action {
@@ -12,6 +23,12 @@ pub enum Action {
         collections: Vec<String>,
         #[serde(default)]
         replicator_addresses: Vec<String>,
+        /// Optional per-collection scope filter applied to this pairing's
+        /// replicators. Absent (the common case) leaves the pairing unfiltered;
+        /// changing it on an already-converged pairing reinstalls the
+        /// replicator. Backward-compatible: existing fixtures omit it.
+        #[serde(default)]
+        replicator_filter: std::collections::BTreeMap<String, ScenarioFilterPredicate>,
     },
     OperatorDelete {
         node: NodeId,
@@ -76,6 +93,7 @@ mod tests {
                     peer: "B".into(),
                     collections: vec!["c1".into()],
                     replicator_addresses: vec!["/ip4/127.0.0.1/tcp/4101/p2p/p1".into()],
+                    replicator_filter: Default::default(),
                 },
                 Action::ReadFailure { node: "A".into() },
                 Action::WaitForConvergence { timeout_secs: 10 },

@@ -149,6 +149,13 @@ pub fn check_liveness(final_snapshot: &ObservedSnapshot) -> bool {
             .applied
             .replicator_addresses
             .is_subset(&final_snapshot.desired.replicator_addresses)
+        // The scope filter is part of the replicator identity. If managed
+        // replicators are installed under a filter that no longer matches the
+        // desired filter, a reinstall is still pending — not converged (Lean
+        // `filter_change_forces_reinstall`).
+        && (final_snapshot.applied.replicator_addresses.is_empty()
+            || final_snapshot.applied.replicator_filter
+                == final_snapshot.desired.replicator_filter)
         && (!final_snapshot.desired.has_wiring() || final_snapshot.actual.connected)
 }
 

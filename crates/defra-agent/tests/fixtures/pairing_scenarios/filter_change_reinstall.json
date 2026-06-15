@@ -1,0 +1,29 @@
+{
+  "name": "filter_change_reinstall",
+  "actions": [
+    {
+      "op": "OperatorWrite",
+      "node": "A",
+      "peer": "B",
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4103/p2p/peer-b"],
+      "replicator_filter": {
+        "AgentRequest": { "field": "agent_did", "value": "did:key:alice" }
+      }
+    },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    {
+      "op": "OperatorWrite",
+      "node": "A",
+      "peer": "B",
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4103/p2p/peer-b"],
+      "replicator_filter": {
+        "AgentRequest": { "field": "agent_did", "value": "did:key:bob" }
+      }
+    },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 }
+  ]
+}
