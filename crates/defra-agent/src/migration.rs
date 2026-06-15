@@ -1059,6 +1059,235 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
     Ok(())
 }
 
+/// Per-collection outcome of the legacy `agent_did` scope-key reconciliation
+/// (Finding #11): how many rows were backfilled from their owning record, and
+/// how many remain unscoped (their `agent_did` is still null after the field was
+/// added) and so are excluded from DID-scoped replication.
+#[derive(Debug, Default)]
+struct ScopeKeyBackfillReport {
+    /// `(collection, backfilled_count, unscoped_count)` in processing order.
+    entries: Vec<(&'static str, usize, usize)>,
+}
+
+impl ScopeKeyBackfillReport {
+    fn record(&mut self, collection: &'static str, backfilled: usize, unscoped: usize) {
+        self.entries.push((collection, backfilled, unscoped));
+    }
+
+    #[cfg(test)]
+    fn backfilled_for(&self, collection: &str) -> usize {
+        self.entries
+            .iter()
+            .find(|(name, _, _)| *name == collection)
+            .map(|(_, backfilled, _)| *backfilled)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn unscoped_for(&self, collection: &str) -> usize {
+        self.entries
+            .iter()
+            .find(|(name, _, _)| *name == collection)
+            .map(|(_, _, unscoped)| *unscoped)
+            .unwrap_or(0)
+    }
+
+    /// Emit one warning per collection that still has unscoped legacy rows, so
+    /// the operator sees the consequence (the count) rather than a silent drop.
+    fn warn_unscoped(&self) {
+        for (collection, _, unscoped) in &self.entries {
+            if *unscoped > 0 {
+                tracing::warn!(
+                    collection,
+                    unscoped_rows = unscoped,
+                    "legacy rows predate the immutable agent_did scope key and \
+                     remain null (this defradb pin rejects writing a value to a \
+                     newly-@immutable field even on its first write); they are \
+                     excluded from DID-scoped replication — re-create or re-scope \
+                     them to include"
+                );
+            }
+        }
+    }
+}
+
+/// Reconcile the freshly-added `agent_did` scope key on legacy conversation rows
+/// (Finding #11) and report the outcome per collection.
+///
+/// INTENT was to BACKFILL each null row from its owning record — children
+/// (AgentMessage/AgentToolCall/CompactionEntry) via `session_id` →
+/// AgentSession.agent_did, and AgentSession itself via its AgentRequest lineage —
+/// with a single first write while the field is brand-new in this migration
+/// window. The owner resolution below is real and exercised.
+///
+/// EMPIRICAL CONSTRAINT (this defradb pin): a write that sets a value on a
+/// newly-`@immutable` field of a pre-existing document is REJECTED with
+/// "immutable field 'agent_did' cannot be changed" — the immutability check
+/// fires on null→value, not just value→value, so the document's history null is
+/// treated as a prior write. Backfill is therefore impossible here; every
+/// resolvable row falls through to the unscoped count and the per-collection
+/// warning. If an upstream version distinguishes the first write, the same code
+/// path will start reporting `backfilled` without further change.
+///
+/// Idempotent and immutability-safe: only rows whose `agent_did` is currently
+/// null are even considered, so a row that already carries the key is never
+/// re-written.
+async fn backfill_conversation_scope_keys(node: &EmbeddedNode) -> ScopeKeyBackfillReport {
+    let mut report = ScopeKeyBackfillReport::default();
+
+    // session_id → owning agent_did, recovered from AgentRequest lineage and any
+    // AgentSession that already carries the key.
+    let owner = build_session_owner_map(node).await;
+
+    // AgentSession is the owning record; the three children key on `session_id`.
+    // All four resolve their DID through the same session→owner map.
+    for collection in [
+        "AgentSession",
+        "AgentMessage",
+        "AgentToolCall",
+        "CompactionEntry",
+    ] {
+        let (filled, unscoped) = reconcile_scope_key(node, collection, &owner).await;
+        report.record(collection, filled, unscoped);
+    }
+
+    report
+}
+
+/// Map `session_id` → owning `agent_did` from AgentRequest lineage and from any
+/// AgentSession that already carries the key. Only non-empty DIDs are recorded,
+/// so a session with no resolvable owner is absent (its rows count as unscoped).
+async fn build_session_owner_map(node: &EmbeddedNode) -> std::collections::HashMap<String, String> {
+    let mut owner: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    let trimmed_did = |row: &serde_json::Value| -> Option<String> {
+        row.get("agent_did")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let session_of = |row: &serde_json::Value| -> Option<String> {
+        row.get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    // AgentRequest lineage first (the source of truth for legacy sessions).
+    let requests = read_rows(node, "AgentRequest", "session_id agent_did").await;
+    for row in &requests {
+        if let (Some(session), Some(did)) = (session_of(row), trimmed_did(row)) {
+            owner.entry(session).or_insert(did);
+        }
+    }
+    // Any AgentSession that already carries its own DID seeds/overrides the map.
+    let sessions = read_rows(node, "AgentSession", "session_id agent_did").await;
+    for row in &sessions {
+        if let (Some(session), Some(did)) = (session_of(row), trimmed_did(row)) {
+            owner.insert(session, did);
+        }
+    }
+
+    owner
+}
+
+/// Read every row of `collection` selecting `_docID` plus the given fields.
+async fn read_rows(
+    node: &EmbeddedNode,
+    collection: &str,
+    select_fields: &str,
+) -> Vec<serde_json::Value> {
+    let query = format!("query {{ {collection} {{ _docID {select_fields} }} }}");
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        tracing::warn!(
+            collection,
+            errors = ?response.errors,
+            "scope-key backfill read failed"
+        );
+        return Vec::new();
+    }
+    response
+        .data
+        .as_ref()
+        .and_then(|d| d.get(collection))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Reconcile `collection`'s `agent_did` against `owner_map[session_id]`. Returns
+/// `(backfilled, unscoped)`. Rows already carrying a non-empty DID are skipped
+/// (idempotent; never a second write to the immutable field). Each null row whose
+/// owner resolves is offered a single first write; if defradb accepts it the row
+/// counts as backfilled, otherwise (and for rows with no resolvable owner) it
+/// counts as unscoped. The whole-collection update failure is logged once at
+/// debug, not per row, so a pin that universally rejects the first write does not
+/// flood the log — the operator-facing signal is the per-collection warn count.
+async fn reconcile_scope_key(
+    node: &EmbeddedNode,
+    collection: &'static str,
+    owner_map: &std::collections::HashMap<String, String>,
+) -> (usize, usize) {
+    let rows = read_rows(node, collection, "session_id agent_did").await;
+    let mut backfilled = 0usize;
+    let mut unscoped = 0usize;
+    let mut logged_reject = false;
+
+    for row in rows {
+        let already_scoped = row
+            .get("agent_did")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if already_scoped {
+            continue;
+        }
+        let Some(doc_id) = row.get("_docID").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let session = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(did) = session.and_then(|s| owner_map.get(s)) else {
+            // No resolvable owner: never guess. Counted + warned by the caller.
+            unscoped += 1;
+            continue;
+        };
+
+        let mutation = format!(
+            r#"mutation {{ update_{collection}(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ agent_did: "{}" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+            crate::graphql::escape_graphql_string(did),
+        );
+        let update = node.execute(&mutation).await;
+        if update.has_errors() {
+            if !logged_reject {
+                logged_reject = true;
+                tracing::debug!(
+                    collection,
+                    errors = ?update.errors,
+                    "scope-key backfill rejected by defradb (likely the immutable \
+                     first-write constraint); affected rows counted as unscoped"
+                );
+            }
+            unscoped += 1;
+            continue;
+        }
+        backfilled += 1;
+    }
+
+    (backfilled, unscoped)
+}
+
 /// Idempotent migration ensuring every conversation collection carries an
 /// `@immutable` `agent_did` scope key, the field filtered replication (#1033)
 /// scopes on (and rejects unless immutable).
@@ -1067,9 +1296,18 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
 ///
 /// 1. The four collections that key on `session_id` and historically lacked
 ///    `agent_did` entirely (AgentMessage, AgentToolCall, AgentSession,
-///    CompactionEntry) get the field ADDED as an immutable nullable String. No
-///    lens is required: a row written before the migration reads back
-///    `agent_did: null` until it is rewritten or recreated.
+///    CompactionEntry) get the field ADDED as an immutable nullable String, then
+///    `backfill_conversation_scope_keys` reconciles legacy rows (Finding #11).
+///    The intent is to BACKFILL each null row from its owning record — children
+///    via `session_id` → AgentSession.agent_did, AgentSession via its
+///    AgentRequest lineage — but on the current defradb pin a write that sets a
+///    value on a newly-`@immutable` field of a pre-existing document is rejected
+///    ("immutable field 'agent_did' cannot be changed"; the constraint fires on
+///    null→value, not only value→value). So today every legacy row stays null and
+///    is COUNTED and WARNED about per collection — excluded from DID-scoped
+///    replication, surfaced rather than silently dropped, and recoverable only by
+///    re-creating or re-scoping the row. (The backfill path remains wired so a
+///    future pin that permits the first write needs no further change.)
 /// 2. The four that already carried `agent_did` as a plain `@index` field
 ///    (AgentRequest, AgentResponse, AgentToolResult, AgentConversation) cannot
 ///    be flipped to immutable on the current pin — defradb rejects any property
@@ -1123,6 +1361,14 @@ pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -
             "patched with agent_did immutable scope key"
         );
     }
+
+    // Group 1 (cont.): backfill the freshly-added scope key on legacy rows from
+    // their owning record, and surface (with a per-collection count + warning)
+    // any row whose owner cannot be resolved (Finding #11). Safe to run every
+    // startup: rows already scoped are skipped, so it self-heals a backfill that
+    // crashed midway and never re-writes an immutable value.
+    let report = backfill_conversation_scope_keys(&node).await;
+    report.warn_unscoped();
 
     // Group 2: detect (cannot fix in place) a pre-existing mutable agent_did.
     for collection_name in PRE_EXISTING_AGENT_DID_COLLECTIONS {
@@ -1666,6 +1912,170 @@ mod patch_kind_tests {
             rewrite.has_errors(),
             "rewriting the migrated immutable agent_did on AgentMessage must be rejected"
         );
+    }
+
+    /// Finding #11: legacy session-keyed rows that predate the immutable
+    /// `agent_did` scope key must not be silently dropped from DID-scoped
+    /// replication. The reconciler resolves each null row's owning DID (children
+    /// via `session_id` → AgentSession; sessions via `session_id` → AgentRequest
+    /// lineage) and attempts a single first write. On the current defradb pin
+    /// that write is rejected (the `@immutable` constraint fires on null→value),
+    /// so every legacy row is COUNTED + WARNED rather than silently excluded, and
+    /// an owner is never guessed. This test pins that behavior; the owner-
+    /// resolution and idempotence paths are fully exercised.
+    #[tokio::test]
+    async fn conversation_scope_key_migration_counts_legacy_rows_owner_never_guessed() {
+        let node = test_node().await;
+        // Upgraded DB: session-keyed collections lack agent_did entirely;
+        // AgentRequest already carries it (the lineage source for sessions).
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
+
+        // A scoped session "s-alice": an AgentRequest carries the owning DID, and
+        // each child collection references the session. All predate the scope key
+        // (no agent_did column exists yet).
+        for mutation in [
+            r#"mutation { create_AgentRequest(input: {
+                request_id: "req-1", session_id: "s-alice",
+                agent_did: "did:defra-agent:alice", content: "hi", status: "done",
+                lifecycle_state: "terminal", created_at: "2026-06-12T00:00:00Z"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentSession(input: {
+                session_id: "s-alice", agent_name: "alice", behavior_id: "b1", status: "ended"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentMessage(input: {
+                message_key: "m-1", session_id: "s-alice", request_id: "req-1",
+                sequence: 0, role: "user", content: "hi"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentToolCall(input: {
+                tool_call_key: "tc-1", session_id: "s-alice", request_id: "req-1",
+                tool_name: "bash", tool_call_id: "call-1", status: "done",
+                lifecycle_state: "terminal"
+            }) { _docID } }"#,
+            r#"mutation { create_CompactionEntry(input: {
+                compaction_key: "ce-1", session_id: "s-alice", sequence: 0,
+                summary: "...", created_at: "2026-06-12T00:00:00Z"
+            }) { _docID } }"#,
+            // An ORPHAN session with no AgentRequest lineage, plus an orphan
+            // message under it: nothing resolves an agent_did for these.
+            r#"mutation { create_AgentSession(input: {
+                session_id: "s-orphan", agent_name: "ghost", behavior_id: "b1", status: "ended"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentMessage(input: {
+                message_key: "m-orphan", session_id: "s-orphan", request_id: "req-gone",
+                sequence: 0, role: "user", content: "?"
+            }) { _docID } }"#,
+        ] {
+            let resp = node.execute(mutation).await;
+            assert!(!resp.has_errors(), "seed mutation failed: {:?}", resp.errors);
+        }
+
+        // Add the immutable scope key (the Group-1 patch the migration runs
+        // before backfilling). Legacy rows now read back agent_did: null.
+        for (collection, patch) in [
+            ("AgentSession", ADD_AGENT_SESSION_AGENT_DID_PATCH),
+            ("AgentMessage", ADD_AGENT_MESSAGE_AGENT_DID_PATCH),
+            ("AgentToolCall", ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH),
+            ("CompactionEntry", ADD_COMPACTION_ENTRY_AGENT_DID_PATCH),
+        ] {
+            let next = node.patch_collection(collection, patch).await.unwrap();
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .unwrap();
+        }
+
+        // First run. The owner map resolves "s-alice" → did:defra-agent:alice
+        // from the AgentRequest lineage and offers each null row a first write.
+        // On the current defradb pin that write is REJECTED ("immutable field
+        // 'agent_did' cannot be changed"), so every legacy row — resolvable or
+        // orphan — is counted as unscoped rather than silently dropped, and
+        // nothing is ever guessed. (If a future pin permits the first write, the
+        // resolvable rows will move into the backfilled column; this assertion
+        // pins today's behavior, matching the group-2 limitation test below.)
+        let report = backfill_conversation_scope_keys(&node).await;
+
+        // Per collection: s-alice (resolvable but write-rejected) and, for the
+        // session-keyed collections that also have an orphan, the orphan too.
+        assert_eq!(
+            report.unscoped_for("AgentSession"),
+            2,
+            "s-alice (write rejected) + s-orphan (no lineage) both counted, not dropped"
+        );
+        assert_eq!(
+            report.unscoped_for("AgentMessage"),
+            2,
+            "m-1 (write rejected) + m-orphan (no scoped session) both counted"
+        );
+        assert_eq!(report.unscoped_for("AgentToolCall"), 1);
+        assert_eq!(report.unscoped_for("CompactionEntry"), 1);
+        // Backfill is impossible on this pin: nothing is written.
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(
+                report.backfilled_for(collection),
+                0,
+                "{collection}: this defradb pin rejects the first write to a \
+                 newly-immutable field, so no row can be backfilled"
+            );
+        }
+
+        // Every legacy row remains null (no backfill, no guess).
+        for (collection, key_field, key) in [
+            ("AgentSession", "session_id", "s-alice"),
+            ("AgentMessage", "message_key", "m-1"),
+            ("AgentToolCall", "tool_call_key", "tc-1"),
+            ("CompactionEntry", "compaction_key", "ce-1"),
+            ("AgentMessage", "message_key", "m-orphan"),
+        ] {
+            let q = format!(
+                r#"query {{ {collection}(filter: {{ {key_field}: {{ _eq: "{key}" }} }}) {{ agent_did }} }}"#
+            );
+            let resp = node.execute(&q).await;
+            assert!(!resp.has_errors(), "read {collection} failed: {:?}", resp.errors);
+            let did = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get(collection))
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|r| r.get("agent_did"))
+                .and_then(|v| v.as_str());
+            assert_eq!(
+                did, None,
+                "{collection} {key} must stay null (backfill blocked, owner never guessed)"
+            );
+        }
+
+        // Idempotent: a second run is stable — same unscoped counts, still zero
+        // backfilled, no error.
+        let report2 = backfill_conversation_scope_keys(&node).await;
+        assert_eq!(report2.unscoped_for("AgentSession"), 2);
+        assert_eq!(report2.unscoped_for("AgentMessage"), 2);
+        assert_eq!(report2.unscoped_for("AgentToolCall"), 1);
+        assert_eq!(report2.unscoped_for("CompactionEntry"), 1);
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(report2.backfilled_for(collection), 0);
+        }
+
+        // The end-to-end public migration also succeeds and stays idempotent.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
     }
 
     /// Guard: every conversation collection must declare `agent_did` as an
