@@ -63,7 +63,7 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     if !otlp_enabled_from_env() {
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(fmt::layer())
+            .with(fmt::layer().with_writer(std::io::stderr))
             .try_init()
             .context("initializing tracing subscriber")?;
         return Ok(TelemetryGuard {
@@ -81,7 +81,7 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(std::io::stderr))
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init()
         .context("initializing tracing subscriber")?;

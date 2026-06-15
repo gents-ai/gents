@@ -6744,6 +6744,7 @@ dependencies = [
  "toml 0.8.2",
  "tracing",
  "tracing-opentelemetry",
+ "tracing-subscriber",
  "uuid",
  "windows-sys 0.61.2",
 ]

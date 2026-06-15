@@ -1202,11 +1202,30 @@ async fn read_rows(
     let query = format!("query {{ {collection} {{ _docID {select_fields} }} }}");
     let response = node.execute(&query).await;
     if response.has_errors() {
-        tracing::warn!(
-            collection,
-            errors = ?response.errors,
-            "scope-key backfill read failed"
-        );
+        // A collection/field that simply doesn't exist (e.g. a fresh or
+        // config-only home that never created this conversation collection) is
+        // not a backfill failure: there are zero legacy rows to scope. DefraDB
+        // surfaces that as `Cannot query field "..."`. Treat it as "not
+        // applicable" and skip silently at debug — the migration runs on every
+        // CLI command, so this must not emit a WARN that would corrupt
+        // `--output json` stdout. Any OTHER error is a genuine read failure and
+        // still warns.
+        let absent = response
+            .errors
+            .iter()
+            .any(|error| error.message.contains("Cannot query field"));
+        if absent {
+            tracing::debug!(
+                collection,
+                "scope-key backfill: collection/field absent; no rows to scope"
+            );
+        } else {
+            tracing::warn!(
+                collection,
+                errors = ?response.errors,
+                "scope-key backfill read failed"
+            );
+        }
         return Vec::new();
     }
     response
@@ -2076,6 +2095,118 @@ mod patch_kind_tests {
         ensure_conversation_scope_key_migrations(node.clone())
             .await
             .unwrap();
+    }
+
+    /// A tracing layer that records the level of every event whose target is
+    /// this crate's `migration` module, so a test can assert the scope-key
+    /// backfill emits NO warn/info on no-op runs (the property that keeps
+    /// `--output json` stdout clean now that the CLI runs the full migration set
+    /// on every command).
+    #[derive(Clone, Default)]
+    struct LevelCapture {
+        levels: std::sync::Arc<std::sync::Mutex<Vec<tracing::Level>>>,
+    }
+
+    impl LevelCapture {
+        fn levels(&self) -> Vec<tracing::Level> {
+            self.levels.lock().expect("level store should lock").clone()
+        }
+
+        fn warns_or_infos(&self) -> Vec<tracing::Level> {
+            self.levels()
+                .into_iter()
+                .filter(|level| *level <= tracing::Level::INFO)
+                .collect()
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for LevelCapture
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target().contains("migration") {
+                self.levels
+                    .lock()
+                    .expect("level store should lock")
+                    .push(*event.metadata().level());
+            }
+        }
+    }
+
+    /// Absent collections are NOT a backfill failure: a home that never created
+    /// the conversation collections (fresh / config-only) has zero legacy rows.
+    /// The read must skip silently (DefraDB reports `Cannot query field`), the
+    /// report must be empty, and crucially the migration must emit NO warn/info —
+    /// otherwise the line corrupts `--output json` stdout on every CLI command.
+    #[tokio::test]
+    async fn scope_key_backfill_silent_when_collections_absent() {
+        use tracing_subscriber::prelude::*;
+
+        let node = test_node().await;
+        // Deliberately do NOT register the conversation collections.
+        let capture = LevelCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        // `set_default` returns a guard whose subscriber stays active across the
+        // awaits below (same thread), unlike the closure-only `with_default`.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let report = backfill_conversation_scope_keys(&node).await;
+
+        // No collections -> nothing to scope, nothing to warn about.
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(report.backfilled_for(collection), 0);
+            assert_eq!(report.unscoped_for(collection), 0);
+        }
+        report.warn_unscoped();
+        assert!(
+            capture.warns_or_infos().is_empty(),
+            "absent collections must produce no warn/info, got: {:?}",
+            capture.warns_or_infos()
+        );
+    }
+
+    /// Steady state: the conversation collections EXIST and carry the scope key
+    /// with no legacy (null) rows. Running the full scope-key migration must be
+    /// silent and idempotent — the common case on every CLI invocation.
+    #[tokio::test]
+    async fn scope_key_migration_silent_on_steady_state_rerun() {
+        use tracing_subscriber::prelude::*;
+
+        let node = test_node().await;
+        // Fresh SDL: collections are created immutable with agent_did already
+        // present, so the migration has nothing to patch and no legacy rows.
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        // Prime once outside capture so any first-run schema work is excluded.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let capture = LevelCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        drop(_guard);
+
+        assert!(
+            capture.warns_or_infos().is_empty(),
+            "steady-state scope-key migration must be silent, got: {:?}",
+            capture.warns_or_infos()
+        );
     }
 
     /// Guard: every conversation collection must declare `agent_did` as an
