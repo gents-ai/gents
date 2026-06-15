@@ -38,6 +38,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
         .env("HOME", &home_dir)
@@ -133,6 +134,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let first_stdout = run_cli_text(&home_dir, &["chat", &first_prompt])?;
     assert!(
@@ -208,6 +210,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
         &home_dir,
@@ -288,6 +291,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
         .env("HOME", &home_dir)

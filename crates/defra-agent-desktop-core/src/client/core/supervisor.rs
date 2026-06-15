@@ -1,8 +1,13 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::SystemTime;
 
+#[cfg(test)]
+use defra_agent::agent::p2p_reconcile::{compute_pairing_diff, PairingActual, RemoteP2pAdmin};
+use defra_agent::agent::p2p_reconcile::{
+    reconcile_peer_tick, DiffOp, GraphqlPairingStateStore, PairingDesired, PairingStateStore,
+    RemoteP2pAdminError,
+};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use tokio::sync::{mpsc, watch, RwLock};
@@ -13,9 +18,8 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
-    add_replicator_with_retry, configure_local_runtime_pairing_legacy, connect_peer_with_retry,
-    force_connect_peer_with_retry, is_connected_peer, p2p_pairing_enabled_for_graphql,
-    pairing_reconcile_enabled, REMOTE_P2P_PAIRING_ENV,
+    add_replicator_with_retry, connect_peer_with_retry, force_connect_peer_with_retry,
+    is_connected_peer, p2p_pairing_enabled_for_graphql, REMOTE_P2P_PAIRING_ENV,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -25,10 +29,7 @@ use super::{
     ClientPeerStatus, P2PHealth, P2PHealthStatus, P2PSupervisorCommand, PairingCollectionStatus,
     P2P_SUPERVISOR_INTERVAL, P2P_WEDGED_FAILURE_THRESHOLD,
 };
-use crate::remote_admin::{
-    classify_remote_admin_error, compute_pairing_diff, DiffOp, HttpRemoteP2pAdmin, PairingActual,
-    PairingDesired, RemoteP2pAdmin,
-};
+use crate::remote_admin::{classify_remote_admin_error, HttpRemoteP2pAdmin};
 
 pub(super) fn spawn_p2p_supervisor_task(
     node: Arc<EmbeddedNode>,
@@ -127,7 +128,6 @@ async fn run_saved_peer_repair_cycle(
                 current_status,
                 install_replicators_on_bootstrap,
                 force_repair,
-                Some(remote_admin_actor.as_ref()),
             )
             .await;
             still_saved = peer_directory
@@ -141,11 +141,10 @@ async fn run_saved_peer_repair_cycle(
             }
         }
 
-        if still_saved && pairing_reconcile_enabled() {
-            let desired = load_desired_for_peer(node, &record).await;
+        if still_saved {
             run_pairing_reconcile_for_peer(
+                node,
                 &record,
-                desired,
                 peer_statuses,
                 Arc::clone(remote_admin_actor),
             )
@@ -278,7 +277,6 @@ pub(super) async fn repair_saved_peer(
     current_status: Option<ClientPeerStatus>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
-    remote_admin_actor: Option<&PrincipalIdentity>,
 ) -> ClientPeerStatus {
     let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
         peer_id: record.peer_id.clone(),
@@ -371,100 +369,14 @@ pub(super) async fn repair_saved_peer(
         status.dial_succeeded = true;
     }
 
-    if let Some(graphql) = record.graphql.as_deref() {
-        if pairing_reconcile_enabled() {
-            status.last_error = None;
-        } else if p2p_pairing_enabled_for_graphql(graphql) {
-            match remote_admin_actor {
-                Some(actor) => {
-                    match configure_local_runtime_pairing_legacy(p2p, graphql, actor).await {
-                        Ok(()) => status.last_error = None,
-                        Err(error) => {
-                            status.last_error = Some(format!(
-                                "peer {} local runtime pairing failed: {}",
-                                record.label, error
-                            ));
-                        }
-                    }
-                }
-                None => {
-                    status.last_error = Some(format!(
-                        "peer {} local runtime pairing failed: desktop principal identity unavailable",
-                        record.label
-                    ));
-                }
-            }
-        } else {
-            status.last_error = None;
-        }
-    } else {
-        status.last_error = None;
-    }
+    status.last_error = None;
 
     status
 }
 
-async fn load_desired_for_peer(node: &Arc<EmbeddedNode>, record: &PeerRecord) -> PairingDesired {
-    use defra_agent_protocol::graphql::escape_graphql_string;
-
-    let peer_id = escape_graphql_string(&record.peer_id);
-    let query = format!(
-        r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ collections replicator_addresses }} }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        tracing::warn!(
-            target: "defra_agent_desktop_core::pairing_reconcile",
-            peer_id = %record.peer_id,
-            label = %record.label,
-            errors = ?response.errors,
-            "PeerPairingDesired query failed; using empty desired state"
-        );
-        return PairingDesired::default();
-    }
-
-    let Some(row) = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("PeerPairingDesired"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-    else {
-        return PairingDesired::default();
-    };
-
-    let collections = row
-        .get("collections")
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|value| value.as_str())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let replicator_addresses = row
-        .get("replicator_addresses")
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|value| value.as_str())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-
-    PairingDesired {
-        collections,
-        replicator_addresses,
-    }
-}
-
 async fn run_pairing_reconcile_for_peer(
+    node: &Arc<EmbeddedNode>,
     record: &PeerRecord,
-    desired: PairingDesired,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     remote_admin_actor: Arc<PrincipalIdentity>,
 ) {
@@ -472,7 +384,10 @@ async fn run_pairing_reconcile_for_peer(
         return;
     };
     let admin = match HttpRemoteP2pAdmin::new_with_actor(graphql_url, remote_admin_actor) {
-        Ok(admin) => admin,
+        // Collection ids are content-addressed, so the local schema resolves the
+        // same name → id the remote tracks; this lets the reconcile diff compare
+        // desired (names) against the remote subscription set (ids) correctly.
+        Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
         Err(error) => {
             tracing::warn!(
                 target: "defra_agent_desktop_core::pairing_reconcile",
@@ -484,72 +399,42 @@ async fn run_pairing_reconcile_for_peer(
             return;
         }
     };
-
-    let actual_collections = match admin.list_p2p_collections().await {
-        Ok(collections) => collections.into_iter().collect(),
+    let store = GraphqlPairingStateStore::new(Arc::clone(node));
+    let desired = match store.load_desired(&record.peer_id).await {
+        Ok(Some(desired)) => desired,
+        Ok(None) => PairingDesired::default(),
         Err(error) => {
-            record_failure(record, peer_statuses, &desired, &error);
-            return;
+            tracing::warn!(
+                target: "defra_agent_desktop_core::pairing_reconcile",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %error,
+                "PeerPairingDesired query failed; runtime tick will no-op"
+            );
+            PairingDesired::default()
         }
     };
-    let remote_replicators = match admin.list_replicators().await {
-        Ok(replicators) => replicators,
-        Err(error) => {
-            record_failure(record, peer_statuses, &desired, &error);
-            return;
+
+    match reconcile_peer_tick(&admin, &store, &record.peer_id).await {
+        Ok(outcome) => {
+            if outcome.desired_read_failed {
+                return;
+            }
+            for op in &outcome.ops_applied {
+                record_success_for_op(record, peer_statuses, &desired, op);
+            }
         }
-    };
-    let actual_replicators = remote_replicators
-        .iter()
-        .filter_map(|replicator| replicator.address.clone())
-        .collect();
-    let replicator_ids_by_addr = remote_replicators
-        .iter()
-        .filter_map(|replicator| {
-            Some((
-                replicator.address.as_ref()?.clone(),
-                replicator.id.as_ref()?.clone(),
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let actual = PairingActual {
-        collections: actual_collections,
-        replicator_addresses: actual_replicators,
-    };
-    let ops = compute_pairing_diff(&desired, &actual);
-    let replicator_collections = desired.collections.iter().cloned().collect::<Vec<_>>();
-
-    for op in &ops {
-        let result = match op {
-            DiffOp::InstallCollection(collection) => {
-                let collections = vec![collection.clone()];
-                admin.add_p2p_collections(&collections).await
+        Err(error) => {
+            if let Some(remote_error) = error.downcast_ref::<RemoteP2pAdminError>() {
+                record_failure(record, peer_statuses, &desired, remote_error);
             }
-            DiffOp::TeardownCollection(collection) => {
-                let collections = vec![collection.clone()];
-                admin.delete_p2p_collections(&collections).await
-            }
-            DiffOp::InstallReplicator(address) => {
-                let addresses = vec![address.clone()];
-                admin
-                    .add_replicator(&addresses, &replicator_collections)
-                    .await
-            }
-            DiffOp::TeardownReplicator(address) => {
-                let id = replicator_ids_by_addr
-                    .get(address)
-                    .map(String::as_str)
-                    .unwrap_or(address.as_str());
-                admin.delete_replicator(id, &replicator_collections).await
-            }
-        };
-
-        match result {
-            Ok(()) => record_success_for_op(record, peer_statuses, &desired, op),
-            Err(error) => {
-                record_failure_for_op(record, peer_statuses, &desired, op, &error);
-                break;
-            }
+            tracing::warn!(
+                target: "defra_agent_desktop_core::pairing_reconcile",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %error,
+                "runtime pairing reconcile tick failed"
+            );
         }
     }
 }
@@ -558,7 +443,7 @@ fn record_failure(
     record: &PeerRecord,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     desired: &PairingDesired,
-    err: &crate::remote_admin::RemoteP2pAdminError,
+    err: &RemoteP2pAdminError,
 ) {
     let class = classify_remote_admin_error(err);
     let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
@@ -593,30 +478,6 @@ fn record_success_for_op(
 
     for target in targets {
         ensure_pairing_status(status, &target).record_success();
-    }
-}
-
-fn record_failure_for_op(
-    record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    desired: &PairingDesired,
-    op: &DiffOp,
-    err: &crate::remote_admin::RemoteP2pAdminError,
-) {
-    let class = classify_remote_admin_error(err);
-    let targets = op_status_targets(op, desired);
-    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-    let Some(status) = statuses
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    else {
-        return;
-    };
-
-    for target in targets {
-        let sub = ensure_pairing_status(status, &target);
-        sub.record_retry(class);
-        sub.update_stuck_indicator(SystemTime::now());
     }
 }
 
@@ -727,6 +588,7 @@ mod pairing_reconcile_tests {
             &self,
             addresses: &[String],
             _collections: &[String],
+            _filters: &defra_agent::agent::p2p_reconcile::PairingFilters,
         ) -> RemoteP2pAdminResult<()> {
             for address in addresses {
                 self.installed_replicators
@@ -762,6 +624,16 @@ mod pairing_reconcile_tests {
                 .iter()
                 .cloned()
                 .collect())
+        }
+
+        async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+            // This stub exercises `compute_pairing_diff` directly in name-space
+            // (not the engine's id-resolution), so it resolves identity.
+            Ok(Some(name.to_string()))
+        }
+
+        async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+            Ok(Some(id.to_string()))
         }
 
         async fn add_p2p_collections(&self, cols: &[String]) -> RemoteP2pAdminResult<()> {
@@ -873,7 +745,13 @@ mod pairing_reconcile_tests {
                 }
                 DiffOp::InstallReplicator(address) => {
                     let addresses = vec![address.clone()];
-                    stub.add_replicator(&addresses, &[]).await.unwrap();
+                    stub.add_replicator(
+                        &addresses,
+                        &[],
+                        &defra_agent::agent::p2p_reconcile::PairingFilters::default(),
+                    )
+                    .await
+                    .unwrap();
                 }
                 DiffOp::TeardownReplicator(address) => {
                     stub.delete_replicator(address, &[]).await.unwrap();

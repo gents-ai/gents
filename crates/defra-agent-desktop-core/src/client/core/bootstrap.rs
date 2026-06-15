@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,11 +27,8 @@ use super::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
     BOOTSTRAP_OPERATION_TIMEOUT,
 };
-use crate::local_runtime;
-
 pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "DEFRA_AGENT_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
 pub(super) const REMOTE_P2P_PAIRING_ENV: &str = "DEFRA_AGENT_DESKTOP_PAIR_REMOTE_P2P";
-pub(super) const PAIRING_RECONCILE_ENV: &str = "DEFRA_AGENT_PAIRING_RECONCILE";
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -164,18 +160,13 @@ impl ClientCore {
 }
 
 async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    defra_agent::migration::ensure_peer_pairing_desired_migrations(Arc::clone(&node))
+    // Run the exact same migration set as the daemon. Enumerating migrations
+    // here previously omitted the conversation `@immutable` scope keys and the
+    // PeerRegistry collection, so upgraded desktop databases silently lost
+    // filtered replication. The shared entry point keeps the two hosts in lockstep.
+    defra_agent::migration::ensure_all_runtime_migrations(node)
         .await
-        .context("ensure desktop PeerPairingDesired migrations")?;
-    defra_agent::migration::ensure_tool_service_registry_migrations(Arc::clone(&node))
-        .await
-        .context("ensure desktop ToolServiceRegistry migrations")?;
-    defra_agent::migration::ensure_tool_service_health_state_migrations(Arc::clone(&node))
-        .await
-        .context("ensure desktop ToolServiceHealthState migrations")?;
-    defra_agent::migration::ensure_agent_behavior_migrations(node)
-        .await
-        .context("ensure desktop AgentBehavior migrations")?;
+        .context("ensure desktop runtime schema migrations")?;
     Ok(())
 }
 
@@ -184,7 +175,7 @@ pub(super) async fn bootstrap_saved_peers(
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
-    actor: &PrincipalIdentity,
+    _actor: &PrincipalIdentity,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -240,7 +231,7 @@ pub(super) async fn bootstrap_saved_peers(
 
                 if let Some(graphql) = record.graphql.as_deref() {
                     if p2p_pairing_enabled {
-                        match configure_local_runtime_pairing(node, p2p, record, actor).await {
+                        match configure_local_runtime_pairing(node, record).await {
                             Ok(()) => {
                                 if branchable_pair_sync_enabled() {
                                     match sync_branchable_collections_with_retry(
@@ -312,38 +303,9 @@ pub(super) async fn bootstrap_saved_peers(
 
 pub(super) async fn configure_local_runtime_pairing(
     node: &EmbeddedNode,
-    p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
-    actor: &PrincipalIdentity,
 ) -> Result<()> {
-    if pairing_reconcile_enabled() {
-        write_peer_pairing_desired(node, record).await?;
-        return Ok(());
-    }
-
-    let graphql = record
-        .graphql
-        .as_deref()
-        .context("local runtime pairing requires a GraphQL endpoint")?;
-    configure_local_runtime_pairing_legacy(p2p, graphql, actor).await
-}
-
-pub(super) async fn configure_local_runtime_pairing_legacy(
-    p2p: &Arc<dyn P2POps>,
-    graphql: &str,
-    actor: &PrincipalIdentity,
-) -> Result<()> {
-    let desktop_listen_address = wait_for_bootstrap_listen_address(p2p, graphql).await?;
-    local_runtime::complete_runtime_pairing(
-        graphql,
-        &desktop_listen_address,
-        subscribed_collection_names()
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        actor,
-    )
-    .await
+    write_peer_pairing_desired(node, record).await
 }
 
 pub(super) async fn write_peer_pairing_desired(
@@ -400,6 +362,7 @@ pub(super) async fn write_peer_pairing_desired(
                     replicator_addresses: ["{replicator_addr}"],
                     agent_did: "{agent_did}",
                     created_at: "{created_at}",
+                    profiles: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }} }}"#
@@ -411,6 +374,7 @@ pub(super) async fn write_peer_pairing_desired(
                 agent_did: "{agent_did}",
                 collections: [{collections}],
                 replicator_addresses: ["{replicator_addr}"],
+                profiles: null,
                 created_at: "{now}",
                 updated_at: "{now}"
             }}) {{ _docID }} }}"#
@@ -602,32 +566,12 @@ pub(super) fn p2p_pairing_enabled_for_graphql(graphql: &str) -> bool {
     graphql_endpoint_is_loopback_or_unspecified(graphql) || env_flag_enabled(REMOTE_P2P_PAIRING_ENV)
 }
 
-pub(super) fn pairing_reconcile_enabled() -> bool {
-    env_flag_enabled(PAIRING_RECONCILE_ENV)
-}
-
 fn env_flag_enabled(name: &str) -> bool {
     let Ok(value) = std::env::var(name) else {
         return false;
     };
     let value = value.trim().to_ascii_lowercase();
     matches!(value.as_str(), "1" | "true" | "yes" | "on")
-}
-
-async fn wait_for_bootstrap_listen_address(p2p: &Arc<dyn P2POps>, graphql: &str) -> Result<String> {
-    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
-    loop {
-        let addrs = p2p_listen_addresses(p2p)
-            .await
-            .context("reading desktop P2P listen addresses for local runtime pairing")?;
-        if let Some(addr) = select_runtime_pairing_addr(&addrs, graphql) {
-            return Ok(addr);
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("desktop node has no IROH listen address for local runtime pairing");
-        }
-        sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
-    }
 }
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
@@ -661,51 +605,6 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
     (!trimmed.is_empty())
         .then_some(trimmed)
         .with_context(|| format!("{field} must not be empty"))
-}
-
-#[cfg(test)]
-pub(super) fn select_local_runtime_pairing_addr(addrs: &[String]) -> Option<String> {
-    select_runtime_pairing_addr(addrs, "http://127.0.0.1/")
-}
-
-pub(super) fn select_runtime_pairing_addr(addrs: &[String], graphql: &str) -> Option<String> {
-    let candidates = addrs
-        .iter()
-        .map(|addr| addr.trim())
-        .filter(|addr| !addr.is_empty())
-        .collect::<Vec<_>>();
-    if candidates.is_empty() {
-        return None;
-    }
-
-    let prefer_loopback = graphql_endpoint_is_loopback_or_unspecified(graphql);
-    if prefer_loopback {
-        candidates
-            .iter()
-            .find(|addr| addr_has_loopback_hint(addr))
-            .map(|addr| (*addr).to_string())
-            .or_else(|| candidates.first().map(|addr| (*addr).to_string()))
-    } else {
-        candidates
-            .iter()
-            .find(|addr| !addr_has_loopback_hint(addr))
-            .map(|addr| (*addr).to_string())
-            .or_else(|| candidates.first().map(|addr| (*addr).to_string()))
-    }
-}
-
-fn addr_has_loopback_hint(addr: &str) -> bool {
-    parse_public_peer_addr(addr)
-        .ok()
-        .map(|(_, hints)| {
-            hints.iter().any(|hint| {
-                hint.as_str()
-                    .parse::<SocketAddr>()
-                    .map(|socket| socket.ip().is_loopback())
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
 }
 
 fn graphql_endpoint_is_loopback_or_unspecified(graphql: &str) -> bool {

@@ -161,8 +161,14 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 
     if let Some(title) = conversation_title {
         let seed_result = async {
-            session::ensure_session_with_behavior_id(node, &session_id, behavior_id, behavior_id)
-                .await?;
+            session::ensure_session_with_behavior_id(
+                node,
+                &session_id,
+                behavior_id,
+                agent_did,
+                behavior_id,
+            )
+            .await?;
             session::upsert_conversation_from_request_with_identity_and_title(
                 node,
                 &session_id,
@@ -268,6 +274,7 @@ impl RequestLifecycle {
             node.as_ref(),
             &session_id,
             agent_name,
+            agent_did,
             &behavior_id,
         )
         .await?;
@@ -450,6 +457,7 @@ impl RequestLifecycle {
             &self.node,
             &self.request.session_id,
             &self.agent_name,
+            &self.agent_did,
             &self.behavior_id,
         )
         .await?;

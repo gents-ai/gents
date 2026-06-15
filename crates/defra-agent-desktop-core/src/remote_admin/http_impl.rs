@@ -1,5 +1,6 @@
 //! HTTP transport implementation for `RemoteP2pAdmin`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,11 +8,12 @@ use async_trait::async_trait;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::client::PrincipalIdentity;
-
-use super::trait_def::{
-    RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+use defra_agent::agent::p2p_reconcile::{
+    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
+use defra_node::EmbeddedNode;
+
+use crate::client::PrincipalIdentity;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTOR_DID_HEADER: &str = "x-defra-actor-did";
@@ -25,6 +27,12 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
+    /// Local node used to resolve collection name ↔ id. Collection ids are
+    /// content-addressed from the schema, so the id for a given name is identical
+    /// on the local and remote nodes (the schema is replicated). The remote P2P
+    /// subscription set is tracked in id-space (`list_p2p_collections` returns
+    /// ids), so the reconcile diff must resolve desired names to ids here.
+    local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
 impl HttpRemoteP2pAdmin {
@@ -37,6 +45,13 @@ impl HttpRemoteP2pAdmin {
         actor: Arc<PrincipalIdentity>,
     ) -> RemoteP2pAdminResult<Self> {
         Self::new_inner(graphql_url, Some(actor))
+    }
+
+    /// Attach a local node used to resolve collection name ↔ id for the reconcile
+    /// diff. See [`HttpRemoteP2pAdmin::local_resolver`].
+    pub fn with_local_resolver(mut self, node: Arc<EmbeddedNode>) -> Self {
+        self.local_resolver = Some(node);
+        self
     }
 
     fn new_inner(
@@ -66,6 +81,7 @@ impl HttpRemoteP2pAdmin {
             api_base_path,
             client,
             actor,
+            local_resolver: None,
         })
     }
 
@@ -120,6 +136,19 @@ struct AddReplicatorBody<'a> {
     collections: &'a [String],
     #[serde(rename = "Addresses")]
     addresses: &'a [String],
+    /// Per-collection equality predicates (defradb.rs #1033 filtered
+    /// replication). Empty map = whole-collection (unfiltered) replication.
+    #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
+    filters: BTreeMap<String, HttpReplicationFilter>,
+}
+
+/// Mirrors defradb's `ReplicationFilter` HTTP wire shape (`{Field, Value}`).
+#[derive(Debug, Serialize)]
+struct HttpReplicationFilter {
+    #[serde(rename = "Field")]
+    field: String,
+    #[serde(rename = "Value")]
+    value: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -223,10 +252,23 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         &self,
         addresses: &[String],
         collections: &[String],
+        filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
         let body = AddReplicatorBody {
             collections,
             addresses,
+            filters: filters
+                .iter()
+                .map(|(collection, predicate)| {
+                    (
+                        collection.clone(),
+                        HttpReplicationFilter {
+                            field: predicate.field.clone(),
+                            value: serde_json::Value::String(predicate.value.clone()),
+                        },
+                    )
+                })
+                .collect(),
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?
@@ -262,6 +304,46 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         resp.json::<Vec<String>>().await.map_err(|e| {
             RemoteP2pAdminError::RpcError(format!("decoding list_p2p_collections: {e}"))
         })
+    }
+
+    async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+        // Resolve against the local schema: collection ids are content-addressed,
+        // so the id for `name` is identical on the remote node whose subscription
+        // set we are reconciling. Without a local resolver we cannot map to the
+        // id-space the remote tracks, so we defer (Ok(None)) rather than churn.
+        let Some(node) = self.local_resolver.as_ref() else {
+            return Ok(None);
+        };
+        match node.get_collection(name) {
+            Ok(Some(def)) => Ok(Some(def.collection_id)),
+            Ok(None) => Ok(None),
+            Err(error) => Err(RemoteP2pAdminError::LocalError(format!(
+                "resolve_collection_id({name}): {error}"
+            ))),
+        }
+    }
+
+    async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+        let Some(node) = self.local_resolver.as_ref() else {
+            return Ok(None);
+        };
+        let names = node.list_collections().map_err(|error| {
+            RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
+        })?;
+        for name in names {
+            match node.get_collection(&name) {
+                Ok(Some(def)) if def.collection_id == id => return Ok(Some(def.name)),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        collection_name = %name,
+                        %error,
+                        "resolve_collection_name failed to fetch a collection definition"
+                    );
+                }
+            }
+        }
+        Ok(None)
     }
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
@@ -567,7 +649,7 @@ mod tests {
         )
         .await;
         admin
-            .add_replicator(&addresses, &collections)
+            .add_replicator(&addresses, &collections, &PairingFilters::default())
             .await
             .expect("signed add_replicator");
 
@@ -823,7 +905,11 @@ mod tests {
 
         let admin = admin_for(&server);
         admin
-            .add_replicator(&["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()], &["c1".into()])
+            .add_replicator(
+                &["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()],
+                &["c1".into()],
+                &PairingFilters::default(),
+            )
             .await
             .expect("add_replicator");
     }

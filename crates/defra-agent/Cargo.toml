@@ -21,6 +21,7 @@ codex-login.workspace = true
 codex-model-provider-info.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
+defra-p2p-adapter.workspace = true
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
@@ -68,3 +69,4 @@ proptest = "1"
 agent-tool-call-lifecycle-v1-to-v2-lens = { path = "../defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2", default-features = false }
 defra-agent-lean-contract.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
+tracing-subscriber.workspace = true

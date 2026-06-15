@@ -42,8 +42,14 @@ end PairingPhase
 /-- Stringly-typed transition kinds emitted by the supervisor. -/
 inductive TransitionKind where
   | operatorWrite
+  | operatorDelete
+  | readFailure
+  | dial
+  | peerDisconnected
   | reconcileInstall
   | reconcileTeardown
+  | reconcileInstallReplicator
+  | reconcileTeardownReplicator
   | crash
   deriving DecidableEq, Repr
 
@@ -51,15 +57,27 @@ namespace TransitionKind
 
 def fromString? : String → Option TransitionKind
   | "operatorWrite" => some .operatorWrite
+  | "operatorDelete" => some .operatorDelete
+  | "readFailure" => some .readFailure
+  | "dial" => some .dial
+  | "peerDisconnected" => some .peerDisconnected
   | "reconcileInstall" => some .reconcileInstall
   | "reconcileTeardown" => some .reconcileTeardown
+  | "reconcileInstallReplicator" => some .reconcileInstallReplicator
+  | "reconcileTeardownReplicator" => some .reconcileTeardownReplicator
   | "crash" => some .crash
   | _ => none
 
 def toString : TransitionKind → String
   | .operatorWrite => "operatorWrite"
+  | .operatorDelete => "operatorDelete"
+  | .readFailure => "readFailure"
+  | .dial => "dial"
+  | .peerDisconnected => "peerDisconnected"
   | .reconcileInstall => "reconcileInstall"
   | .reconcileTeardown => "reconcileTeardown"
+  | .reconcileInstallReplicator => "reconcileInstallReplicator"
+  | .reconcileTeardownReplicator => "reconcileTeardownReplicator"
   | .crash => "crash"
 
 theorem fromString_toString (k : TransitionKind) :
@@ -73,8 +91,17 @@ def step? : PairingPhase → TransitionKind → Option PairingPhase
   | .idle, .operatorWrite => some .diverged
   | .converged, .operatorWrite => some .diverged
   | .crashed, .operatorWrite => some .diverged
+  | .idle, .operatorDelete => some .diverged
+  | .converged, .operatorDelete => some .diverged
+  | .crashed, .operatorDelete => some .diverged
+  | phase, .readFailure => some phase
+  | .diverged, .dial => some .converged
+  | .converged, .peerDisconnected => some .diverged
+  | .diverged, .peerDisconnected => some .diverged
   | .diverged, .reconcileInstall => some .converged
   | .diverged, .reconcileTeardown => some .converged
+  | .diverged, .reconcileInstallReplicator => some .converged
+  | .diverged, .reconcileTeardownReplicator => some .converged
   | _, .crash => some .crashed
   | _, _ => none
 

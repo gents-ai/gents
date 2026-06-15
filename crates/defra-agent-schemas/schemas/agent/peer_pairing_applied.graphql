@@ -1,0 +1,8 @@
+type PeerPairingApplied {
+    peer_id: String @index(unique: true)
+    collections: [String!]
+    replicator_addresses: [String!]
+    replicator_filter: String
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}

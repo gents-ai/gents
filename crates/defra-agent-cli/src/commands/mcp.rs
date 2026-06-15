@@ -9,7 +9,8 @@ use defra_agent::{
 };
 use serde::Serialize;
 
-use crate::cli::args::{McpCommand, McpProbeArgs, McpProbeOutput};
+use crate::cli::args::{McpCommand, McpProbeArgs};
+use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{
     graphql_rows_or_empty_if_collection_missing, normalize_optional_string, parse_duration_suffix,
@@ -53,12 +54,16 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         items: snapshots,
     };
 
-    match args.output {
-        McpProbeOutput::Json => print_json(&serde_json::to_value(report)?),
-        McpProbeOutput::Text => {
+    match args
+        .output
+        .ensure_supported("mcp probe", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => print_json(&serde_json::to_value(report)?),
+        OutputFormat::Text => {
             print_probe_table(&report.items);
             Ok(())
         }
+        _ => unreachable!("ensure_supported restricts mcp probe output formats"),
     }
 }
 

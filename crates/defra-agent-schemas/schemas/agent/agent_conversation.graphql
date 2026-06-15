@@ -1,7 +1,7 @@
 type AgentConversation @branchable {
     session_id: String @index(unique: true)
     agent_name: String @index
-    agent_did: String @index
+    agent_did: String @index @immutable
     behavior_id: String @index
     title: String
     title_source: String

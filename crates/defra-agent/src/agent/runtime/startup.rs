@@ -32,6 +32,9 @@ enum BackgroundTaskResult {
     Control(Result<()>),
     SubagentCompletion(Result<()>),
     CrossDeploymentCancelMirror(Result<()>),
+    PairingReconcile(Result<()>),
+    RegistryHeartbeat(Result<()>),
+    DiscoveryReconcile(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -39,9 +42,12 @@ pub(in crate::agent) async fn run_agent(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    crate::migration::ensure_agent_runtime_executor_status_migrations(agent.node.clone())
+    // AgentRuntime executor-status fields must exist before RuntimeStatusHandle
+    // writes them, so run the full migration set (shared with the desktop
+    // bootstrap so the two hosts cannot drift) before publishing any status.
+    crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
-        .context("ensure AgentRuntime executor status migrations")?;
+        .context("ensure runtime schema migrations")?;
     let runtime_status =
         RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
     runtime_status
@@ -52,36 +58,6 @@ pub(in crate::agent) async fn run_agent(
         .await;
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Recovering);
-    }
-    if let Err(error) = crate::migration::ensure_peer_pairing_desired_migrations(agent.node.clone())
-        .await
-        .context("ensure PeerPairingDesired migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) =
-        crate::migration::ensure_tool_service_registry_migrations(agent.node.clone())
-            .await
-            .context("ensure ToolServiceRegistry migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) =
-        crate::migration::ensure_tool_service_health_state_migrations(agent.node.clone())
-            .await
-            .context("ensure ToolServiceHealthState migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
-    }
-    if let Err(error) = crate::migration::ensure_agent_behavior_migrations(agent.node.clone())
-        .await
-        .context("ensure AgentBehavior migrations")
-    {
-        runtime_status.publish_error(&format!("{error:#}")).await;
-        return Err(error);
     }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new_with_agent_did(
@@ -296,6 +272,42 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let pairing_node = agent.node.clone();
+    let pairing_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::PairingReconcile(
+            crate::agent::p2p_reconcile::run_pairing_reconciler(pairing_node, pairing_cancel).await,
+        )
+    });
+
+    let registry_node = agent.node.clone();
+    let registry_agent_did = agent.agent_did().to_string();
+    let registry_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::RegistryHeartbeat(
+            crate::agent::p2p_reconcile::run_registry_heartbeat(
+                registry_node,
+                registry_agent_did,
+                crate::agent::p2p_reconcile::resolve_network_id(),
+                registry_cancel,
+            )
+            .await,
+        )
+    });
+
+    // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
+    // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
+    // OFF, gated by DEFRA_AGENT_DISCOVERY_AUTO_PAIR) — the registry still
+    // replicates either way, but no auto-pairing happens when off.
+    let discovery_node = agent.node.clone();
+    let discovery_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::DiscoveryReconcile(
+            crate::agent::p2p_reconcile::run_discovery_reconciler(discovery_node, discovery_cancel)
+                .await,
+        )
+    });
+
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
@@ -389,6 +401,9 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
             Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
+            Ok(BackgroundTaskResult::PairingReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => (result, false),
+            Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),

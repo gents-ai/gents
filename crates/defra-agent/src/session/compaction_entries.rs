@@ -61,6 +61,7 @@ pub async fn load_compaction_entries(
 pub async fn save_compaction_entry(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     summary: &str,
     files_read: &[String],
     files_modified: &[String],
@@ -94,7 +95,10 @@ pub async fn save_compaction_entry(
         escape_graphql_string(&serde_json::to_string(&cumulative_files_modified)?);
     let escaped_summary = escape_graphql_string(&summary);
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
 
+    // `agent_did` is the immutable scope key: written only in the `add` branch
+    // (create), never rewritten on update.
     let compaction_key = format!("{escaped_session_id}:{sequence}");
     let mutation = format!(
         r#"mutation {{
@@ -103,6 +107,7 @@ pub async fn save_compaction_entry(
                 add: {{
                     compaction_key: "{compaction_key}",
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
                     sequence: {sequence},
                     summary: "{escaped_summary}",
                     files_read: "{files_read_json}",

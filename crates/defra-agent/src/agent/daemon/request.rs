@@ -144,6 +144,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         let entry = session::save_compaction_entry(
                             &self.node,
                             &request.session_id,
+                            &request.agent_did,
                             &summary,
                             &result.files_read,
                             &result.files_modified,

@@ -6,7 +6,8 @@ use defra_agent::graphql::escape_graphql_string;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cli::args::{BackgroundCommand, BackgroundListArgs, BackgroundOutputFormat};
+use crate::cli::args::{BackgroundCommand, BackgroundListArgs};
+use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::parse_duration_suffix;
 use crate::{
@@ -46,12 +47,16 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
         items: rows,
     };
 
-    match args.output {
-        BackgroundOutputFormat::Json => print_json(&serde_json::to_value(output)?),
-        BackgroundOutputFormat::Table => {
+    match args.output.ensure_supported(
+        "background list",
+        &[OutputFormat::Table, OutputFormat::Json],
+    )? {
+        OutputFormat::Json => print_json(&serde_json::to_value(output)?),
+        OutputFormat::Table => {
             print_background_table(&output.items, output.active_native_executors_available);
             Ok(())
         }
+        _ => unreachable!("ensure_supported restricts background list output formats"),
     }
 }
 

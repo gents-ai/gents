@@ -43,8 +43,15 @@ impl DefraSessionHook {
                     anyhow::bail!("system messages are not persisted in session history");
                 }
             };
-            let sequence =
-                session::append_message(&self.node, &session_id, role, &content, reasoning).await?;
+            let sequence = session::append_message(
+                &self.node,
+                &session_id,
+                &self.agent_did,
+                role,
+                &content,
+                reasoning,
+            )
+            .await?;
             let mut state = self.state.lock().await;
             if state.session_id.as_deref() == Some(session_id.as_str()) {
                 state.sequence = state.sequence.max(sequence);
@@ -111,6 +118,7 @@ impl DefraSessionHook {
                 session::save_message_with_key(
                     &self.node,
                     &session_id,
+                    &self.agent_did,
                     sequence,
                     role,
                     &content,
@@ -120,8 +128,16 @@ impl DefraSessionHook {
                 .await?;
             }
             None => {
-                session::save_message(&self.node, &session_id, sequence, role, &content, reasoning)
-                    .await?;
+                session::save_message(
+                    &self.node,
+                    &session_id,
+                    &self.agent_did,
+                    sequence,
+                    role,
+                    &content,
+                    reasoning,
+                )
+                .await?;
             }
         }
         Ok(sequence)
@@ -622,6 +638,7 @@ impl DefraSessionHook {
             self.node.clone(),
             request_id.clone(),
             session_id.clone(),
+            self.agent_did.clone(),
             internal_call_id.to_string(),
             seq,
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),

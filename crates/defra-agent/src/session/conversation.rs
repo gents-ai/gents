@@ -84,7 +84,6 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
                 }},
                 update: {{
                     agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
@@ -164,7 +163,6 @@ pub(crate) async fn update_conversation_status_with_identity(
                 }},
                 update: {{
                     agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
@@ -194,7 +192,10 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    // `agent_did` is intentionally not interpolated: it is the immutable scope
+    // key and must never appear in an update mutation. The parameter is retained
+    // for signature symmetry with the create-path identity helpers.
+    let _ = agent_did;
     let escaped_latest_request_id = escape_graphql_string(latest_request_id);
     let escaped_status = escape_graphql_string(status);
     let existing = load_conversation_document(node, session_id).await?;
@@ -232,7 +233,6 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
                 }},
                 input: {{
                     agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",

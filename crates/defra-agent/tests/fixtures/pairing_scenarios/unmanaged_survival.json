@@ -1,0 +1,23 @@
+{
+  "name": "unmanaged_survival",
+  "actions": [
+    {
+      "op": "PreseedActual",
+      "node": "B",
+      "collections": ["ManualCollection"],
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4999/p2p/manual"],
+      "connected": true
+    },
+    {
+      "op": "OperatorWrite",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest"],
+      "replicator_addresses": ["/ip4/127.0.0.1/tcp/4104/p2p/peer-b"]
+    },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "OperatorDelete", "node": "A", "peer": "B" },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 }
+  ]
+}

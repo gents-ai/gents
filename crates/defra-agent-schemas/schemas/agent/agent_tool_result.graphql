@@ -1,5 +1,5 @@
 type AgentToolResult @branchable {
-    agent_did: String @index
+    agent_did: String @index @immutable
     session_id: String @index
     tool_name: String @index
     tool_input: String

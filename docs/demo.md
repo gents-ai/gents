@@ -162,7 +162,7 @@ defra-agent chat "Introduce yourself in two short sentences."
 
 Identity is the other half of the boundary: every action the runtime takes is
 attributed to the agent's DID, and every tool call is persisted as a document
-you can audit afterwards (`defra-agent show response <request-id>`, or
+you can audit afterwards (`defra-agent response show <request-id>`, or
 `defra-agent trace timeline`).
 
 ## Other backends
@@ -212,6 +212,274 @@ defra-agent request submit --graphql "$GRAPHQL" --agent-did "did:key:..." \
   --content "Introduce yourself in two short sentences."
 defra-agent response wait --graphql "$GRAPHQL" --request-id "<request-id>"
 ```
+
+# Part 2 — Pair a second node
+
+Part 1 is one runtime talking to itself. The reason defra-agent is built on
+DefraDB is that the *same documents* can live on more than one node and stay
+in sync over a peer-to-peer link — no shared server in the middle. Part 2
+pairs a second runtime to the first and replicates a chat between them.
+
+This is also the reference example for **how to drive Defra P2P replication
+from an application**. The pattern is the point: you do not imperatively wire
+peers together and hope the two sides agree. You **write a document that
+describes the pairing you want, and the runtime reconciles live P2P state
+toward it** — connecting, subscribing collections, installing replicators,
+and recording what it did. The same idea as `kubectl apply`, applied to
+gossip replication.
+
+## The two documents
+
+| Document | Who writes it | Meaning |
+|---|---|---|
+| `PeerPairingDesired` | you (the operator) | the pairing you want: which peer, which DID you expect it to have, which collections/profiles to replicate |
+| `PeerPairingApplied` | the runtime reconciler | what it actually installed for that peer — the **ownership record** |
+
+The split matters. The reconciler only ever tears down wiring it finds in
+`PeerPairingApplied` — so collections or replicators you added by hand with
+the low-level `p2p admin` commands are never touched, and deleting a pairing
+removes exactly what the pairing introduced and nothing else. You declare
+intent; the runtime owns the consequences and can always undo precisely its
+own work.
+
+## 1. Start a second runtime
+
+Keep Part 1's runtime running. In a fresh home, start a second one. Both bind
+P2P to loopback for the demo:
+
+```bash
+defra-agent init  --home /tmp/coding --agent-name coding \
+  --inference-url http://127.0.0.1:8080/v1 --model-name "$MODEL"
+defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 0
+```
+
+Use Part 1's home (say `~/.defra-agent`) as the first node, "Amy", and
+`/tmp/coding` as the second, "Coding".
+
+## 2. Exchange a pairing invite
+
+Pairing carries the remote agent's **DID** — the identity that is the
+permission and audit boundary for everything that replicates. The
+invite/join flow moves the DID for you, so you never hand-type it.
+
+On Amy, mint an invite token. It encodes Amy's shareable P2P address, peer id,
+DID, and the collection profiles it offers:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite | jq -r .token)
+```
+
+On Coding, accept it. This writes Coding's `PeerPairingDesired` row for Amy
+and — because this is the first leg — prints a **reciprocal token** so Amy can
+pair back:
+
+```bash
+CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
+CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
+```
+
+Pairing is **directional**: Coding now wants documents from Amy, but Amy
+doesn't yet know about Coding. Close the loop by joining the reciprocal token
+on Amy:
+
+```bash
+defra-agent p2p pairings join "$CODING_INVITE"
+```
+
+## 3. Watch the runtime reconcile
+
+You wrote documents; you installed nothing. Watch the reconciler converge:
+
+```bash
+defra-agent p2p pairings list --home /tmp/coding --output table
+```
+
+```
+PEER       DID            PROFILES       CONNECTED  SUBSCRIBED  REPLICATING
+12D3Koo…   did:key:amy…   chat-requests  yes        yes         yes
+```
+
+Those last three columns are the health of the pairing, each derived from a
+different source so you can see *where* a stuck pairing is stuck:
+
+- **CONNECTED** — the live peer list includes that peer id (the dial worked).
+- **SUBSCRIBED** — every desired collection appears in `PeerPairingApplied`
+  (the reconciler subscribed them).
+- **REPLICATING** — every desired replicator address appears in
+  `PeerPairingApplied` (the push replicator is installed).
+
+All three flip to `yes` on their own, on the runtime's pairing sweep — no
+further commands. If one stays `no`, that column tells you whether the problem
+is connectivity, subscription, or replication.
+
+## 4. Confirm replication
+
+Send a chat on one node and read it on the other. Because the `chat-requests`
+profile replicates the request/response/message collections, a request created
+on Coding and its streamed response are visible from Amy:
+
+```bash
+defra-agent chat --home /tmp/coding "Say hello to the other node."
+defra-agent request submit --graphql http://127.0.0.1:9191/api/v0/graphql \
+  --agent-did "$CODING_DID" --content "ping" | jq -r '.request_id'
+# read the replicated row back from Amy's endpoint
+```
+
+## 5. Unpair
+
+Delete the desired row. The runtime sees the row gone, reads its
+`PeerPairingApplied` record, tears down **only** what it installed for that
+pairing, then deletes the applied record:
+
+```bash
+defra-agent p2p pairings rm --home /tmp/coding --peer "$AMY_PEER_ID"
+```
+
+Any wiring you had added by hand survives — the reconciler never owned it.
+
+## When to reach past invite/join
+
+- **`p2p pairings set`** is the scripted/manual path: you supply `--did`,
+  `--address`, and `--collection`/`--profile` directly. `--did` is required —
+  a pairing always names the identity it trusts. `--peer` is optional when an
+  `--address` is a shareable ticket the peer id can be derived from.
+- **`p2p admin`** (`connect`, `collections`, `replicators`, `documents`) is
+  the escape hatch: imperative surgery on live state, for non-paired
+  topologies and debugging. It does not write desired documents, so the
+  reconciler leaves its wiring alone.
+
+One last boundary: replication moves *documents*, not *permission*. A child
+node replicating a parent's requests still cannot act as a delegated subagent
+across deployments unless `subagent_allow_cross_deployment: true` is set on
+both sides — that gate is off by default and deferred. Pairing is the
+transport; trust is still configured explicitly.
+
+# Part 3 — Join a network
+
+Part 2 pairs two nodes you wired by hand. A real fleet has many nodes, and you
+do not want to hand-exchange an invite with each one. Part 3 turns pairwise
+pairing into a **network**: join one member, and you discover — and can pair
+with — the whole network. Three layers do this, and the point is that they stay
+distinct:
+
+| Layer | Document | Question it answers |
+|---|---|---|
+| **Discovery** | `PeerRegistry` | *Who is out there?* |
+| **Replication** | `PeerPairingDesired` + reconciler | *Move the documents.* (Part 2) |
+| **Authorization** | signed invite · `subagent_allow_cross_deployment` | *Who may join? Who may delegate?* |
+
+Discovery makes a peer *visible*. It does not make it *authorized*. Those are
+different documents, gated separately — that separation is the whole design.
+
+## 1. Self-register into the registry
+
+Each running node writes (and heartbeats) its own row in `PeerRegistry`, keyed
+by its peer id. The runtime does this automatically; the explicit command is
+for a manual refresh, a display name, or to advertise the profiles it offers:
+
+```bash
+defra-agent p2p network register --profile discovery --display-name amy
+```
+
+The registry travels in the `discovery` profile. So the moment a node pairs
+with a member over `discovery`, it replicates `PeerRegistry` and sees every
+member that member already knows.
+
+## 2. Mint a signed invite — the credential
+
+In Part 2 any reachable node could join. A network gates membership on a
+member's cryptographic say-so. `p2p pairings invite` now signs the token with
+the local agent's DID and **carries the chosen scope template** (default:
+`conversation`) so the joining peer knows exactly what to replicate:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
+```
+
+Pair by intent, not by schema: `--template` selects a named bundle of
+collections, scoping policy, and delivery mode. The runtime resolves the
+collections and filtering at reconcile time so operators never hand-author
+collection lists. Use `defra-agent p2p templates list` to see the built-in
+catalog (`conversation`, `agent-config`, `backup`).
+
+`p2p pairings join` verifies that signature and reads the template from the
+token. Because a `did:key` embeds its own public key, verification needs
+nothing but the token — no lookup, no registry:
+
+```bash
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+```
+
+`join` reads the template from the token and writes it as the desired pairing's
+template. If both `--template` and a token template are present, the explicit
+`--template` wins (document it in your script if you override):
+
+```bash
+# Override to backup template regardless of what the token offers:
+defra-agent p2p pairings join --home /tmp/coding --template backup "$AMY_INVITE"
+```
+
+The rule has two arms:
+
+- **Bootstrap (trust-on-first-use).** Your registry has no other members yet,
+  so a valid signature over a well-formed token is enough. The issuer's DID is
+  recorded as `invited_by` — an audit trail of how you entered the trust set.
+- **Subsequent invites.** Once your registry holds live members, an invite is
+  admitted only if its issuer is one of them. A signature from a non-member (or
+  an evicted one) is rejected. A tampered signature is rejected outright.
+
+A reciprocal join (the `--reciprocal` token a first join prints, so the issuer
+pairs back) completes a handshake both sides already agreed to, so it verifies
+the signature but skips the membership arm.
+
+## 3. Watch transitive pairing
+
+Pairing Coding to Amy replicated Amy's `PeerRegistry`. List what Coding can now
+see:
+
+```bash
+defra-agent p2p network list --home /tmp/coding --output table
+```
+
+```
+PEER       DID            NAME   NETWORK  ONLINE  PAIRED  PROFILES
+12D3Koo…   did:key:amy…   amy    default  yes     yes     discovery
+12D3Koo…   did:key:dana…  dana   default  yes     no      discovery
+```
+
+`ONLINE` is derived from the heartbeat age, not the self-reported `status` —
+the timestamp is the truth, the field is a hint. `PAIRED` shows whether a
+`PeerPairingDesired` row already exists for that peer.
+
+Dana is *visible* but not *paired*: discovery found her through Amy's registry,
+but nobody has paired with her yet. Turn on auto-pair and the discovery
+reconciler closes that gap:
+
+```bash
+DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1 defra-agent server --home /tmp/coding \
+  --p2p-bind-addr 127.0.0.1 --p2p-port 0
+```
+
+Now, for each live member that Coding has *not* already paired with by hand,
+the reconciler writes a **registry-owned** `PeerPairingDesired` row
+(`source: "registry"`) and the Part 2 pairing reconciler wires it — no invite,
+no operator command. Auto-pair is off by default; with it off, `network list`
+shows the peers and you pair explicitly.
+
+Ownership stays clean across the two sources of desired rows:
+
+- A registry entry going stale or removed retracts **only** its registry-owned
+  rows. Your hand-authored `pairings set` rows are never touched.
+- The discovery step never overwrites an operator-authored row for the same
+  peer — operator intent wins.
+
+## 4. The authorization boundary, again
+
+Discovery and replication moved documents and wired transport. They did **not**
+grant permission. A peer Coding auto-paired with still cannot run a delegated
+subagent on Coding's behalf unless `subagent_allow_cross_deployment: true` is
+set on both behaviors' tool selections — exactly the Part 2 boundary, now at
+network scale. Visible ≠ paired ≠ authorized; each is its own document.
 
 ## How this is wired (for the curious)
 

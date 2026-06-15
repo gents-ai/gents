@@ -6,6 +6,7 @@ pub(crate) mod apply;
 pub(crate) mod backend;
 pub(crate) mod behavior;
 pub(crate) mod binding;
+mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod import;
@@ -23,20 +24,54 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Backend { command } => match command {
             BackendCommand::Set(args) => backend::backend_set(args).await,
             BackendCommand::DiscoverModels(args) => backend::backend_discover_models(args).await,
+            BackendCommand::List(args) => crud::config_list(crud::BACKEND_SPEC, args).await,
+            BackendCommand::Show(args) => crud::config_show(crud::BACKEND_SPEC, args).await,
+            BackendCommand::Rm(args) => crud::config_rm(crud::BACKEND_SPEC, args).await,
         },
         ConfigCommand::Behavior { command } => match command {
             BehaviorCommand::Set(args) => behavior::behavior_set(args).await,
+            BehaviorCommand::List(args) => crud::config_list(crud::BEHAVIOR_SPEC, args).await,
+            BehaviorCommand::Show(args) => crud::config_show(crud::BEHAVIOR_SPEC, args).await,
+            BehaviorCommand::Rm(args) => crud::config_rm(crud::BEHAVIOR_SPEC, args).await,
         },
         ConfigCommand::Tools { command } => match command {
             ToolSelectionCommand::Set(args) => tools::tool_selection_set(args).await,
+            ToolSelectionCommand::List(args) => {
+                crud::config_list(crud::TOOL_SELECTION_SPEC, args).await
+            }
+            ToolSelectionCommand::Show(args) => {
+                crud::config_show(crud::TOOL_SELECTION_SPEC, args).await
+            }
+            ToolSelectionCommand::Rm(args) => {
+                crud::config_rm(crud::TOOL_SELECTION_SPEC, args).await
+            }
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
+            InferenceProfileCommand::List(args) => {
+                crud::config_list(crud::PROFILE_SPEC, args).await
+            }
+            InferenceProfileCommand::Show(args) => {
+                crud::config_show(crud::PROFILE_SPEC, args).await
+            }
+            InferenceProfileCommand::Rm(args) => crud::config_rm(crud::PROFILE_SPEC, args).await,
         },
         ConfigCommand::Task { command } => match command {
-            ConfigTaskCommand::List(args) => crate::commands::task::task_list(args).await,
-            ConfigTaskCommand::Show(args) => crate::commands::task::task_show(args).await,
-            ConfigTaskCommand::Run(args) => task_run::config_task_run(args).await,
+            TaskCommand::List(args) => crate::commands::task::task_list(args).await,
+            TaskCommand::Show(args) => crate::commands::task::task_show(args).await,
+            TaskCommand::Run(args) => task_run::config_task_run(args).await,
+        },
+        ConfigCommand::Trigger { command } => match command {
+            ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,
+            ConfigTriggerCommand::Show(args) => crud::config_show(crud::TRIGGER_SPEC, args).await,
+        },
+        ConfigCommand::Schedule { command } => match command {
+            ConfigScheduleCommand::List(args) => crud::config_list(crud::SCHEDULE_SPEC, args).await,
+            ConfigScheduleCommand::Show(args) => crud::config_show(crud::SCHEDULE_SPEC, args).await,
+        },
+        ConfigCommand::Mcp { command } => match command {
+            ConfigMcpCommand::List(args) => crud::config_list(crud::MCP_SPEC, args).await,
+            ConfigMcpCommand::Show(args) => crud::config_show(crud::MCP_SPEC, args).await,
         },
         ConfigCommand::Skill { command } => match command {
             SkillCommand::Add(args) => skill::skill_add(args).await,

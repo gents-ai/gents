@@ -287,6 +287,7 @@ async fn fork_with_executor(
         executor,
         params.source_session_id,
         &child_session_id,
+        parent_agent_did,
         cut_seq,
     )
     .await
@@ -296,6 +297,7 @@ async fn fork_with_executor(
         executor,
         params.source_session_id,
         &child_session_id,
+        parent_agent_did,
         cut_seq,
     )
     .await
@@ -318,6 +320,7 @@ async fn fork_with_executor(
         executor,
         params.source_session_id,
         &child_session_id,
+        parent_agent_did,
         &cut_ts,
     )
     .await
@@ -458,6 +461,7 @@ async fn copy_messages(
     executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
+    agent_did: &str,
     cut_seq: u32,
 ) -> Result<u32> {
     let escaped_source = escape_graphql_string(source_session_id);
@@ -481,6 +485,7 @@ async fn copy_messages(
     }
     let rows = graphql_rows(&resp, "AgentMessage");
     let child_session_escaped = escape_graphql_string(child_session_id);
+    let agent_did_escaped = escape_graphql_string(agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let sequence = row
@@ -497,6 +502,7 @@ async fn copy_messages(
             r#"message_{index}: create_AgentMessage(input: {{
                     message_key: "{message_key}",
                     session_id: "{child_session_escaped}",
+                    agent_did: "{agent_did_escaped}",
                     sequence: {sequence},
                     role: "{role_escaped}",
                     content: "{content_escaped}",
@@ -518,6 +524,7 @@ async fn copy_tool_calls(
     executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
+    agent_did: &str,
     cut_seq: u32,
 ) -> Result<u32> {
     let escaped_source = escape_graphql_string(source_session_id);
@@ -547,6 +554,7 @@ async fn copy_tool_calls(
     }
     let rows = graphql_rows(&resp, "AgentToolCall");
     let child_session_escaped = escape_graphql_string(child_session_id);
+    let agent_did_escaped = escape_graphql_string(agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let message_sequence = row
@@ -586,6 +594,7 @@ async fn copy_tool_calls(
             r#"tool_call_{index}: create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     session_id: "{child_session_escaped}",
+                    agent_did: "{agent_did_escaped}",
                     message_sequence: {message_sequence},
                     tool_name: "{tool_name_escaped}",
                     tool_call_id: "{tool_call_id_escaped}",
@@ -717,6 +726,7 @@ async fn copy_compaction_entries(
     executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
     child_session_id: &str,
+    agent_did: &str,
     cut_ts: &str,
 ) -> Result<u32> {
     let escaped_source = escape_graphql_string(source_session_id);
@@ -743,6 +753,7 @@ async fn copy_compaction_entries(
     }
     let rows = graphql_rows(&resp, "CompactionEntry");
     let child_session_escaped = escape_graphql_string(child_session_id);
+    let agent_did_escaped = escape_graphql_string(agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let sequence = row
@@ -776,6 +787,7 @@ async fn copy_compaction_entries(
             r#"compaction_{index}: create_CompactionEntry(input: {{
                     compaction_key: "{compaction_key}",
                     session_id: "{child_session_escaped}",
+                    agent_did: "{agent_did_escaped}",
                     sequence: {sequence},
                     summary: "{summary_escaped}",
                     files_read: "{files_read_escaped}",
@@ -823,6 +835,7 @@ async fn create_child_session_and_conversation(
             create_AgentSession(input: {{
                 session_id: "{child_session_escaped}",
                 agent_name: "{agent_name_escaped}",
+                agent_did: "{agent_did_escaped}",
                 behavior_id: "{behavior_id_escaped}",
                 started: "{now_escaped}",
                 status: "active"

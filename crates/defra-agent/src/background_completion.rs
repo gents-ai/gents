@@ -676,15 +676,27 @@ pub(crate) async fn append_background_tool_completion(
     result: &str,
     reason: Option<&str>,
 ) -> Result<()> {
+    // Load the parent request up front so the completion notification is stamped
+    // with the parent session's owning agent_did.
+    let parent_request = load_agent_request_for_queue(node, parent_request_id)
+        .await?
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+
     let (notification_timestamp, created_notification) =
         match existing_tool_completion_notification(node, parent_session_id, tool_call_id).await? {
             Some(existing) => (existing.timestamp, false),
             None => {
                 let notification =
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
-                let sequence =
-                    session::append_message(node, parent_session_id, "user", &notification, None)
-                        .await?;
+                let sequence = session::append_message(
+                    node,
+                    parent_session_id,
+                    &parent_request.agent_did,
+                    "user",
+                    &notification,
+                    None,
+                )
+                .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
                 (timestamp, true)
             }
@@ -698,9 +710,6 @@ pub(crate) async fn append_background_tool_completion(
         return Ok(());
     }
 
-    let parent_request = load_agent_request_for_queue(node, parent_request_id)
-        .await?
-        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
     let _wake = enqueue_session_request(
         node,
         &parent_request,
@@ -735,14 +744,26 @@ async fn ensure_projection_side_effects(
     status: &str,
     summary: &str,
 ) -> Result<SideEffects> {
+    // Load the parent request up front so the projection notification is stamped
+    // with the parent session's owning agent_did.
+    let parent_request = load_agent_request_for_queue(node, parent_request_id)
+        .await?
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+
     let (notification_sequence, notification_timestamp, created_notification) =
         match existing_notification(node, parent_session_id, &edge.child_request_id).await? {
             Some(existing) => (existing.sequence, existing.timestamp, false),
             None => {
                 let notification = render_notification(edge, status, summary);
-                let sequence =
-                    session::append_message(node, parent_session_id, "user", &notification, None)
-                        .await?;
+                let sequence = session::append_message(
+                    node,
+                    parent_session_id,
+                    &parent_request.agent_did,
+                    "user",
+                    &notification,
+                    None,
+                )
+                .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
                 (sequence, timestamp, true)
             }
@@ -760,9 +781,6 @@ async fn ensure_projection_side_effects(
         });
     }
 
-    let parent_request = load_agent_request_for_queue(node, parent_request_id)
-        .await?
-        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
     let wake = enqueue_session_request(
         node,
         &parent_request,

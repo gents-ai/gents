@@ -479,13 +479,8 @@ impl ClientCore {
 
         if let Some(graphql) = record.graphql.as_deref() {
             if p2p_pairing_enabled {
-                match super::bootstrap::configure_local_runtime_pairing(
-                    self.node.as_ref(),
-                    &self.p2p,
-                    &record,
-                    self.principal(),
-                )
-                .await
+                match super::bootstrap::configure_local_runtime_pairing(self.node.as_ref(), &record)
+                    .await
                 {
                     Ok(()) => {
                         if branchable_pair_sync_enabled() {

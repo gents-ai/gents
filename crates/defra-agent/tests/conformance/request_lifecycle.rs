@@ -2243,6 +2243,7 @@ async fn create_background_child_bridge(
         node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
+        "did:defra-agent:test".to_string(),
         tool_call_id.to_string(),
         message_sequence,
         "spawn_subagent".to_string(),

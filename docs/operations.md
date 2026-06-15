@@ -56,30 +56,115 @@ defra-agent server \
 
 ## Connected runtime bring-up
 
-To bring up two runtimes and connect them through the operator CLI:
+To bring up two runtimes and pair them through the operator CLI:
 
 ```bash
 defra-agent server --home /tmp/amy --p2p-bind-addr 127.0.0.1 --p2p-port 4017
 defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
 ```
 
-Read Amy's startup JSON or `/tmp/amy/runtime.json` and take one of the values
-from `p2p_listen_addresses`. Then connect Coding to Amy:
+Create an invite on Amy and join it from Coding:
 
 ```bash
-defra-agent p2p connect --home /tmp/coding --peer "<peer-id-or-listen-address>"
+AMY_INVITE=$(defra-agent p2p pairings invite --home /tmp/amy | jq -r .token)
+CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
+CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
+defra-agent p2p pairings join --home /tmp/amy "$CODING_INVITE"
 ```
 
-Inspect connectivity from either runtime:
+Inspect desired pairing rows and live connectivity from either runtime:
 
 ```bash
+defra-agent p2p pairings list --home /tmp/amy --output table
 defra-agent p2p status --home /tmp/amy
 defra-agent p2p peers --home /tmp/coding
 defra-agent status --home /tmp/coding
 ```
 
 The most useful fields for bring-up are `p2p_transport`, `p2p_peer_id`,
-`p2p_listen_addresses`, and `p2p_connected_peers`.
+`p2p_listen_addresses`, `p2p_connected_peers`, and the `CONNECTED`,
+`SUBSCRIBED`, and `REPLICATING` columns in `p2p pairings list`.
+
+For the narrated, end-to-end version of this flow — what each document means
+and how to watch the runtime reconcile it — see [Part 2 of the getting-started
+walkthrough](demo.md#part-2--pair-a-second-node).
+
+The low-level `p2p admin` commands (`connect`, `collections`, `replicators`,
+`documents`) remain available for diagnostics and repair. They mutate live
+P2P state directly; normal pairing should go through `p2p pairings`
+(invite/join or `pairings set`).
+
+## Scope templates
+
+Scope templates are named pairing intents that bundle a fixed collection set, a
+per-peer scoping policy (agent_did equality or unscoped), and a delivery mode
+(push or replicate). Use `--template` on `p2p pairings invite`, `join`, and
+`pairings set` instead of hand-authoring collection lists.
+
+```bash
+defra-agent p2p templates list          # print the built-in catalog
+```
+
+Built-in templates:
+
+| Template | Collections | Scope | Delivery |
+|---|---|---|---|
+| `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction | `agent_did` equality | Push |
+| `agent-config` | Behaviors, tool selections, backends, profiles, tool services, skills | Unscoped | Replicate |
+| `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
+
+Pass `--template` to `invite` and `join` to select the intent:
+
+```bash
+AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+# join reads the template from the token; pass --template to override
+```
+
+## Admin filtered replication
+
+The low-level `p2p admin replicators add` command accepts `--filter` to express
+per-collection field-equality predicates (repeatable). These are parsed into
+`PairingFilters` and echoed in the command output. Full forwarding to the
+DefraDB filtered-replication endpoint is pending defradb.rs #1033.
+
+```bash
+defra-agent p2p admin replicators add \
+  --home /tmp/coding \
+  --peer iroh://peer-id \
+  --collection AgentRequest \
+  --filter "AgentRequest:agent_did=did:key:alice" \
+  --filter "AgentResponse:agent_did=did:key:alice"
+```
+
+Format: `<Collection>:<field>=<value>`. Parse errors (missing `:` or `=`,
+empty component) are hard failures with a clear message.
+
+## Service discovery — joining a network
+
+Beyond pairwise pairing, the `p2p network` commands target the replicated
+`PeerRegistry` collection so that joining one member surfaces the whole
+network. Pairing over the `discovery` collection profile replicates
+`PeerRegistry`, and `p2p pairings invite`/`join` mint and verify a member
+**signature** on the invite token (trust-on-first-use for the bootstrap join;
+registry-membership-checked thereafter).
+
+```bash
+defra-agent p2p network register --home /tmp/amy --template conversation   # self-register, advertise template
+defra-agent p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
+defra-agent p2p network rm --home /tmp/amy                                  # deregister this node's row
+```
+
+Auto-pairing of discovered members is **off by default**. Set the
+`DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1` environment variable on `server` to have
+the discovery reconciler materialize registry-owned `PeerPairingDesired` rows
+(`source: "registry"`) for live members; with it unset, `network list` shows
+discovered peers and you pair explicitly. Registry-owned rows are retracted
+when their entry stales/removed and never touch operator-authored pairings.
+
+For the narrated walkthrough — the three layers (discovery / replication /
+authorization) and transitive pairing — see [Part 3 of the getting-started
+walkthrough](demo.md#part-3--join-a-network).
 
 ## Remote Codex clients
 

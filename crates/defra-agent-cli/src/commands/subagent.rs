@@ -9,9 +9,8 @@ use defra_agent::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLif
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cli::args::{
-    SubagentCancelArgs, SubagentCancelOutput, SubagentCommand, SubagentListArgs, SubagentListOutput,
-};
+use crate::cli::args::{SubagentCancelArgs, SubagentCommand, SubagentListArgs};
+use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{
     graphql_rows, parse_duration_suffix, post_graphql, print_json, resolve_agent_did,
@@ -65,8 +64,12 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
         }
         ConfigAccess::Local(node) => {
             let node = Arc::new(node);
-            defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
-            defra_agent::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
+            // Migrations already ran via the single sanctioned entry point inside
+            // `resolve_config_access` (it calls
+            // `migration::ensure_all_runtime_migrations` for every Local node,
+            // including the `agent_did` scope key that `ToolCallLifecycle::load`
+            // selects). Running them again here would be a redundant double-run in
+            // this path.
             let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
                 .context("resolving local agent_did for cascade ownership checks")?;
             let affected =
@@ -587,15 +590,15 @@ fn string_field(row: &Value, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn render_cancel_output(output: SubagentCancelOutput, render: SubagentCancelRender) -> Result<()> {
-    match output {
-        SubagentCancelOutput::Text => {
+fn render_cancel_output(output: OutputFormat, render: SubagentCancelRender) -> Result<()> {
+    match output.ensure_supported("subagent cancel", &[OutputFormat::Text, OutputFormat::Json])? {
+        OutputFormat::Text => {
             for request in &render.requests {
                 println!("{}", request.request_id);
             }
             Ok(())
         }
-        SubagentCancelOutput::Json => print_json(&json!({
+        OutputFormat::Json => print_json(&json!({
             "request_id": render.request_id,
             "cascade": render.cascade,
             "cause": render.cause,
@@ -603,6 +606,7 @@ fn render_cancel_output(output: SubagentCancelOutput, render: SubagentCancelRend
             "interrupted_request_ids": render.requests.iter().map(|row| row.request_id.as_str()).collect::<Vec<_>>(),
             "requests": render.requests,
         })),
+        _ => unreachable!("ensure_supported restricts subagent cancel output formats"),
     }
 }
 
@@ -676,10 +680,14 @@ async fn subagent_list(args: SubagentListArgs) -> Result<()> {
         None => load_lineage_forest(&access, args.depth).await?,
     };
 
-    match args.output {
-        SubagentListOutput::Tree => print_tree(&rows),
-        SubagentListOutput::Table => print_table(&rows),
-        SubagentListOutput::Json => print_lineage_json(args.root.as_deref(), args.depth, &rows),
+    match args.output.ensure_supported(
+        "subagent list",
+        &[OutputFormat::Tree, OutputFormat::Table, OutputFormat::Json],
+    )? {
+        OutputFormat::Tree => print_tree(&rows),
+        OutputFormat::Table => print_table(&rows),
+        OutputFormat::Json => print_lineage_json(args.root.as_deref(), args.depth, &rows),
+        _ => unreachable!("ensure_supported restricts subagent list output formats"),
     }
 }
 

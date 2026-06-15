@@ -1063,10 +1063,21 @@ pub(crate) async fn append_steering_request(
     interrupted_request_id: Option<String>,
     drained_wake_up_request_ids: Vec<String>,
 ) -> Result<SteerSubagentResponse> {
-    session::append_message(node, &edge.child_session_id, "user", message, None).await?;
+    // Load the child request first so the steering message is stamped with the
+    // child session's owning agent_did (the message belongs to the child agent's
+    // conversation slice, not the steering caller's).
     let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
         .await?
         .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
+    session::append_message(
+        node,
+        &edge.child_session_id,
+        &child_request.agent_did,
+        "user",
+        message,
+        None,
+    )
+    .await?;
     if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
         anyhow::bail!(
             "child AgentRequest {} no longer links to caller request {caller_request_id}",

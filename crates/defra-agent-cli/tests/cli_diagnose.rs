@@ -109,7 +109,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let (mut serve, _) = spawn_server_with_ready_json(
+    let mut serve = spawn_server_with_env(
         &home_dir,
         port,
         &[

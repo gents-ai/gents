@@ -74,8 +74,7 @@ Or without the Codex TUI:
 
 Inspect the local runtime:
   defra-agent status
-  defra-agent show runtime
-  defra-agent show response REQUEST_ID
+  defra-agent response show REQUEST_ID
   defra-agent task list
   defra-agent task show TASK_ID
   defra-agent task run TASK_ID --wait
@@ -156,7 +155,7 @@ Examples:
 
 Diagnostics:
   defra-agent status
-  defra-agent show response REQUEST_ID";
+  defra-agent response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Runs the Codex terminal UI in-process, connected to the local agent's Codex
 shim. Codex-side approvals and sandboxing are bypassed: the tool preset chosen
@@ -172,16 +171,24 @@ const P2P_AFTER_HELP: &str = "\
 Examples:
   defra-agent p2p status
   defra-agent p2p peers --home /path/to/home
-  defra-agent p2p connect --graphql http://127.0.0.1:9191/api/v0/graphql --peer <peer-id-or-address>
-  defra-agent p2p collections add --profile chat-requests
-  defra-agent p2p collections sync-versions --version-id <collection-version-id>
-  defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
-  defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
-  defra-agent p2p pairings set --peer <peer-id> --did <agent-did> --address <multiaddr> --profile chat-requests
+  defra-agent p2p diagnose
+
+  # Declarative pairing (the normal path — the runtime reconciles these):
+  defra-agent p2p pairings set --did <agent-did> --address <ticket-or-multiaddr> --template conversation
   defra-agent p2p pairings list
-  defra-agent p2p unpair --peer <peer-id>
-  defra-agent p2p pair --peer <multiaddr> --profile chat-requests
-  defra-agent p2p diagnose";
+  defra-agent p2p pairings rm --peer <peer-id>
+  defra-agent p2p pairings invite --template conversation
+  defra-agent p2p pairings join <invite-token>
+
+  # Service discovery:
+  defra-agent p2p network register
+  defra-agent p2p network list
+  defra-agent p2p templates list
+
+  # Low-level live wiring (escape hatch — prefer `p2p pairings`):
+  defra-agent p2p admin connect --peer <peer-id-or-address>
+  defra-agent p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
+  defra-agent p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 
@@ -236,9 +243,9 @@ Examples:
   defra-agent task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
-  defra-agent show runtime
-  defra-agent show request REQUEST_ID
-  defra-agent show response REQUEST_ID";
+  defra-agent status
+  defra-agent request show REQUEST_ID
+  defra-agent response show REQUEST_ID";
 const TRACE_AFTER_HELP: &str = "\
 Exports one JSON object per persisted AgentToolCall row. The command reads
 AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and
@@ -386,7 +393,11 @@ pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let argv = std::env::args().collect::<Vec<_>>();
+    if let Some(warning) = cli::deprecations::deprecation_warning(&argv) {
+        eprintln!("{warning}");
+    }
+    let cli = Cli::parse_from(argv);
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
@@ -557,10 +568,12 @@ pub(crate) async fn resolve_config_access(
         if ensure_local_schemas {
             ensure_runtime_schemas(&node_arc).await?;
         }
-        // Run the AgentBehavior migration so that offline config diff/apply/export
-        // against an upgraded DB does not fail with "unknown field" errors when
-        // querying description/summary (introduced in #377). Idempotent and cheap.
-        defra_agent::migration::ensure_agent_behavior_migrations(node_arc.clone()).await?;
+        // Single sanctioned migration entry point: run the FULL set so offline
+        // config diff/apply/export/subagent paths against an upgraded DB never
+        // drift on which migrations have run (e.g. the `agent_did` scope key that
+        // `ToolCallLifecycle::load` selects, or description/summary from #377).
+        // Idempotent check-then-add, so the cost is bounded per invocation.
+        defra_agent::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
         // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
         // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable
         // but required by the type system.

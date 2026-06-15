@@ -26,8 +26,13 @@ use crate::watcher::AgentRequest;
 #[derive(Debug)]
 struct PairingReconcileRuntimeProbes {
     operator_write_diverges: bool,
+    operator_delete_diverges: bool,
+    read_failure_self_loops: bool,
     install_converges: bool,
     teardown_converges: bool,
+    replicator_install_converges: bool,
+    replicator_teardown_converges: bool,
+    dial_converges: bool,
     crash_restarts_slot: bool,
 }
 
@@ -142,8 +147,13 @@ async fn pairing_reconcile_state_machine_contract_is_complete() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let probes = PairingReconcileRuntimeProbes {
         operator_write_diverges: operator_write_changes_snapshot_fingerprint(node.as_ref()).await,
+        operator_delete_diverges: operator_delete_yields_teardown_diff(),
+        read_failure_self_loops: read_failure_is_noop_self_loop(node.clone()).await,
         install_converges: reconcile_install_applies_added_behavior(node.as_ref()).await,
         teardown_converges: reconcile_teardown_applies_removed_behavior(node.as_ref()).await,
+        replicator_install_converges: pairing_replicator_install_diff_converges(),
+        replicator_teardown_converges: pairing_replicator_teardown_diff_converges(),
+        dial_converges: pairing_dial_is_available_for_desired_addresses(),
         crash_restarts_slot: slot_panic_restarts_behavior(node.as_ref()).await,
     };
 
@@ -186,11 +196,133 @@ fn rust_pairing_reconcile_step(
         ("idle" | "converged" | "crashed", "operatorWrite") if probes.operator_write_diverges => {
             Some("diverged")
         }
+        ("idle" | "converged" | "crashed", "operatorDelete") if probes.operator_delete_diverges => {
+            Some("diverged")
+        }
+        ("idle", "readFailure") if probes.read_failure_self_loops => Some("idle"),
+        ("converged", "readFailure") if probes.read_failure_self_loops => Some("converged"),
+        ("diverged", "readFailure") if probes.read_failure_self_loops => Some("diverged"),
+        ("crashed", "readFailure") if probes.read_failure_self_loops => Some("crashed"),
+        ("diverged", "dial") if probes.dial_converges => Some("converged"),
+        ("converged" | "diverged", "peerDisconnected") => Some("diverged"),
         ("diverged", "reconcileInstall") if probes.install_converges => Some("converged"),
         ("diverged", "reconcileTeardown") if probes.teardown_converges => Some("converged"),
+        ("diverged", "reconcileInstallReplicator") if probes.replicator_install_converges => {
+            Some("converged")
+        }
+        ("diverged", "reconcileTeardownReplicator") if probes.replicator_teardown_converges => {
+            Some("converged")
+        }
         (_, "crash") if probes.crash_restarts_slot => Some("crashed"),
         _ => None,
     }
+}
+
+fn pairing_replicator_install_diff_converges() -> bool {
+    use crate::agent::p2p_reconcile::{
+        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
+    };
+    let desired = PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
+    };
+    let actual = PairingActual::default();
+    let applied = PairingApplied::default();
+    compute_owned_pairing_diff(&desired, &actual, &applied)
+        == vec![DiffOp::InstallReplicator("addr1".into())]
+}
+
+fn pairing_replicator_teardown_diff_converges() -> bool {
+    use crate::agent::p2p_reconcile::{
+        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
+    };
+    let desired = PairingDesired::default();
+    let actual = PairingActual {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    };
+    let applied = PairingApplied {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
+    };
+    compute_owned_pairing_diff(&desired, &actual, &applied)
+        == vec![DiffOp::TeardownReplicator("addr1".into())]
+}
+
+/// Probe for the `operatorDelete` transition: when the operator deletes the
+/// desired row (desired empty) but the managed/live state still carries what was
+/// installed, the diff must be non-empty (a teardown of the managed set), so the
+/// state diverges and the reconciler has work to do. Distinct from the
+/// `operatorWrite` probe — this exercises desired-None-over-non-empty-applied.
+fn operator_delete_yields_teardown_diff() -> bool {
+    use crate::agent::p2p_reconcile::{
+        compute_owned_pairing_diff, PairingActual, PairingApplied, PairingDesired,
+    };
+    let desired = PairingDesired::default();
+    let actual = PairingActual {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+    };
+    let applied = PairingApplied {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
+    };
+    !compute_owned_pairing_diff(&desired, &actual, &applied).is_empty()
+}
+
+/// Probe for the `readFailure` transition: a failed `load_desired` read makes a
+/// tick a no-op self-loop — `desired_read_failed` is set and NO ops are applied,
+/// so the state is unchanged. Exercises the real `reconcile_peer_tick` with a
+/// store whose desired read errors (the admin is never reached on this path).
+async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> bool {
+    use crate::agent::p2p_reconcile::{
+        reconcile_peer_tick, EmbeddedRemoteP2pAdmin, PairingApplied, PairingDesired,
+        PairingStateStore,
+    };
+
+    struct FailingDesiredStore;
+    #[async_trait::async_trait]
+    impl PairingStateStore for FailingDesiredStore {
+        async fn load_desired(&self, _peer_id: &str) -> anyhow::Result<Option<PairingDesired>> {
+            anyhow::bail!("simulated desired-state read failure")
+        }
+        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<PairingApplied> {
+            Ok(PairingApplied::default())
+        }
+        async fn save_applied(
+            &self,
+            _peer_id: &str,
+            _applied: &PairingApplied,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete_applied(&self, _peer_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn list_peer_ids(&self) -> anyhow::Result<BTreeSet<String>> {
+            Ok(BTreeSet::new())
+        }
+    }
+
+    let admin = EmbeddedRemoteP2pAdmin::new(node);
+    let store = FailingDesiredStore;
+    match reconcile_peer_tick(&admin, &store, "peer-a").await {
+        Ok(outcome) => outcome.desired_read_failed && outcome.ops_applied.is_empty(),
+        Err(_) => false,
+    }
+}
+
+fn pairing_dial_is_available_for_desired_addresses() -> bool {
+    use crate::agent::p2p_reconcile::PairingDesired;
+    PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
+    }
+    .has_wiring()
 }
 
 async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {

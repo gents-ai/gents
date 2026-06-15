@@ -12,7 +12,8 @@ impl DefraSessionHook {
             let mut state = self.state.lock().await;
 
             if !state.initialized {
-                let session_id = session::create_session(&self.node, &state.agent_name).await?;
+                let session_id =
+                    session::create_session(&self.node, &state.agent_name, &self.agent_did).await?;
                 state.session_id = Some(session_id);
                 state.initialized = true;
             }
@@ -253,6 +254,7 @@ impl DefraSessionHook {
                 self.node.clone(),
                 request_id,
                 session_id,
+                self.agent_did.clone(),
                 internal_call_id.to_string(),
                 seq,
                 tool_name.to_string(),

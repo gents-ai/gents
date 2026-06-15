@@ -95,6 +95,26 @@ const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
 
+const ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"profiles","Kind":21}}
+]"#;
+
+const ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
+]"#;
+
+const ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"template","Kind":11}}
+]"#;
+
+const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
+]"#;
+
+const ADD_PEER_REGISTRY_TEMPLATES_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerRegistry/Fields/-","value":{"Name":"templates","Kind":21}}
+]"#;
+
 // Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
 // fields compiles to that kind. AgentBehavior gained `description` and `summary`
 // on branch design/issue-377; existing DBs upgraded from a prior schema version
@@ -119,6 +139,56 @@ const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
     {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":5}},
     {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
 ]"#;
+
+// Kind 11 == NillableString. The `agent_did` scope key denormalizes the owning
+// agent onto the four conversation collections that key on `session_id` and
+// historically lacked it (AgentMessage, AgentToolCall, AgentSession,
+// CompactionEntry). The field is `@immutable` in the SDL: it is logically
+// write-once (stamped from the session owner at create), which lets filtered
+// replication (#1033) scope each collection to one agent's DID — and #1033
+// REJECTS any replication-filter field that is not immutable. The patch must
+// therefore carry `"Immutable":true`: `FieldDescription.immutable` deserializes
+// from that key, and adding a brand-new field has no prior values to violate
+// immutability, so this stays an ordinary additive patch.
+const ADD_AGENT_MESSAGE_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+]"#;
+const ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+]"#;
+const ADD_AGENT_SESSION_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+]"#;
+const ADD_COMPACTION_ENTRY_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+]"#;
+
+// The other four conversation collections (AgentRequest, AgentResponse,
+// AgentToolResult, AgentConversation) already carried `agent_did` as a plain
+// `@index` field; this version's SDL adds `@immutable`. A FRESH database is
+// created immutable from the SDL, but an UPGRADED database keeps the existing
+// MUTABLE field — `add_schema` short-circuits on an existing collection, and
+// defradb's schema patcher REJECTS changing any property of an existing field
+// (`validate_field_not_mutated`: `new_field != old_field` ⇒ "mutating an existing
+// field is not supported"; this mirrors Go DefraDB's `validateFieldNotMutated`,
+// which `reflect.DeepEqual`s the whole field).
+//
+// Flipping a field to immutable is NOT an additive change: `@immutable` (a
+// defradb.rs-only concept — Go DefraDB has no write-once field) is enforced at
+// DAG-merge time, so an existing document that already has multiple writes to
+// the field in its history would retroactively violate the invariant. A safe
+// flip therefore needs defradb to scan each document's history and prove a
+// single write first — an upstream feature, not an in-place patch. Until that
+// lands, the migration only DETECTS the stale shape and warns, so the operator
+// can see that filtered replication of the conversation template is unavailable
+// on this upgraded node (defradb rejects the non-immutable scope filter at
+// `add_replicator`). Fresh databases are immutable from the SDL and unaffected.
+const PRE_EXISTING_AGENT_DID_COLLECTIONS: [&str; 4] = [
+    "AgentRequest",
+    "AgentResponse",
+    "AgentToolResult",
+    "AgentConversation",
+];
 
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
@@ -302,6 +372,12 @@ fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
 
 fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
     cv.fields.iter().any(|f| f.name == field_name)
+}
+
+fn field_is_immutable(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
+    cv.fields
+        .iter()
+        .any(|f| f.name == field_name && f.immutable)
 }
 
 /// WASM lens bytes for the v2->v3 subagent extension. Embedded at compile time
@@ -575,31 +651,265 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
 }
 
 pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    let Some(collection) = node
+    ensure_peer_pairing_applied_schema(node.as_ref()).await?;
+
+    let Some(mut collection) = node
         .get_collection("PeerPairingDesired")
         .context("get PeerPairingDesired collection")?
     else {
         return Ok(());
     };
-    if collection_has_field(&collection, "agent_did") {
+
+    if !collection_has_field(&collection, "agent_did") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired agent_did")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired agent_did")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with agent_did field"
+        );
+        collection = next;
+    }
+
+    if !collection_has_field(&collection, "profiles") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired profiles")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired profiles")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with profiles field"
+        );
+        collection = next;
+    }
+
+    if !collection_has_field(&collection, "source") {
+        let next = node
+            .patch_collection("PeerPairingDesired", ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH)
+            .await
+            .context("patch_collection PeerPairingDesired source")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired source")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with source field"
+        );
+    }
+
+    if !collection_has_field(&collection, "template") {
+        let next = node
+            .patch_collection(
+                "PeerPairingDesired",
+                ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH,
+            )
+            .await
+            .context("patch_collection PeerPairingDesired template")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version PeerPairingDesired template")?;
+        tracing::info!(
+            version = %next.version_id,
+            "PeerPairingDesired patched with template field"
+        );
+    }
+
+    // Self-healing backfill (gated on ROW STATE, runs every startup): default any
+    // row still missing `source`/`template` to the operator partition and the
+    // `conversation` template. Previously the backfill lived inside the
+    // field-add branch, so a crash between adding the field and running the
+    // backfill left rows at `source: null` forever — invisible to BOTH the
+    // operator (`source _eq "operator"`) and registry (`source _eq "registry"`)
+    // partition queries, and reconciled by neither. Reading rows and updating
+    // by `_docID` (rather than an `_eq: null` filter) also avoids clobbering
+    // legitimate registry-owned rows.
+    backfill_pairing_desired_defaults(&node).await;
+
+    Ok(())
+}
+
+/// Fill any `PeerPairingDesired` row still missing `source` or `template` with
+/// the operator-partition / `conversation` defaults. Idempotent and convergent:
+/// once every row carries both fields it updates nothing, so it is safe to run on
+/// every startup and self-heals a migration that crashed mid-backfill.
+async fn backfill_pairing_desired_defaults(node: &EmbeddedNode) {
+    let response = node
+        .execute(r#"query { PeerPairingDesired { _docID source template } }"#)
+        .await;
+    if response.has_errors() {
+        tracing::warn!(errors = ?response.errors, "PeerPairingDesired backfill read failed");
+        return;
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("PeerPairingDesired"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for row in rows {
+        let Some(doc_id) = row.get("_docID").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let is_blank = |field: &str| {
+            row.get(field)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .map(str::is_empty)
+                .unwrap_or(true)
+        };
+        let mut assignments = Vec::new();
+        if is_blank("source") {
+            assignments.push("source: \"operator\"".to_string());
+        }
+        if is_blank("template") {
+            assignments.push("template: \"conversation\"".to_string());
+        }
+        if assignments.is_empty() {
+            continue;
+        }
+        let mutation = format!(
+            r#"mutation {{ update_PeerPairingDesired(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ {} }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+            assignments.join(", ")
+        );
+        let update = node.execute(&mutation).await;
+        if update.has_errors() {
+            tracing::warn!(
+                doc_id,
+                errors = ?update.errors,
+                "PeerPairingDesired default backfill update failed"
+            );
+        }
+    }
+}
+
+/// Idempotent migration for PeerRegistry: registers the collection schema if
+/// it does not yet exist. PeerRegistry is a new collection introduced for
+/// service-discovery.
+///
+/// Additive field migration: the registry offer field was renamed `profiles` →
+/// `templates` (a node now advertises the scope templates it offers, not raw
+/// collection profiles). Existing DBs that registered PeerRegistry under the old
+/// schema gain the `templates` field via patch. No backfill — a node freshly
+/// re-advertises its offered templates on its next heartbeat, so the stale
+/// `profiles` value is simply left unread.
+pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let existing = node
+        .get_collection("PeerRegistry")
+        .context("get PeerRegistry collection")?;
+
+    if let Some(collection) = existing {
+        if !collection_has_field(&collection, "templates") {
+            let next = node
+                .patch_collection("PeerRegistry", ADD_PEER_REGISTRY_TEMPLATES_PATCH)
+                .await
+                .context("patch_collection PeerRegistry templates")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version PeerRegistry templates")?;
+            tracing::info!(
+                version = %next.version_id,
+                "PeerRegistry patched with templates field"
+            );
+        }
         return Ok(());
     }
 
-    let next = node
-        .patch_collection(
-            "PeerPairingDesired",
-            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
-        )
+    match node
+        .add_schema(defra_agent_protocol::schemas::PEER_REGISTRY)
         .await
-        .context("patch_collection PeerPairingDesired agent_did")?;
-    node.set_active_collection_version(&next.version_id)
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PeerRegistry schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `ConsumedInviteNonce` ledger collection
+/// exists. This is the runtime backing for single-use pairing invites (Task C2,
+/// Finding #16): the join path records each redeemed token's `nonce` here and
+/// rejects any token whose nonce is already present, mirroring the Lean
+/// `consumedNonces` ledger and the `replay_rejected` theorem. The `nonce` field
+/// carries a unique index (declared in the SDL) so a concurrent double-redeem
+/// loses the race at insert time rather than slipping through.
+///
+/// A fresh database created from `schemas::ALL` already has this collection, so
+/// the migration is a no-op there; it only adds the schema on a database
+/// upgraded from before C2 landed (mirrors `ensure_peer_registry_migrations`).
+pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("ConsumedInviteNonce")
+        .context("get ConsumedInviteNonce collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::CONSUMED_INVITE_NONCE)
         .await
-        .context("set_active_collection_version PeerPairingDesired agent_did")?;
-    tracing::info!(
-        version = %next.version_id,
-        "PeerPairingDesired patched with agent_did field"
-    );
-    Ok(())
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add ConsumedInviteNonce schema"),
+    }
+}
+
+async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
+    let existing = node
+        .get_collection("PeerPairingApplied")
+        .context("get PeerPairingApplied collection")?;
+
+    if let Some(collection) = existing {
+        // Additive: existing DBs gain the `replicator_filter` field that records
+        // the scope filter last installed for this pairing's replicators, so a
+        // changed desired filter is detected as divergence (Lean
+        // `filter_change_forces_reinstall`). No backfill: null == unfiltered.
+        if !collection_has_field(&collection, "replicator_filter") {
+            let next = node
+                .patch_collection(
+                    "PeerPairingApplied",
+                    ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH,
+                )
+                .await
+                .context("patch_collection PeerPairingApplied replicator_filter")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version PeerPairingApplied replicator_filter")?;
+            tracing::info!(
+                version = %next.version_id,
+                "PeerPairingApplied patched with replicator_filter field"
+            );
+        }
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::PEER_PAIRING_APPLIED)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PeerPairingApplied schema"),
+    }
 }
 
 pub async fn ensure_tool_service_registry_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
@@ -749,13 +1059,428 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
     Ok(())
 }
 
+/// Per-collection outcome of the legacy `agent_did` scope-key reconciliation
+/// (Finding #11): how many rows were backfilled from their owning record, and
+/// how many remain unscoped (their `agent_did` is still null after the field was
+/// added) and so are excluded from DID-scoped replication.
+#[derive(Debug, Default)]
+struct ScopeKeyBackfillReport {
+    /// `(collection, backfilled_count, unscoped_count)` in processing order.
+    entries: Vec<(&'static str, usize, usize)>,
+}
+
+impl ScopeKeyBackfillReport {
+    fn record(&mut self, collection: &'static str, backfilled: usize, unscoped: usize) {
+        self.entries.push((collection, backfilled, unscoped));
+    }
+
+    #[cfg(test)]
+    fn backfilled_for(&self, collection: &str) -> usize {
+        self.entries
+            .iter()
+            .find(|(name, _, _)| *name == collection)
+            .map(|(_, backfilled, _)| *backfilled)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn unscoped_for(&self, collection: &str) -> usize {
+        self.entries
+            .iter()
+            .find(|(name, _, _)| *name == collection)
+            .map(|(_, _, unscoped)| *unscoped)
+            .unwrap_or(0)
+    }
+
+    /// Emit one warning per collection that still has unscoped legacy rows, so
+    /// the operator sees the consequence (the count) rather than a silent drop.
+    fn warn_unscoped(&self) {
+        for (collection, _, unscoped) in &self.entries {
+            if *unscoped > 0 {
+                tracing::warn!(
+                    collection,
+                    unscoped_rows = unscoped,
+                    "legacy rows predate the immutable agent_did scope key and \
+                     remain null (this defradb pin rejects writing a value to a \
+                     newly-@immutable field even on its first write); they are \
+                     excluded from DID-scoped replication — re-create or re-scope \
+                     them to include"
+                );
+            }
+        }
+    }
+}
+
+/// Reconcile the freshly-added `agent_did` scope key on legacy conversation rows
+/// (Finding #11) and report the outcome per collection.
+///
+/// INTENT was to BACKFILL each null row from its owning record — children
+/// (AgentMessage/AgentToolCall/CompactionEntry) via `session_id` →
+/// AgentSession.agent_did, and AgentSession itself via its AgentRequest lineage —
+/// with a single first write while the field is brand-new in this migration
+/// window. The owner resolution below is real and exercised.
+///
+/// EMPIRICAL CONSTRAINT (this defradb pin): a write that sets a value on a
+/// newly-`@immutable` field of a pre-existing document is REJECTED with
+/// "immutable field 'agent_did' cannot be changed" — the immutability check
+/// fires on null→value, not just value→value, so the document's history null is
+/// treated as a prior write. Backfill is therefore impossible here; every
+/// resolvable row falls through to the unscoped count and the per-collection
+/// warning. If an upstream version distinguishes the first write, the same code
+/// path will start reporting `backfilled` without further change.
+///
+/// Idempotent and immutability-safe: only rows whose `agent_did` is currently
+/// null are even considered, so a row that already carries the key is never
+/// re-written.
+async fn backfill_conversation_scope_keys(node: &EmbeddedNode) -> ScopeKeyBackfillReport {
+    let mut report = ScopeKeyBackfillReport::default();
+
+    // session_id → owning agent_did, recovered from AgentRequest lineage and any
+    // AgentSession that already carries the key.
+    let owner = build_session_owner_map(node).await;
+
+    // AgentSession is the owning record; the three children key on `session_id`.
+    // All four resolve their DID through the same session→owner map.
+    for collection in [
+        "AgentSession",
+        "AgentMessage",
+        "AgentToolCall",
+        "CompactionEntry",
+    ] {
+        let (filled, unscoped) = reconcile_scope_key(node, collection, &owner).await;
+        report.record(collection, filled, unscoped);
+    }
+
+    report
+}
+
+/// Map `session_id` → owning `agent_did` from AgentRequest lineage and from any
+/// AgentSession that already carries the key. Only non-empty DIDs are recorded,
+/// so a session with no resolvable owner is absent (its rows count as unscoped).
+async fn build_session_owner_map(node: &EmbeddedNode) -> std::collections::HashMap<String, String> {
+    let mut owner: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    let trimmed_did = |row: &serde_json::Value| -> Option<String> {
+        row.get("agent_did")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let session_of = |row: &serde_json::Value| -> Option<String> {
+        row.get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    // AgentRequest lineage first (the source of truth for legacy sessions).
+    let requests = read_rows(node, "AgentRequest", "session_id agent_did").await;
+    for row in &requests {
+        if let (Some(session), Some(did)) = (session_of(row), trimmed_did(row)) {
+            owner.entry(session).or_insert(did);
+        }
+    }
+    // Any AgentSession that already carries its own DID seeds/overrides the map.
+    let sessions = read_rows(node, "AgentSession", "session_id agent_did").await;
+    for row in &sessions {
+        if let (Some(session), Some(did)) = (session_of(row), trimmed_did(row)) {
+            owner.insert(session, did);
+        }
+    }
+
+    owner
+}
+
+/// Read every row of `collection` selecting `_docID` plus the given fields.
+async fn read_rows(
+    node: &EmbeddedNode,
+    collection: &str,
+    select_fields: &str,
+) -> Vec<serde_json::Value> {
+    let query = format!("query {{ {collection} {{ _docID {select_fields} }} }}");
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        // A collection/field that simply doesn't exist (e.g. a fresh or
+        // config-only home that never created this conversation collection) is
+        // not a backfill failure: there are zero legacy rows to scope. DefraDB
+        // surfaces that as `Cannot query field "..."`. Treat it as "not
+        // applicable" and skip silently at debug — the migration runs on every
+        // CLI command, so this must not emit a WARN that would corrupt
+        // `--output json` stdout. Any OTHER error is a genuine read failure and
+        // still warns.
+        let absent = response
+            .errors
+            .iter()
+            .any(|error| error.message.contains("Cannot query field"));
+        if absent {
+            tracing::debug!(
+                collection,
+                "scope-key backfill: collection/field absent; no rows to scope"
+            );
+        } else {
+            tracing::warn!(
+                collection,
+                errors = ?response.errors,
+                "scope-key backfill read failed"
+            );
+        }
+        return Vec::new();
+    }
+    response
+        .data
+        .as_ref()
+        .and_then(|d| d.get(collection))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Reconcile `collection`'s `agent_did` against `owner_map[session_id]`. Returns
+/// `(backfilled, unscoped)`. Rows already carrying a non-empty DID are skipped
+/// (idempotent; never a second write to the immutable field). Each null row whose
+/// owner resolves is offered a single first write; if defradb accepts it the row
+/// counts as backfilled, otherwise (and for rows with no resolvable owner) it
+/// counts as unscoped. The whole-collection update failure is logged once at
+/// debug, not per row, so a pin that universally rejects the first write does not
+/// flood the log — the operator-facing signal is the per-collection warn count.
+async fn reconcile_scope_key(
+    node: &EmbeddedNode,
+    collection: &'static str,
+    owner_map: &std::collections::HashMap<String, String>,
+) -> (usize, usize) {
+    let rows = read_rows(node, collection, "session_id agent_did").await;
+    let mut backfilled = 0usize;
+    let mut unscoped = 0usize;
+    let mut logged_reject = false;
+
+    for row in rows {
+        let already_scoped = row
+            .get("agent_did")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if already_scoped {
+            continue;
+        }
+        let Some(doc_id) = row.get("_docID").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let session = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(did) = session.and_then(|s| owner_map.get(s)) else {
+            // No resolvable owner: never guess. Counted + warned by the caller.
+            unscoped += 1;
+            continue;
+        };
+
+        let mutation = format!(
+            r#"mutation {{ update_{collection}(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ agent_did: "{}" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+            crate::graphql::escape_graphql_string(did),
+        );
+        let update = node.execute(&mutation).await;
+        if update.has_errors() {
+            if !logged_reject {
+                logged_reject = true;
+                tracing::debug!(
+                    collection,
+                    errors = ?update.errors,
+                    "scope-key backfill rejected by defradb (likely the immutable \
+                     first-write constraint); affected rows counted as unscoped"
+                );
+            }
+            unscoped += 1;
+            continue;
+        }
+        backfilled += 1;
+    }
+
+    (backfilled, unscoped)
+}
+
+/// Idempotent migration ensuring every conversation collection carries an
+/// `@immutable` `agent_did` scope key, the field filtered replication (#1033)
+/// scopes on (and rejects unless immutable).
+///
+/// Two groups, both required on an UPGRADED database:
+///
+/// 1. The four collections that key on `session_id` and historically lacked
+///    `agent_did` entirely (AgentMessage, AgentToolCall, AgentSession,
+///    CompactionEntry) get the field ADDED as an immutable nullable String, then
+///    `backfill_conversation_scope_keys` reconciles legacy rows (Finding #11).
+///    The intent is to BACKFILL each null row from its owning record — children
+///    via `session_id` → AgentSession.agent_did, AgentSession via its
+///    AgentRequest lineage — but on the current defradb pin a write that sets a
+///    value on a newly-`@immutable` field of a pre-existing document is rejected
+///    ("immutable field 'agent_did' cannot be changed"; the constraint fires on
+///    null→value, not only value→value). So today every legacy row stays null and
+///    is COUNTED and WARNED about per collection — excluded from DID-scoped
+///    replication, surfaced rather than silently dropped, and recoverable only by
+///    re-creating or re-scoping the row. (The backfill path remains wired so a
+///    future pin that permits the first write needs no further change.)
+/// 2. The four that already carried `agent_did` as a plain `@index` field
+///    (AgentRequest, AgentResponse, AgentToolResult, AgentConversation) cannot
+///    be flipped to immutable on the current pin — defradb rejects any property
+///    change to an existing field. These are only DETECTED: a mutable field on an
+///    upgraded node is warned about (filtered replication of the conversation
+///    template is unavailable there until an upstream immutable-flip lands).
+///
+/// Each collection is checked independently so a partial failure resumes at the
+/// un-migrated collection on the next run, and each step is a no-op once its
+/// target shape is already present (so fresh databases, created immutable from
+/// the SDL, skip every patch and warning).
+pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    // Group 1: add the immutable scope key where it is missing entirely.
+    for (collection_name, patch) in [
+        ("AgentMessage", ADD_AGENT_MESSAGE_AGENT_DID_PATCH),
+        ("AgentToolCall", ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH),
+        ("AgentSession", ADD_AGENT_SESSION_AGENT_DID_PATCH),
+        ("CompactionEntry", ADD_COMPACTION_ENTRY_AGENT_DID_PATCH),
+    ] {
+        let Some(collection) = node
+            .get_collection(collection_name)
+            .with_context(|| format!("get {collection_name} collection"))?
+        else {
+            tracing::debug!(
+                collection = collection_name,
+                "collection absent; scope-key patch no-op"
+            );
+            continue;
+        };
+
+        if collection_has_field(&collection, "agent_did") {
+            tracing::debug!(
+                collection = collection_name,
+                "already has agent_did scope key; skipping patch"
+            );
+            continue;
+        }
+
+        let next = node
+            .patch_collection(collection_name, patch)
+            .await
+            .with_context(|| format!("patch_collection {collection_name} agent_did scope key"))?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .with_context(|| {
+                format!("set_active_collection_version {collection_name} agent_did scope key")
+            })?;
+        tracing::info!(
+            collection = collection_name,
+            version = %next.version_id,
+            "patched with agent_did immutable scope key"
+        );
+    }
+
+    // Group 1 (cont.): backfill the freshly-added scope key on legacy rows from
+    // their owning record, and surface (with a per-collection count + warning)
+    // any row whose owner cannot be resolved (Finding #11). Safe to run every
+    // startup: rows already scoped are skipped, so it self-heals a backfill that
+    // crashed midway and never re-writes an immutable value.
+    let report = backfill_conversation_scope_keys(&node).await;
+    report.warn_unscoped();
+
+    // Group 2: detect (cannot fix in place) a pre-existing mutable agent_did.
+    for collection_name in PRE_EXISTING_AGENT_DID_COLLECTIONS {
+        let Some(collection) = node
+            .get_collection(collection_name)
+            .with_context(|| format!("get {collection_name} collection"))?
+        else {
+            continue;
+        };
+
+        if collection_has_field(&collection, "agent_did")
+            && !field_is_immutable(&collection, "agent_did")
+        {
+            tracing::warn!(
+                collection = collection_name,
+                "agent_did exists but is not immutable on this upgraded database; \
+                 defradb cannot flip an existing field to immutable, so filtered \
+                 replication of the conversation template is unavailable here until \
+                 an upstream immutable-flip migration lands (a fresh database is \
+                 created immutable from the SDL and is unaffected)"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Run every idempotent runtime schema migration in dependency order. The daemon
+/// (`run_agent`) and the desktop bootstrap both call this so the two hosts can
+/// never drift on which migrations have run — a drift that previously left
+/// upgraded desktop databases without the `@immutable` conversation scope keys
+/// (and without the PeerRegistry / AgentRuntime-status collections), silently
+/// disabling filtered replication there.
+//
+// THIS IS THE ONLY SANCTIONED MIGRATION ENTRY POINT. Every host (daemon,
+// desktop, and ALL CLI-local paths: `init`, `server`, `subagent`, oneshot, and
+// offline config diff/apply/export via `resolve_config_access`) must call this
+// and nothing else. Do NOT hand-enumerate a SUBSET of the individual `ensure_*`
+// migrations at a new call site: that is exactly the host-drift bug (Finding #3
+// / Pattern 3) where some paths skipped `ensure_conversation_scope_key_migrations`
+// and an upgraded DB failed reads with `Cannot query field "agent_did"`. The
+// individual `ensure_*` fns exist only as the building blocks of this function
+// (and the migration unit tests); new code adds a step HERE.
+pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    ensure_agent_runtime_executor_status_migrations(node.clone())
+        .await
+        .context("ensure AgentRuntime executor status migrations")?;
+    ensure_peer_pairing_desired_migrations(node.clone())
+        .await
+        .context("ensure PeerPairingDesired migrations")?;
+    ensure_peer_registry_migrations(node.clone())
+        .await
+        .context("ensure PeerRegistry migrations")?;
+    ensure_consumed_invite_nonce_migrations(node.clone())
+        .await
+        .context("ensure ConsumedInviteNonce migrations")?;
+    ensure_tool_service_registry_migrations(node.clone())
+        .await
+        .context("ensure ToolServiceRegistry migrations")?;
+    ensure_tool_service_health_state_migrations(node.clone())
+        .await
+        .context("ensure ToolServiceHealthState migrations")?;
+    ensure_agent_behavior_migrations(node.clone())
+        .await
+        .context("ensure AgentBehavior migrations")?;
+    ensure_conversation_scope_key_migrations(node)
+        .await
+        .context("ensure conversation agent_did scope-key migrations")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod patch_kind_tests {
     use super::*;
+    use serde::Deserialize;
 
     // defradb.rs ScalarArrayKind::NillableStringArray. SDL `[String]` (nullable
     // elements) compiles to this; migration patches adding such fields must match.
     const NILLABLE_STRING_ARRAY_KIND: i64 = 21;
+    const OLD_PEER_PAIRING_DESIRED_SCHEMA: &str = r#"
+        type PeerPairingDesired {
+            peer_id: String @index(unique: true)
+            agent_did: String @index
+            collections: [String!]!
+            replicator_addresses: [String!]!
+            created_at: DateTime @index(direction: DESC)
+            updated_at: DateTime @index(direction: DESC)
+        }
+    "#;
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        Arc::new(EmbeddedNode::builder().build().await.unwrap())
+    }
 
     fn field_kinds(patch_json: &str) -> Vec<(String, i64)> {
         let ops: serde_json::Value = serde_json::from_str(patch_json).expect("patch is valid JSON");
@@ -791,6 +1516,13 @@ mod patch_kind_tests {
                 "backgroundable_tool_names must be NillableStringArray (21), got {kind}"
             );
         }
+        for (name, kind) in field_kinds(ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH) {
+            assert_eq!(name, "profiles", "unexpected field in profiles patch");
+            assert_eq!(
+                kind, NILLABLE_STRING_ARRAY_KIND,
+                "profiles must be NillableStringArray (21), got {kind}"
+            );
+        }
     }
 
     #[test]
@@ -820,12 +1552,40 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
             ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
+            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+            ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
+            ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH,
+            ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH,
+            ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH,
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
+            ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
+            ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
+            ADD_AGENT_SESSION_AGENT_DID_PATCH,
+            ADD_COMPACTION_ENTRY_AGENT_DID_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
                 assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
+            }
+        }
+    }
+
+    #[test]
+    fn conversation_scope_key_patches_use_nillable_string_kind() {
+        const NILLABLE_STRING_KIND: i64 = 11;
+        for patch in [
+            ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
+            ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
+            ADD_AGENT_SESSION_AGENT_DID_PATCH,
+            ADD_COMPACTION_ENTRY_AGENT_DID_PATCH,
+        ] {
+            for (name, kind) in field_kinds(patch) {
+                assert_eq!(name, "agent_did", "unexpected field in scope-key patch");
+                assert_eq!(
+                    kind, NILLABLE_STRING_KIND,
+                    "agent_did scope key must be NillableString (11), got {kind}"
+                );
             }
         }
     }
@@ -853,6 +1613,851 @@ mod patch_kind_tests {
                 ("behavior_executor_queue_depth".to_string(), 5),
                 ("behavior_executor_status_json".to_string(), 11),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_pairing_migration_ensures_applied_and_desired_profiles() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let desired = node
+            .get_collection("PeerPairingDesired")
+            .unwrap()
+            .expect("PeerPairingDesired collection");
+        assert!(collection_has_field(&desired, "agent_did"));
+        assert!(collection_has_field(&desired, "profiles"));
+        assert!(collection_has_field(&desired, "source"));
+        assert!(collection_has_field(&desired, "template"));
+
+        let applied = node
+            .get_collection("PeerPairingApplied")
+            .unwrap()
+            .expect("PeerPairingApplied collection");
+        assert!(collection_has_field(&applied, "collections"));
+        assert!(collection_has_field(&applied, "replicator_addresses"));
+        assert!(collection_has_field(&applied, "replicator_filter"));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PairingDesiredRow {
+        peer_id: String,
+        collections: Option<Vec<String>>,
+        replicator_addresses: Option<Vec<String>>,
+        profiles: Option<Vec<String>>,
+    }
+
+    #[tokio::test]
+    async fn peer_pairing_profiles_migration_preserves_existing_rows() {
+        let node = test_node().await;
+        node.add_schema(OLD_PEER_PAIRING_DESIRED_SCHEMA)
+            .await
+            .unwrap();
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_PeerPairingDesired(input: {
+                        peer_id: "peer-b",
+                        agent_did: "did:defra-agent:peer-b",
+                        collections: ["AgentRequest"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/4101/p2p/peer-b"],
+                        created_at: "2026-06-12T00:00:00Z",
+                        updated_at: "2026-06-12T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "create old PeerPairingDesired row failed: {:?}",
+            response.errors
+        );
+
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_peer_pairing_desired_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let desired = node
+            .get_collection("PeerPairingDesired")
+            .unwrap()
+            .expect("PeerPairingDesired collection");
+        assert!(collection_has_field(&desired, "profiles"));
+        assert!(
+            node.get_collection("PeerPairingApplied").unwrap().is_some(),
+            "PeerPairingApplied collection should be added"
+        );
+
+        let response = node
+            .execute(
+                r#"{
+                    PeerPairingDesired(filter: { peer_id: { _eq: "peer-b" } }) {
+                        peer_id
+                        collections
+                        replicator_addresses
+                        profiles
+                    }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query migrated PeerPairingDesired failed: {:?}",
+            response.errors
+        );
+        let rows: Vec<PairingDesiredRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].peer_id, "peer-b");
+        assert_eq!(
+            rows[0].collections.as_deref(),
+            Some(&["AgentRequest".to_string()][..])
+        );
+        assert_eq!(
+            rows[0].replicator_addresses.as_deref(),
+            Some(&["/ip4/127.0.0.1/tcp/4101/p2p/peer-b".to_string()][..])
+        );
+        assert!(rows[0].profiles.is_none());
+    }
+
+    // Pre-scope-key SDL for the four session-keyed conversation collections:
+    // identical to the shipped schema minus the `agent_did` field. Registering
+    // these on a fresh node simulates a database upgraded from a schema version
+    // that predates the immutable scope key, which the migration must patch.
+    const OLD_AGENT_MESSAGE_SCHEMA: &str = r#"
+        type AgentMessage @branchable {
+            message_key: String @index(unique: true)
+            session_id: String @index
+            request_id: String @index
+            sequence: Int @index
+            role: String
+            content: String
+            timestamp: DateTime
+        }
+    "#;
+    const OLD_AGENT_TOOL_CALL_SCHEMA: &str = r#"
+        type AgentToolCall @branchable {
+            tool_call_key: String @index(unique: true)
+            request_id: String @index
+            session_id: String @index
+            tool_name: String @index
+            tool_call_id: String @index
+            args: String
+            status: String
+            lifecycle_state: String @index
+        }
+    "#;
+    const OLD_AGENT_SESSION_SCHEMA: &str = r#"
+        type AgentSession @branchable {
+            session_id: String @index(unique: true)
+            agent_name: String @index
+            behavior_id: String @index
+            started: DateTime
+            ended: DateTime
+            status: String
+        }
+    "#;
+    const OLD_COMPACTION_ENTRY_SCHEMA: &str = r#"
+        type CompactionEntry @branchable {
+            compaction_key: String @index(unique: true)
+            session_id: String @index
+            sequence: Int @index
+            summary: String
+            created_at: DateTime
+        }
+    "#;
+
+    // Pre-`@immutable` SDL for the four conversation collections that already
+    // carried `agent_did` but only as a plain `@index` field. Registering these
+    // simulates a database upgraded from a version before the scope key was made
+    // immutable; the migration must flip the existing field in place. These are
+    // trimmed to the fields the migration test exercises.
+    const OLD_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            status: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_RESPONSE_SCHEMA: &str = r#"
+        type AgentResponse @branchable {
+            response_key: String @index(unique: true)
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_TOOL_RESULT_SCHEMA: &str = r#"
+        type AgentToolResult @branchable {
+            agent_did: String @index
+            session_id: String @index
+            tool_name: String @index
+            created_at: String @index
+        }
+    "#;
+    const OLD_AGENT_CONVERSATION_SCHEMA: &str = r#"
+        type AgentConversation @branchable {
+            session_id: String @index(unique: true)
+            agent_name: String @index
+            agent_did: String @index
+            created_at: DateTime @index(direction: DESC)
+        }
+    "#;
+
+    #[tokio::test]
+    async fn conversation_scope_key_migration_makes_agent_did_immutable_on_upgrade() {
+        let node = test_node().await;
+        // Group 1: agent_did absent entirely.
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+        // Group 2: agent_did present but mutable (@index only).
+        node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_RESPONSE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_RESULT_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_CONVERSATION_SCHEMA)
+            .await
+            .unwrap();
+
+        const GROUP1: [&str; 4] = [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentSession",
+            "CompactionEntry",
+        ];
+        const GROUP2: [&str; 4] = [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentToolResult",
+            "AgentConversation",
+        ];
+
+        // Pre-state: group 1 lacks agent_did; group 2 has it but mutable.
+        for collection in GROUP1 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                !collection_has_field(&cv, "agent_did"),
+                "{collection} should not yet have agent_did before migration"
+            );
+        }
+        for collection in GROUP2 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                collection_has_field(&cv, "agent_did") && !field_is_immutable(&cv, "agent_did"),
+                "{collection} should start with a mutable agent_did before migration"
+            );
+        }
+
+        // Idempotent: running twice must not fail.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+
+        // Post-state, group 1 (ADDED field): agent_did is now IMMUTABLE — the
+        // property #1033 requires before it will install the scope filter.
+        for collection in GROUP1 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                field_is_immutable(&cv, "agent_did"),
+                "{collection}.agent_did must be immutable after migration"
+            );
+        }
+
+        // Post-state, group 2 (PRE-EXISTING field): defradb refuses to flip an
+        // existing field to immutable, so the migration can only warn — the field
+        // stays mutable on an upgraded DB. This assertion pins that limitation; it
+        // should flip to `field_is_immutable` once an upstream immutable-flip
+        // migration exists (at which point this test, and the group-2 detection
+        // branch in `ensure_conversation_scope_key_migrations`, must be updated).
+        for collection in GROUP2 {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                !field_is_immutable(&cv, "agent_did"),
+                "{collection}.agent_did cannot yet be made immutable on upgrade \
+                 (see ensure_conversation_scope_key_migrations group 2)"
+            );
+        }
+
+        // Enforcement actually fires on the migrated ADDED field: create a row
+        // with the original owner, then attempt to reassign the scope key — the
+        // update must error and the stored value must survive.
+        let create = node
+            .execute(
+                r#"mutation { create_AgentMessage(input: {
+                    message_key: "mig-m1", session_id: "mig-s1",
+                    agent_did: "did:defra-agent:alice", role: "user", content: "hi"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create AgentMessage with agent_did failed: {:?}",
+            create.errors
+        );
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentMessage(
+                        filter: { agent_did: { _eq: "did:defra-agent:alice" } },
+                        input: { agent_did: "did:defra-agent:mallory" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            rewrite.has_errors(),
+            "rewriting the migrated immutable agent_did on AgentMessage must be rejected"
+        );
+    }
+
+    /// Finding #11: legacy session-keyed rows that predate the immutable
+    /// `agent_did` scope key must not be silently dropped from DID-scoped
+    /// replication. The reconciler resolves each null row's owning DID (children
+    /// via `session_id` → AgentSession; sessions via `session_id` → AgentRequest
+    /// lineage) and attempts a single first write. On the current defradb pin
+    /// that write is rejected (the `@immutable` constraint fires on null→value),
+    /// so every legacy row is COUNTED + WARNED rather than silently excluded, and
+    /// an owner is never guessed. This test pins that behavior; the owner-
+    /// resolution and idempotence paths are fully exercised.
+    #[tokio::test]
+    async fn conversation_scope_key_migration_counts_legacy_rows_owner_never_guessed() {
+        let node = test_node().await;
+        // Upgraded DB: session-keyed collections lack agent_did entirely;
+        // AgentRequest already carries it (the lineage source for sessions).
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
+
+        // A scoped session "s-alice": an AgentRequest carries the owning DID, and
+        // each child collection references the session. All predate the scope key
+        // (no agent_did column exists yet).
+        for mutation in [
+            r#"mutation { create_AgentRequest(input: {
+                request_id: "req-1", session_id: "s-alice",
+                agent_did: "did:defra-agent:alice", content: "hi", status: "done",
+                lifecycle_state: "terminal", created_at: "2026-06-12T00:00:00Z"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentSession(input: {
+                session_id: "s-alice", agent_name: "alice", behavior_id: "b1", status: "ended"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentMessage(input: {
+                message_key: "m-1", session_id: "s-alice", request_id: "req-1",
+                sequence: 0, role: "user", content: "hi"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentToolCall(input: {
+                tool_call_key: "tc-1", session_id: "s-alice", request_id: "req-1",
+                tool_name: "bash", tool_call_id: "call-1", status: "done",
+                lifecycle_state: "terminal"
+            }) { _docID } }"#,
+            r#"mutation { create_CompactionEntry(input: {
+                compaction_key: "ce-1", session_id: "s-alice", sequence: 0,
+                summary: "...", created_at: "2026-06-12T00:00:00Z"
+            }) { _docID } }"#,
+            // An ORPHAN session with no AgentRequest lineage, plus an orphan
+            // message under it: nothing resolves an agent_did for these.
+            r#"mutation { create_AgentSession(input: {
+                session_id: "s-orphan", agent_name: "ghost", behavior_id: "b1", status: "ended"
+            }) { _docID } }"#,
+            r#"mutation { create_AgentMessage(input: {
+                message_key: "m-orphan", session_id: "s-orphan", request_id: "req-gone",
+                sequence: 0, role: "user", content: "?"
+            }) { _docID } }"#,
+        ] {
+            let resp = node.execute(mutation).await;
+            assert!(
+                !resp.has_errors(),
+                "seed mutation failed: {:?}",
+                resp.errors
+            );
+        }
+
+        // Add the immutable scope key (the Group-1 patch the migration runs
+        // before backfilling). Legacy rows now read back agent_did: null.
+        for (collection, patch) in [
+            ("AgentSession", ADD_AGENT_SESSION_AGENT_DID_PATCH),
+            ("AgentMessage", ADD_AGENT_MESSAGE_AGENT_DID_PATCH),
+            ("AgentToolCall", ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH),
+            ("CompactionEntry", ADD_COMPACTION_ENTRY_AGENT_DID_PATCH),
+        ] {
+            let next = node.patch_collection(collection, patch).await.unwrap();
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .unwrap();
+        }
+
+        // First run. The owner map resolves "s-alice" → did:defra-agent:alice
+        // from the AgentRequest lineage and offers each null row a first write.
+        // On the current defradb pin that write is REJECTED ("immutable field
+        // 'agent_did' cannot be changed"), so every legacy row — resolvable or
+        // orphan — is counted as unscoped rather than silently dropped, and
+        // nothing is ever guessed. (If a future pin permits the first write, the
+        // resolvable rows will move into the backfilled column; this assertion
+        // pins today's behavior, matching the group-2 limitation test below.)
+        let report = backfill_conversation_scope_keys(&node).await;
+
+        // Per collection: s-alice (resolvable but write-rejected) and, for the
+        // session-keyed collections that also have an orphan, the orphan too.
+        assert_eq!(
+            report.unscoped_for("AgentSession"),
+            2,
+            "s-alice (write rejected) + s-orphan (no lineage) both counted, not dropped"
+        );
+        assert_eq!(
+            report.unscoped_for("AgentMessage"),
+            2,
+            "m-1 (write rejected) + m-orphan (no scoped session) both counted"
+        );
+        assert_eq!(report.unscoped_for("AgentToolCall"), 1);
+        assert_eq!(report.unscoped_for("CompactionEntry"), 1);
+        // Backfill is impossible on this pin: nothing is written.
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(
+                report.backfilled_for(collection),
+                0,
+                "{collection}: this defradb pin rejects the first write to a \
+                 newly-immutable field, so no row can be backfilled"
+            );
+        }
+
+        // Every legacy row remains null (no backfill, no guess).
+        for (collection, key_field, key) in [
+            ("AgentSession", "session_id", "s-alice"),
+            ("AgentMessage", "message_key", "m-1"),
+            ("AgentToolCall", "tool_call_key", "tc-1"),
+            ("CompactionEntry", "compaction_key", "ce-1"),
+            ("AgentMessage", "message_key", "m-orphan"),
+        ] {
+            let q = format!(
+                r#"query {{ {collection}(filter: {{ {key_field}: {{ _eq: "{key}" }} }}) {{ agent_did }} }}"#
+            );
+            let resp = node.execute(&q).await;
+            assert!(
+                !resp.has_errors(),
+                "read {collection} failed: {:?}",
+                resp.errors
+            );
+            let did = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get(collection))
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|r| r.get("agent_did"))
+                .and_then(|v| v.as_str());
+            assert_eq!(
+                did, None,
+                "{collection} {key} must stay null (backfill blocked, owner never guessed)"
+            );
+        }
+
+        // Idempotent: a second run is stable — same unscoped counts, still zero
+        // backfilled, no error.
+        let report2 = backfill_conversation_scope_keys(&node).await;
+        assert_eq!(report2.unscoped_for("AgentSession"), 2);
+        assert_eq!(report2.unscoped_for("AgentMessage"), 2);
+        assert_eq!(report2.unscoped_for("AgentToolCall"), 1);
+        assert_eq!(report2.unscoped_for("CompactionEntry"), 1);
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(report2.backfilled_for(collection), 0);
+        }
+
+        // The end-to-end public migration also succeeds and stays idempotent.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+    }
+
+    /// A tracing layer that records the level of every event whose target is
+    /// this crate's `migration` module, so a test can assert the scope-key
+    /// backfill emits NO warn/info on no-op runs (the property that keeps
+    /// `--output json` stdout clean now that the CLI runs the full migration set
+    /// on every command).
+    #[derive(Clone, Default)]
+    struct LevelCapture {
+        levels: std::sync::Arc<std::sync::Mutex<Vec<tracing::Level>>>,
+    }
+
+    impl LevelCapture {
+        fn levels(&self) -> Vec<tracing::Level> {
+            self.levels.lock().expect("level store should lock").clone()
+        }
+
+        fn warns_or_infos(&self) -> Vec<tracing::Level> {
+            self.levels()
+                .into_iter()
+                .filter(|level| *level <= tracing::Level::INFO)
+                .collect()
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for LevelCapture
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target().contains("migration") {
+                self.levels
+                    .lock()
+                    .expect("level store should lock")
+                    .push(*event.metadata().level());
+            }
+        }
+    }
+
+    /// Absent collections are NOT a backfill failure: a home that never created
+    /// the conversation collections (fresh / config-only) has zero legacy rows.
+    /// The read must skip silently (DefraDB reports `Cannot query field`), the
+    /// report must be empty, and crucially the migration must emit NO warn/info —
+    /// otherwise the line corrupts `--output json` stdout on every CLI command.
+    #[tokio::test]
+    async fn scope_key_backfill_silent_when_collections_absent() {
+        use tracing_subscriber::prelude::*;
+
+        let node = test_node().await;
+        // Deliberately do NOT register the conversation collections.
+        let capture = LevelCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        // `set_default` returns a guard whose subscriber stays active across the
+        // awaits below (same thread), unlike the closure-only `with_default`.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let report = backfill_conversation_scope_keys(&node).await;
+
+        // No collections -> nothing to scope, nothing to warn about.
+        for collection in [
+            "AgentSession",
+            "AgentMessage",
+            "AgentToolCall",
+            "CompactionEntry",
+        ] {
+            assert_eq!(report.backfilled_for(collection), 0);
+            assert_eq!(report.unscoped_for(collection), 0);
+        }
+        report.warn_unscoped();
+        assert!(
+            capture.warns_or_infos().is_empty(),
+            "absent collections must produce no warn/info, got: {:?}",
+            capture.warns_or_infos()
+        );
+    }
+
+    /// Steady state: the conversation collections EXIST and carry the scope key
+    /// with no legacy (null) rows. Running the full scope-key migration must be
+    /// silent and idempotent — the common case on every CLI invocation.
+    #[tokio::test]
+    async fn scope_key_migration_silent_on_steady_state_rerun() {
+        use tracing_subscriber::prelude::*;
+
+        let node = test_node().await;
+        // Fresh SDL: collections are created immutable with agent_did already
+        // present, so the migration has nothing to patch and no legacy rows.
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        // Prime once outside capture so any first-run schema work is excluded.
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let capture = LevelCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        drop(_guard);
+
+        assert!(
+            capture.warns_or_infos().is_empty(),
+            "steady-state scope-key migration must be silent, got: {:?}",
+            capture.warns_or_infos()
+        );
+    }
+
+    /// Guard: every conversation collection must declare `agent_did` as an
+    /// `@immutable` scope key in its canonical SDL — the property filtered
+    /// replication (#1033) relies on. This checks the SDL source; the companion
+    /// runtime tests below verify that the pinned #1033 rev actually ENFORCES it
+    /// (rejecting a rewrite) on both the fresh-SDL and migrated-upgrade paths.
+    #[test]
+    fn all_conversation_collections_declare_agent_did_immutable() {
+        use defra_agent_protocol::schemas;
+        let conversation_sdls = [
+            ("AgentRequest", schemas::AGENT_REQUEST),
+            ("AgentResponse", schemas::AGENT_RESPONSE),
+            ("AgentToolResult", schemas::AGENT_TOOL_RESULT),
+            ("AgentConversation", schemas::AGENT_CONVERSATION),
+            ("AgentMessage", schemas::AGENT_MESSAGE),
+            ("AgentToolCall", schemas::AGENT_TOOL_CALL),
+            ("AgentSession", schemas::AGENT_SESSION),
+            ("CompactionEntry", schemas::COMPACTION_ENTRY),
+        ];
+        for (name, sdl) in conversation_sdls {
+            let line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("agent_did:"))
+                .unwrap_or_else(|| panic!("{name} SDL must declare an agent_did field"));
+            assert!(
+                line.contains("@immutable"),
+                "{name}.agent_did must be declared @immutable (the filtered-replication scope key); got: {line}"
+            );
+        }
+    }
+
+    /// Companion to the SDL guard, FRESH-SDL path: with the defradb.rs #1033 rev
+    /// pinned, `@immutable` enforcement is LIVE — a row is created with
+    /// `agent_did`, but any later rewrite of the immutable scope key is REJECTED.
+    /// This is the runtime half of the filtered-replication DAG-safety guarantee.
+    #[tokio::test]
+    async fn agent_did_rewrite_is_rejected_by_immutable_enforcement() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        let create = node
+            .execute(
+                r#"mutation {
+                    create_AgentRequest(input: {
+                        request_id: "scope-guard-req",
+                        agent_did: "did:defra-agent:alice",
+                        session_id: "scope-guard-session",
+                        content: "hi",
+                        status: "pending",
+                        lifecycle_state: "pending",
+                        created_at: "2026-06-13T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create AgentRequest with agent_did failed: {:?}",
+            create.errors
+        );
+
+        // Attempt to rewrite the immutable scope key to a different DID; the
+        // #1033 enforcement must reject it (or leave the stored value unchanged).
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentRequest(
+                        filter: { request_id: { _eq: "scope-guard-req" } },
+                        input: { agent_did: "did:defra-agent:mallory" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+
+        // Enforcement must REJECT the rewrite outright, not silently no-op it.
+        assert!(
+            rewrite.has_errors(),
+            "rewrite of the immutable agent_did scope key must be rejected with an error"
+        );
+
+        // ...and the stored value must still be the original owner.
+        let read = node
+            .execute(
+                r#"query {
+                    AgentRequest(filter: { request_id: { _eq: "scope-guard-req" } }) {
+                        agent_did
+                    }
+                }"#,
+            )
+            .await;
+        let stored = read
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("agent_did"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            stored,
+            Some("did:defra-agent:alice"),
+            "immutable agent_did scope key must survive a rewrite attempt \
+             (rewrite errors={:?})",
+            rewrite.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_registry_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_peer_registry_migrations(node.clone()).await.unwrap();
+        ensure_peer_registry_migrations(node.clone()).await.unwrap();
+
+        let collection = node
+            .get_collection("PeerRegistry")
+            .unwrap()
+            .expect("PeerRegistry collection must exist after migration");
+
+        for field in &[
+            "peer_id",
+            "agent_did",
+            "addresses",
+            "templates",
+            "display_name",
+            "status",
+            "network_id",
+            "invited_by",
+            "registered_at",
+            "updated_at",
+        ] {
+            assert!(
+                collection_has_field(&collection, field),
+                "PeerRegistry must have field '{field}'"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn consumed_invite_nonce_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("ConsumedInviteNonce")
+            .unwrap()
+            .expect("ConsumedInviteNonce collection must exist after migration");
+
+        for field in &["nonce", "issuer_did", "consumed_at"] {
+            assert!(
+                collection_has_field(&collection, field),
+                "ConsumedInviteNonce must have field '{field}'"
+            );
+        }
+    }
+
+    /// Regression for the host-drift bug (Finding #3 / Pattern 3): CLI-local
+    /// paths used to hand-enumerate a SUBSET of migrations
+    /// (`ensure_tool_call_migrations` + `ensure_subagent_extensions_migrations`)
+    /// that does NOT add the `agent_did` scope key. On a database upgraded from
+    /// a pre-scope-key schema, that left AgentToolCall without `agent_did` —
+    /// while `ToolCallLifecycle::load` unconditionally SELECTs it, so
+    /// `subagent cancel` (and other config-read paths) failed with
+    /// `Cannot query field "agent_did"`.
+    ///
+    /// This test pins the consolidation: starting from a pre-scope-key DB,
+    /// `ensure_all_runtime_migrations` (the single sanctioned entry point every
+    /// host now calls) makes `agent_did` queryable on all four session-keyed
+    /// conversation collections AND creates the ConsumedInviteNonce ledger
+    /// (Task C2). It also pins the drift it fixes: the old subset leaves
+    /// `agent_did` absent.
+    #[tokio::test]
+    async fn ensure_all_runtime_migrations_adds_scope_key_the_subset_misses() {
+        let node = test_node().await;
+        // Simulate a database upgraded from a schema version that predates the
+        // immutable scope key: AgentToolCall (and its session-keyed siblings)
+        // exist but lack `agent_did`.
+        node.add_schema(OLD_AGENT_MESSAGE_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+        node.add_schema(OLD_AGENT_SESSION_SCHEMA).await.unwrap();
+        node.add_schema(OLD_COMPACTION_ENTRY_SCHEMA).await.unwrap();
+
+        const SCOPE_KEYED: [&str; 4] = [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentSession",
+            "CompactionEntry",
+        ];
+
+        // Drift pin: the hand-enumerated subset the CLI-local paths used to run
+        // never adds the scope key, so AgentToolCall stays without `agent_did`.
+        ensure_tool_call_migrations(node.clone()).await.unwrap();
+        ensure_subagent_extensions_migrations(node.clone())
+            .await
+            .unwrap();
+        let atc = node.get_collection("AgentToolCall").unwrap().unwrap();
+        assert!(
+            !collection_has_field(&atc, "agent_did"),
+            "the old subset must NOT add agent_did (this is the drift the fix closes)"
+        );
+
+        // The single sanctioned entry point: idempotent, run twice.
+        ensure_all_runtime_migrations(node.clone()).await.unwrap();
+        ensure_all_runtime_migrations(node.clone()).await.unwrap();
+
+        for collection in SCOPE_KEYED {
+            let cv = node.get_collection(collection).unwrap().unwrap();
+            assert!(
+                collection_has_field(&cv, "agent_did"),
+                "{collection}.agent_did must exist after ensure_all_runtime_migrations"
+            );
+        }
+
+        // ...and the field is actually QUERYABLE — exactly the SELECT that
+        // `ToolCallLifecycle::load` issues and that used to fail.
+        let read = node
+            .execute(r#"query { AgentToolCall { _docID agent_did } }"#)
+            .await;
+        assert!(
+            !read.has_errors(),
+            "querying agent_did on AgentToolCall must succeed after the full migration set, \
+             got: {:?}",
+            read.errors
+        );
+
+        // Task C2 ledger is part of the sanctioned set too.
+        assert!(
+            node.get_collection("ConsumedInviteNonce")
+                .unwrap()
+                .is_some(),
+            "ConsumedInviteNonce ledger must exist after ensure_all_runtime_migrations"
         );
     }
 }

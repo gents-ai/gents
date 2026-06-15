@@ -111,6 +111,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         db.node.clone(),
         "r6-recovery-parent".to_string(),
         "r6-recovery-session".to_string(),
+        "did:defra-agent:test".to_string(),
         "r6-recovery-tool".to_string(),
         1,
         "bash".to_string(),

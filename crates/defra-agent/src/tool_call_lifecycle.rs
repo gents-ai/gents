@@ -276,6 +276,10 @@ pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
     request_id: String,
     session_id: String,
+    /// DID of the agent that owns the session this tool call belongs to. Stamped
+    /// onto the AgentToolCall row at create so filtered replication can scope the
+    /// collection to one agent (`@immutable` scope key).
+    agent_did: String,
     tool_call_id: String,
     message_sequence: u32,
     tool_name: String,
@@ -295,10 +299,12 @@ pub struct ToolCallLifecycle {
 impl ToolCallLifecycle {
     /// Construct a new lifecycle. Does NOT persist; the first transition
     /// method (`start_running`) creates the DefraDB row.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         node: Arc<EmbeddedNode>,
         request_id: String,
         session_id: String,
+        agent_did: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
@@ -309,6 +315,7 @@ impl ToolCallLifecycle {
             node,
             request_id,
             session_id,
+            agent_did,
             tool_call_id,
             message_sequence,
             tool_name,
@@ -330,10 +337,12 @@ impl ToolCallLifecycle {
     /// link to the spawned child AgentRequest) and lets the caller pick await_mode
     /// and cancel_policy. Synchronous and does not persist — first transition
     /// (typically start_running) creates the row.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_subagent(
         node: Arc<EmbeddedNode>,
         request_id: String,
         session_id: String,
+        agent_did: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
@@ -347,6 +356,7 @@ impl ToolCallLifecycle {
             node,
             request_id,
             session_id,
+            agent_did,
             tool_call_id,
             message_sequence,
             tool_name,
@@ -366,10 +376,12 @@ impl ToolCallLifecycle {
 
     /// Constructor for an ordinary tool launched through the R6 background
     /// bridge. The row is a bridge row even though it has no child request.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_background_tool(
         node: Arc<EmbeddedNode>,
         request_id: String,
         session_id: String,
+        agent_did: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
@@ -380,6 +392,7 @@ impl ToolCallLifecycle {
             node,
             request_id,
             session_id,
+            agent_did,
             tool_call_id,
             message_sequence,
             tool_name,
@@ -511,6 +524,7 @@ mod tests {
         // Compile-only sanity test: behavior verified in Bucket 3 integration tests.
         let _: fn(
             std::sync::Arc<defra_node::EmbeddedNode>,
+            String,
             String,
             String,
             String,

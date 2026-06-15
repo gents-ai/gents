@@ -192,8 +192,22 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     );
 }
 
+// Cross-deployment cancel-cascade coverage under the immutable `agent_did`
+// scope key. The spawn's resolved target carries a REMOTE `agent_did`, so the
+// bridge is cross-deployment BY CONSTRUCTION (#377): SubagentSource's
+// single-creator gate refuses to materialize a B-owned child, so A only ever
+// holds the bridge. Cancel must therefore record the durable cancel intent on
+// the BRIDGE (remote-ack pending) rather than interrupt a (nonexistent) local
+// child.
+//
+// The resolved target DID comes from the parent's tool-selection
+// `subagent_targets`, NOT the child behavior doc — re-pointing the behavior doc
+// alone leaves the bridge resolving to the LOCAL owner (and SubagentSource then
+// races to create a local child). So we re-upsert the tool selection to point
+// the target at a remote DID and opt the behavior into cross-deployment.
 #[tokio::test]
 async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
+    const REMOTE_DID: &str = "did:defra-agent:remote";
     let fixture = setup_spawn_fixture(
         "cross_deployment_cancel_intent",
         vec![CHILD_BEHAVIOR_ID],
@@ -205,6 +219,30 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
+
+    // Re-point the parent's subagent target at a REMOTE owner DID and enable
+    // cross-deployment spawning. The bridge resolves the target's `agent_did`
+    // from this tool selection, so the spawned bridge is remote by construction.
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: "r4-parent-tools".to_string(),
+            agent_did: agent_did.clone(),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                CHILD_BEHAVIOR_ID,
+                REMOTE_DID,
+                CHILD_BEHAVIOR_ID,
+                None,
+            )]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            subagent_allow_cross_deployment: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
     let args = json!({
         "name": CHILD_BEHAVIOR_ID,
         "prompt": "remote child prompt",
@@ -225,15 +263,22 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Wait for SubagentSource to materialize the child, then flip its owner to
-    // a remote DID so the cascade classifies as cross-deployment (#377).
-    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
-    override_child_agent_did(
-        db.node.as_ref(),
-        &child_request_id,
-        "did:defra-agent:remote",
-    )
-    .await;
+
+    // The bridge resolved to a remote owner, so SubagentSource's single-creator
+    // gate refuses to materialize the B-owned child — A only holds the bridge.
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-xdep-cancel").await;
+    let persisted_args: serde_json::Value =
+        serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
+    assert_eq!(
+        persisted_args["agent_did"], REMOTE_DID,
+        "bridge must resolve the remote target owner DID"
+    );
+    assert!(
+        fetch_child_request_optional(db.node.as_ref(), &child_request_id)
+            .await
+            .is_none(),
+        "A must not materialize the remote-owned child request"
+    );
 
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-xdep-cancel")

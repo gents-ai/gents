@@ -177,6 +177,14 @@ pub(super) async fn fetch_live_http_p2p_status(
     }))
 }
 
+pub(super) async fn fetch_connected_peer_ids(graphql: &str) -> Result<Vec<String>> {
+    let client = super::p2p_http_client()?;
+    let api_base = crate::graphql_access::graphql_api_base(graphql)?;
+    let peer_rows: Vec<P2pPeerRow> =
+        http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
+    Ok(peer_rows.into_iter().map(|row| row.id).collect())
+}
+
 pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
     match runtime_state {
         Some(runtime_state) => json!({

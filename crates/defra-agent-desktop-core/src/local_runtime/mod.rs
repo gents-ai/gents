@@ -1,6 +1,5 @@
 mod http;
 mod identity;
-mod pairing;
 
 #[cfg(test)]
 mod tests;
@@ -437,8 +436,6 @@ Next:
         peer_directory = summary.peer_directory,
     )
 }
-
-pub(crate) use pairing::complete_runtime_pairing;
 
 async fn fetch_graphql_runtime_connection_payload(
     client: &reqwest::Client,

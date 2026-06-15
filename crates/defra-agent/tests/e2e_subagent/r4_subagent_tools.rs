@@ -428,25 +428,6 @@ async fn fetch_child_request_optional(
     first_optional_row(&node.execute(&query).await, "AgentRequest")
 }
 
-async fn override_child_agent_did(node: &EmbeddedNode, child_request_id: &str, agent_did: &str) {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ agent_did: "{escaped_agent_did}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "override child agent_did failed: {:?}",
-        response.errors
-    );
-}
-
 async fn child_request_for_tool(
     node: &EmbeddedNode,
     parent_tool_call_id: &str,

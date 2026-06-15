@@ -6,7 +6,8 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::cli::args::{ChatArgs, ChatOutputFormat};
+use crate::cli::args::ChatArgs;
+use crate::cli::output_format::OutputFormat;
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
     wait_for_terminal_response, write_json_output_file, RequestSubmitOptions, SubmittedRequest,
@@ -41,8 +42,11 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     if let Some(message) = resolve_chat_message(&args.message, args.message_file.as_deref())? {
-        match args.output_format {
-            ChatOutputFormat::Text => {
+        match args
+            .output_format
+            .ensure_supported("chat", &[OutputFormat::Text, OutputFormat::Json])?
+        {
+            OutputFormat::Text => {
                 let (_submitted, response) = submit_chat_turn(
                     &graphql,
                     &agent_did,
@@ -57,7 +61,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     write_text_output_file(path, response_text_content(&response))?;
                 }
             }
-            ChatOutputFormat::Json => {
+            OutputFormat::Json => {
                 let output = submit_chat_turn_json(
                     &graphql,
                     &agent_did,
@@ -73,12 +77,13 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     write_json_output_file(path, &output)?;
                 }
             }
+            _ => unreachable!("ensure_supported restricts chat output formats"),
         }
         return Ok(());
     }
 
-    if args.output_format != ChatOutputFormat::Text {
-        anyhow::bail!("interactive chat only supports --output-format text");
+    if args.output_format != OutputFormat::Text {
+        anyhow::bail!("interactive chat only supports --output text");
     }
     if let Some(path) = args.output_file.as_deref() {
         anyhow::bail!(

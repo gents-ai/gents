@@ -50,6 +50,7 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
 pub(crate) async fn save_message(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     sequence: u32,
     role: &str,
     content: &str,
@@ -60,6 +61,7 @@ pub(crate) async fn save_message(
     save_message_inner(
         node,
         session_id,
+        agent_did,
         sequence,
         role,
         content,
@@ -72,6 +74,7 @@ pub(crate) async fn save_message(
 pub(crate) async fn save_message_with_key(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     sequence: u32,
     role: &str,
     content: &str,
@@ -82,6 +85,7 @@ pub(crate) async fn save_message_with_key(
     save_message_inner(
         node,
         session_id,
+        agent_did,
         sequence,
         role,
         content,
@@ -91,9 +95,11 @@ pub(crate) async fn save_message_with_key(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn save_message_inner(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     sequence: u32,
     role: &str,
     content: &str,
@@ -103,11 +109,14 @@ async fn save_message_inner(
     let now = chrono::Utc::now().to_rfc3339();
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_role = escape_graphql_string(role);
     // #492: persist the durable reasoning copy alongside content. Empty/absent
     // reasoning is written as "" so the field round-trips deterministically.
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
 
+    // `agent_did` is only written in the `add` branch: it is the immutable scope
+    // key, stamped once at create. The `update` branch must not rewrite it.
     let mutation = format!(
         r#"mutation {{
             upsert_AgentMessage(
@@ -115,6 +124,7 @@ async fn save_message_inner(
                 add: {{
                     message_key: "{escaped_message_key}",
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
                     sequence: {sequence},
                     role: "{escaped_role}",
                     content: "{escaped}",
@@ -137,6 +147,7 @@ async fn save_message_inner(
 pub(crate) async fn append_message(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     role: &str,
     content: &str,
     reasoning: Option<&str>,
@@ -145,7 +156,11 @@ pub(crate) async fn append_message(
     loop {
         attempts += 1;
         let sequence = next_append_sequence(node, session_id).await?;
-        match create_message(node, session_id, sequence, role, content, reasoning).await {
+        match create_message(
+            node, session_id, agent_did, sequence, role, content, reasoning,
+        )
+        .await
+        {
             Ok(()) => return Ok(sequence),
             Err(error) if attempts < 5 => {
                 tracing::debug!(
@@ -211,6 +226,7 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
 async fn create_message(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     sequence: u32,
     role: &str,
     content: &str,
@@ -219,6 +235,7 @@ async fn create_message(
     let now = chrono::Utc::now().to_rfc3339();
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_role = escape_graphql_string(role);
     // #492: durable reasoning copy written at materialize time (see save_message).
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
@@ -229,6 +246,7 @@ async fn create_message(
             create_AgentMessage(input: {{
                 message_key: "{message_key}",
                 session_id: "{escaped_session_id}",
+                agent_did: "{escaped_agent_did}",
                 sequence: {sequence},
                 role: "{escaped_role}",
                 content: "{escaped}",

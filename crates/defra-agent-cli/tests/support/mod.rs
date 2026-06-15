@@ -28,10 +28,11 @@ pub use process::{
     spawn_server_with_env, spawn_server_with_ready_json, wait_for_port, ServeProcess,
 };
 pub use waits::{
-    insert_terminal_response, wait_for_completed_inference_behaviors,
-    wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_request,
-    wait_for_request_lifecycle_state, wait_for_runtime_doc_id, wait_for_runtime_quiescence,
-    wait_for_runtime_ready, wait_for_tool_call,
+    insert_terminal_response, peer_pairing_row, wait_for_completed_inference_behaviors,
+    wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_pairing_applied,
+    wait_for_request, wait_for_request_lifecycle_state, wait_for_runtime_doc_id,
+    wait_for_runtime_quiescence, wait_for_runtime_ready, wait_for_runtime_state_graphql,
+    wait_for_tool_call,
 };
 
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://192.168.1.78:8000/v1";

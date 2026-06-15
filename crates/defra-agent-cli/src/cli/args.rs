@@ -8,6 +8,7 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 
+use crate::cli::output_format::OutputFormat;
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
     CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP,
@@ -71,7 +72,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SchemaCommand,
     },
-    #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
+    #[command(
+        about = "Show stored runtime, request, or response state",
+        after_help = SHOW_AFTER_HELP,
+        hide = true
+    )]
     Show {
         #[command(subcommand)]
         command: ShowCommand,
@@ -503,8 +508,8 @@ pub(crate) struct ChatArgs {
     pub(crate) behavior_id: Option<String>,
     #[arg(long = "message-file", help = "Read the user message from a file")]
     pub(crate) message_file: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = ChatOutputFormat::Text)]
-    pub(crate) output_format: ChatOutputFormat,
+    #[arg(long = "output", alias = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output_format: OutputFormat,
     #[arg(long = "output-file", help = "Write the final response to a file")]
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
@@ -558,16 +563,10 @@ pub(crate) struct McpProbeArgs {
     pub(crate) all: bool,
     #[arg(long, default_value = "5s", value_name = "DURATION")]
     pub(crate) timeout: String,
-    #[arg(long, value_enum, default_value_t = McpProbeOutput::Text)]
-    pub(crate) output: McpProbeOutput,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[arg(value_name = "SERVICE")]
     pub(crate) service: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum McpProbeOutput {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -604,14 +603,8 @@ pub(crate) struct BackgroundListArgs {
         help = "Only show calls older than this duration, e.g. 30s, 5m, 2h"
     )]
     pub(crate) age_gt: Option<String>,
-    #[arg(long, value_enum, default_value_t = BackgroundOutputFormat::Table)]
-    pub(crate) output: BackgroundOutputFormat,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum BackgroundOutputFormat {
-    Table,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -657,12 +650,6 @@ pub(crate) struct QueryArgs {
         help = "Restrict the query to these collections (repeatable); omit for all"
     )]
     pub(crate) allow_collections: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ChatOutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -979,10 +966,25 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
-    #[command(about = "Inspect and fire configured Task documents")]
+    #[command(about = "Inspect and fire configured Task documents", hide = true)]
     Task {
         #[command(subcommand)]
-        command: ConfigTaskCommand,
+        command: TaskCommand,
+    },
+    #[command(about = "Inspect EventTrigger documents")]
+    Trigger {
+        #[command(subcommand)]
+        command: ConfigTriggerCommand,
+    },
+    #[command(about = "Inspect Schedule documents")]
+    Schedule {
+        #[command(subcommand)]
+        command: ConfigScheduleCommand,
+    },
+    #[command(about = "Inspect MCP service registry documents")]
+    Mcp {
+        #[command(subcommand)]
+        command: ConfigMcpCommand,
     },
     #[command(about = "Create, list, show, delete, enable, or disable Skill documents")]
     Skill {
@@ -1017,18 +1019,48 @@ pub(crate) enum BackendCommand {
     Set(BackendUpsertArgs),
     #[command(name = "discover-models")]
     DiscoverModels(BackendDiscoverModelsArgs),
+    #[command(name = "list", about = "List InferenceBackend documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an InferenceBackend document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an InferenceBackend document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
 pub(crate) enum BehaviorCommand {
     #[command(name = "set")]
     Set(BehaviorUpsertArgs),
+    #[command(name = "list", about = "List AgentBehavior documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an AgentBehavior document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an AgentBehavior document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ToolSelectionCommand {
     #[command(name = "set")]
     Set(ToolSelectionUpsertArgs),
+    #[command(name = "list", about = "List ToolSelection documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a ToolSelection document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete a ToolSelection document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
@@ -1166,6 +1198,30 @@ pub(crate) struct SkillRefArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ConfigListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ConfigShowArgs {
+    #[arg(long = "id", value_name = "ID")]
+    pub(crate) id_flag: Option<String>,
+    #[arg(value_name = "ID")]
+    pub(crate) id: Option<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -1350,16 +1406,40 @@ pub(crate) struct ToolSelectionUpsertArgs {
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
     Set(InferenceProfileUpsertArgs),
+    #[command(name = "list", about = "List InferenceProfile documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an InferenceProfile document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete an InferenceProfile document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ConfigTaskCommand {
-    #[command(name = "list", about = "List configured Task documents")]
-    List(TaskListArgs),
-    #[command(name = "show", about = "Show a configured Task document")]
-    Show(TaskShowArgs),
-    #[command(name = "run", about = "Run a configured Task once, now")]
-    Run(ConfigTaskRunArgs),
+pub(crate) enum ConfigTriggerCommand {
+    #[command(name = "list", about = "List EventTrigger documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show an EventTrigger document")]
+    Show(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigScheduleCommand {
+    #[command(name = "list", about = "List Schedule documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a Schedule document")]
+    Show(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigMcpCommand {
+    #[command(name = "list", about = "List ToolServiceRegistry documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a ToolServiceRegistry document")]
+    Show(ConfigShowArgs),
 }
 
 #[derive(Subcommand)]
@@ -1669,59 +1749,142 @@ pub(crate) enum P2pCommand {
     Status(P2pAccessArgs),
     #[command(about = "List connected peers for the running runtime")]
     Peers(P2pAccessArgs),
-    #[command(about = "Connect the running runtime to another peer")]
-    Connect(P2pConnectArgs),
-    #[command(about = "Manage collection subscriptions for the running runtime")]
-    Collections {
-        #[command(subcommand)]
-        command: P2pCollectionsCommand,
-    },
-    #[command(about = "Manage push replicators for the running runtime")]
-    Replicators {
-        #[command(subcommand)]
-        command: P2pReplicatorsCommand,
-    },
-    #[command(about = "Manage document subscriptions and document sync")]
-    Documents {
-        #[command(subcommand)]
-        command: P2pDocumentsCommand,
-    },
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
-    #[command(about = "Manage desired out-of-band P2P pairings")]
+    #[command(
+        about = "Manage declarative P2P pairings (the runtime reconciles them)",
+        after_help = "\
+Pairings are declarative: every subcommand here writes or reads \
+PeerPairingDesired documents, and the running runtime reconciles live P2P \
+state toward them. This is the normal way to configure P2P. The imperative \
+`p2p admin` commands mutate live wiring directly and are an escape hatch for \
+diagnostics, break-glass repair, and non-paired topologies."
+    )]
     Pairings {
         #[command(subcommand)]
         command: P2pPairingsCommand,
     },
     #[command(
-        about = "Remove a desired out-of-band P2P pairing",
+        about = "Register into and inspect the peer discovery registry",
         after_help = "\
-Removes the PeerPairingDesired row for --peer. This affects desktop pairing \
-reconcile when DEFRA_AGENT_PAIRING_RECONCILE=1. For a headless server that \
-should change live connectivity immediately, use p2p collections/replicators \
-commands against the running server."
+The peer registry (PeerRegistry collection) is the service-discovery layer: \
+nodes self-register here, peers replicate the collection, and the discovery \
+reconciler materializes registry-owned PeerPairingDesired rows for live peers.\n\
+\n\
+`p2p network register` — write this node's row (idempotent / upsert).\n\
+`p2p network list`     — read all PeerRegistry rows with liveness and pairing annotations.\n\
+`p2p network rm`       — deregister this node (delete its PeerRegistry row)."
     )]
-    Unpair(P2pPairingRefArgs),
+    Network {
+        #[command(subcommand)]
+        command: P2pNetworkCommand,
+    },
     #[command(
-        about = "Set up delegation replication between this server and a peer (connect + collections + replicator)",
+        about = "Low-level live P2P admin (escape hatch — prefer `p2p pairings`)",
         after_help = "\
-This command runs against the LOCAL server (--graphql / --home) and sets up \
-one direction of replication toward --peer:\n\
-  1. connect  — dials the peer\n\
-  2. collections add  — subscribes the profile's collections\n\
-  3. replicators add  — installs a push replicator to the peer\n\
-\n\
-Replication is directional. For bidirectional delegation (the child writes \
-AgentRequests/AgentToolCalls that the parent reads, and the parent writes \
-AgentResponses/AgentMessages that the child reads) you must run `p2p pair` on \
-BOTH servers, each with --peer set to the other's listen address.\n\
-\n\
-NOTE: replication alone does NOT enable cross-deployment delegation. \
-Cross-deployment delegation is off by default and DEFERRED — to opt in, \
-set `subagent_allow_cross_deployment: true` on the relevant behaviors' tool \
-selections on BOTH the orchestrator and the target server (trusted-fleet only)."
+These commands mutate live P2P state on the running runtime directly, without \
+writing PeerPairingDesired documents — so the pairing reconciler does not own \
+or manage what they install. Use them for diagnostics, break-glass repair when \
+the reconciler is the suspect component, and intentionally ad-hoc topologies \
+(one-off document fetches, test connectivity). For normal pairing, use \
+`p2p pairings`."
     )]
-    Pair(P2pPairArgs),
+    Admin {
+        #[command(subcommand)]
+        command: P2pAdminCommand,
+    },
+    #[command(
+        about = "Inspect the built-in scope-template catalog",
+        after_help = "\
+Scope templates are named pairing intents that bundle a fixed collection set, \
+a per-peer scoping policy (agent_did equality or unscoped), and a delivery \
+mode (push or replicate).  Use them as the --template argument when creating \
+PeerPairingDesired rows."
+    )]
+    Templates {
+        #[command(subcommand)]
+        command: P2pTemplatesCommand,
+    },
+}
+
+/// Subcommands for `p2p network` — the peer-registry front door.
+#[derive(Subcommand)]
+pub(crate) enum P2pNetworkCommand {
+    #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
+    Register(P2pNetworkRegisterArgs),
+    #[command(about = "List PeerRegistry rows with liveness and pairing annotations")]
+    List(P2pNetworkListArgs),
+    #[command(
+        name = "rm",
+        about = "Deregister this node from the peer discovery registry",
+        aliases = ["deregister", "remove"]
+    )]
+    Rm(P2pAccessArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pNetworkRegisterArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Human-readable display name for this node in the registry.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) display_name: Option<String>,
+    /// Scope template this node offers (repeatable). A node advertises the
+    /// templates it is willing to replicate; a discovering peer materializes a
+    /// scoped pairing from one of them. Defaults to `conversation` (filtered
+    /// push of the peer's conversation slice) when none are given.
+    #[arg(long = "template", value_name = "TEMPLATE")]
+    pub(crate) templates: Vec<String>,
+    /// Network / fleet id. Defaults to "default".
+    #[arg(long = "network", value_name = "NETWORK_ID")]
+    pub(crate) network_id: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pNetworkListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+/// Subcommands for `p2p templates`.
+#[derive(Subcommand)]
+pub(crate) enum P2pTemplatesCommand {
+    #[command(about = "List all built-in scope templates")]
+    List(P2pTemplatesListArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pTemplatesListArgs {
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
+#[derive(Subcommand)]
+pub(crate) enum P2pAdminCommand {
+    #[command(about = "Connect the running runtime to another peer")]
+    Connect(P2pConnectArgs),
+    #[command(about = "Manage live collection subscriptions on the running runtime")]
+    Collections {
+        #[command(subcommand)]
+        command: P2pCollectionsCommand,
+    },
+    #[command(about = "Manage live push replicators on the running runtime")]
+    Replicators {
+        #[command(subcommand)]
+        command: P2pReplicatorsCommand,
+    },
+    #[command(about = "Manage live document subscriptions and document sync")]
+    Documents {
+        #[command(subcommand)]
+        command: P2pDocumentsCommand,
+    },
 }
 
 #[derive(clap::Args)]
@@ -1780,19 +1943,42 @@ pub(crate) enum P2pDocumentsCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum P2pPairingsCommand {
-    #[command(about = "List desired out-of-band P2P pairings")]
-    List(P2pAccessArgs),
+    #[command(about = "List desired pairings annotated with live health")]
+    List(P2pPairingsListArgs),
     #[command(
-        about = "Create or update a desired out-of-band P2P pairing",
+        about = "Create or update a desired pairing row (the runtime reconciles it)",
         after_help = "\
-Writes PeerPairingDesired for desktop pairing reconcile. Desktop reconcile \
-runs when DEFRA_AGENT_PAIRING_RECONCILE=1 and a saved peer record exists. For \
-headless servers, use `defra-agent p2p pair --peer <multiaddr>` to apply live \
-P2P wiring immediately."
+Writes a PeerPairingDesired row. A running defra-agent runtime reads desired \
+rows on its pairing sweep and reconciles live P2P state toward them — this \
+command never mutates live wiring itself.\n\
+\n\
+--did (the expected remote agent DID) is required: the DID is the permission \
+and audit boundary, so a pairing always names who it trusts. If you do not \
+know the remote DID, use `p2p pairings invite` / `p2p pairings join`, which \
+carry it for you.\n\
+\n\
+--peer may be omitted when a --address is a shareable ticket or multiaddr; the \
+peer id is derived from it.\n\
+\n\
+Pairing is directional. For bidirectional delegation, create a row on BOTH \
+servers, each naming the other.\n\
+\n\
+NOTE: replication alone does NOT enable cross-deployment delegation. That is \
+off by default and DEFERRED — opt in with `subagent_allow_cross_deployment: \
+true` on the relevant behaviors' tool selections on BOTH servers \
+(trusted-fleet only)."
     )]
     Set(P2pPairingSetArgs),
-    #[command(about = "Remove a desired out-of-band P2P pairing", aliases = ["rm", "unpair"])]
+    #[command(
+        name = "rm",
+        about = "Remove a desired pairing row (runtime tears down only what it applied)",
+        aliases = ["unpair", "remove"]
+    )]
     Remove(P2pPairingRefArgs),
+    #[command(about = "Create a shareable, DID-carrying pairing invite token")]
+    Invite(P2pInviteArgs),
+    #[command(about = "Accept a pairing invite token and write a desired row")]
+    Join(P2pJoinArgs),
 }
 
 #[derive(clap::Args)]
@@ -1801,21 +1987,32 @@ pub(crate) struct P2pPairingSetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    /// Remote peer ID stored in PeerPairingDesired.peer_id.
+    /// Remote peer ID. Optional when a --address is a shareable ticket or
+    /// multiaddr the peer id can be derived from.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
-    pub(crate) peer_id: String,
-    /// Agent DID expected for the remote peer.
+    pub(crate) peer_id: Option<String>,
+    /// Agent DID expected for the remote peer. Required: the DID is the trust boundary.
     #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
     pub(crate) agent_did: String,
-    /// Replicator multiaddr to install during reconcile. Repeat for multiple addresses.
-    #[arg(long = "address", value_name = "MULTIADDR")]
+    /// Replicator address (shareable ticket or multiaddr) to install during
+    /// reconcile. Repeat for multiple addresses.
+    #[arg(long = "address", value_name = "ADDRESS")]
     pub(crate) addresses: Vec<String>,
-    /// Collection name to include in the desired pairing. Repeat or combine with --profile.
-    #[arg(long = "collection", value_name = "COLLECTION")]
-    pub(crate) collections: Vec<String>,
-    /// Collection profile to include in the desired pairing. Repeat or combine with --collection.
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Scope template id driving the pairing (collections + scope + delivery).
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
+    #[arg(
+        long = "template",
+        value_name = "TEMPLATE",
+        default_value = "conversation"
+    )]
+    pub(crate) template: String,
+    /// Wait for the runtime to observe the peer as connected.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
+    #[arg(long, default_value = "30s")]
+    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]
@@ -1827,6 +2024,64 @@ pub(crate) struct P2pPairingRefArgs {
     /// Remote peer ID stored in PeerPairingDesired.peer_id.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
     pub(crate) peer_id: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingsListArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pInviteArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Scope template id for this invite (e.g. `conversation`, `agent-config`, `backup`).
+    /// The template is encoded in the invite token and read by `p2p pairings join`.
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
+    #[arg(
+        long = "template",
+        value_name = "TEMPLATE",
+        default_value = "conversation"
+    )]
+    pub(crate) template: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pJoinArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// Invite token produced by `defra-agent p2p pairings invite`.
+    #[arg(value_name = "TOKEN")]
+    pub(crate) token: String,
+    /// Override the scope template from the token. When both `--template` and a
+    /// token template are present, `--template` wins. Omit to use the token's
+    /// template (the normal path).
+    #[arg(long = "template", value_name = "TEMPLATE")]
+    pub(crate) template: Option<String>,
+    /// Mark this as a reciprocal join completing a pairing the issuer initiated
+    /// (the issuer already accepted our invite and we are pairing back). The
+    /// signature is still verified, but the registry-membership gate is bypassed:
+    /// re-gating the reciprocal leg on membership would reject a pairing both
+    /// sides already agreed to. Set automatically in the `reciprocal_join_command`
+    /// emitted by a first join.
+    #[arg(long, default_value_t = false)]
+    pub(crate) reciprocal: bool,
+    /// Wait for the runtime to observe the peer as connected.
+    #[arg(long, default_value_t = false)]
+    pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
+    #[arg(long, default_value = "30s")]
+    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]
@@ -1873,6 +2128,13 @@ pub(crate) struct P2pReplicatorAddArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Per-collection field-equality filter for filtered replication (repeatable).
+    /// Format: `<collection>:<field>=<value>`, e.g.
+    /// `AgentRequest:agent_did=did:key:alice`. Forwarded to the node as the
+    /// replicator's `Filters`, which installs a filtered (push-only) replicator
+    /// that sends only matching documents. The filter field must be `@immutable`.
+    #[arg(long = "filter", value_name = "COLLECTION:FIELD=VALUE")]
+    pub(crate) filters: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -1887,25 +2149,6 @@ pub(crate) struct P2pReplicatorRemoveArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pPairArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Multiaddr of the remote peer (e.g. /ip4/1.2.3.4/tcp/4001/p2p/<peer-id>)
-    #[arg(long)]
-    pub(crate) peer: String,
-    /// Collection profile to subscribe and replicate (default: chat-requests)
-    #[arg(
-        long = "profile",
-        value_enum,
-        value_name = "PROFILE",
-        default_value = "chat-requests"
-    )]
-    pub(crate) profile: P2pCollectionProfileArg,
 }
 
 #[derive(clap::Args)]
@@ -1937,6 +2180,7 @@ pub(crate) enum P2pCollectionProfileArg {
     DesktopConfig,
     ChatRequests,
     ToolServices,
+    Discovery,
 }
 
 #[derive(Subcommand)]
@@ -1971,12 +2215,6 @@ impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::Cancel
             RequestInterruptCauseArg::UserCancelled => Self::UserCancelled,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum RequestInterruptOutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(clap::Args)]
@@ -2045,10 +2283,10 @@ pub(crate) struct RequestInterruptArgs {
     #[arg(
         long,
         value_enum,
-        default_value_t = RequestInterruptOutputFormat::Text,
+        default_value_t = OutputFormat::Text,
         help = "Output format; use json for scripts"
     )]
-    pub(crate) output: RequestInterruptOutputFormat,
+    pub(crate) output: OutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
@@ -2081,18 +2319,12 @@ pub(crate) struct RequestShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "output", value_enum, default_value_t = RequestShowOutputFormat::Text)]
-    pub(crate) output: RequestShowOutputFormat,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum RequestShowOutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -2117,15 +2349,8 @@ pub(crate) struct SubagentListArgs {
     pub(crate) root: Option<String>,
     #[arg(long, value_name = "N")]
     pub(crate) depth: Option<usize>,
-    #[arg(long, value_enum, default_value_t = SubagentListOutput::Tree)]
-    pub(crate) output: SubagentListOutput,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum SubagentListOutput {
-    Tree,
-    Table,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Tree)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
@@ -2167,18 +2392,16 @@ pub(crate) struct SubagentCancelArgs {
         help = "Wait timeout such as 30s, 5m, or 1h. Only valid with --wait"
     )]
     pub(crate) timeout: Option<String>,
-    #[arg(long, value_enum, default_value_t = SubagentCancelOutput::Text)]
-    pub(crate) output: SubagentCancelOutput,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum SubagentCancelOutput {
-    Text,
-    Json,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(Subcommand)]
 pub(crate) enum SessionCommand {
+    #[command(about = "List AgentSession documents")]
+    List(ConfigListArgs),
+    #[command(about = "Show an AgentSession document")]
+    Show(ConfigShowArgs),
     #[command(about = "Fork an existing session at a user-turn boundary")]
     Fork(SessionForkArgs),
 }
@@ -2552,7 +2775,7 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::Run(args),
+                        command: TaskCommand::Run(args),
                     },
             } => assert_task_run_args(args),
             _ => panic!("expected `config task run`"),
@@ -2567,7 +2790,7 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::List(_),
+                        command: TaskCommand::List(_),
                     },
             } => {}
             _ => panic!("expected `config task list`"),
@@ -2586,13 +2809,236 @@ mod tests {
             Command::Config {
                 command:
                     ConfigCommand::Task {
-                        command: ConfigTaskCommand::Show(args),
+                        command: TaskCommand::Show(args),
                     },
             } => {
                 assert_eq!(args.task_id, None);
                 assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
             }
             _ => panic!("expected `config task show`"),
+        }
+    }
+
+    #[test]
+    fn deprecated_spellings_still_parse() {
+        for argv in [
+            vec!["defra-agent", "config", "task", "list"],
+            vec!["defra-agent", "p2p", "pairings", "rm", "--peer", "p1"],
+            vec!["defra-agent", "p2p", "pairings", "unpair", "--peer", "p1"],
+            vec!["defra-agent", "show", "request", "req-1"],
+        ] {
+            Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+        }
+    }
+
+    fn parse_p2p_invite(extra: &[&str]) -> P2pInviteArgs {
+        let mut argv = vec!["defra-agent", "p2p", "pairings", "invite"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p pairings invite should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Pairings {
+                        command: P2pPairingsCommand::Invite(args),
+                    },
+            } => args,
+            _ => panic!("expected `p2p pairings invite`"),
+        }
+    }
+
+    fn parse_p2p_join(extra: &[&str]) -> P2pJoinArgs {
+        let mut argv = vec!["defra-agent", "p2p", "pairings", "join", "dapair1-token"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p pairings join should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Pairings {
+                        command: P2pPairingsCommand::Join(args),
+                    },
+            } => args,
+            _ => panic!("expected `p2p pairings join`"),
+        }
+    }
+
+    fn parse_p2p_replicator_add(extra: &[&str]) -> P2pReplicatorAddArgs {
+        let mut argv = vec![
+            "defra-agent",
+            "p2p",
+            "admin",
+            "replicators",
+            "add",
+            "--peer",
+            "peer-a",
+            "--collection",
+            "AgentRequest",
+        ];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("p2p admin replicators add should parse");
+        match cli.command {
+            Command::P2p {
+                command:
+                    P2pCommand::Admin {
+                        command:
+                            P2pAdminCommand::Replicators {
+                                command: P2pReplicatorsCommand::Add(args),
+                            },
+                    },
+            } => args,
+            _ => panic!("expected `p2p admin replicators add`"),
+        }
+    }
+
+    #[test]
+    fn p2p_invite_template_defaults_to_conversation() {
+        let args = parse_p2p_invite(&[]);
+        assert_eq!(args.template, "conversation");
+    }
+
+    /// `--template` is the sole scope input on the pairing front door: the dead
+    /// `--collection`/`--profile` flags were removed, so clap must now reject
+    /// them as unknown arguments rather than silently parsing inert data.
+    #[test]
+    fn p2p_pairing_front_door_rejects_removed_scope_flags() {
+        for argv in [
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "set",
+                "--did",
+                "did:key:peer",
+                "--peer",
+                "peer-one",
+                "--collection",
+                "AgentRequest",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "set",
+                "--did",
+                "did:key:peer",
+                "--peer",
+                "peer-one",
+                "--profile",
+                "chat-requests",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "invite",
+                "--profile",
+                "chat-requests",
+            ],
+            vec![
+                "defra-agent",
+                "p2p",
+                "pairings",
+                "join",
+                "dapair1-token",
+                "--profile",
+                "chat-requests",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&argv).is_err(),
+                "expected clap to reject removed scope flag in: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn p2p_invite_template_accepts_known_templates() {
+        assert_eq!(
+            parse_p2p_invite(&["--template", "backup"]).template,
+            "backup"
+        );
+        assert_eq!(
+            parse_p2p_invite(&["--template", "agent-config"]).template,
+            "agent-config"
+        );
+    }
+
+    #[test]
+    fn p2p_join_template_is_optional_override() {
+        // Without --template, field is None (uses token's template).
+        let no_override = parse_p2p_join(&[]);
+        assert_eq!(no_override.template, None);
+        // With --template, field is Some.
+        let with_override = parse_p2p_join(&["--template", "backup"]);
+        assert_eq!(with_override.template.as_deref(), Some("backup"));
+    }
+
+    #[test]
+    fn p2p_replicator_add_filter_parses() {
+        let args = parse_p2p_replicator_add(&[
+            "--filter",
+            "AgentRequest:agent_did=did:key:alice",
+            "--filter",
+            "AgentResponse:agent_did=did:key:bob",
+        ]);
+        assert_eq!(args.filters.len(), 2);
+        assert_eq!(args.filters[0], "AgentRequest:agent_did=did:key:alice");
+        assert_eq!(args.filters[1], "AgentResponse:agent_did=did:key:bob");
+    }
+
+    #[test]
+    fn p2p_replicator_add_no_filter_is_empty() {
+        let args = parse_p2p_replicator_add(&[]);
+        assert!(args.filters.is_empty());
+    }
+
+    #[test]
+    fn every_deprecated_path_warns() {
+        use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
+
+        for (path, replacement) in DEPRECATED {
+            let mut argv = vec!["defra-agent".to_string()];
+            argv.extend(path.iter().copied().map(str::to_string));
+            argv.extend(deprecated_path_required_args(path));
+
+            let warning =
+                deprecation_warning(&argv).unwrap_or_else(|| panic!("missing warning: {argv:?}"));
+            assert!(
+                warning.contains(&format!("use `defra-agent {}`", replacement)),
+                "warning did not mention replacement for {argv:?}: {warning}"
+            );
+
+            // Some deprecated paths are still valid clap commands that merely
+            // warn (renamed, both spellings parse). Others were *removed* from
+            // clap entirely — the deprecation entry is the only guidance the
+            // user gets before clap rejects the unknown subcommand. We assert
+            // parseability only for the former group.
+            if deprecated_path_still_parses(path) {
+                Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+            } else {
+                assert!(
+                    Cli::try_parse_from(&argv).is_err(),
+                    "{argv:?}: expected removed deprecated path to fail clap parsing"
+                );
+            }
+        }
+    }
+
+    /// Whether a deprecated path is still a parseable clap command (renamed,
+    /// not removed). Removed paths only carry a deprecation warning.
+    fn deprecated_path_still_parses(path: &[&str]) -> bool {
+        !matches!(path, ["p2p", "pair"] | ["p2p", "unpair"])
+    }
+
+    fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
+        match path {
+            ["config", "task"] => vec!["list".to_string()],
+            ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
+            // Removed paths: args are irrelevant (clap rejects the subcommand),
+            // but provide harmless placeholders so the warning path is exercised.
+            ["p2p", "pair"] | ["p2p", "unpair"] => {
+                vec!["--peer".to_string(), "peer-1".to_string()]
+            }
+            _ => panic!("no parse fixture for deprecated path: {path:?}"),
         }
     }
 }

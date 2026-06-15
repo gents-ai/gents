@@ -280,14 +280,14 @@ pub(super) async fn stream_turn_progress(
                 if !terminal_content.contains(error_message) {
                     println!("[agent error] {error_message}");
                     println!(
-                        "[inspect] defra-agent show response {}",
+                        "[inspect] defra-agent response show {}",
                         submitted.request_id
                     );
                     io::stdout().flush()?;
                 }
             } else if response_status == "error" || matches!(lifecycle_state, "failed" | "dead") {
                 println!(
-                    "[inspect] defra-agent show response {}",
+                    "[inspect] defra-agent response show {}",
                     submitted.request_id
                 );
                 io::stdout().flush()?;

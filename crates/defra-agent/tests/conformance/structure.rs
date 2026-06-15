@@ -59,6 +59,17 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),
         ),
+        // Discovery derivation + signed-invite guard. peer_registry_discovery.rs
+        // fences the derivation/ownership properties AND the membership half of
+        // the join gate (`signedByMember`/`isMember`) via the real
+        // `decide_join_admission` engine fn. The signature half (`sigValid`) is
+        // fenced separately by defra-agent-protocol::pairing_token verify/tamper
+        // tests; identity-binding of the admitted entry is intentionally out of
+        // scope (trusted-fleet TOFU — see Transition.join docstring).
+        (
+            "PeerRegistryDiscovery",
+            Module("conformance/peer_registry_discovery.rs"),
+        ),
         (
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
@@ -69,6 +80,12 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Request", Module("conformance/request_lifecycle.rs")),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),
+        // Scope-template resolution model (deterministic + catalog-total
+        // resolveTemplate, pure scopeFilter). Fenced by scope_templates.rs,
+        // which calls the real resolution fns; the template-driven reconcile +
+        // filter-aware replicator identity is additionally exercised by
+        // pairing_reconcile.rs and the p2p_reconcile engine/diff unit tests.
+        ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SessionRecovery", Module("conformance/session_recovery.rs")),
         (
             "Skills",

@@ -8,6 +8,124 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// Task C2 (#16): an invite token is single-use. The first join consuming its
+/// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
+/// join presenting the *same* token (same nonce) is rejected as a replay, even
+/// though it is still inside the freshness window. Mirrors the Lean
+/// `replay_rejected` theorem (the admit transition burns the nonce atomically).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("replay-a");
+    let home_b = tempdir.path().join("replay-b");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-replay-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let port_b = allocate_port()?;
+    let agent_name_a = format!("cli-replay-a-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-replay-b-{}", Uuid::new_v4().simple());
+    let graphql_a = graphql_url(port_a);
+    let graphql_b = graphql_url(port_b);
+
+    let init_a = run_init_json(
+        &home_a,
+        &[
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
+
+    let (mut serve_a, readiness_a) = spawn_server_with_ready_json(
+        &home_a,
+        port_a,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    let (mut serve_b, _readiness_b) = spawn_server_with_ready_json(
+        &home_b,
+        port_b,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_port(port_b, &mut serve_b)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
+
+    let peer_id_a = readiness_a
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
+
+    // Mint exactly ONE invite from A.
+    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
+    let token_a = invite_a
+        .get("token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("invite A missing token: {invite_a}"))?
+        .to_string();
+
+    // First join consumes the nonce → succeeds.
+    let join_one = run_cli_json(&home_b, &["p2p", "pairings", "join", &token_a])?;
+    assert_eq!(
+        join_one.get("status").and_then(Value::as_str),
+        Some("pairing_joined"),
+        "first join should succeed: {join_one}"
+    );
+    assert_eq!(
+        join_one.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_a)
+    );
+
+    // Second join with the SAME token → rejected as a replay (nonce already
+    // consumed), despite still being inside the freshness window.
+    let stderr = run_cli_failure_stderr(&home_b, &["p2p", "pairings", "join", &token_a])?;
+    let lowered = stderr.to_lowercase();
+    assert!(
+        lowered.contains("replay") || lowered.contains("already used"),
+        "second join should be rejected as a replay; stderr was:\n{stderr}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -26,8 +144,6 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
             "did:key:peer-one",
             "--address",
             "/ip4/127.0.0.1/tcp/4001/p2p/peer-one",
-            "--collection",
-            "AgentRequest",
         ],
     )?;
     assert_eq!(
@@ -39,12 +155,8 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
         Some("local")
     );
     assert_eq!(set.get("peer_id").and_then(Value::as_str), Some("peer-one"));
-    assert!(set
-        .get("note")
-        .and_then(Value::as_str)
-        .is_some_and(|note| note.contains("Headless defra-agent server")));
 
-    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    let list = run_cli_json(&home, &["p2p", "pairings", "list", "--output", "json"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
     let row = list
         .get("pairings")
@@ -56,19 +168,41 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
         row.get("agent_did").and_then(Value::as_str),
         Some("did:key:peer-one")
     );
+    // Scope is derived entirely from the default `conversation` template now
+    // that `--collection`/`--profile` are gone. The informational `collections`
+    // column reflects that template's set; `profiles` is no longer written.
     assert!(row
         .get("collections")
         .and_then(Value::as_array)
         .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))));
+    assert!(row
+        .get("collections")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentResponse"))));
+    assert!(row
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_none_or(|rows| rows.is_empty()));
+    assert_eq!(row.get("connected").and_then(Value::as_bool), Some(false));
+    assert_eq!(row.get("subscribed").and_then(Value::as_bool), Some(false));
+    assert_eq!(row.get("replicating").and_then(Value::as_bool), Some(false));
 
-    let remove = run_cli_json(&home, &["p2p", "unpair", "--peer", "peer-one"])?;
+    let table = run_cli_text(&home, &["p2p", "pairings", "list", "--output", "table"])?;
+    assert!(table.contains("PEER"));
+    assert!(table.contains("DID"));
+    assert!(table.contains("PROFILES"));
+    assert!(table.contains("CONNECTED"));
+    assert!(table.contains("SUBSCRIBED"));
+    assert!(table.contains("REPLICATING"));
+
+    let remove = run_cli_json(&home, &["p2p", "pairings", "unpair", "--peer", "peer-one"])?;
     assert_eq!(
         remove.get("status").and_then(Value::as_str),
         Some("pairing_removed")
     );
     assert_eq!(remove.get("removed_count").and_then(Value::as_u64), Some(1));
 
-    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    let list = run_cli_json(&home, &["p2p", "pairings", "list", "--output", "json"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
 
     Ok(())
@@ -165,7 +299,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("Amy readiness JSON missing P2P listen address: {readiness_a}"))?;
 
-    let connect = run_cli_json(&home_b, &["p2p", "connect", "--peer", peer_addr_a])?;
+    let connect = run_cli_json(&home_b, &["p2p", "admin", "connect", "--peer", peer_addr_a])?;
     assert_eq!(
         connect.get("status").and_then(Value::as_str),
         Some("connect_requested")
@@ -193,7 +327,14 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
 
     let collections_add = run_cli_json(
         &home_b,
-        &["p2p", "collections", "add", "--profile", "chat-requests"],
+        &[
+            "p2p",
+            "admin",
+            "collections",
+            "add",
+            "--profile",
+            "chat-requests",
+        ],
     )?;
     assert_eq!(
         collections_add.get("status").and_then(Value::as_str),
@@ -208,6 +349,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         &home_b,
         &[
             "p2p",
+            "admin",
             "replicators",
             "add",
             "--peer",
@@ -257,7 +399,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_pair_sets_up_bidirectional_delegation_replication() -> Result<()> {
+async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_a = tempdir.path().join("parent-agent");
     let home_b = tempdir.path().join("child-agent");
@@ -336,7 +478,7 @@ async fn p2p_pair_sets_up_bidirectional_delegation_replication() -> Result<()> {
         .get("p2p_peer_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("Parent readiness JSON missing p2p_peer_id: {readiness_a}"))?;
-    let peer_id_b = readiness_b
+    let _peer_id_b = readiness_b
         .get("p2p_peer_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("Child readiness JSON missing p2p_peer_id: {readiness_b}"))?;
@@ -348,123 +490,245 @@ async fn p2p_pair_sets_up_bidirectional_delegation_replication() -> Result<()> {
         .ok_or_else(|| {
             anyhow!("Parent readiness JSON missing P2P listen address: {readiness_a}")
         })?;
-    let peer_addr_b = readiness_b
-        .get("p2p_listen_addresses")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("Child readiness JSON missing P2P listen address: {readiness_b}"))?;
-
-    // Pair child → parent (child dials, subscribes collections, installs replicator to parent).
+    // Pair child -> parent by writing PeerPairingDesired with `pairings set`.
+    // --peer is omitted to exercise peer-id derivation from the shareable
+    // --address. The command never mutates live P2P state; the runtime
+    // reconciler consumes the row on its sweep.
     let pair_b = run_cli_json(
         &home_b,
         &[
             "p2p",
-            "pair",
-            "--peer",
+            "pairings",
+            "set",
+            "--did",
+            agent_did_a.as_str(),
+            "--address",
             peer_addr_a,
-            "--profile",
-            "chat-requests",
         ],
     )?;
     assert_eq!(
         pair_b.get("status").and_then(Value::as_str),
-        Some("paired"),
-        "child pair status: {pair_b}"
+        Some("pairing_set"),
+        "child pairings set status: {pair_b}"
+    );
+    assert_eq!(
+        pair_b.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_a),
+        "peer id should be derived from the shareable address: {pair_b}"
+    );
+    assert_eq!(
+        pair_b.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
     );
     assert!(
         pair_b
             .get("collections")
             .and_then(Value::as_array)
             .is_some_and(|rows| rows.iter().any(|r| r.as_str() == Some("AgentRequest"))),
-        "pair output missing AgentRequest in collections: {pair_b}"
+        "pairings set output missing AgentRequest in collections: {pair_b}"
     );
     assert!(
         pair_b.get("note").and_then(Value::as_str).is_some(),
-        "pair output missing bidirectional note: {pair_b}"
+        "pairings set output missing runtime reconcile note: {pair_b}"
     );
 
-    // Wait for child to see parent as a connected peer.
-    let status_b = wait_for_connected_peer(&home_b, peer_id_a, Duration::from_secs(20)).await?;
-    assert!(
-        status_b
-            .get("p2p_connected_peers")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| rows
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|row| row.contains(peer_id_a))),
-        "child not connected to parent: {status_b}"
+    let row = peer_pairing_row(&graphql_b, peer_id_a).await?;
+    assert_eq!(
+        row.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
     );
+    assert!(row
+        .get("replicator_addresses")
+        .and_then(Value::as_array)
+        .is_some_and(|addresses| addresses
+            .iter()
+            .any(|address| address.as_str() == Some(peer_addr_a))));
+    // `--template` is the sole scope source now; the dead `profiles` column is
+    // never written (rendered `null`), so the parsed row carries no profiles.
+    assert!(row
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_none_or(|profiles| profiles.is_empty()));
 
-    // Pair parent → child (parent dials, subscribes collections, installs replicator to child).
-    let pair_a = run_cli_json(
+    let list = run_cli_json(&home_b, &["p2p", "pairings", "list", "--output", "json"])?;
+    assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
+    let table = run_cli_text(&home_b, &["p2p", "pairings", "list", "--output", "table"])?;
+    assert!(table.contains("PEER"));
+    assert!(table.contains("CONNECTED"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("invite-a");
+    let home_b = tempdir.path().join("invite-b");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-invite-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let port_b = allocate_port()?;
+    let agent_name_a = format!("cli-invite-a-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-invite-b-{}", Uuid::new_v4().simple());
+    let graphql_a = graphql_url(port_a);
+    let graphql_b = graphql_url(port_b);
+
+    let init_a = run_init_json(
         &home_a,
         &[
-            "p2p",
-            "pair",
-            "--peer",
-            peer_addr_b,
-            "--profile",
-            "chat-requests",
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
         ],
     )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
+
+    let (mut serve_a, readiness_a) = spawn_server_with_ready_json(
+        &home_a,
+        port_a,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    let (mut serve_b, readiness_b) = spawn_server_with_ready_json(
+        &home_b,
+        port_b,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_port(port_b, &mut serve_b)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
+
+    let peer_id_a = readiness_a
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
+    let peer_id_b = readiness_b
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("B readiness JSON missing p2p_peer_id: {readiness_b}"))?;
+
+    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
     assert_eq!(
-        pair_a.get("status").and_then(Value::as_str),
-        Some("paired"),
-        "parent pair status: {pair_a}"
+        invite_a.get("status").and_then(Value::as_str),
+        Some("invite_created")
+    );
+    assert_eq!(
+        invite_a.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_a)
+    );
+    assert_eq!(
+        invite_a.get("did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
+    let token_a = invite_a
+        .get("token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("invite A missing token: {invite_a}"))?;
+
+    let join_b = run_cli_json(&home_b, &["p2p", "pairings", "join", token_a])?;
+    assert_eq!(
+        join_b.get("status").and_then(Value::as_str),
+        Some("pairing_joined"),
+        "join B output: {join_b}"
+    );
+    assert_eq!(
+        join_b.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_a)
+    );
+    assert_eq!(
+        join_b.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
+    let reciprocal = join_b
+        .get("reciprocal_token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("join B missing reciprocal token: {join_b}"))?;
+
+    let join_a = run_cli_json(&home_a, &["p2p", "pairings", "join", reciprocal])?;
+    assert_eq!(
+        join_a.get("status").and_then(Value::as_str),
+        Some("pairing_joined"),
+        "join A output: {join_a}"
+    );
+    assert_eq!(
+        join_a.get("peer_id").and_then(Value::as_str),
+        Some(peer_id_b)
+    );
+    assert_eq!(
+        join_a.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_b.as_str())
     );
 
-    // Wait for parent to see child as a connected peer.
-    let status_a = wait_for_connected_peer(&home_a, peer_id_b, Duration::from_secs(20)).await?;
+    let row_b = peer_pairing_row(&graphql_b, peer_id_a).await?;
+    assert_eq!(
+        row_b.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
+    let row_a = peer_pairing_row(&graphql_a, peer_id_b).await?;
+    assert_eq!(
+        row_a.get("agent_did").and_then(Value::as_str),
+        Some(agent_did_b.as_str())
+    );
+
+    // The `conversation` template (the invite/join default) is filtered-PUSH
+    // delivery: the reconciler installs a filtered replicator toward the peer
+    // and deliberately does NOT subscribe the collections (no gossip leak of
+    // the unfiltered collection). So the applied row carries replicator
+    // addresses, not subscribed collections.
+    let applied_b =
+        wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(70)).await?;
     assert!(
-        status_a
-            .get("p2p_connected_peers")
+        applied_b
+            .get("replicator_addresses")
             .and_then(Value::as_array)
-            .is_some_and(|rows| rows
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|row| row.contains(peer_id_b))),
-        "parent not connected to child: {status_a}"
+            .is_some_and(|rows| !rows.is_empty()),
+        "B applied row missing a replicator toward A after joining: {applied_b}"
     );
-
-    // Verify both servers have collections subscribed (list returns CIDs; count is sufficient here
-    // since pair output already validated the collection names above).
-    let collections_b = run_cli_json(&home_b, &["p2p", "collections", "list"])?;
+    let applied_a =
+        wait_for_pairing_applied(&graphql_a, peer_id_b, Duration::from_secs(70)).await?;
     assert!(
-        collections_b
-            .get("count")
-            .and_then(Value::as_u64)
-            .is_some_and(|n| n >= 1),
-        "child has no subscribed collections: {collections_b}"
-    );
-
-    let collections_a = run_cli_json(&home_a, &["p2p", "collections", "list"])?;
-    assert!(
-        collections_a
-            .get("count")
-            .and_then(Value::as_u64)
-            .is_some_and(|n| n >= 1),
-        "parent has no subscribed collections: {collections_a}"
-    );
-
-    // Verify both servers have a replicator installed.
-    let replicators_b = run_cli_json(&home_b, &["p2p", "replicators", "list"])?;
-    assert!(
-        replicators_b
-            .get("count")
-            .and_then(Value::as_u64)
-            .is_some_and(|n| n >= 1),
-        "child has no replicators: {replicators_b}"
-    );
-
-    let replicators_a = run_cli_json(&home_a, &["p2p", "replicators", "list"])?;
-    assert!(
-        replicators_a
-            .get("count")
-            .and_then(Value::as_u64)
-            .is_some_and(|n| n >= 1),
-        "parent has no replicators: {replicators_a}"
+        applied_a
+            .get("replicator_addresses")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty()),
+        "A applied row missing a replicator toward B after joining: {applied_a}"
     );
 
     Ok(())
