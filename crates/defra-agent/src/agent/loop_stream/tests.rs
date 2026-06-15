@@ -239,6 +239,7 @@ fn tool_result_text(content: &ToolResultContent) -> &str {
 fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
         preamble: None,
+        context_message: None,
         temperature: None,
         max_tokens: None,
         additional_params: None,
@@ -302,6 +303,37 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
     assert_eq!(texts, vec!["Hello ".to_string(), "world".to_string()]);
     assert_eq!(final_text.as_deref(), Some("Hello world"));
+}
+
+#[tokio::test]
+async fn context_message_is_sent_before_prompt() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("ok".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let mut cfg = config(0);
+    cfg.context_message = Some(Message::user(
+        "<context>\nnow=2026-06-15T00:00:00Z\n</context>",
+    ));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("actual prompt"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        cfg,
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 1);
+    assert!(matches!(
+        &histories[0][0],
+        Message::User { content }
+            if matches!(first_content(&content), UserContent::Text(text) if text.text.starts_with("<context>"))
+    ));
 }
 
 #[tokio::test]

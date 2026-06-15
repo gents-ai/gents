@@ -152,6 +152,7 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
             description: None,
             summary: None,
             system_prompt: Some("Be precise".to_string()),
+            request_context_template: None,
             backend_id: Some("backend-local".to_string()),
             model_name: Some("gpt-local".to_string()),
             tool_selection_id: None,

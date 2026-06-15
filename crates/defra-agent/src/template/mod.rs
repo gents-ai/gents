@@ -11,10 +11,15 @@ mod tests;
 
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 
+pub mod catalog;
+pub mod reads;
+
 pub struct TemplateScope {
     pub event: serde_json::Value,
     pub doc: Option<serde_json::Value>,
     pub args: Option<serde_json::Value>,
+    pub node: serde_json::Value,
+    pub ctx: serde_json::Value,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +77,8 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         if let Some(args) = scope.args.clone() {
             ctx.insert("args".to_string(), args);
         }
+        ctx.insert("node".to_string(), scope.node.clone());
+        ctx.insert("ctx".to_string(), scope.ctx.clone());
         serde_json::Value::Object(ctx)
     };
 
@@ -86,6 +93,98 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         return Err(TemplateError::SizeCap(rendered.len()));
     }
     Ok(rendered)
+}
+
+/// Render a system template against run-constant `node` scope.
+pub fn render_system_prompt(
+    template: &str,
+    node: serde_json::Value,
+    cat: &catalog::Catalog,
+) -> Result<String, TemplateError> {
+    if !template.contains("{{") && !template.contains("{%") && !template.contains("{#") {
+        return Ok(template.to_string());
+    }
+    reads::validate_system_template(template, cat)?;
+    let scope = TemplateScope {
+        event: serde_json::json!({}),
+        doc: None,
+        args: None,
+        node,
+        ctx: serde_json::json!({}),
+    };
+    render_template(template, &scope)
+}
+
+/// Render a per-request context template against `node` and `ctx` scope.
+pub fn render_request_context_template(
+    template: &str,
+    node: serde_json::Value,
+    ctx: serde_json::Value,
+    cat: &catalog::Catalog,
+) -> Result<String, TemplateError> {
+    validate_catalog_scope(template, cat, catalog::Site::RequestContext)?;
+    let scope = TemplateScope {
+        event: serde_json::json!({}),
+        doc: None,
+        args: None,
+        node,
+        ctx,
+    };
+    render_template(template, &scope)
+}
+
+fn validate_catalog_scope(
+    template: &str,
+    cat: &catalog::Catalog,
+    site: catalog::Site,
+) -> Result<(), TemplateError> {
+    let reads = reads::collect_request_reads(template)?;
+    for var in reads {
+        if !is_catalog_scoped_ref(&var) {
+            continue;
+        }
+        if !cat.is_available_at(&var, site) {
+            return Err(TemplateError::Render(format!(
+                "template references unavailable variable `{var}` at {site:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_catalog_scoped_ref(var: &str) -> bool {
+    var == "node" || var == "ctx" || var.starts_with("node.") || var.starts_with("ctx.")
+}
+
+/// Summarize the local node's active collection schemas for `ctx.collection_summary`.
+pub fn collection_summary(node: &defra_node::EmbeddedNode) -> anyhow::Result<String> {
+    let mut names = node.list_collections()?;
+    names.sort();
+    let mut lines = Vec::with_capacity(names.len() + 1);
+    lines.push(format!("collections: {}", names.len()));
+    for name in names {
+        let Some(collection) = node.get_collection(&name)? else {
+            continue;
+        };
+        lines.push(format!(
+            "- {}: {} fields",
+            collection.name,
+            collection.fields.len()
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Build the task-scope `node`/`ctx` JSON for a fire at `now` (RFC3339).
+pub fn task_node_ctx(
+    node_did: &str,
+    behavior_id: &str,
+    now: &str,
+) -> (serde_json::Value, serde_json::Value) {
+    (
+        serde_json::json!({ "node_did": node_did, "behavior_id": behavior_id }),
+        serde_json::json!({ "now": now }),
+    )
 }
 
 /// Parse `template` and return every variable access whose root identifier is
@@ -316,7 +415,7 @@ fn utf8_char_len(first: u8) -> usize {
 }
 
 fn is_tracked_root(ident: &str) -> bool {
-    matches!(ident, "event" | "doc" | "args")
+    matches!(ident, "event" | "doc" | "args" | "node" | "ctx")
 }
 
 fn is_ident_start(c: u8) -> bool {

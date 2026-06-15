@@ -8,6 +8,16 @@ use super::*;
 /// (kept per decision D3).
 impl DefraSessionHook {
     pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
+        self.on_completion_call_with_context(prompt, _history, None)
+            .await
+    }
+
+    pub async fn on_completion_call_with_context(
+        &self,
+        prompt: &Message,
+        _history: &[Message],
+        context: Option<&Message>,
+    ) -> HookAction {
         let result: anyhow::Result<()> = async {
             let mut state = self.state.lock().await;
 
@@ -21,6 +31,9 @@ impl DefraSessionHook {
             state.reset_after_user_message();
             drop(state);
 
+            if let Some(context) = context {
+                self.persist_message(context).await?;
+            }
             self.persist_message(prompt).await?;
             Ok(())
         }

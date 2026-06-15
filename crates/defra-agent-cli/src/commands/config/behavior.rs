@@ -26,6 +26,7 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         description: None,
         summary: None,
         system_prompt,
+        request_context_template: None,
         backend_id: args.backend_id.clone(),
         model_name: args.model_name.clone(),
         tool_selection_id: args.tool_selection_id.clone(),

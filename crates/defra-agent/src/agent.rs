@@ -281,6 +281,16 @@ pub(crate) fn behavior_config_from_documents(
         .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
 
+    let raw_system_prompt = behavior.system_prompt.clone().unwrap_or_default();
+    let rendered_system_prompt = crate::template::render_system_prompt(
+        &raw_system_prompt,
+        serde_json::json!({
+            "node_did": principal.agent_did.as_str(),
+            "behavior_id": behavior.behavior_id.as_str(),
+        }),
+        &crate::template::catalog::default_catalog(),
+    )?;
+
     Ok(AgentBehavior {
         behavior_id: behavior.behavior_id.clone(),
         principal,
@@ -304,7 +314,8 @@ pub(crate) fn behavior_config_from_documents(
             .max_turns
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_TURNS),
-        system_prompt: behavior.system_prompt.clone().unwrap_or_default(),
+        system_prompt: rendered_system_prompt,
+        request_context_template: behavior.request_context_template.clone(),
         tools: BehaviorToolConfig::from_selection_with_subagent_tools(
             &behavior.behavior_id,
             tool_selection,

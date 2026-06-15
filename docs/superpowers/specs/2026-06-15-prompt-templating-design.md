@@ -66,8 +66,6 @@ namespaces are added to `TemplateScope`:
 | `node.node_did` | run-constant | `AgentPrincipal.agent_did` | system, request-ctx, task |
 | `node.behavior_id` | run-constant | resolved behavior id | system, request-ctx, task |
 | `ctx.now` | per-request | request / fire (RFC3339) | request-ctx, task |
-| `ctx.acting_seat` | per-request | request | request-ctx |
-| `ctx.acting_did` | per-request | request | request-ctx |
 | `ctx.collection_summary` | per-request | lazy DefraDB query | request-ctx |
 | `event.*` / `doc.*` / `args.*` | per-request | trigger fire time | task |
 
@@ -79,11 +77,10 @@ Two orthogonal axes:
   only run-constant (or static) variables.
 - **Availability** drives a render-site scope check (analogous to today's
   trigger-kind scope validation): a variable is only legal where the runtime
-  actually supplies it. `ctx.acting_seat`/`ctx.acting_did`/
-  `ctx.collection_summary` are **request-context only** — actor identity and
-  the live summary are not established at trigger fire time, so they are not in
-  task scope for v1. `ctx.now` is the task-interop time variable (covers
-  "pull system time into task start"); `event.fired_at` remains as well.
+  actually supplies it. `ctx.collection_summary` is **request-context only** —
+  the live summary is not established at trigger fire time, so it is not in task
+  scope for v1. `ctx.now` is the task-interop time variable (covers "pull
+  system time into task start"); `event.fired_at` remains as well.
 
 Every catalog entry is a **full variable ref** (e.g. `node.node_did`), not a
 bare namespace root. The guard and the reads-collector operate on full refs:
@@ -306,10 +303,12 @@ cargo test -p defra-agent-cli
 - `ctx.node_state` — deferred until its exact JSON/string contract (which
   liveness/peer/replication fields, as what shape) is specified. Add as a
   catalog entry (per-request, request-context availability) once defined.
-- Task availability for `ctx.acting_seat`/`ctx.acting_did`/
-  `ctx.collection_summary` — these are request-context-only in v1; extend to
-  task fire if a concrete need appears and the fire-time value is well-defined.
+- `ctx.acting_seat` / `ctx.acting_did` — deferred until `AgentRequest` carries
+  a concrete acting-identity source; v1 fails closed instead of emitting empty
+  placeholders.
+- Task availability for `ctx.collection_summary` — request-context-only in v1;
+  extend to task fire if a concrete need appears and the fire-time value is
+  well-defined.
 - Additional catalog variables beyond v1 (extend the table).
 - Per-request render of the system template with an equality assertion
   (defense-in-depth); D4's render-once-frozen makes this unnecessary for v1.
-

@@ -292,10 +292,15 @@ impl TriggerEngine {
         }
 
         // 2. Render the prompt template against the intent's scope.
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let (node_scope, ctx_scope) =
+            crate::template::task_node_ctx(&snapshot.local_did, &intent.task.behavior_id, &now);
         let scope = crate::template::TemplateScope {
             event: intent.event_vars.clone(),
             doc: intent.doc_vars.clone(),
             args: intent.args_vars.clone(),
+            node: node_scope,
+            ctx: ctx_scope,
         };
         let rendered = match crate::template::render_template(&intent.task.prompt_template, &scope)
         {

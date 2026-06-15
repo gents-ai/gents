@@ -39,6 +39,7 @@ pub(crate) fn loop_config(
 ) -> LoopConfig {
     LoopConfig {
         preamble: Some(preamble),
+        context_message: None,
         temperature: behavior.sampling.temperature,
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
         // Thinking-on default is the leftmost base so that provider params,

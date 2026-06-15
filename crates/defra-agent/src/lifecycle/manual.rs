@@ -21,7 +21,7 @@ use crate::lifecycle::{
     write_pending_agent_request_with_lineage_and_conversation_title, ExecutionOrigin,
     TriggerLineage,
 };
-use crate::template::{render_template, TemplateScope};
+use crate::template::{render_template, task_node_ctx, TemplateScope};
 
 /// Write an `AgentRequest` row representing a manual task run, after rendering
 /// the task's `prompt_template` against the given `args`.
@@ -61,6 +61,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
     conversation_title: Option<&str>,
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let (node_scope, ctx_scope) = task_node_ctx(agent_did, behavior_id, &now);
     let scope = TemplateScope {
         event: serde_json::json!({
             "fired_at": now,
@@ -69,6 +70,8 @@ pub async fn write_manual_agent_request_with_conversation_title(
         }),
         doc: None,
         args: Some(args),
+        node: node_scope,
+        ctx: ctx_scope,
     };
     let content = render_template(prompt_template, &scope)
         .map_err(|e| anyhow!("render manual template for task {task_id}: {e}"))?;
@@ -172,6 +175,50 @@ mod tests {
         assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
         assert_eq!(row["status"].as_str(), Some("pending"));
         assert!(row["metadata"].is_null());
+    }
+
+    #[tokio::test]
+    async fn manual_task_template_gets_node_and_ctx_scope() {
+        let node = test_node().await;
+
+        let agent_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let doc_id = write_manual_agent_request(
+            node.as_ref(),
+            agent_did,
+            "behavior-1",
+            "task-1",
+            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.behavior_id }}",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    content
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query failed: {:?}",
+            response.errors
+        );
+        let content = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("content"))
+            .and_then(Value::as_str)
+            .expect("request content");
+
+        assert!(content.starts_with("tick "));
+        assert!(content.contains(agent_did), "content={content:?}");
+        assert!(content.ends_with(" / behavior-1"), "content={content:?}");
     }
 
     #[tokio::test]

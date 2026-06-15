@@ -9,9 +9,12 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
+use crate::config::AgentBehavior;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
+use crate::llm::message::Message;
 use crate::streaming::{StreamStatus, StreamWriter};
+use crate::watcher::AgentRequest;
 
 enum InferenceAttemptOutcome {
     Retry(crate::error::InferenceError),
@@ -66,6 +69,53 @@ fn request_workspace_cwd(request: &crate::watcher::AgentRequest) -> Option<PathB
         .or_else(|| value.get("workspace_cwd"))
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
+}
+
+fn render_request_context_message(
+    node: &defra_node::EmbeddedNode,
+    behavior: &AgentBehavior,
+    request: &AgentRequest,
+) -> Result<Option<Message>> {
+    let Some(template) = behavior.request_context_template.as_deref() else {
+        return Ok(None);
+    };
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let reads = crate::template::reads::collect_request_reads(template)
+        .map_err(|error| anyhow!("request_context_template parse failed: {error}"))?;
+    let mut ctx = serde_json::Map::new();
+    ctx.insert(
+        "now".to_string(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    if reads.contains("ctx.collection_summary") {
+        ctx.insert(
+            "collection_summary".to_string(),
+            serde_json::json!(crate::template::collection_summary(node)?),
+        );
+    }
+
+    let rendered = crate::template::render_request_context_template(
+        template,
+        serde_json::json!({
+            "node_did": behavior.agent_did(),
+            "behavior_id": behavior.behavior_id.as_str(),
+        }),
+        serde_json::Value::Object(ctx),
+        &crate::template::catalog::default_catalog(),
+    )
+    .map_err(|error| anyhow!("request_context_template render failed: {error}"))?;
+
+    tracing::debug!(
+        request_id = %request.request_id,
+        behavior_id = %behavior.behavior_id,
+        "rendered request context template"
+    );
+    Ok(Some(Message::user(format!(
+        "<context>\n{rendered}\n</context>"
+    ))))
 }
 
 async fn await_with_request_deadline<F, T>(
@@ -178,12 +228,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // over the model + tool surface. Per-request sampling is resolved
                 // into the loop config from the behavior + request.
                 let model = (*self.model).clone();
-                let loop_config = crate::completion_factory::loop_config_for_request(
+                let mut loop_config = crate::completion_factory::loop_config_for_request(
                     &self.behavior,
                     self.preamble.clone(),
                     request,
                     self.loop_tools.len(),
                 );
+                loop_config.context_message =
+                    render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();

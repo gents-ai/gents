@@ -1809,6 +1809,7 @@ mod lean_apply_write_boundary_tests {
             description: None,
             summary: None,
             system_prompt: Some(doc.content.clone()),
+            request_context_template: None,
             backend_id: ref_id(doc, Collection::InferenceBackend),
             model_name: Some(format!("model-{}", doc.id)),
             tool_selection_id: ref_id(doc, Collection::ToolSelection),

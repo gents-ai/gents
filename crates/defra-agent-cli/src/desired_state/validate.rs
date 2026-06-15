@@ -1,6 +1,10 @@
 use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
+use defra_agent::template::{
+    catalog::{default_catalog, Site},
+    reads::validate_system_template,
+};
 use defra_agent::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
@@ -332,6 +336,10 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
 
+        if let Some(system_prompt) = behavior.system_prompt.as_deref() {
+            validate_behavior_system_template(&behavior.behavior_id, system_prompt, errors);
+        }
+
         // skill_refs / skill_excludes must resolve to skills in this manifest.
         // Because every skill is validated above to belong to this principal,
         // this also enforces D6 (no live cross-principal skill references —
@@ -447,6 +455,8 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 task.task_id, behavior_id
             ));
         }
+
+        validate_task_template_catalog_scope(task, errors);
     }
 
     let mut schedule_ids = BTreeSet::new();
@@ -485,9 +495,10 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             )),
         }
 
-        // Schedule scope only supplies `event.*` — reject any `doc.*` or
-        // `args.*` references in the linked task's prompt template so the
-        // trigger cannot fail at render time with a missing scope.
+        // Schedule scope supplies `event.*` plus the task catalog scope
+        // (`node.*`, `ctx.now`) — reject any `doc.*` or `args.*` references
+        // in the linked task's prompt template so the trigger cannot fail at
+        // render time with a missing scope.
         if !task_id.is_empty() {
             if let Some(task) = manifest.tasks.iter().find(|task| task.task_id == task_id) {
                 match parse_template_for_validation(&task.prompt_template) {
@@ -497,7 +508,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                             if let Some(root) = var.root() {
                                 if (root == "doc" || root == "args") && reported.insert(root) {
                                     errors.push(format!(
-                                        "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*",
+                                        "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*, node.*, and ctx.now",
                                         schedule.schedule_id,
                                         format_variable_ref(var),
                                     ));
@@ -578,7 +589,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                             if let Some(root) = vref.root() {
                                 if root == "args" && reported.insert("args") {
                                     errors.push(format!(
-                                        "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.* and doc.*",
+                                        "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.*, doc.*, node.*, and ctx.now",
                                         trig.trigger_id
                                     ));
                                 }
@@ -593,6 +604,59 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
     }
+}
+
+fn validate_behavior_system_template(
+    behavior_id: &str,
+    system_prompt: &str,
+    errors: &mut Vec<String>,
+) {
+    if !contains_template_marker(system_prompt) {
+        return;
+    }
+    let catalog = default_catalog();
+    if let Err(error) = validate_system_template(system_prompt, &catalog) {
+        errors.push(format!(
+            "behavior {behavior_id} system_prompt template is invalid: {error}"
+        ));
+    }
+}
+
+fn validate_task_template_catalog_scope(task: &super::DesiredTask, errors: &mut Vec<String>) {
+    let refs = match parse_template_for_validation(&task.prompt_template) {
+        Ok(refs) => refs,
+        Err(error) => {
+            errors.push(format!(
+                "task {} prompt template failed to parse: {}",
+                task.task_id, error
+            ));
+            return;
+        }
+    };
+    let catalog = default_catalog();
+    let mut reported: BTreeSet<String> = BTreeSet::new();
+    for var in refs {
+        let Some(root) = var.root() else {
+            continue;
+        };
+        if root != "node" && root != "ctx" {
+            continue;
+        }
+        let full_ref = format_variable_ref(&var);
+        if catalog.is_available_at(&full_ref, Site::Task) {
+            continue;
+        }
+        if reported.insert(full_ref.clone()) {
+            errors.push(format!(
+                "task {} prompt_template references unavailable template variable {}; task scope permits node.node_did, node.behavior_id, and ctx.now",
+                task.task_id, full_ref
+            ));
+        }
+    }
+}
+
+fn contains_template_marker(value: &str) -> bool {
+    value.contains("{{") || value.contains("{%") || value.contains("{#")
 }
 
 fn validate_projection_resource_map_json(
@@ -1157,6 +1221,116 @@ pub(crate) fn normalize_tool_service_mcp_path(value: Option<String>) -> String {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::super::{
+        DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest, DesiredTask,
+    };
+    use super::*;
+
+    fn manifest(system_prompt: Option<&str>, task_prompt: Option<&str>) -> DesiredStateManifest {
+        DesiredStateManifest {
+            agent_principal: DesiredAgentPrincipal {
+                agent_did: "did:key:test-template-validation".to_string(),
+                display_name: None,
+                default_behavior_id: Some("default".to_string()),
+                enabled: true,
+            },
+            agent_behaviors: vec![DesiredAgentBehavior {
+                behavior_id: "default".to_string(),
+                agent_did: "did:key:test-template-validation".to_string(),
+                display_name: None,
+                description: None,
+                summary: None,
+                system_prompt: system_prompt.map(str::to_string),
+                request_context_template: None,
+                backend_id: None,
+                model_name: None,
+                tool_selection_id: None,
+                inference_profile_id: None,
+                compaction_strategy: None,
+                compaction_threshold: None,
+                enabled: true,
+                skill_refs: Vec::new(),
+                skill_excludes: Vec::new(),
+            }],
+            skills: Vec::new(),
+            tool_selections: Vec::new(),
+            inference_backends: Vec::new(),
+            inference_profiles: Vec::new(),
+            tool_service_registries: Vec::new(),
+            projection_acp_bindings: Vec::new(),
+            tasks: task_prompt
+                .map(|prompt| {
+                    vec![DesiredTask {
+                        task_id: "task".to_string(),
+                        name: "Task".to_string(),
+                        description: None,
+                        behavior_id: "default".to_string(),
+                        prompt_template: prompt.to_string(),
+                        enabled: true,
+                        output_schema_ref: None,
+                    }]
+                })
+                .unwrap_or_default(),
+            schedules: Vec::new(),
+            event_triggers: Vec::new(),
+        }
+    }
+
+    fn validate_errors(manifest: DesiredStateManifest) -> Vec<String> {
+        let mut errors = Vec::new();
+        validate_manifest(&manifest, &mut errors);
+        errors
+    }
+
+    #[test]
+    fn system_prompt_rejects_per_request_ref() {
+        let errors = validate_errors(manifest(Some("now {{ ctx.now }}"), None));
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("per-request variable `ctx.now`")),
+            "expected ctx.now rejection, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn system_prompt_accepts_literal_raw_and_node_refs() {
+        for prompt in [
+            "literal text with no MiniJinja markers",
+            "{% raw %}{{ ctx.now }}{% endraw %}",
+            "node {{ node.node_did }} / {{ node.behavior_id }}",
+        ] {
+            let errors = validate_errors(manifest(Some(prompt), None));
+            assert!(errors.is_empty(), "prompt {prompt:?} failed: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn task_prompt_accepts_task_catalog_refs() {
+        let errors = validate_errors(manifest(
+            None,
+            Some("run {{ node.node_did }} {{ node.behavior_id }} {{ ctx.now }}"),
+        ));
+
+        assert!(errors.is_empty(), "task refs should pass: {errors:?}");
+    }
+
+    #[test]
+    fn task_prompt_rejects_request_context_only_ref() {
+        let errors = validate_errors(manifest(None, Some("state {{ ctx.collection_summary }}")));
+
+        assert!(
+            errors.iter().any(|error| error.contains(
+                "unavailable template variable ctx.collection_summary"
+            )),
+            "expected ctx.collection_summary rejection, got {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod live_tests {
     use anyhow::Result;
     use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
@@ -1547,6 +1721,7 @@ mod live_tests {
                     ),
                     summary: Some("Research assistant".to_string()),
                     system_prompt: None,
+                    request_context_template: None,
                     backend_id: None,
                     model_name: None,
                     tool_selection_id: None,

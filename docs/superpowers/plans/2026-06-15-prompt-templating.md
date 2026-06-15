@@ -47,7 +47,7 @@ cargo test -p defra-agent-cli
 - `crates/defra-agent-cli/src/desired_state/validate.rs` — apply-time system-template cache-safety guard + full-ref catalog-aware task scope validation.
 - `crates/defra-agent/src/lifecycle/manual.rs`, `crates/defra-agent-cli/src/commands/config/task_run.rs` — supply node/ctx at the manual/CLI task render paths.
 - `crates/defra-agent-cli/src/main.rs` — export allowlist.
-- `crates/defra-agent/src/prompt.rs` — render `system_prompt` as run-constant template into the frozen preamble.
+- `crates/defra-agent/src/agent.rs`, `crates/defra-agent/src/agent/builder.rs` — render `system_prompt` into the runtime `AgentBehavior` at construction/resolution time.
 - `crates/defra-agent/src/completion_factory.rs` — default `LoopConfig.context_message` to `None`.
 - `crates/defra-agent/src/agent/daemon/inference.rs` — render the per-request context (fail-closed) and set it on the config.
 - `crates/defra-agent/src/agent/loop_stream.rs` — `LoopConfig.context_message` field + inject ahead of prompt.
@@ -343,13 +343,13 @@ use defra_agent::template::reads::{collect_system_reads, validate_system_templat
 use defra_agent::template::{render_template, TemplateScope};
 
 /// node.* binding (run-constant) for two requests; the ctx values differ.
-fn scope(now: &str, seat: &str) -> TemplateScope {
+fn scope(now: &str) -> TemplateScope {
     TemplateScope {
         event: serde_json::json!({}),
         doc: None,
         args: None,
         node: serde_json::json!({ "node_did": "did:key:zNODE", "behavior_id": "policy_agent" }),
-        ctx: serde_json::json!({ "now": now, "acting_seat": seat, "acting_did": "did:key:zSEAT" }),
+        ctx: serde_json::json!({ "now": now }),
     }
 }
 
@@ -573,8 +573,6 @@ pub fn default_catalog() -> Catalog {
     add("node.behavior_id", RunConstant, &[System, RequestContext, Task]);
     // ctx.* — per-request.
     add("ctx.now", PerRequest, &[RequestContext, Task]);
-    add("ctx.acting_seat", PerRequest, &[RequestContext]);
-    add("ctx.acting_did", PerRequest, &[RequestContext]);
     add("ctx.collection_summary", PerRequest, &[RequestContext]);
     Catalog { entries }
 }
@@ -999,7 +997,8 @@ git commit -m "feat(behavior): request_context_template config surface + migrati
 ### Task 10: Render `system_prompt` as a run-constant template at startup
 
 **Files:**
-- Modify: `crates/defra-agent/src/prompt.rs`
+- Modify: `crates/defra-agent/src/agent.rs` (document-backed behavior resolution)
+- Modify: `crates/defra-agent/src/agent/builder.rs` (builder-backed behavior construction)
 - Modify: `crates/defra-agent/src/template/mod.rs` (add a small render helper)
 
 - [ ] **Step 1: Add a node-scope render helper**
@@ -1033,29 +1032,56 @@ pub fn render_system_prompt(
 }
 ```
 
-- [ ] **Step 2: Render at the behavior-resolution path (fail-closed, NOT in `prompt.rs`)**
+- [ ] **Step 2: Render into the runtime `AgentBehavior` at construction/resolution (fail-closed, NOT in `prompt.rs`)**
 
-Render the system prompt **before** `prompt.rs::for_behavior`, at the behavior-resolution/load site, and pass the already-rendered string into `for_behavior` as `system_prompt`. That site returns `Result` (behavior load/reconcile), so a render/validation error **fails the behavior load** — fail-closed — instead of `prompt.rs` swallowing it and emitting raw `{{ }}` to the model. This also keeps `for_behavior`/`build_preamble_with_targets` signatures unchanged.
+Render the system prompt when constructing the runtime `crate::config::AgentBehavior`, and store the already-rendered string in `AgentBehavior.system_prompt`. Leave `LayeredPromptBuilder::new`, `LayeredPromptBuilder::for_behavior`, and `build_preamble_with_targets` unchanged: those prompt-builder paths also add skill catalog/ceiling state, and Task 10 must not bypass that setup by replacing `new(...)` with a direct `for_behavior(...)` call.
 
-Find the `for_behavior(` call site(s) (grep — the daemon behavior setup / `snapshot.rs` reconcile where the runtime `AgentBehavior` and its principal DID are in scope). Immediately before the call, render:
+There are two runtime behavior construction paths to cover:
+
+1. **Document-backed behavior resolution:** in `crates/defra-agent/src/agent.rs`, inside `behavior_config_from_documents(...)`, compute the rendered prompt before the `Ok(AgentBehavior { ... })` literal and assign it to `system_prompt`.
 
 ```rust
+    let raw_system_prompt = behavior.system_prompt.clone().unwrap_or_default();
     let rendered_system_prompt = crate::template::render_system_prompt(
-        behavior.system_prompt.as_str(), // or &behavior.system_prompt
+        &raw_system_prompt,
         serde_json::json!({
-            "node_did": behavior.principal.agent_did,
-            "behavior_id": behavior.behavior_id,
+            "node_did": principal.agent_did.as_str(),
+            "behavior_id": behavior.behavior_id.as_str(),
         }),
         &crate::template::catalog::default_catalog(),
     )?; // fail-closed: invalid/non-cache-safe template aborts behavior load
 
-    let prompt_builder = PromptBuilder::for_behavior(
-        &rendered_system_prompt, // was: &behavior.system_prompt
-        /* …unchanged args… */
-    );
+    Ok(AgentBehavior {
+        // ...
+        system_prompt: rendered_system_prompt,
+        // ...
+    })
 ```
 
-> The apply-time guard (Task 9 Step 11) is the primary gate; this runtime render is the backstop and must agree with it — both use `render_system_prompt`/`validate_system_template` + `default_catalog()`, both fail-closed. The no-marker fast path in `render_system_prompt` keeps existing literal prompts unaffected (no behavior-load regression). If the chosen call site is not already `Result`-returning, propagate via the nearest enclosing `Result` fn; do **not** reintroduce a literal fallback.
+2. **Builder-backed behavior construction:** in `crates/defra-agent/src/agent/builder.rs`, in the `PendingAgentBehavior` path that builds an `AgentBehavior` literal, render `self.system_prompt` using the principal DID and behavior name before moving fields into the literal:
+
+```rust
+    let behavior_id = self.name.clone();
+    let rendered_system_prompt = crate::template::render_system_prompt(
+        &self.system_prompt,
+        serde_json::json!({
+            "node_did": principal.agent_did.as_str(),
+            "behavior_id": behavior_id.as_str(),
+        }),
+        &crate::template::catalog::default_catalog(),
+    )?;
+
+    Ok(AgentBehavior {
+        behavior_id: self.name,
+        // ...
+        system_prompt: rendered_system_prompt,
+        // ...
+    })
+```
+
+> Verify exact ownership/accessor details against the real builder function (`principal.agent_did`, `behavior_name`, etc.) and adjust variable names mechanically. The invariant is the important part: every runtime `AgentBehavior.system_prompt` is already rendered or the behavior construction returns an error.
+
+> The apply-time guard (Task 9 Step 11) is the primary gate; this runtime render is the backstop and must agree with it — both use `render_system_prompt`/`validate_system_template` + `default_catalog()`, both fail-closed. The no-marker fast path in `render_system_prompt` keeps existing literal prompts unaffected (no behavior-load regression). Do **not** reintroduce a literal fallback.
 
 > **Cache-safety note:** validation guarantees no per-request refs, so rendering once here freezes the preamble for the run.
 
@@ -1067,7 +1093,7 @@ Expected: builds and passes. Existing literal system prompts (no markers) are un
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/defra-agent/src/prompt.rs crates/defra-agent/src/template/mod.rs
+git add crates/defra-agent/src/agent.rs crates/defra-agent/src/agent/builder.rs crates/defra-agent/src/template/mod.rs
 git commit -m "feat(prompt): render system_prompt as run-constant template into frozen preamble (#497)"
 ```
 
@@ -1159,12 +1185,9 @@ In `crates/defra-agent/src/agent/daemon/inference.rs`, the per-request `loop_con
             "now".to_string(),
             serde_json::json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
         );
-        // Actor identity from the request's acting principal (see note below).
-        ctx.insert("acting_seat".to_string(), serde_json::json!(request.acting_seat_or_empty()));
-        ctx.insert("acting_did".to_string(), serde_json::json!(request.acting_did_or_empty()));
         // Lazy: only query the live summary when the template reads it.
         if reads.contains("ctx.collection_summary") {
-            let summary = crate::template::collection_summary(&node).await?; // ? = fail request
+            let summary = crate::template::collection_summary(&node)?; // ? = fail request
             ctx.insert("collection_summary".to_string(), serde_json::json!(summary));
         }
         let scope = crate::template::TemplateScope {
@@ -1177,7 +1200,12 @@ In `crates/defra-agent/src/agent/daemon/inference.rs`, the per-request `loop_con
             }),
             ctx: serde_json::Value::Object(ctx),
         };
-        let rendered = crate::template::render_template(tmpl, &scope)
+        let rendered = crate::template::render_request_context_template(
+                tmpl,
+                scope.node,
+                scope.ctx,
+                &crate::template::catalog::default_catalog(),
+            )
             .map_err(|e| anyhow::anyhow!("request_context_template render failed: {e}"))?; // fail-closed
         loop_config.context_message = Some(Message::User {
             content: vec![message::UserContent::Text(message::Text {
@@ -1187,7 +1215,7 @@ In `crates/defra-agent/src/agent/daemon/inference.rs`, the per-request `loop_con
     }
 ```
 
-> **Field accessors to verify against the real types:** `behavior.request_context_template` (Task 9 Step 4 runtime config), `behavior.principal.agent_did` (`AgentPrincipal`), `behavior.behavior_id`. For `request.acting_seat`/`acting_did`: source from whatever acting-identity field `AgentRequest` carries. **If the acting identity is not yet on `AgentRequest` in v1, do NOT emit empty strings** — instead remove `ctx.acting_seat`/`ctx.acting_did` from `default_catalog()` (Task 6) and the spec's v1 list so a template referencing them is rejected at apply-time validation (fail-closed), and file a follow-up to add them. Keep `now` and `collection_summary`. Make `loop_config` a `let mut`.
+> **Field accessors verified against the real types:** `behavior.request_context_template` (Task 9 Step 4 runtime config), `behavior.principal.agent_did` (`AgentPrincipal`), `behavior.behavior_id`. `AgentRequest` does not carry acting identity in v1, so `ctx.acting_seat`/`ctx.acting_did` are removed from `default_catalog()` and the spec's v1 list; a template referencing them fails closed. File a follow-up to add them once the request field exists. Keep `now` and `collection_summary`. Make `loop_config` a `let mut`.
 >
 > `collection_summary(&node)` is a new small read-only helper (in `template/mod.rs` or a `runtime` module) returning a `String` summary of collections (names/counts) via a DefraDB read query — it does not write, so no `escape_graphql_string` there; the rendered value is escaped where Task 12 persists it.
 
@@ -1374,7 +1402,7 @@ Example (manual.rs):
 
 The real apply-time task scope check lives in `crates/defra-agent-cli/src/desired_state/validate.rs` (~line 574, the `parse_template_for_validation(&task.prompt_template)` block that today forbids `args` for event triggers). Two problems for interop (finding 6): it is **root-based** (`vref.root()`), and `parse_template_for_validation` only tracks `event`/`doc`/`args` roots — it never even *sees* `node.*`/`ctx.*` refs.
 
-Make this validation catalog-aware at the **full-ref** level so `{{ node.node_did }}` and `{{ ctx.now }}` are accepted for tasks while `{{ ctx.acting_did }}` / `{{ ctx.collection_summary }}` (not task-available) are rejected:
+Make this validation catalog-aware at the **full-ref** level so `{{ node.node_did }}` and `{{ ctx.now }}` are accepted for tasks while `{{ ctx.collection_summary }}` and any unknown `ctx.*` path (not task-available) are rejected:
 
 1. Extend `parse_template_for_validation` in `crates/defra-agent/src/template/mod.rs` to also track `node` and `ctx` as roots — add them to `is_tracked_root` (the function that currently matches `event`/`doc`/`args`). This makes the existing textual collector return `node.*`/`ctx.*` refs too (best-effort is fine for an *availability* check; the cache-safety guard for system templates uses the separate parser-backed collector from Task 7).
 2. In `validate.rs`, for each collected `VariableRef` whose root is `node` or `ctx`, join the path to a full ref (`vref.path.join(".")`) and check `default_catalog().is_available_at(&full_ref, Site::Task)`. If not available, push an error naming the var, e.g.:
@@ -1404,7 +1432,7 @@ Extend an existing trigger e2e/conformance test (e.g. `tests/conformance/trigger
 
 Run: `cargo test -p defra-agent trigger 2>&1 | tail -20`
 Run: `cargo test -p defra-agent-cli desired_state 2>&1 | tail -20`
-Expected: builds and passes (including the new task-scope availability rejection — add a `validate.rs` test asserting a task template reading `{{ ctx.acting_did }}` is rejected while `{{ ctx.now }}` is accepted).
+Expected: builds and passes (including the new task-scope availability rejection — add a `validate.rs` test asserting a task template reading `{{ ctx.collection_summary }}` is rejected while `{{ ctx.now }}` is accepted).
 
 - [ ] **Step 5: Commit**
 
@@ -1469,6 +1497,6 @@ Use `superpowers:finishing-a-development-branch` to choose merge/PR. (Per worktr
 
 - **Spec coverage:** D1 (context user msg)→Task 11; D2 (reuse engine)→Tasks 6–8; D3 (catalog)→Task 6; D4 (system render-once frozen)→Task 10; D5 (request_context_template)→Tasks 9, 11; D6 (lazy providers)→Task 11 Step 3; D7 (complete-or-reject)→Task 7. Catalog v1→Task 6. Lean theorems→Tasks 1–2; conformance→Tasks 3–4; config surface + migration→Task 9; per-request render fail-closed→Task 11; persistence order + turn-1-once→Task 12; task interop + apply validation→Task 13.
 - **Plan-review revisions applied (3rd pass):** conformance module wired/committed only after the API exists (Task 4 ordering gate); context rendered at the daemon path and carried via `LoopConfig`, not in the shared loop (Task 11); fail-closed on render error (Task 11); context persisted turn-1-only to avoid per-turn duplication (Task 12); DB migration + 2nd CLI write path + desired-state load/validate added (Tasks 9, 13); Lean tail theorem strengthened (Task 2); minijinja `ast` import path corrected (Task 7).
-- **Plan-review revisions applied (4th pass):** system-template guard actually wired into apply validation `validate.rs` behavior loop, with tests (Task 9 Step 11); runtime system render made fail-closed at the behavior-resolution path (no literal fallback) (Task 10); 2nd CLI write path patched in BOTH `add_fields` and `update_fields` (Task 9 Step 9); desired-state sidecar **spill** added to match hydration (Task 9 Step 10); node/ctx populated at ALL THREE task render sites — trigger_engine + manual.rs + task_run.rs — via shared `task_node_ctx` helper (Task 13 Step 1).
-- **Known soft spots flagged inline (not placeholders):** minijinja AST field names are version-pinned and must be verified against the 2.19 source (Tasks 7, 11); if the acting identity isn't on `AgentRequest` in v1, **drop `ctx.acting_seat`/`ctx.acting_did` from the catalog** (so referencing them fails at apply — fail-closed) rather than emitting empty strings — file a follow-up (Task 11 Step 3 note).
+- **Plan-review revisions applied (4th pass):** system-template guard actually wired into apply validation `validate.rs` behavior loop, with tests (Task 9 Step 11); runtime system render made fail-closed when constructing/resolving the runtime `AgentBehavior` (no literal fallback, prompt builder path unchanged) (Task 10); 2nd CLI write path patched in BOTH `add_fields` and `update_fields` (Task 9 Step 9); desired-state sidecar **spill** added to match hydration (Task 9 Step 10); node/ctx populated at ALL THREE task render sites — trigger_engine + manual.rs + task_run.rs — via shared `task_node_ctx` helper (Task 13 Step 1).
+- **Known soft spots flagged inline (not placeholders):** minijinja AST field names are version-pinned and must be verified against the 2.19 source (Tasks 7, 11); acting identity is not on `AgentRequest` in v1, so `ctx.acting_seat`/`ctx.acting_did` are out of the catalog and should be added in a follow-up once the request field exists.
 - **Type consistency:** `Volatility` (Lean) ↔ `catalog::Volatility` (Rust); `Site`, `default_catalog`, `is_available_at`, `collect_system_reads`, `validate_system_template`, `collect_request_reads`, `render_system_prompt` names are used identically across Tasks 4, 6, 7, 8, 10, 11, 13.

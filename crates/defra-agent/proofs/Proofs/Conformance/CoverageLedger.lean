@@ -744,6 +744,11 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.providerInput.sanitizeLoadedHistory"
       boundaryPromptAssemblyProviderInputSanitizationId)
       "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "follow_up_hook"
+      "PromptAssembly.Template.system_render_stable"
+      "system_render_stable proves a well-formed system template renders identically across requests that agree on run-constant values — the cacheable prefix is byte-stable. validateSystem_correct ties the apply-time guard to well-formedness. Fenced by tests/conformance/prompt_template.rs.")
+      "compaction" []
   ]
 
 def followUpHookIds : List String :=

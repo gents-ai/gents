@@ -52,6 +52,7 @@ mod tests;
 #[derive(Clone)]
 pub(crate) struct LoopConfig {
     pub(crate) preamble: Option<String>,
+    pub(crate) context_message: Option<Message>,
     pub(crate) temperature: Option<f64>,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
@@ -93,7 +94,11 @@ where
         // The running set of messages produced this request. The last element
         // is always the "prompt" for the next turn (rig semantics): initially
         // the user message, later the trailing tool-result user message.
-        let mut new_messages: Vec<Message> = vec![prompt];
+        let mut new_messages: Vec<Message> = Vec::with_capacity(2);
+        if let Some(context_message) = config.context_message.clone() {
+            new_messages.push(context_message);
+        }
+        new_messages.push(prompt);
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
 
@@ -138,7 +143,13 @@ where
                 let history_snapshot: Vec<Message> =
                     history.iter().chain(prior.iter()).cloned().collect();
                 if let HookAction::Terminate { reason } =
-                    hook.on_completion_call(&current_prompt, &history_snapshot).await
+                    hook.on_completion_call_with_context(
+                        &current_prompt,
+                        &history_snapshot,
+                        (current_turn == 1)
+                            .then_some(config.context_message.as_ref())
+                            .flatten(),
+                    ).await
                 {
                     Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
                         chat_history: rig_compat::to_rig_messages(&error_chat_history(

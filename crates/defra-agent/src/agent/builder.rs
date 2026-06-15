@@ -540,6 +540,14 @@ impl PendingAgentBehavior {
         tool_ceiling: &ToolCeiling,
     ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
+        let rendered_system_prompt = crate::template::render_system_prompt(
+            &self.system_prompt,
+            serde_json::json!({
+                "node_did": principal.agent_did.as_str(),
+                "behavior_id": behavior_name.as_str(),
+            }),
+            &crate::template::catalog::default_catalog(),
+        )?;
 
         Ok(AgentBehavior {
             behavior_id: self.name,
@@ -553,7 +561,8 @@ impl PendingAgentBehavior {
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
-            system_prompt: self.system_prompt,
+            system_prompt: rendered_system_prompt,
+            request_context_template: None,
             tools: BehaviorToolConfig::from_selection(
                 &behavior_name,
                 self.tool_selection,

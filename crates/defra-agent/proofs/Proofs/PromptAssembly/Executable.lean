@@ -142,6 +142,7 @@ inductive Slot where
   | summaryReminder
   | skillReminder (index : Nat)
   | conversation (index : Nat)
+  | contextPreamble
   | prompt
   deriving DecidableEq, Repr
 
