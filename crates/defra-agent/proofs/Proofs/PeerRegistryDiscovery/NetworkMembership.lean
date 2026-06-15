@@ -6,7 +6,7 @@ import Mathlib.Data.Finset.Image
 
 The network control-plane layer that sits above the self-asserted
 `RegistryEntry` discovery (`State.lean`) and **supersedes** it (design spec
-§1, §12): a self-registered registry row is replaced by an **admin-signed
+§1, §7): a self-registered registry row is replaced by an **admin-signed
 `Membership`** plus a **member-signed `Endpoint`**. This file is the Lean
 source of truth the cut-2 SDL collections (`AgentNetwork`, `NetworkMembership`,
 `PeerEndpoint`, `NetworkJoinRequest`) mirror field-for-field, and the
@@ -26,6 +26,8 @@ against the signing DID. The crypto itself is fenced separately
    admin-signed membership ∧ fresh member-signed endpoint **is** materialized.
 3. `revoke_sound` / `revoke_drops_member` / `revoke_preserves_others` —
    revocation retracts **exactly** that member (mirrors `retraction_sound`).
+   `deriveNetworkDesired_tombstone_eq_revoke` proves the model's erase is a
+   faithful stand-in for the §4 `status=revoked` tombstone (row retained).
 4. `net_ownership_safe` — discovery **never mutates operator-owned** desired
    rows (reuses the two-finset partition + `operatorWrite`-is-the-sole-exception
    shape of `ownership_safe`).
@@ -334,6 +336,55 @@ theorem revoke_sound {pre post post' : NetworkState} {m : Membership}
     post'.networkDesired = deriveNetworkDesired (revokeState pre m) := by
   subst h_revoke; subst h_derive
   exact ⟨rfl, rfl⟩
+
+/-! ### Tombstone ≡ erase for the derived set (faithfulness to the §4 wire op)
+
+`revokeState` erases the grant row, but design spec §4 mandates a `status =
+revoked` **tombstone** — the row is RETAINED with `active = false`, never
+deleted (so revocation is attributable and replicates). `tombstoneState` models
+that literal wire operation. The two are **proven** to produce the identical
+materialized set (not merely asserted in prose): the retained `active = false`
+row can never satisfy `admittedMember` (which requires `active = true`), so the
+admitted memberships over the tombstoned roster are exactly those over the
+erased roster. Hence every `revoke_*` theorem transfers verbatim to the real
+tombstone representation. -/
+
+/-- The §4 wire revocation: erase the active grant and insert its `active = false`
+tombstone (the row is retained, not deleted). -/
+def tombstoneState (s : NetworkState) (m : Membership) : NetworkState :=
+  { s with memberships := insert { m with active := false } (s.memberships.erase m) }
+
+/-- After a tombstone, `d` is materialized iff some endpoint for `d` is admitted
+by a membership **other than `m`** — the IDENTICAL right-hand side as
+`revoke_characterization`, because the retained `active = false` tombstone row
+never satisfies `admittedMember`. -/
+theorem tombstone_characterization {s : NetworkState} {m : Membership} {d : Did} :
+    d ∈ deriveNetworkDesired (tombstoneState s m) ↔
+      ∃ ep ∈ s.endpoints, validNetwork s.network ∧ memberSignedEndpoint ep ∧
+        ep.fresh = true ∧ ep.did ≠ s.self ∧ ep.did = d ∧
+        ∃ m' ∈ s.memberships, m' ≠ m ∧ admittedMember s.network m' ∧ m'.memberDid = ep.did := by
+  rw [mem_deriveNetworkDesired]
+  unfold endpointMaterializable tombstoneState
+  simp only
+  constructor
+  · rintro ⟨ep, hep, ⟨hnet, hsig, hfresh, hself, m', hm'_mem, hm'_adm, hm'_did⟩, hep_did⟩
+    rcases Finset.mem_insert.mp hm'_mem with heq | hmem
+    · subst heq; exact absurd hm'_adm.2.2 Bool.false_ne_true
+    · exact ⟨ep, hep, hnet, hsig, hfresh, hself, hep_did, m',
+        Finset.mem_of_mem_erase hmem, Finset.ne_of_mem_erase hmem, hm'_adm, hm'_did⟩
+  · rintro ⟨ep, hep, hnet, hsig, hfresh, hself, hep_did, m', hm'_mem, hm'_ne, hm'_adm, hm'_did⟩
+    exact ⟨ep, hep, ⟨hnet, hsig, hfresh, hself, m',
+      Finset.mem_insert_of_mem (Finset.mem_erase.mpr ⟨hm'_ne, hm'_mem⟩), hm'_adm, hm'_did⟩, hep_did⟩
+
+/-- **Tombstone and erase materialize identically.** The proof that the model's
+`revokeState` (erase) is a faithful stand-in for the §4 wire tombstone
+(`active = false` row retained): the derived sets are equal, so every `revoke_*`
+theorem holds for the real tombstone operation too. -/
+theorem deriveNetworkDesired_tombstone_eq_revoke (s : NetworkState) (m : Membership) :
+    deriveNetworkDesired (tombstoneState s m) = deriveNetworkDesired (revokeState s m) := by
+  apply Finset.ext
+  intro d
+  rw [tombstone_characterization, ← revoke_characterization]
 
 /-! ## (4) Ownership safety — discovery never mutates operator-owned rows -/
 
