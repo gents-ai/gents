@@ -1356,6 +1356,18 @@ mod tests {
                 .any(|e| e.contains("request_context_template") && e.contains("ctx.bogus_unknown")),
             "expected unknown ctx ref rejection at apply, got {bad:?}"
         );
+
+        // Refs hidden inside a {% set %} must also be rejected at apply — the
+        // complete walker closes the "passes apply, fails first request" gap.
+        let hidden = validate_errors(manifest_with_request_context(
+            "{% set x = ctx.bogus_unknown %}{{ x }}",
+        ));
+        assert!(
+            hidden
+                .iter()
+                .any(|e| e.contains("request_context_template") && e.contains("ctx.bogus_unknown")),
+            "expected unknown ctx ref inside set to be rejected at apply, got {hidden:?}"
+        );
     }
 
     #[test]
