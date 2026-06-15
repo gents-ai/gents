@@ -882,6 +882,173 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
+    // Regression guard for #494: ordinary CLI/chat/runtime sessions share the
+    // shim's (agent_did, behavior_id) and create AgentSession rows, but they are
+    // NOT Codex threads (no codex_shim request, not shim-created) and must not
+    // appear in thread/list.
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let behavior_id = format!("{agent_did}:default");
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a NON-Codex session + request for the bound identity, directly in the
+    // database (as the runtime/CLI would), with no codex_shim metadata.
+    let foreign_session_id = Uuid::new_v4().to_string();
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentSession(input: {{
+                    session_id: "{session}",
+                    agent_name: "{agent_name}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    started: "2026-01-01T00:00:00Z",
+                    status: "active"
+                }}) {{ _docID }}
+            }}"#,
+            session = escape_graphql_string(&foreign_session_id),
+            agent_name = escape_graphql_string(&agent_name),
+            agent_did = escape_graphql_string(&agent_did),
+            behavior_id = escape_graphql_string(&behavior_id),
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session}",
+                    metadata: "{{}}",
+                    execution_origin: "cli",
+                    created_at: "2026-01-01T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            request = escape_graphql_string(&Uuid::new_v4().to_string()),
+            agent_did = escape_graphql_string(&agent_did),
+            behavior_id = escape_graphql_string(&behavior_id),
+            session = escape_graphql_string(&foreign_session_id),
+        ),
+    )
+    .await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    // A genuine Codex thread (created by the shim) must be listed.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let codex_thread: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    let codex_thread_id = codex_thread.thread.id.clone();
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(3),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let listed: codex::ThreadListResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    assert!(
+        listed
+            .data
+            .iter()
+            .any(|thread| thread.id == codex_thread_id),
+        "the shim-created Codex thread should be listed: {listed:?}"
+    );
+    assert!(
+        !listed
+            .data
+            .iter()
+            .any(|thread| thread.id == foreign_session_id),
+        "a non-Codex session sharing the bound identity must not be listed as a Codex thread: {listed:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

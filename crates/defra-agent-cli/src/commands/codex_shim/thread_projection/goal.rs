@@ -21,7 +21,15 @@ pub(crate) struct StoredGoal {
 pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
     state: &ShimState,
     params: &codex::ThreadGoalSetParams,
-) -> Result<codex::ThreadGoal> {
+) -> Result<Option<codex::ThreadGoal>> {
+    // Don't seed goal state for a thread this shim doesn't own; a later resume of
+    // the same id would otherwise inherit a phantom goal.
+    if super::storage::load_scoped_session(state, &params.thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
     let existing = state.thread_goal(&params.thread_id).await;
     let now = now_seconds_i64();
     let status = params
@@ -48,7 +56,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
         updated_at: now,
     };
     state.set_thread_goal(&params.thread_id, goal.clone()).await;
-    enrich(state, goal).await
+    Ok(Some(enrich(state, goal).await?))
 }
 
 pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(

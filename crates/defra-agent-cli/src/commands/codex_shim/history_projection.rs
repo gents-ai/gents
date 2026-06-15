@@ -403,9 +403,23 @@ pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadR
             "cwd": absolute_path(&record.cwd),
             "cliVersion": env!("CARGO_PKG_VERSION"),
             "source": "cli",
-            "gitInfo": record.git_info.clone(),
+            "gitInfo": conversation_summary_git_info(&record.git_info),
         }
     })
+}
+
+/// Reshape the derived v2 thread git metadata (`{sha, branch, originUrl}`) into
+/// the v1 `ConversationGitInfo` shape (`{sha, branch, origin_url}`) used by
+/// `getConversationSummary`. Without this, the typed round-trip in
+/// `send_typed_json_result` drops the camelCase `originUrl` and loses the remote.
+fn conversation_summary_git_info(git_info: &Option<Value>) -> Option<Value> {
+    let object = git_info.as_ref()?.as_object()?;
+    let field = |name: &str| object.get(name).and_then(Value::as_str);
+    Some(json!({
+        "sha": field("sha"),
+        "branch": field("branch"),
+        "origin_url": field("originUrl").or_else(|| field("origin_url")),
+    }))
 }
 
 fn project_turn_group(

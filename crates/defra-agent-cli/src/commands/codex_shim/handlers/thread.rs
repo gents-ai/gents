@@ -335,7 +335,15 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadGoalSet {
             request_id, params, ..
         } => {
-            let goal = set_codex_thread_goal(state, &params).await?;
+            let Some(goal) = set_codex_thread_goal(state, &params).await? else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
             send_result(outbound, request_id, codex::ThreadGoalSetResponse { goal }).await
         }
         codex::ClientRequest::ThreadGoalGet {

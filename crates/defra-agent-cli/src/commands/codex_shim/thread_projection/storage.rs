@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -111,6 +112,46 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<Sessio
         .map(serde_json::from_value)
         .collect::<serde_json::Result<Vec<_>>>()
         .context("decoding AgentSession rows")
+}
+
+/// Session ids (scoped to the shim's identity) that carry at least one
+/// `codex_shim`-marked request. This is the durable Codex-ownership signal that
+/// distinguishes Codex threads from ordinary CLI/chat/runtime sessions that
+/// share the same `(agent_did, behavior_id)` — those create `AgentSession`s too
+/// but never a `codex_shim` request.
+pub(super) async fn codex_marked_session_ids(state: &ShimState) -> Result<HashSet<String>> {
+    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
+    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                }}
+            ) {{
+                session_id
+                metadata
+            }}
+        }}"#
+    );
+    let response = query_node_json(&state.node, &query).await?;
+    Ok(response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            row.get("metadata")
+                .and_then(Value::as_str)
+                .is_some_and(|metadata| metadata.contains("\"codex_shim\""))
+        })
+        .filter_map(|row| {
+            row.get("session_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect())
 }
 
 /// Verify the existing AgentSession (if any) is pinned to the shim's current

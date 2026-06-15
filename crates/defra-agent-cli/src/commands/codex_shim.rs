@@ -65,6 +65,11 @@ pub(crate) const DEFAULT_MEMORY_MODE: &str = "disabled";
 
 #[derive(Default)]
 pub(crate) struct CodexSidecar {
+    /// Threads this shim process created via ThreadStart/ThreadFork. Used as a
+    /// Codex-ownership signal for zero-turn threads that carry no durable
+    /// `codex_shim`-marked request yet. Populated only by thread creation, never
+    /// by resume/settings, so it cannot be used to adopt a foreign session.
+    pub(crate) created: BTreeSet<String>,
     pub(crate) cwd: BTreeMap<String, PathBuf>,
     pub(crate) loaded: BTreeSet<String>,
     pub(crate) archived: BTreeSet<String>,
@@ -332,6 +337,18 @@ impl ShimState {
         } else {
             guard.archived.remove(thread_id);
         }
+    }
+
+    async fn mark_thread_created(&self, thread_id: &str) {
+        self.sidecar
+            .lock()
+            .await
+            .created
+            .insert(thread_id.to_string());
+    }
+
+    async fn is_thread_created(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.created.contains(thread_id)
     }
 
     async fn thread_memory_mode(&self, thread_id: &str) -> String {

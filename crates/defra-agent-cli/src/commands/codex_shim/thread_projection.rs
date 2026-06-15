@@ -76,6 +76,7 @@ pub(super) async fn create_codex_thread(
     cwd: &Path,
 ) -> Result<CodexThreadRecord> {
     ensure_agent_session(state, thread_id).await?;
+    state.mark_thread_created(thread_id).await;
     state.set_thread_cwd(thread_id, cwd.to_path_buf()).await;
     state.set_thread_loaded(thread_id, true).await;
     state.set_thread_memory_mode(thread_id, "disabled").await;
@@ -120,8 +121,19 @@ pub(super) async fn list_codex_threads_by_archived(
     archived: bool,
 ) -> Result<Vec<CodexThreadRecord>> {
     let sessions = list_scoped_sessions(state).await?;
+    // Ordinary CLI/chat/runtime sessions share the shim's (agent_did,
+    // behavior_id), so the AgentSession spine is not sufficient on its own. A
+    // session is a Codex thread only if it carries a durable `codex_shim`
+    // request OR was created by this shim process (covers zero-turn starts that
+    // have no request yet).
+    let codex_marked = storage::codex_marked_session_ids(state).await?;
     let mut records = Vec::with_capacity(sessions.len());
     for session in sessions {
+        let is_codex_thread = codex_marked.contains(&session.session_id)
+            || state.is_thread_created(&session.session_id).await;
+        if !is_codex_thread {
+            continue;
+        }
         if state.is_thread_archived(&session.session_id).await != archived {
             continue;
         }
@@ -140,6 +152,7 @@ pub(super) async fn store_forked_codex_thread(
     cwd: &Path,
 ) -> Result<CodexThreadRecord> {
     ensure_agent_session(state, child_session_id).await?;
+    state.mark_thread_created(child_session_id).await;
     state
         .set_thread_cwd(child_session_id, cwd.to_path_buf())
         .await;

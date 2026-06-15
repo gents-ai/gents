@@ -18,6 +18,12 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_loaded(
     thread_id: &str,
     loaded: bool,
 ) -> Result<()> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     state.set_thread_loaded(thread_id, loaded).await;
     Ok(())
 }
@@ -27,6 +33,12 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_archived(
     thread_id: &str,
     archived: bool,
 ) -> Result<()> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     state.set_thread_archived(thread_id, archived).await;
     Ok(())
 }
@@ -86,6 +98,12 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_memory_mode(
     thread_id: &str,
     mode: codex::ThreadMemoryMode,
 ) -> Result<()> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     state.set_thread_memory_mode(thread_id, mode.as_str()).await;
     Ok(())
 }
@@ -95,6 +113,12 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_settings(
     thread_id: &str,
     settings: &codex::ThreadSettingsUpdateParams,
 ) -> Result<()> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     let settings_json =
         serde_json::to_string(settings).context("encoding Codex thread settings")?;
     state.set_thread_settings(thread_id, &settings_json).await;
