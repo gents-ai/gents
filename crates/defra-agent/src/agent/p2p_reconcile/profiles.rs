@@ -95,7 +95,6 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "CompactionEntry",
-    "CodexThreadProjection",
     "ProjectionAcpBinding",
     "Task",
     "Schedule",
@@ -131,7 +130,6 @@ const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "CompactionEntry",
-    "CodexThreadProjection",
 ];
 
 const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];

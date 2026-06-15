@@ -28,9 +28,6 @@ pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
-pub const CODEX_THREAD_PROJECTION_NAME: &str = "CodexThreadProjection";
-pub const CODEX_THREAD_PROJECTION: &str =
-    include_str!("../schemas/agent/codex_thread_projection.graphql");
 pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
 pub const PROJECTION_ACP_BINDING: &str =
     include_str!("../schemas/agent/projection_acp_binding.graphql");
@@ -72,7 +69,6 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
-    CODEX_THREAD_PROJECTION,
     PROJECTION_ACP_BINDING,
     TASK,
     SCHEDULE,
@@ -99,7 +95,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
-    CODEX_THREAD_PROJECTION_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
@@ -122,7 +117,6 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
-    CODEX_THREAD_PROJECTION_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
@@ -136,7 +130,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 23);
+        assert_eq!(ALL.len(), 22);
     }
 
     #[test]

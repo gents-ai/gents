@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::host_runtime::thread_git_info;
@@ -13,8 +13,8 @@ mod mutations;
 mod storage;
 mod usage;
 
-pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(in crate::commands::codex_shim) use goal::StoredGoal;
+pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(super) use json::{
     codex_thread_json, codex_thread_json_with_turns, thread_response_json,
     thread_resume_response_json, thread_start_response_json,
@@ -26,12 +26,8 @@ pub(super) use mutations::{
 };
 
 pub(super) use storage::ensure_agent_session_pinning;
-pub(super) use usage::{
-    requests_token_usage, session_token_usage, thread_token_usage,
-};
-use storage::{
-    ensure_agent_session, list_scoped_sessions, load_conversation, load_scoped_session,
-};
+use storage::{ensure_agent_session, list_scoped_sessions, load_conversation, load_scoped_session};
+pub(super) use usage::{requests_token_usage, session_token_usage, thread_token_usage};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -51,20 +47,27 @@ pub(super) struct CodexThreadRecord {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ConversationRow {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) preview_text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) status: String,
     #[serde(default)]
     pub(super) created_at: Option<String>,
     #[serde(default)]
     pub(super) updated_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) latest_request_id: String,
     #[serde(default)]
     pub(super) forked_from_session_id: Option<String>,
+}
+
+fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 pub(super) async fn create_codex_thread(
@@ -126,9 +129,8 @@ pub(super) async fn list_codex_threads_by_archived(
             continue;
         }
         let conversation = load_conversation(state, &session.session_id).await?;
-        records.push(
-            assemble_record(state, &session.session_id, session.started, conversation).await,
-        );
+        records
+            .push(assemble_record(state, &session.session_id, session.started, conversation).await);
     }
     Ok(records)
 }

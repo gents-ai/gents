@@ -13,11 +13,10 @@ use super::super::protocol::{
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
     ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
-    loaded_codex_thread_ids, resume_codex_thread, session_token_usage,
-    set_codex_thread_archived, set_codex_thread_git_info, set_codex_thread_goal,
-    set_codex_thread_loaded, set_codex_thread_memory_mode, set_codex_thread_name,
-    set_codex_thread_settings, thread_resume_response_json, thread_start_response_json,
-    thread_token_usage,
+    loaded_codex_thread_ids, resume_codex_thread, session_token_usage, set_codex_thread_archived,
+    set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
+    set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
+    thread_resume_response_json, thread_start_response_json, thread_token_usage,
 };
 use super::super::thread_routes;
 use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};

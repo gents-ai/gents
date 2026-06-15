@@ -66,8 +66,7 @@ pub(crate) struct CodexSidecar {
     pub(crate) archived: BTreeSet<String>,
     pub(crate) memory_mode: BTreeMap<String, String>,
     pub(crate) settings: BTreeMap<String, String>,
-    pub(crate) goal:
-        BTreeMap<String, crate::commands::codex_shim::thread_projection::StoredGoal>,
+    pub(crate) goal: BTreeMap<String, crate::commands::codex_shim::thread_projection::StoredGoal>,
 }
 
 #[derive(Clone)]

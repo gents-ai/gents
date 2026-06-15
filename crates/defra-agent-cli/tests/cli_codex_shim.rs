@@ -180,50 +180,46 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
-    let projection_response = graphql_query(
+    let session_response = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    session_id
-                    cwd
-                    archived
-                    loaded
-                }}
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
+                    agent_did
                     behavior_id
                     status
+                    started
                 }}
             }}"#,
-            escape_graphql_string(&thread_id),
             escape_graphql_string(&thread_id),
         ),
     )
     .await?;
-    let projection = first_graphql_row(&projection_response, "CodexThreadProjection")?;
+    let session = first_graphql_row(&session_response, "AgentSession")?;
     assert_eq!(
-        projection.get("session_id").and_then(Value::as_str),
+        session.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
     );
-    let expected_cwd = home_dir.display().to_string();
     assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
     );
-    assert_eq!(
-        projection.get("archived").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        projection.get("loaded").and_then(Value::as_bool),
-        Some(true)
-    );
-    let session = first_graphql_row(&projection_response, "AgentSession")?;
     let expected_behavior_id = format!("{agent_did}:default");
     assert_eq!(
         session.get("behavior_id").and_then(Value::as_str),
         Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        session.get("status").and_then(Value::as_str),
+        Some("active")
+    );
+    assert!(
+        session
+            .get("started")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()),
+        "AgentSession.started should be populated: {session}"
     );
 
     send_client_request(
@@ -383,6 +379,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         Some(&thread_id)
     );
 
+    let expected_git_sha = init_test_git_repo(&home_dir, "main")?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadMetadataUpdate {
@@ -408,7 +405,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             .git_info
             .as_ref()
             .and_then(|git| git.sha.as_deref()),
-        Some("abc123")
+        Some(expected_git_sha.as_str())
     );
 
     send_client_request(
@@ -517,7 +514,11 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(turn_start.turn.status, codex::TurnStatus::InProgress);
 
     let (final_text, completed_turn) = read_turn_to_completion(&mut ws).await?;
-    assert_eq!(completed_turn.status, codex::TurnStatus::Completed);
+    assert_eq!(
+        completed_turn.status,
+        codex::TurnStatus::Completed,
+        "completed_turn={completed_turn:?}; final_text={final_text}"
+    );
     assert!(
         final_text.contains(&expected_reply),
         "expected streamed Codex text to contain {expected_reply}, got:\n{final_text}"
@@ -1691,7 +1692,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     let prompt_token = "PROJLIVE";
     let thread_name = format!("DEFRA live projection {}", Uuid::new_v4().simple());
     let goal_objective = format!("exercise live projection {}", Uuid::new_v4().simple());
-    let git_sha = format!("live{}", Uuid::new_v4().simple());
     let git_branch = "codex-shim-live-projection".to_string();
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
@@ -1700,8 +1700,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
-    let expected_cwd = smoke.home_dir.display().to_string();
-
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadSetName {
@@ -1763,6 +1761,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     assert_eq!(goal_set.goal.objective, goal_objective);
     assert_eq!(goal_set.goal.token_budget, Some(321));
 
+    let expected_git_sha = init_test_git_repo(&smoke.home_dir, &git_branch)?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadMetadataUpdate {
@@ -1770,8 +1769,8 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             params: codex::ThreadMetadataUpdateParams {
                 thread_id: thread_id.clone(),
                 git_info: Some(codex::ThreadMetadataGitInfoUpdateParams {
-                    sha: Some(Some(git_sha.clone())),
-                    branch: Some(Some(git_branch.clone())),
+                    sha: Some(Some(format!("ignored-{}", Uuid::new_v4().simple()))),
+                    branch: Some(Some("ignored-client-branch".to_string())),
                     origin_url: None,
                 }),
             },
@@ -1790,7 +1789,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             .git_info
             .as_ref()
             .and_then(|git| git.sha.as_deref()),
-        Some(git_sha.as_str())
+        Some(expected_git_sha.as_str())
     );
 
     let prompt = format!("Reply with exactly this token and no extra words: {prompt_token}");
@@ -1805,25 +1804,23 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         wait_for_request(&smoke.graphql, &smoke.agent_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
-    let projection_response = graphql_query(
+    let durable_response = graphql_query(
         &smoke.graphql,
         &format!(
             r#"{{
-                CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    session_id
-                    cwd
-                    archived
-                    loaded
-                    memory_mode
-                    name
-                    settings_json
-                    goal_json
-                    git_info_json
-                }}
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
+                    agent_did
                     behavior_id
                     status
+                    started
+                }}
+                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    agent_did
+                    behavior_id
+                    title
+                    title_source
                 }}
             }}"#,
             escape_graphql_string(&thread_id),
@@ -1831,77 +1828,51 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         ),
     )
     .await?;
-    let projection = first_graphql_row(&projection_response, "CodexThreadProjection")?;
+    let session = first_graphql_row(&durable_response, "AgentSession")?;
     assert_eq!(
-        projection.get("session_id").and_then(Value::as_str),
+        session.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
     );
     assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(smoke.agent_did.as_str())
     );
-    assert_eq!(
-        projection.get("archived").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        projection.get("loaded").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        projection.get("memory_mode").and_then(Value::as_str),
-        Some("disabled")
-    );
-    assert_eq!(
-        projection.get("name").and_then(Value::as_str),
-        Some(thread_name.as_str())
-    );
-    let settings_json: Value = serde_json::from_str(
-        projection
-            .get("settings_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing settings_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread settings")?;
-    assert_eq!(
-        settings_json.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
-    );
-    let goal_json: Value = serde_json::from_str(
-        projection
-            .get("goal_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing goal_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread goal")?;
-    assert_eq!(
-        goal_json.get("objective").and_then(Value::as_str),
-        Some(goal_objective.as_str())
-    );
-    assert_eq!(
-        goal_json.get("tokenBudget").and_then(Value::as_i64),
-        Some(321)
-    );
-    let git_info_json: Value = serde_json::from_str(
-        projection
-            .get("git_info_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing git_info_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread git metadata")?;
-    assert_eq!(
-        git_info_json.get("sha").and_then(Value::as_str),
-        Some(git_sha.as_str())
-    );
-    assert_eq!(
-        git_info_json.get("branch").and_then(Value::as_str),
-        Some(git_branch.as_str())
-    );
-    let session = first_graphql_row(&projection_response, "AgentSession")?;
     let expected_behavior_id = format!("{}:default", smoke.agent_did);
     assert_eq!(
         session.get("behavior_id").and_then(Value::as_str),
         Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        session.get("status").and_then(Value::as_str),
+        Some("active")
+    );
+    assert!(
+        session
+            .get("started")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()),
+        "AgentSession.started should be populated: {session}"
+    );
+    let conversation = first_graphql_row(&durable_response, "AgentConversation")?;
+    assert_eq!(
+        conversation.get("session_id").and_then(Value::as_str),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(
+        conversation.get("agent_did").and_then(Value::as_str),
+        Some(smoke.agent_did.as_str())
+    );
+    assert_eq!(
+        conversation.get("behavior_id").and_then(Value::as_str),
+        Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        conversation.get("title").and_then(Value::as_str),
+        Some(thread_name.as_str())
+    );
+    assert_eq!(
+        conversation.get("title_source").and_then(Value::as_str),
+        Some("user")
     );
 
     send_client_request(
@@ -2758,6 +2729,11 @@ fn require_command(name: &str) -> Result<()> {
 }
 
 fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
+    let _ = run_git_output(cwd, args)?;
+    Ok(())
+}
+
+fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> Result<String> {
     // Disable commit signing so the test is hermetic against the host/CI git
     // config: a runner with `commit.gpgsign=true` but no usable gpg key (headless)
     // would otherwise fail `git commit` with "gpg failed to sign the data".
@@ -2777,7 +2753,31 @@ fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> Result<String> {
+    require_command("git")?;
+    run_git_command(cwd, &["init"])?;
+    run_git_command(cwd, &["checkout", "-B", branch])?;
+    fs::write(cwd.join(".codex-shim-git-fixture"), "base\n")
+        .with_context(|| format!("writing git fixture in {}", cwd.display()))?;
+    run_git_command(cwd, &["add", ".codex-shim-git-fixture"])?;
+    run_git_command(
+        cwd,
+        &[
+            "-c",
+            "user.name=Defra Test",
+            "-c",
+            "user.email=defra-test@example.invalid",
+            "commit",
+            "-m",
+            "base",
+        ],
+    )?;
+    Ok(run_git_output(cwd, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string())
 }
 
 fn gh_is_authenticated() -> bool {

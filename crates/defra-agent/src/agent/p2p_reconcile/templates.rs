@@ -81,8 +81,7 @@ pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 // ---------------------------------------------------------------------------
 
 /// Conversation collections: all request/response/turn artifacts, scoped by
-/// the peer's agent DID.  CodexThreadProjection is deliberately excluded
-/// because it is a denormalised projection and should not be replicated raw.
+/// the peer's agent DID.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -179,7 +178,6 @@ mod tests {
         assert!(matches!(t.scope, Scope::PeerDid { field } if field == "agent_did"));
         assert_eq!(t.collections.len(), 8);
         assert!(t.collections.contains(&"AgentRequest"));
-        assert!(!t.collections.contains(&"CodexThreadProjection"));
     }
 
     #[test]

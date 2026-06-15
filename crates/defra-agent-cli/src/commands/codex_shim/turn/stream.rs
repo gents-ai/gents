@@ -170,7 +170,8 @@ pub(super) async fn stream_defra_turn(
                         .is_some_and(|value| !value.is_null());
             let hydrated =
                 hydrate_materialized_response_content(state.node.as_ref(), &mut terminal_response)
-                    .await?;
+                    .await
+                    .context("hydrating materialized response content for terminal Codex turn")?;
             if should_wait_for_materialized_content && !hydrated {
                 if last_progress_at.elapsed() >= state.timeout {
                     anyhow::bail!(
@@ -210,7 +211,8 @@ pub(super) async fn stream_defra_turn(
             if turn_status == codex::TurnStatus::Completed {
                 if let Some(next_request) =
                     next_steering_request_after(state, &current.session_id, &current.request_id)
-                        .await?
+                        .await
+                        .context("loading next Codex steering request")?
                 {
                     if next_request.is_pending() {
                         tokio::time::sleep(state.poll_interval).await;
@@ -272,7 +274,8 @@ pub(super) async fn stream_defra_turn(
 
             projection
                 .finish_turn(outbound, turn_status, error_message)
-                .await?;
+                .await
+                .context("sending terminal Codex turn notification")?;
             spawn_background_tool_watcher(
                 connection.clone(),
                 state.clone(),

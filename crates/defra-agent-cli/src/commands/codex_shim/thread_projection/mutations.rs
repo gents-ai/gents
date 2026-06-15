@@ -59,9 +59,11 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_name}",
                     title_source: "user",
+                    preview_text: "",
                     status: "active",
                     created_at: "{now}",
-                    updated_at: "{now}"
+                    updated_at: "{now}",
+                    latest_request_id: ""
                 }},
                 update: {{
                     title: "{escaped_name}",
