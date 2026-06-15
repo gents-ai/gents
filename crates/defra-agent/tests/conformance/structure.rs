@@ -66,6 +66,14 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // fenced separately by defra-agent-protocol::pairing_token verify/tamper
         // tests; identity-binding of the admitted entry is intentionally out of
         // scope (trusted-fleet TOFU — see Transition.join docstring).
+        //
+        // The §9 network-membership layer (NetworkMembership.lean: admin-signed
+        // Membership + member-signed Endpoint → materialization, with the five
+        // §9 obligations) lives under this same barrel. Its executable decision
+        // (`decideMaterializable`) is fenced against the network discovery
+        // reconciler when that reconciler lands (design spec cut 5); the cut-2
+        // PR carries the proven model + SDL only, so the runtime fence is a
+        // tracked follow-up here, not a silent gap.
         (
             "PeerRegistryDiscovery",
             Module("conformance/peer_registry_discovery.rs"),

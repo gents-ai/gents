@@ -1,5 +1,6 @@
-# A network's control-plane root record. Mirrors the cut-1 Lean `Network`
-# entity: a network is named by `network_id` (unique) and owned by `admin_did`.
+# A network's control-plane root record. Mirrors the Lean `Network` entity
+# (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9): a
+# network is named by `network_id` (unique) and owned by `admin_did`.
 # `admin_sig` is the admin's signature over the network's defining fields
 # (network_id, admin_did, display_name, default_template, created_at), proving
 # the admin authored this network record.

@@ -1,5 +1,6 @@
-# A candidate's request to join a network. Mirrors the cut-1 Lean `JoinRequest`
-# entity, keyed by (network_id, candidate_did). `request_key` is the derived
+# A candidate's request to join a network. Mirrors the Lean `JoinRequest`
+# entity (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9),
+# keyed by (network_id, candidate_did). `request_key` is the derived
 # composite key (DefraDB `@index(unique)` is per-field, so the pair is hashed
 # into one unique field, mirroring `AgentMessage.message_key`). `status` is
 # informational ("pending"); the authoritative grant lives in NetworkMembership.

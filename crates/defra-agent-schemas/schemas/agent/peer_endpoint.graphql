@@ -1,5 +1,6 @@
-# A DID's self-published reachability record. Mirrors the cut-1 Lean
-# `PeerEndpoint` entity: the binding from a `did` (unique) to its current
+# A DID's self-published reachability record. Mirrors the Lean `Endpoint`
+# entity (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9):
+# the binding from a `did` (unique) to its current
 # transport coordinates (`node_id`, `address`). `binding_sig` is the DID's own
 # signature over the binding (did, node_id, address, updated_at), proving the
 # endpoint owner published this record and binding the address to the DID.

@@ -1,5 +1,7 @@
-# A member's standing in a network. Mirrors the cut-1 Lean `Membership` entity:
-# the membership set keyed by (network_id, member_did). `membership_key` is the
+# A member's standing in a network. Mirrors the Lean `Membership` entity
+# (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9): the
+# membership set keyed by (network_id, member_did). The Lean `status`↔`active`
+# bridge is `m.active = (status == "active")`. `membership_key` is the
 # derived composite key (DefraDB `@index(unique)` is per-field, so the
 # (network_id, member_did) pair is hashed into one unique field, mirroring
 # `AgentMessage.message_key`). `status` is "active" | "revoked". `admin_sig` is
