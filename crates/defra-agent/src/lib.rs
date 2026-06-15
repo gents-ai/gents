@@ -51,6 +51,7 @@ pub mod native_executor_status;
 pub mod oneshot;
 pub mod prompt;
 pub(crate) mod registry;
+pub(crate) mod rendered_request;
 pub mod retry;
 pub mod run_timeline;
 pub(crate) mod runtime_snapshot;

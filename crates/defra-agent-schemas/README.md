@@ -8,8 +8,8 @@ need to share with defra-agent:
 
 - agent identity, behavior, runtime, and tool selection
 - per-agent memory
-- requests, responses, sessions, conversations, messages, tool calls, and tool
-  results
+- requests, rendered provider requests, responses, sessions, conversations,
+  messages, tool calls, and tool results
 - compaction, Codex thread projection, projection ACP bindings, tasks,
   schedules, event triggers, and peer pairing desired state
 

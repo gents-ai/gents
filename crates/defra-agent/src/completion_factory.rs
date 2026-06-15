@@ -54,6 +54,7 @@ pub(crate) fn loop_config(
             behavior.sampling.additional_params(),
         ),
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
+        on_rendered_request: None,
         max_turns: behavior.max_turns,
     }
 }

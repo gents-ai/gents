@@ -15,7 +15,8 @@ use crate::client_protocol::{
     RequestSnapshot, ResponseSnapshot, ResponseStatus,
 };
 use crate::row::{
-    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
+    AgentMessageRow, AgentRenderedRequestRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow,
+    AgentToolResultRow,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +46,8 @@ pub struct CreateAgentRequestInput<'a> {
 pub struct GraphqlTurnState {
     pub request: Option<AgentRequestRow>,
     pub response: Option<AgentResponseRow>,
+    #[serde(default)]
+    pub rendered_requests: Vec<AgentRenderedRequestRow>,
 }
 
 impl GraphqlTurnState {
@@ -697,6 +700,24 @@ pub fn turn_state_query(request_id: &str) -> String {
                 materialized_at
                 interrupted_at
             }}
+            AgentRenderedRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, order: {{ turn_index: ASC }}) {{
+                rendered_request_key
+                request_id
+                turn_index
+                agent_did
+                behavior_id
+                session_id
+                source
+                request_json
+                messages_json
+                tools_json
+                tool_choice_json
+                sampling_json
+                prompt_hash
+                tools_hash
+                created_at
+                updated_at
+            }}
         }}"#
     )
 }
@@ -775,8 +796,18 @@ pub fn parse_turn_state_response(
         .cloned()
         .map(serde_json::from_value)
         .transpose()?;
+    let rendered_requests = data
+        .get("AgentRenderedRequest")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
 
-    Ok(GraphqlTurnState { request, response })
+    Ok(GraphqlTurnState {
+        request,
+        response,
+        rendered_requests,
+    })
 }
 
 pub fn parse_session_shape_response(

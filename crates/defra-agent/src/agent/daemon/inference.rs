@@ -178,12 +178,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // over the model + tool surface. Per-request sampling is resolved
                 // into the loop config from the behavior + request.
                 let model = (*self.model).clone();
-                let loop_config = crate::completion_factory::loop_config_for_request(
+                let mut loop_config = crate::completion_factory::loop_config_for_request(
                     &self.behavior,
                     self.preamble.clone(),
                     request,
                     self.loop_tools.len(),
                 );
+                loop_config.on_rendered_request =
+                    Some(crate::rendered_request::persisted_rendered_request_sink(
+                        self.node.clone(),
+                        request,
+                        self.behavior.model_name.clone(),
+                        crate::rendered_request::RenderedRequestSource::for_behavior_provider(
+                            self.behavior.backend_provider_kind,
+                        ),
+                    ));
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();

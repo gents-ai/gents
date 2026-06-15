@@ -31,7 +31,9 @@ use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
+};
 
 use crate::llm::tool::ToolDyn;
 use crate::llm::ToolChoice;
@@ -56,6 +58,7 @@ pub(crate) struct LoopConfig {
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
+    pub(crate) on_rendered_request: Option<crate::rendered_request::RenderedRequestSink>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
@@ -151,6 +154,15 @@ where
             }
 
             let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
+            if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                on_rendered_request(current_turn - 1, request.clone())
+                    .await
+                    .map_err(|error| {
+                        StreamingError::Completion(CompletionError::ProviderError(format!(
+                            "persisting rendered completion request failed: {error:#}"
+                        )))
+                    })?;
+            }
 
             let mut stream = model
                 .stream(request)

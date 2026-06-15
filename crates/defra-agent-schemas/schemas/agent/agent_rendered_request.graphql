@@ -1,0 +1,21 @@
+type AgentRenderedRequest @branchable {
+    rendered_request_key: String @index(unique: true)
+    request_id: String @index
+    turn_index: Int @index
+    agent_did: String @index @immutable
+    behavior_id: String @index
+    session_id: String @index
+    source: String @index
+
+    request_json: String
+    messages_json: String
+    tools_json: String
+    tool_choice_json: String
+    sampling_json: String
+
+    prompt_hash: String @index
+    tools_hash: String @index
+
+    created_at: String @index(direction: DESC)
+    updated_at: String @index(direction: DESC)
+}

@@ -243,6 +243,7 @@ fn config(max_turns: usize) -> LoopConfig {
         max_tokens: None,
         additional_params: None,
         tool_choice: None,
+        on_rendered_request: None,
         max_turns,
     }
 }
@@ -302,6 +303,53 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
     assert_eq!(texts, vec!["Hello ".to_string(), "world".to_string()]);
     assert_eq!(final_text.as_deref(), Some("Hello world"));
+}
+
+#[tokio::test]
+async fn rendered_request_sink_runs_before_provider_stream() {
+    let (_node, hook) = test_hook().await;
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("unreached".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let captures_for_sink = captures.clone();
+    let mut loop_config = config(0);
+    loop_config.on_rendered_request = Some(Arc::new(move |turn_index, request| {
+        let captures = captures_for_sink.clone();
+        Box::pin(async move {
+            captures
+                .lock()
+                .await
+                .push((turn_index, request.chat_history.len()));
+            Err(anyhow::anyhow!("capture failed"))
+        })
+    }));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    futures::pin_mut!(stream);
+
+    let item = stream
+        .next()
+        .await
+        .expect("stream should yield the sink error");
+    let error = item.expect_err("capture failure should abort the provider call");
+    assert!(
+        format!("{error:?}").contains("persisting rendered completion request failed"),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(captures.lock().await.as_slice(), &[(0, 1)]);
+    assert!(
+        model.seen_histories().await.is_empty(),
+        "provider stream must not start after capture failure"
+    );
 }
 
 #[tokio::test]
