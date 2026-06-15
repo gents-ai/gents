@@ -47,52 +47,70 @@ message, reusing the existing system-reminder mechanism.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D1 | Per-request context renders into a `<context>`-tagged **user** message | Provider APIs accept only system/user/assistant; reuses the system-reminder path, so it persists and is captured for free |
-| D2 | Reuse the existing MiniJinja `crate::template` engine | The cache guarantee is a property of *which variables a template reads* (extracted by `parse_template_for_validation`), not of engine expressiveness; gets task interop for free |
+| D1 | Per-request context renders into a `<context>`-tagged **user** message | Provider APIs accept only system/user/assistant; reuses the system-reminder message shape. Persistence is **not** automatic (see Rust step 6) — an explicit capture call records it |
+| D2 | Reuse the existing MiniJinja `crate::template` engine | The cache guarantee is a property of *which variables a template reads* (extracted by a new complete-or-reject reads-collector, D7), not of engine expressiveness; gets task interop for free |
 | D3 | Variable volatility comes from a **runtime-owned catalog** | Behaviors reference names only and cannot mis-declare volatility, so the guard checks against ground truth |
 | D4 | `system_prompt` is rendered as a **run-constant** template, once at runtime start, then frozen | Cache-stability becomes *structural* — the preamble literally cannot change per request — matching today's frozen-preamble model |
 | D5 | A new `request_context_template` behavior field renders **per request** | The genuinely-new dynamic surface; opt-in, absent = today's behavior |
-| D6 | Per-request providers (`collection_summary`, `node_state`) are evaluated **lazily** | Only queried when a template actually reads them (reads known from `parse_template_for_validation`) — no cost for behaviors that don't use them |
+| D6 | Per-request providers (`collection_summary`) are evaluated **lazily** | Only queried when a template actually reads them (reads known from the reads-collector) — no cost for behaviors that don't use them |
+| D7 | The reads-collector is **complete-or-reject**, not best-effort | A cache-safety guard must err toward rejection. The current `parse_template_for_validation` under-collects (misses loop/macro/filter rebindings), which would *accept* unsafe templates. v1 collects *all* identifier roots and **rejects** any system template using constructs it cannot fully analyze (see Validation) |
 
 ## The variable catalog (v1)
 
-A runtime-owned table mapping each variable reference to its **volatility**.
-Two new MiniJinja namespaces are added to `TemplateScope`:
+A runtime-owned table mapping each variable reference to its **volatility** and
+its **availability** (which render sites supply it). Two new MiniJinja
+namespaces are added to `TemplateScope`:
 
-| Namespace.var | Volatility | Source | Allowed in system template? |
+| Namespace.var | Volatility | Source | Availability |
 |---|---|---|---|
-| `node.node_did` | run-constant | runtime start | ✅ |
-| `node.node_id` | run-constant | runtime start | ✅ |
-| `node.behavior_id` | run-constant | runtime start | ✅ |
-| `node.deployment_id` | run-constant | runtime start | ✅ |
-| `ctx.acting_seat` | per-request | request | ❌ |
-| `ctx.acting_did` | per-request | request | ❌ |
-| `ctx.now` | per-request | request (RFC3339) | ❌ |
-| `ctx.collection_summary` | per-request | lazy DefraDB query | ❌ |
-| `ctx.node_state` | per-request | lazy liveness query | ❌ |
-| `event.*` / `doc.*` / `args.*` | per-request | trigger fire time | ❌ |
+| `node.node_did` | run-constant | runtime start | system, request-ctx, task |
+| `node.node_id` | run-constant | runtime start | system, request-ctx, task |
+| `node.behavior_id` | run-constant | runtime start | system, request-ctx, task |
+| `node.deployment_id` | run-constant | runtime start | system, request-ctx, task |
+| `ctx.now` | per-request | request / fire (RFC3339) | request-ctx, task |
+| `ctx.acting_seat` | per-request | request | request-ctx |
+| `ctx.acting_did` | per-request | request | request-ctx |
+| `ctx.collection_summary` | per-request | lazy DefraDB query | request-ctx |
+| `event.*` / `doc.*` / `args.*` | per-request | trigger fire time | task |
 
 Volatility classes: **static** (literal text, no variable), **run-constant**
 (filled once at runtime start, frozen), **per-request** (varies per request).
 
-`node.*` (run-constant) is usable in **system**, **request-context**, and
-**task** templates. `ctx.*` (per-request) is usable in request-context and
-task templates only. The existing `event/doc/args` task scopes are unchanged
-and remain per-request.
+Two orthogonal axes:
+- **Volatility** drives the cache-safety guard: a *system* template may read
+  only run-constant (or static) variables.
+- **Availability** drives a render-site scope check (analogous to today's
+  trigger-kind scope validation): a variable is only legal where the runtime
+  actually supplies it. `ctx.acting_seat`/`ctx.acting_did`/
+  `ctx.collection_summary` are **request-context only** — actor identity and
+  the live summary are not established at trigger fire time, so they are not in
+  task scope for v1. `ctx.now` is the task-interop time variable (covers
+  "pull system time into task start"); `event.fired_at` remains as well.
+
+**Deferred from v1:** `ctx.node_state` (liveness/peers/replication). Deferred
+until its exact JSON/string contract is specified — see Follow-ups.
 
 ## Behavior surface
 
 - `system_prompt` (existing field) — now rendered through the engine with the
   **run-constant** binding, once at runtime start, into the frozen preamble.
-  **Backward-compat guard:** a `system_prompt` containing no MiniJinja markers
-  (`{{`, `{%`, `{#`) bypasses rendering entirely and is used as a literal, so
-  existing behaviors are unaffected. A prompt that *does* contain markers is
-  validated (D3 guard) and rendered.
+  A `system_prompt` containing no MiniJinja markers (`{{`, `{%`, `{#`) bypasses
+  rendering entirely and is used as a literal. A prompt that *does* contain
+  markers is validated (D3/D7 guard) and rendered.
+
+  **Intentional breaking edge (accepted):** an existing literal prompt that
+  happens to contain `{{`/`{%`/`{#` (e.g. documenting Jinja/Handlebars syntax)
+  now becomes a template and will be rejected at apply if it references a
+  non-run-constant or unanalyzable construct. This is an accepted break — we
+  keep the single `system_prompt` field rather than a separate opt-in field.
+  **Escape hatch:** wrap literal braces in a MiniJinja `{% raw %}…{% endraw %}`
+  block to keep them literal. This is the documented migration path; the apply
+  error message names it.
 - `request_context_template` (new optional field) — rendered **per request**
-  into the `<context>`-tagged user message. May read `node.*` and `ctx.*`
-  (the trigger scopes `event/doc/args` are fire-time only and are not in scope
-  during the owned loop's per-request render). Absent ⇒ no context message is
-  injected (today's behavior).
+  into the `<context>`-tagged user message. May read `node.*` and the
+  request-context `ctx.*` variables (the trigger scopes `event/doc/args` are
+  fire-time only and not in scope during the owned loop's per-request render).
+  Absent ⇒ no context message is injected (today's behavior).
 
 ## Foundation flow
 
@@ -142,47 +160,109 @@ Standard: **zero `sorry`s**. Composition with the existing `PromptAssembly`
 model: the rendered system template *is* the `preamble` slot text;
 `system_render_stable` proves that slot is per-request-invariant, hence the
 cacheable prefix is byte-stable. The rendered context is an injected user
-message in the `conversation` region.
+message — add a `contextPreamble` slot to the `assemble` order, positioned
+**after** `conversation` and **before** `prompt` (the per-request context
+precedes the new user turn), and extend `assemble_spec` to pin the new order.
+
+**Model↔impl fidelity for the guard.** The cache-safety theorem is stated over
+`t.reads` and assumes it is the *complete* set of variables the template reads.
+Soundness therefore depends on the Rust reads-collector being complete-or-
+reject (D7): if the collector cannot prove it captured every read, it must
+reject rather than return a partial set. The conformance suite pins this
+direction explicitly (a system template using an unanalyzable construct must be
+rejected, never silently accepted).
 
 ### 2. Conformance mirror — `tests/conformance/prompt_template.rs`
 
 Mirrors each theorem under the structure fence, with a `CoverageLedger` entry
 (`PromptAssembly.template.systemRenderStable`). Cases:
 
-- system template reading only `node.*` → `validateSystem` accepts; render under
-  two different `ctx` bindings is identical (`system_render_stable`).
-- system template reading `ctx.now` → `validateSystem` rejects (guard).
+- system template reading only `node.*` → guard accepts; render under two
+  different `ctx` bindings is identical (`system_render_stable`).
+- system template reading `ctx.now` → guard rejects (volatility guard).
+- system template using an **unanalyzable construct** (e.g. a `{% for %}` /
+  macro rebinding the reads-collector cannot fully resolve) → guard **rejects**
+  (D7 complete-or-reject; pins the safe failure direction).
 - request-context template reading `ctx.*` → renders differently per binding
   (expected dynamic behavior; documents the boundary).
+- assemble order: `contextPreamble` precedes `prompt` (the new slot position).
 - determinism: same binding ⇒ same output (`render_determined`).
 
-Ties model to impl: validation maps to the apply-time check built on
-`parse_template_for_validation` + catalog; render maps to `render_template`.
+Ties model to impl: the guard maps to the apply-time check built on the
+new complete-or-reject reads-collector + catalog; render maps to
+`render_template`.
 
 ### 3. Rust implementation
 
 1. **Catalog module** — `Volatility` enum, the catalog table (VarRef →
-   Volatility), and helpers to classify a `VariableRef`.
-2. **Scope assembly** — extend `TemplateScope` with `node` and `ctx`
+   `{ volatility, availability }`), and helpers to classify a `VariableRef`
+   and resolve which roots/vars are legal at a given render site.
+
+2. **Reads-collector (complete-or-reject)** — a new collector that returns the
+   complete set of identifier roots a template reads, or an error if the
+   template uses a construct it cannot fully analyze. Two acceptable
+   implementations, decided in the plan:
+   - **Parser-backed**: use MiniJinja's `unstable_machinery` parser to walk the
+     AST and collect every name access (preferred for completeness); or
+   - **Restricted-subset textual scan**: extend the current scanner to track
+     *all* catalog roots and **reject** templates containing rebinding
+     constructs (`{% for %}`, `{% set %}`, `{% macro %}`, filters that take
+     name args) when used in a *system* template.
+
+   The existing `parse_template_for_validation` (event/doc/args, best-effort)
+   stays as-is for the trigger-scope check it already serves; the new collector
+   is what backs the cache-safety guard. Do **not** repurpose the weak scanner
+   for the guard.
+
+3. **Scope assembly** — extend `TemplateScope` with `node` and `ctx`
    namespaces. Populate `node.*` once at runtime start (run-constant). Build
-   `ctx.*` per request, evaluating `collection_summary` / `node_state`
-   **lazily** based on the reads of the template being rendered.
-3. **Validation** — `validate_system_template(template, catalog)` built on
-   `parse_template_for_validation`; rejects any per-request ref. Wired into the
-   apply/reconcile path (Lean-fenced — the apply path requires the Lean model
-   to cover the new check). Surfaces a clear error like the existing
-   trigger-scope validation.
-4. **System render** — in `prompt.rs` preamble construction, render
-   `system_prompt` as a run-constant template once (with the marker
-   backward-compat guard) into the frozen preamble.
-5. **Request-context render** — in `agent/loop_stream.rs`, render
-   `request_context_template` per request into a `<context>`-tagged user
-   message, injected ahead of the new prompt; persisted via the existing
-   message-persistence path so training capture records it.
-6. **Task interop** — merge `node.*`/`ctx.*` into the trigger-engine
-   `TemplateScope` so a task's `prompt_template` can read e.g. `{{ ctx.now }}`
-   / `{{ node.node_did }}` at fire time. `parse_template_for_validation`'s
-   per-kind scope checks gain the new namespaces.
+   `ctx.*` per request, evaluating `collection_summary` **lazily** based on the
+   collected reads of the template being rendered (escape interpolated values
+   with `escape_graphql_string` where they reach a mutation; emit `null`, never
+   `[]`).
+
+4. **Validation (apply/reconcile, Lean-fenced)** —
+   `validate_system_template(template, catalog)`: collect reads (step 2), reject
+   any non-run-constant ref and any unanalyzable construct, with an error that
+   names the offending var and the `{% raw %}` escape. Plus an
+   **availability** check at each render site (system / request-context / task)
+   mirroring today's trigger-kind scope validation. The apply path requires the
+   Lean model to cover the new guard.
+
+5. **System render** — in `prompt.rs` preamble construction, render
+   `system_prompt` as a run-constant template once (marker guard: no markers ⇒
+   literal) into the frozen preamble.
+
+6. **Request-context render + explicit persistence** — in
+   `agent/loop_stream.rs`, render `request_context_template` per request into a
+   `<context>`-tagged user message and inject it **before** the prompt (the new
+   `contextPreamble` slot). It is **not** persisted by the current path:
+   `new_messages` starts as `vec![prompt]` and `on_completion_call` persists
+   only the prompt. Add an explicit persistence call for the context message
+   (e.g. a `persist_context_message` analogous to `persist_message`, invoked
+   alongside `on_completion_call`) so training capture records exactly what the
+   model saw. Add a conformance/integration case asserting the context message
+   is durably persisted, not just sent.
+
+7. **`request_context_template` config surface** (first-class step) — wire the
+   new behavior field end to end:
+   - `crates/defra-agent-schemas/schemas/agent/agent_behavior.graphql` — add
+     the field.
+   - `document_config` Behavior struct — add the optional field.
+   - `AgentBehavior` runtime config + reconcile — carry it into the resolved
+     behavior.
+   - `crates/defra-agent-cli/src/desired_state/mod.rs` — accept the new field
+     (desired-state currently rejects unknown behavior fields).
+   - `crates/defra-agent-cli/src/main.rs` export allowlist — include the field
+     so export/import round-trips.
+   - write-path (create/update behavior mutation) — emit the field; `null` when
+     empty, never `[]`.
+
+8. **Task interop** — merge `node.*` and the task-available `ctx.*` (`ctx.now`)
+   into the trigger-engine `TemplateScope` so a task's `prompt_template` can
+   read `{{ ctx.now }}` / `{{ node.node_did }}` at fire time. Extend the
+   trigger-kind scope validation to know the new namespaces and their
+   per-render-site availability.
 
 ### Sharp edges honored
 
@@ -202,9 +282,13 @@ cargo test -p defra-agent-cli
 
 ## Out of scope / follow-ups
 
+- `ctx.node_state` — deferred until its exact JSON/string contract (which
+  liveness/peer/replication fields, as what shape) is specified. Add as a
+  catalog entry (per-request, request-context availability) once defined.
+- Task availability for `ctx.acting_seat`/`ctx.acting_did`/
+  `ctx.collection_summary` — these are request-context-only in v1; extend to
+  task fire if a concrete need appears and the fire-time value is well-defined.
 - Additional catalog variables beyond v1 (extend the table).
-- Richer `node_state` detail (peers/replication) if v1's liveness is too thin.
 - Per-request render of the system template with an equality assertion
   (defense-in-depth); D4's render-once-frozen makes this unnecessary for v1.
-```
 
