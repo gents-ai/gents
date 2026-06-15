@@ -44,7 +44,7 @@ mechanical removal of `CodexThreadProjection` from the collection registries.
 | `loaded` | subscribe/unsubscribe | **Drop persistence.** Track an in-process subscribed-thread set. One TUI talks to one shim process; replicating one process's UI focus is meaningless. |
 | `archived` | `ThreadArchive`/`ThreadUnarchive` | **In-process set (faked).** Cannot ride on `AgentConversation.status` (the runtime rewrites it on every request transition — `transition.rs`, `recovery.rs`). A dedicated `AgentConversation.archived` field would persist but is a core-collection schema change with reconcile/desktop fan-out — out of scope for "minimal churn." Archive works per session and resets on restart; usability is retained. |
 | `memory_mode` | `ThreadMemoryModeSet` | **In-process map, default `"disabled"`.** Memory is not actually wired in this shim, so the honest default is disabled (was `"enabled"`). |
-| `settings_json` | `ThreadSettingsUpdate` | **In-process map, default `{}`.** The only meaningful part (`cwd`) is already tracked in `thread_cwds`; model/approval/sandbox are hardcoded by the shim in `thread_response_json`. |
+| `settings_json` | `ThreadSettingsUpdate` | **In-process map, default `{}`.** The only meaningful part (`cwd`) is tracked in the server-scoped cwd sidecar (see `cwd` above); model/approval/sandbox are hardcoded by the shim in `thread_response_json`. |
 | `goal_json` | `ThreadGoalSet`/`Clear` | **In-process map.** Pure display state; `tokens_used`/`time_used_seconds` are now populated with real values (Part B) instead of 0 stubs. |
 | `rollback_user_turn` | always `-1`, no setter | **Delete.** Dead: written as a constant, never read anywhere. |
 
@@ -254,9 +254,12 @@ of the Codex shim.
 **No backfill of pre-upgrade data (accepted loss).** Existing
 `CodexThreadProjection` rows are not migrated. User-set names revert to
 auto-generated conversation titles; archive flags, goals, and settings reset.
-Additionally, the list scopes by `agent_did + behavior_id`, and pre-upgrade shim
-`AgentSession` rows were written without `agent_did` (which is `@immutable` and
-cannot be backfilled), so pre-upgrade threads drop off `thread/list`. Their
-conversations and history remain intact in the runtime collections; only the
-Codex-shim list view and UI sugar are affected. This is acceptable for local,
-pre-release tooling and avoids a one-time migration path.
+Additionally, **both** `load_codex_thread` and the list scope by
+`agent_did + behavior_id`, and pre-upgrade shim `AgentSession` rows were written
+without `agent_did` (which is `@immutable` and cannot be backfilled). So
+pre-upgrade threads are fully retired from the shim view: they drop off
+`thread/list` **and** explicit `ThreadResume`/`ThreadRead` by id will not find
+them (no legacy direct-load exception). Their conversations and history remain
+intact in the runtime collections; only the Codex-shim view and UI sugar are
+affected. This is acceptable for local, pre-release tooling and avoids both a
+one-time migration path and a legacy-session special case in the load path.
