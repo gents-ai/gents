@@ -104,6 +104,23 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "Skill",
 ];
 
+/// Discovery (network control-plane) collections: the membership documents a
+/// joiner needs to learn and run the network, plus agent-config so it can run
+/// what it discovers. Unscoped Replicate — small control-plane docs, not
+/// per-peer slices. This is the bootstrap on-ramp template.
+const DISCOVERY_COLLECTIONS: &[&str] = &[
+    "AgentNetwork",
+    "NetworkMembership",
+    "PeerEndpoint",
+    "NetworkJoinRequest",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+    "ToolServiceRegistry",
+    "Skill",
+];
+
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "conversation",
@@ -120,6 +137,12 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "backup",
         collections: CONVERSATION_COLLECTIONS,
+        scope: Scope::Unscoped,
+        delivery: Delivery::Replicate,
+    },
+    ScopeTemplate {
+        id: "discovery",
+        collections: DISCOVERY_COLLECTIONS,
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
     },
@@ -230,8 +253,27 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_three() {
-        assert_eq!(builtin_templates().len(), 3);
+    fn builtin_template_count_is_four() {
+        assert_eq!(builtin_templates().len(), 4);
+    }
+
+    #[test]
+    fn discovery_is_unscoped_replicate_with_control_plane_and_config() {
+        let t = resolve_template("discovery").unwrap();
+        assert_eq!(t.delivery, Delivery::Replicate);
+        assert!(matches!(t.scope, Scope::Unscoped));
+        // control-plane collections
+        assert!(t.collections.contains(&"AgentNetwork"));
+        assert!(t.collections.contains(&"NetworkMembership"));
+        assert!(t.collections.contains(&"PeerEndpoint"));
+        assert!(t.collections.contains(&"NetworkJoinRequest"));
+        // agent-config so a joiner can run what it discovers
+        for col in AGENT_CONFIG_COLLECTIONS {
+            assert!(
+                t.collections.contains(col),
+                "discovery missing config collection {col}"
+            );
+        }
     }
 
     #[test]
