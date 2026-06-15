@@ -244,6 +244,21 @@ No `lake build` (no Lean / ApplyReconcile touched — verified).
 
 ## Accepted tradeoffs
 
+**Codex is a presentation layer; threads reconstruct from durable data.** A
+Codex thread is not a persisted entity with an ownership marker — it is a view
+over durable DEFRA records. A thread with **any** turn carries a durable
+`codex_shim`-marked `AgentRequest`, so a fresh shim process (e.g. after restart,
+with an empty in-process sidecar) reconstructs it in `thread/list` purely from
+the data: ownership from the marked request (`codex_marked_session_ids`), cwd
+from that request's metadata (`derive_thread_cwd`), name from
+`AgentConversation.title`, history from the messages. The in-process `created`
+set is only a same-session presentation cache so a just-started thread appears in
+the sidebar before its first turn; it is deliberately **not** durable. A
+never-turned start or fork holds no durable Codex interaction, so it is not
+surfaced after a restart — and no DEFRA data is lost (a fork's copied messages
+remain in the DB; re-forking is free). This is why no durable ownership marker
+is introduced.
+
 **Restart resets UI sugar.** Restarting the embedded node resets Codex-only UI
 sugar (archive flag, memory toggle, goal, thread settings) to defaults.
 Conversations, history, and titles (including user-set names, now on
