@@ -285,6 +285,10 @@ impl ShimState {
             .unwrap_or_else(|| self.cwd.clone())
     }
 
+    async fn thread_cwd_override(&self, thread_id: &str) -> Option<PathBuf> {
+        self.sidecar.lock().await.cwd.get(thread_id).cloned()
+    }
+
     async fn set_thread_cwd(&self, thread_id: &str, cwd: PathBuf) {
         self.sidecar
             .lock()

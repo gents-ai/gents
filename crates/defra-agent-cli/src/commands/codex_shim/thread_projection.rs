@@ -89,13 +89,10 @@ pub(super) async fn resume_codex_thread(
     thread_id: &str,
     cwd_override: Option<&str>,
 ) -> Result<Option<CodexThreadRecord>> {
-    let cwd = match cwd_override.filter(|value| !value.trim().is_empty()) {
-        Some(value) => PathBuf::from(value),
-        None => state.thread_cwd(thread_id).await,
-    };
-
     ensure_agent_session(state, thread_id).await?;
-    state.set_thread_cwd(thread_id, cwd).await;
+    if let Some(cwd) = cwd_override.filter(|value| !value.trim().is_empty()) {
+        state.set_thread_cwd(thread_id, PathBuf::from(cwd)).await;
+    }
     state.set_thread_loaded(thread_id, true).await;
 
     let record = load_codex_thread(state, thread_id).await?;
@@ -114,7 +111,7 @@ pub(super) async fn load_codex_thread(
     };
     let conversation = load_conversation(state, thread_id).await?;
     Ok(Some(
-        assemble_record(state, thread_id, session.started, conversation).await,
+        assemble_record(state, thread_id, session.started, conversation).await?,
     ))
 }
 
@@ -129,8 +126,9 @@ pub(super) async fn list_codex_threads_by_archived(
             continue;
         }
         let conversation = load_conversation(state, &session.session_id).await?;
-        records
-            .push(assemble_record(state, &session.session_id, session.started, conversation).await);
+        records.push(
+            assemble_record(state, &session.session_id, session.started, conversation).await?,
+        );
     }
     Ok(records)
 }
@@ -162,10 +160,11 @@ async fn assemble_record(
     session_id: &str,
     started: Option<String>,
     conversation: Option<ConversationRow>,
-) -> CodexThreadRecord {
-    let cwd = state.thread_cwd(session_id).await;
+) -> Result<CodexThreadRecord> {
+    let cwd = storage::derive_thread_cwd(state, session_id).await?;
+    state.set_thread_cwd(session_id, cwd.clone()).await;
     let git_info = thread_git_info(&cwd).await;
-    CodexThreadRecord {
+    Ok(CodexThreadRecord {
         session_id: session_id.to_string(),
         cwd,
         archived: state.is_thread_archived(session_id).await,
@@ -176,5 +175,5 @@ async fn assemble_record(
         git_info,
         projection_started: started,
         conversation,
-    }
+    })
 }

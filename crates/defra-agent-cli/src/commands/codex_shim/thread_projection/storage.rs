@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
@@ -180,10 +182,125 @@ pub(super) async fn load_conversation(
         .context("decoding AgentConversation row")
 }
 
+pub(super) async fn derive_thread_cwd(state: &ShimState, thread_id: &str) -> Result<PathBuf> {
+    if let Some(cwd) = state.thread_cwd_override(thread_id).await {
+        return Ok(cwd);
+    }
+    if let Some(cwd) = latest_request_metadata_cwd(state, thread_id).await? {
+        return Ok(cwd);
+    }
+    if let Some(cwd) = settings_json_cwd(&state.cwd, &state.thread_settings(thread_id).await) {
+        return Ok(cwd);
+    }
+    Ok(state.cwd.clone())
+}
+
+async fn latest_request_metadata_cwd(
+    state: &ShimState,
+    thread_id: &str,
+) -> Result<Option<PathBuf>> {
+    let escaped_thread_id = escape_graphql_string(thread_id);
+    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
+    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_thread_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                }},
+                order: {{ created_at: DESC }},
+                limit: 10
+            ) {{
+                metadata
+            }}
+        }}"#
+    );
+    let response = query_node_json(&state.node, &query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for row in rows {
+        let Some(metadata) = row.get("metadata").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(cwd) = metadata_json_cwd(&state.cwd, metadata) {
+            return Ok(Some(cwd));
+        }
+    }
+    Ok(None)
+}
+
+fn settings_json_cwd(base_cwd: &Path, settings_json: &str) -> Option<PathBuf> {
+    json_path_cwd(base_cwd, settings_json, &["cwd"])
+}
+
+fn metadata_json_cwd(base_cwd: &Path, metadata: &str) -> Option<PathBuf> {
+    json_path_cwd(base_cwd, metadata, &["codex_shim", "cwd"])
+}
+
+fn json_path_cwd(base_cwd: &Path, raw: &str, path: &[&str]) -> Option<PathBuf> {
+    let parsed = serde_json::from_str::<Value>(raw).ok()?;
+    let mut value = &parsed;
+    for segment in path {
+        value = value.get(*segment)?;
+    }
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+        .map(Path::new)
+        .map(|cwd| absolute_cwd(base_cwd, cwd))
+}
+
+fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
+    if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        base_cwd.join(cwd)
+    }
+}
+
 fn behavior_id(state: &ShimState) -> String {
     state.behavior_id.as_ref().to_string()
 }
 
 fn agent_name(state: &ShimState) -> String {
     behavior_id(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_json_cwd_reads_codex_shim_cwd() {
+        let base_cwd = Path::new("/workspace");
+        assert_eq!(
+            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"/repo"}}"#),
+            Some(PathBuf::from("/repo"))
+        );
+        assert_eq!(
+            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"repo"}}"#),
+            Some(PathBuf::from("/workspace/repo"))
+        );
+        assert_eq!(metadata_json_cwd(base_cwd, r#"{"cwd":"/wrong"}"#), None);
+    }
+
+    #[test]
+    fn settings_json_cwd_reads_thread_settings_cwd() {
+        let base_cwd = Path::new("/workspace");
+        assert_eq!(
+            settings_json_cwd(base_cwd, r#"{"cwd":"/repo-from-settings"}"#),
+            Some(PathBuf::from("/repo-from-settings"))
+        );
+        assert_eq!(
+            settings_json_cwd(base_cwd, r#"{"cwd":"repo-from-settings"}"#),
+            Some(PathBuf::from("/workspace/repo-from-settings"))
+        );
+        assert_eq!(settings_json_cwd(base_cwd, "{}"), None);
+    }
 }
