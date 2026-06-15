@@ -4,6 +4,7 @@ use anyhow::Result;
 use defra_agent::template::{
     catalog::{default_catalog, Site},
     reads::validate_system_template,
+    validate_request_context_template,
 };
 use defra_agent::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
@@ -340,6 +341,14 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             validate_behavior_system_template(&behavior.behavior_id, system_prompt, errors);
         }
 
+        if let Some(request_context_template) = behavior.request_context_template.as_deref() {
+            validate_behavior_request_context_template(
+                &behavior.behavior_id,
+                request_context_template,
+                errors,
+            );
+        }
+
         // skill_refs / skill_excludes must resolve to skills in this manifest.
         // Because every skill is validated above to belong to this principal,
         // this also enforces D6 (no live cross-principal skill references —
@@ -618,6 +627,22 @@ fn validate_behavior_system_template(
     if let Err(error) = validate_system_template(system_prompt, &catalog) {
         errors.push(format!(
             "behavior {behavior_id} system_prompt template is invalid: {error}"
+        ));
+    }
+}
+
+fn validate_behavior_request_context_template(
+    behavior_id: &str,
+    request_context_template: &str,
+    errors: &mut Vec<String>,
+) {
+    if !contains_template_marker(request_context_template) {
+        return;
+    }
+    let catalog = default_catalog();
+    if let Err(error) = validate_request_context_template(request_context_template, &catalog) {
+        errors.push(format!(
+            "behavior {behavior_id} request_context_template is invalid: {error}"
         ));
     }
 }
@@ -1305,6 +1330,55 @@ mod tests {
             let errors = validate_errors(manifest(Some(prompt), None));
             assert!(errors.is_empty(), "prompt {prompt:?} failed: {errors:?}");
         }
+    }
+
+    fn manifest_with_request_context(template: &str) -> DesiredStateManifest {
+        let mut m = manifest(None, None);
+        m.agent_behaviors[0].request_context_template = Some(template.to_string());
+        m
+    }
+
+    #[test]
+    fn request_context_template_validated_at_apply() {
+        // request-context templates may read ctx.* but not task/system-only or
+        // unknown refs; a misconfigured one must fail apply, not first request.
+        let ok = validate_errors(manifest_with_request_context(
+            "seat at {{ ctx.now }} on {{ node.node_did }}",
+        ));
+        assert!(
+            ok.is_empty(),
+            "valid request-context template failed: {ok:?}"
+        );
+
+        let bad = validate_errors(manifest_with_request_context("{{ ctx.bogus_unknown }}"));
+        assert!(
+            bad.iter()
+                .any(|e| e.contains("request_context_template") && e.contains("ctx.bogus_unknown")),
+            "expected unknown ctx ref rejection at apply, got {bad:?}"
+        );
+    }
+
+    #[test]
+    fn task_template_raw_block_is_not_scope_checked() {
+        // The documented {% raw %} escape hatch must be honored by the task
+        // scope validator too: a task-unavailable var inside raw is literal text.
+        let errors = validate_errors(manifest(
+            None,
+            Some("{% raw %}{{ ctx.collection_summary }}{% endraw %} at {{ ctx.now }}"),
+        ));
+        assert!(
+            errors.is_empty(),
+            "raw-wrapped task-unavailable var must not be scope-rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn task_template_rejects_task_unavailable_ctx_ref() {
+        let errors = validate_errors(manifest(None, Some("{{ ctx.collection_summary }}")));
+        assert!(
+            errors.iter().any(|e| e.contains("ctx.collection_summary")),
+            "expected task-unavailable ctx ref rejection, got {errors:?}"
+        );
     }
 
     #[test]

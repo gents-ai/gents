@@ -84,3 +84,23 @@ pub fn default_catalog() -> Catalog {
 
     Catalog { entries }
 }
+
+#[cfg(test)]
+impl Catalog {
+    /// Build a catalog from explicit entries. Test-only: lets the guard tests
+    /// exercise combinations (e.g. a run-constant var NOT available in the
+    /// system preamble) that the v1 `default_catalog` does not contain.
+    pub(crate) fn from_entries(entries: &[(&'static str, Volatility, &'static [Site])]) -> Catalog {
+        let mut map = BTreeMap::new();
+        for (key, volatility, availability) in entries {
+            map.insert(
+                *key,
+                Entry {
+                    volatility: *volatility,
+                    availability,
+                },
+            );
+        }
+        Catalog { entries: map }
+    }
+}

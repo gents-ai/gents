@@ -63,6 +63,39 @@ pub(crate) struct LoopConfig {
     pub(crate) max_turns: usize,
 }
 
+/// Assemble the per-request message tail: the optional `<context>` message rides
+/// immediately before the prompt, which is always last (rig prompt semantics).
+///
+/// This mirrors Lean `PromptAssembly.Template.assembleWithContext`, whose
+/// `assembleWithContext_tail` theorem fixes the order as `... contextPreamble,
+/// prompt`. Fenced by `tests` (`assembles_context_immediately_before_prompt`);
+/// reordering here breaks that test and contradicts the proof.
+pub(crate) fn assemble_new_messages(
+    context_message: Option<Message>,
+    prompt: Message,
+) -> Vec<Message> {
+    let mut new_messages: Vec<Message> = Vec::with_capacity(2);
+    if let Some(context_message) = context_message {
+        new_messages.push(context_message);
+    }
+    new_messages.push(prompt);
+    new_messages
+}
+
+/// True for a per-request `<context>...</context>` user message produced by the
+/// request-context templating layer (#497). Used to keep prior requests' stale
+/// context out of provider-bound history.
+pub(crate) fn is_request_context_message(message: &Message) -> bool {
+    let Message::User { content } = message else {
+        return false;
+    };
+    let [UserContent::Text(text)] = content.as_slice() else {
+        return false;
+    };
+    let trimmed = text.text.trim();
+    trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
+}
+
 /// Drive the owned multi-turn loop, producing a stream of `MultiTurnStreamItem`s.
 ///
 /// `prompt` is the new user message; `history` is the prior conversation
@@ -91,14 +124,24 @@ where
         // provider-valid by construction, and sanitizing them mid-flight would
         // mis-drop a tool call whose result rides as the next turn's prompt.
         let history = crate::compaction::sanitize_history_for_provider(history);
+        // #497: prior requests' per-request `<context>` messages are durably
+        // persisted (training capture), but must NOT be replayed to the provider:
+        // they carry stale `ctx.now` / collection summaries and would accumulate
+        // unboundedly across a multi-request session, inflating tokens and
+        // presenting stale context as current. Strip them from the provider-bound
+        // history; the CURRENT request's context rides in `new_messages` below.
+        // Persistence is untouched (it already happened upstream).
+        let history: Vec<Message> = history
+            .into_iter()
+            .filter(|message| !is_request_context_message(message))
+            .collect();
         // The running set of messages produced this request. The last element
         // is always the "prompt" for the next turn (rig semantics): initially
-        // the user message, later the trailing tool-result user message.
-        let mut new_messages: Vec<Message> = Vec::with_capacity(2);
-        if let Some(context_message) = config.context_message.clone() {
-            new_messages.push(context_message);
-        }
-        new_messages.push(prompt);
+        // the user message, later the trailing tool-result user message. The
+        // optional per-request context message rides immediately before the
+        // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
+        let mut new_messages: Vec<Message> =
+            assemble_new_messages(config.context_message.clone(), prompt);
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
 

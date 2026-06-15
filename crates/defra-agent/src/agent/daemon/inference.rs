@@ -83,14 +83,18 @@ fn render_request_context_message(
         return Ok(None);
     }
 
-    let reads = crate::template::reads::collect_request_reads(template)
-        .map_err(|error| anyhow!("request_context_template parse failed: {error}"))?;
     let mut ctx = serde_json::Map::new();
     ctx.insert(
         "now".to_string(),
         serde_json::json!(Utc::now().to_rfc3339()),
     );
-    if reads.contains("ctx.collection_summary") {
+    // Populate the (potentially expensive) live summary whenever the template
+    // could reference it. A literal substring check can never miss a real read
+    // — the catalog variable name must appear verbatim to be referenced — while
+    // a best-effort AST walk drops names bound inside set/with/filter/macro
+    // bodies, which would leave `collection_summary` undefined and fail the
+    // render under strict-undefined for an otherwise-valid template.
+    if template.contains("collection_summary") {
         ctx.insert(
             "collection_summary".to_string(),
             serde_json::json!(crate::template::collection_summary(node)?),
@@ -165,6 +169,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
+        // Render the per-request <context> message ONCE, before the retry loop.
+        // Rendering per attempt would (a) recompute ctx.now so each retry's
+        // persisted/visible context diverges from what the model consumed, and
+        // (b) defeat exactly-once persistence. A render error here is permanent
+        // (not transient), so failing before the first attempt is correct.
+        let request_context_message =
+            render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
+
         for attempt in 0..max_attempts {
             ensure_request_deadline_open(request_deadline, "starting inference attempt")?;
             if *shutdown.borrow() {
@@ -234,8 +246,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     request,
                     self.loop_tools.len(),
                 );
-                loop_config.context_message =
-                    render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
+                loop_config.context_message = request_context_message.clone();
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();

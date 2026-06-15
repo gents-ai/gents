@@ -1116,6 +1116,39 @@ fn deadline_remaining_is_zero_when_past() {
     assert_eq!(super::deadline_remaining(None), None);
 }
 
+#[test]
+fn assembles_context_immediately_before_prompt() {
+    // Fences Lean `PromptAssembly.Template.assembleWithContext_tail`: when a
+    // per-request context message is present, the assembly ends with exactly
+    // [contextPreamble, prompt] — context immediately precedes the prompt.
+    let context = Message::user("<context>\nseat: x\n</context>");
+    let prompt = Message::user("hello");
+
+    let with_context = super::assemble_new_messages(Some(context.clone()), prompt.clone());
+    assert_eq!(with_context.len(), 2);
+    assert!(super::is_request_context_message(&with_context[0]));
+    assert_eq!(with_context[1], prompt);
+    // Context is the immediately-preceding entry before the prompt.
+    assert_eq!(&with_context[with_context.len() - 2], &context);
+
+    // Without a context message, the prompt is the sole (last) entry.
+    let without = super::assemble_new_messages(None, prompt.clone());
+    assert_eq!(without, vec![prompt]);
+}
+
+#[test]
+fn is_request_context_message_only_matches_context_user_text() {
+    assert!(super::is_request_context_message(&Message::user(
+        "<context>\nx\n</context>"
+    )));
+    assert!(!super::is_request_context_message(&Message::user(
+        "an ordinary prompt"
+    )));
+    assert!(!super::is_request_context_message(&Message::assistant(
+        "hi"
+    )));
+}
+
 #[tokio::test]
 async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     // No tool runtime scope is active in this unit test, so dispatch_tool takes

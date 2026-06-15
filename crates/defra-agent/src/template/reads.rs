@@ -6,7 +6,7 @@ use minijinja::machinery::ast::{CallArg, Expr, Stmt};
 use minijinja::machinery::parse;
 use minijinja::syntax::SyntaxConfig;
 
-use super::catalog::{Catalog, Volatility};
+use super::catalog::{Catalog, Site, Volatility};
 use super::TemplateError;
 
 /// Collect the complete set of full variable refs a system template reads,
@@ -29,7 +29,20 @@ pub fn validate_system_template(template: &str, cat: &Catalog) -> Result<(), Tem
     let reads = collect_system_reads(template)?;
     for r in &reads {
         match cat.volatility(r) {
-            Some(Volatility::RunConstant) => {}
+            Some(Volatility::RunConstant) => {
+                // Cache-safety is about volatility, but the catalog also models
+                // per-site availability; a run-constant var that is not declared
+                // available in the system preamble must not silently enter the
+                // cacheable prefix. Bind the guard to the catalog's own model so
+                // it stays correct as the catalog grows (fail-closed by default).
+                if !cat.is_available_at(r, Site::System) {
+                    return Err(TemplateError::Render(format!(
+                        "system template references `{r}`, which is run-constant but not \
+                         available in the system preamble; wrap literal braces in \
+                         {{% raw %}}...{{% endraw %}} if intended as text"
+                    )));
+                }
+            }
             Some(Volatility::PerRequest) => {
                 return Err(TemplateError::Render(format!(
                     "system template may not read per-request variable `{r}`; move it to \
@@ -188,5 +201,40 @@ fn dotted_path(expr: &Expr<'_>) -> Option<String> {
             Some(format!("{base}.{key}"))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::template::catalog::Catalog;
+
+    #[test]
+    fn rejects_run_constant_var_not_available_in_system_preamble() {
+        // A run-constant var that the catalog does NOT make available at the
+        // system site must be rejected: cache-safety is about volatility, but
+        // the guard must also honor the catalog's availability model so it stays
+        // correct as the catalog grows (fail-closed, not safe-by-coincidence).
+        let cat = Catalog::from_entries(&[(
+            "node.future_var",
+            Volatility::RunConstant,
+            &[Site::RequestContext],
+        )]);
+        let err = validate_system_template("{{ node.future_var }}", &cat).unwrap_err();
+        assert!(
+            format!("{err}").contains("node.future_var"),
+            "guard must reject run-constant vars not available in the system preamble: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_run_constant_var_available_in_system_preamble() {
+        let cat = Catalog::from_entries(&[(
+            "node.node_did",
+            Volatility::RunConstant,
+            &[Site::System, Site::RequestContext, Site::Task],
+        )]);
+        validate_system_template("agent {{ node.node_did }}", &cat)
+            .expect("run-constant + system-available must pass");
     }
 }

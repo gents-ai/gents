@@ -34,7 +34,8 @@ pub use fork::{
 };
 pub use history::load_history;
 pub(crate) use history::{
-    append_message, mark_response_materialized, save_message, save_message_with_key,
+    append_message, mark_response_materialized, message_sequence_for_request_content, save_message,
+    save_message_with_key,
 };
 pub(crate) use query::load_session_behavior_id;
 pub use retry::count_active_sessions;

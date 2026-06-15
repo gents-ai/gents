@@ -133,6 +133,18 @@ pub fn render_request_context_template(
     render_template(template, &scope)
 }
 
+/// Apply-time validation for a behavior's `request_context_template`: the
+/// template must parse and reference only catalog variables available at the
+/// request-context render site. Mirrors the system-template guard's role on the
+/// cacheable path, so a misconfigured template fails apply rather than the
+/// first production request.
+pub fn validate_request_context_template(
+    template: &str,
+    cat: &catalog::Catalog,
+) -> Result<(), TemplateError> {
+    validate_catalog_scope(template, cat, catalog::Site::RequestContext)
+}
+
 fn validate_catalog_scope(
     template: &str,
     cat: &catalog::Catalog,
@@ -260,6 +272,20 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
                 let end = find_close(bytes, start, b'%');
                 if let Some(end_idx) = end {
                     let body = &template[start..end_idx];
+                    // `{% raw %}...{% endraw %}` is literal text — its contents
+                    // are NOT variable references. Skip the whole span so the
+                    // documented escape hatch (wrap literal braces in raw) is
+                    // honored here exactly as the parser-backed system guard
+                    // honors it (otherwise valid task templates false-reject).
+                    if body.trim() == "raw" {
+                        match find_endraw(bytes, end_idx + 2) {
+                            Some(after_endraw) => {
+                                i = after_endraw;
+                                continue;
+                            }
+                            None => break,
+                        }
+                    }
                     collect_refs_in_body(body, &mut refs);
                     i = end_idx + 2;
                 } else {
@@ -273,6 +299,27 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
     }
 
     Ok(refs)
+}
+
+/// Find the index just past the closing `%}` of the next `{% endraw %}` tag at
+/// or after `from`. Used to skip over a `{% raw %}` literal span. Returns `None`
+/// if no `endraw` close is found (malformed/unterminated raw block).
+fn find_endraw(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'%' {
+            let start = i + 2;
+            let end = find_close(bytes, start, b'%')?;
+            let body = std::str::from_utf8(&bytes[start..end]).ok()?.trim();
+            if body == "endraw" {
+                return Some(end + 2);
+            }
+            i = end + 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Locate the closing sequence `<close>}` starting from `from`, returning the

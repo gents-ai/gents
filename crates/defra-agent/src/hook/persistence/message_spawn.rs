@@ -12,7 +12,7 @@ impl DefraSessionHook {
         // assistant messages carry reasoning; users/tool-results yield `None`.
         let reasoning = defra_agent_protocol::transcript::extract_message_reasoning(message);
         let reasoning = reasoning.as_deref();
-        let (session_id, turn_state, message_key, existing_sequence) = {
+        let (session_id, turn_state, message_key, existing_sequence, current_request_id) = {
             let state = self.state.lock().await;
             let session_id = state
                 .session_id
@@ -28,11 +28,33 @@ impl DefraSessionHook {
                 state.transcript_turn,
                 message_key,
                 existing_sequence,
+                state.current_request_id.clone(),
             )
         };
 
         if let Some(sequence) = existing_sequence {
             return Ok(sequence);
+        }
+
+        // #497: durable request-scoped dedup for the turn-1 user prompt and the
+        // per-request `<context>` message. Tool-result user messages already
+        // dedup by `message_key` above; these don't. The daemon retry loop builds
+        // a fresh hook per attempt, so a transient failure before the first
+        // assistant token would otherwise re-persist them. If this request
+        // already persisted an identical message, reuse its sequence.
+        if message_key.is_none() && matches!(message, Message::User { .. }) {
+            if let Some(request_id) = current_request_id.as_deref() {
+                if let Some(sequence) = session::message_sequence_for_request_content(
+                    &self.node,
+                    &session_id,
+                    request_id,
+                    &content,
+                )
+                .await?
+                {
+                    return Ok(sequence);
+                }
+            }
         }
 
         if matches!(turn_state, TranscriptTurnState::Idle) {
@@ -50,6 +72,7 @@ impl DefraSessionHook {
                 role,
                 &content,
                 reasoning,
+                current_request_id.as_deref(),
             )
             .await?;
             let mut state = self.state.lock().await;

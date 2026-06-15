@@ -749,6 +749,11 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.Template.system_render_stable"
       "system_render_stable proves a well-formed system template renders identically across requests that agree on run-constant values — the cacheable prefix is byte-stable. validateSystem_correct ties the apply-time guard to well-formedness. Fenced by tests/conformance/prompt_template.rs.")
       "compaction" []
+  , tagged (followUpCoverage
+      "follow_up_hook"
+      "PromptAssembly.Template.assembleWithContext_tail"
+      "assembleWithContext_tail proves the per-request assembly ends with exactly [contextPreamble, prompt] — the rendered <context> message rides immediately before the prompt. Fenced by the loop_stream::assemble_new_messages helper and its unit test assembles_context_immediately_before_prompt; a reorder there breaks the test and contradicts the proof.")
+      "compaction" []
   ]
 
 def followUpHookIds : List String :=
