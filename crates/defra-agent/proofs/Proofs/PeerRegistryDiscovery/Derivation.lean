@@ -242,6 +242,80 @@ theorem reciprocal_join_rejected_witness :
     ∃ tok : Token, tok.sigValid = false := by
   exact ⟨⟨"did:key:x", false, "nonce-x"⟩, rfl⟩
 
+/-! ## Join-gate leaf theorems (the "non-member rejected" guarantee)
+
+These two leaves make the `Transition.lean` docstring claim — "non-member invite
+rejected is a theorem, not prose" — literally true against the live
+`signedByMember`/`admitsJoin` gate, and are the live symbols the conformance
+module cites. -/
+
+/-- **Non-member invite rejected.** On the membership/registry arm (no TOFU
+bootstrap, `tofuBootstrap = false`), a token whose signature is invalid OR whose
+issuer is not an admitted member is NOT signed-by-member: `signedByMember` fails.
+So a non-member's invite (or a forged one) cannot be admitted through the
+membership arm — exactly the property `join_gate_rejects_non_live_member_when_registry_nonempty`
+exercises.
+
+Non-vacuous: the hypothesis (`tok.sigValid = false ∨ ¬ admittedMember tok.issuer s`)
+is realizable (e.g. a token issued by a non-member of a populated network), and the
+conclusion is a genuine consequence — `signedByMember` with `tofuBootstrap = false`
+requires BOTH `sigValid` and `admittedMember` (the bootstrap disjunct is
+unavailable when the flag is off), so failing either kills it. The positive case
+(an actual admitted member IS admitted) is witnessed by `replay_rejected_witness`,
+so this is not vacuously "everything is rejected". -/
+theorem non_member_invite_rejected {tok : Token} {s : DiscoveryState}
+    (h : tok.sigValid = false ∨ ¬ admittedMember tok.issuer s) :
+    ¬ signedByMember tok s false := by
+  rintro ⟨hsig, harm⟩
+  rcases h with hbad | hnm
+  · rw [hbad] at hsig; exact Bool.false_ne_true hsig
+  · rcases harm with hadm | ⟨htofu, _, _⟩
+    · exact hnm hadm
+    · exact Bool.false_ne_true htofu
+
+/-- **No join without an admissible token.** A `Transition.join` step from `pre`
+to `post` of `tok`/`tofu` (i.e. `h` equals *some* application of the `join`
+constructor on those arguments) implies `admitsJoin pre tok tofu` held. The plain
+`join` analogue of `reciprocal_join_still_gated`: the admission proof is the
+constructor's own precondition, pulled back out — it is NOT handed in as a free
+fact, so the conclusion genuinely rides on the constructor having been firable.
+
+Non-vacuous: `no_join_without_admissible_token_witness` exhibits a concrete join
+transition whose hypothesis holds, so the implication is not vacuously true. -/
+theorem no_join_without_admissible_token {pre post : DiscoveryState}
+    {tok : Token} {tofu : Bool}
+    (h : Transition pre post)
+    (h_is_join :
+      ∃ (hadm : admitsJoin pre tok tofu) (hpost : post = joinState pre tok),
+        h = Transition.join tok tofu hadm hpost) :
+    admitsJoin pre tok tofu :=
+  h_is_join.choose
+
+/-- Witness that `no_join_without_admissible_token`'s hypothesis space is
+inhabited: a concrete join transition that IS admissible (fresh, member-signed
+token). Without this the gating theorem could be vacuous. -/
+theorem no_join_without_admissible_token_witness :
+    ∃ (pre post : DiscoveryState) (tok : Token) (tofu : Bool),
+      Transition pre post ∧ admitsJoin pre tok tofu := by
+  let network : Network := ⟨"net-1", "did:key:admin", true⟩
+  let membership : Membership := ⟨"net-1", "did:key:a", true, "did:key:admin", true⟩
+  let pre : DiscoveryState :=
+    { self := "peer-self"
+    , network := network
+    , memberships := {membership}
+    , endpoints := ∅
+    , requests := ∅
+    , operatorDesired := ∅
+    , registryDesired := ∅
+    , consumedNonces := ∅ }
+  let tok : Token := ⟨"did:key:a", true, "nonce-1"⟩
+  have hadm : admitsJoin pre tok false := by
+    refine ⟨⟨rfl, Or.inl ?_⟩, Finset.not_mem_empty _⟩
+    refine ⟨rfl, membership, Finset.mem_singleton_self membership, rfl, rfl, ?_⟩
+    exact ⟨rfl, rfl, rfl⟩
+  exact ⟨pre, joinState pre tok, tok, false,
+    Transition.join tok false hadm rfl, hadm⟩
+
 /-- Replay rejection extends to reciprocal joins for free: a reciprocal join
 applies the same `joinState` mutator, so it burns the nonce identically and the
 same token can never be re-admitted (by any subsequent join OR reciprocal join).
