@@ -159,7 +159,7 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     );
     assert_eq!(set.get("peer_id").and_then(Value::as_str), Some("peer-one"));
 
-    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    let list = run_cli_json(&home, &["p2p", "pairings", "list", "--output", "json"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
     let row = list
         .get("pairings")
@@ -205,7 +205,7 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     );
     assert_eq!(remove.get("removed_count").and_then(Value::as_u64), Some(1));
 
-    let list = run_cli_json(&home, &["p2p", "pairings", "list"])?;
+    let list = run_cli_json(&home, &["p2p", "pairings", "list", "--output", "json"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
 
     Ok(())
@@ -553,7 +553,7 @@ async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<(
         .and_then(Value::as_array)
         .is_none_or(|profiles| profiles.is_empty()));
 
-    let list = run_cli_json(&home_b, &["p2p", "pairings", "list"])?;
+    let list = run_cli_json(&home_b, &["p2p", "pairings", "list", "--output", "json"])?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(1));
     let table = run_cli_text(&home_b, &["p2p", "pairings", "list", "--output", "table"])?;
     assert!(table.contains("PEER"));

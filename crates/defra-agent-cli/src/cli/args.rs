@@ -2032,7 +2032,7 @@ pub(crate) struct P2pPairingsListArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub(crate) output: OutputFormat,
 }
 
@@ -2992,7 +2992,7 @@ mod tests {
     }
 
     #[test]
-    fn every_deprecated_path_warns_and_still_parses() {
+    fn every_deprecated_path_warns() {
         use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
 
         for (path, replacement) in DEPRECATED {
@@ -3006,14 +3006,38 @@ mod tests {
                 warning.contains(&format!("use `defra-agent {}`", replacement)),
                 "warning did not mention replacement for {argv:?}: {warning}"
             );
-            Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+
+            // Some deprecated paths are still valid clap commands that merely
+            // warn (renamed, both spellings parse). Others were *removed* from
+            // clap entirely — the deprecation entry is the only guidance the
+            // user gets before clap rejects the unknown subcommand. We assert
+            // parseability only for the former group.
+            if deprecated_path_still_parses(path) {
+                Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+            } else {
+                assert!(
+                    Cli::try_parse_from(&argv).is_err(),
+                    "{argv:?}: expected removed deprecated path to fail clap parsing"
+                );
+            }
         }
+    }
+
+    /// Whether a deprecated path is still a parseable clap command (renamed,
+    /// not removed). Removed paths only carry a deprecation warning.
+    fn deprecated_path_still_parses(path: &[&str]) -> bool {
+        !matches!(path, ["p2p", "pair"] | ["p2p", "unpair"])
     }
 
     fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
         match path {
             ["config", "task"] => vec!["list".to_string()],
             ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
+            // Removed paths: args are irrelevant (clap rejects the subcommand),
+            // but provide harmless placeholders so the warning path is exercised.
+            ["p2p", "pair"] | ["p2p", "unpair"] => {
+                vec!["--peer".to_string(), "peer-1".to_string()]
+            }
             _ => panic!("no parse fixture for deprecated path: {path:?}"),
         }
     }
