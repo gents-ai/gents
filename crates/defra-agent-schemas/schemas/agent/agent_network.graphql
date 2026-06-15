@@ -1,0 +1,13 @@
+# A network's control-plane root record. Mirrors the cut-1 Lean `Network`
+# entity: a network is named by `network_id` (unique) and owned by `admin_did`.
+# `admin_sig` is the admin's signature over the network's defining fields
+# (network_id, admin_did, display_name, default_template, created_at), proving
+# the admin authored this network record.
+type AgentNetwork {
+    network_id: String @index(unique: true)
+    admin_did: String @index
+    display_name: String
+    default_template: String
+    created_at: String
+    admin_sig: String
+}

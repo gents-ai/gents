@@ -873,6 +873,99 @@ pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) ->
     }
 }
 
+/// Idempotent migration ensuring the `AgentNetwork` control-plane collection
+/// exists (cut-2 network membership, Task 1). A fresh database created from
+/// `schemas::ALL` already has this collection, so the migration is a no-op
+/// there; it only adds the schema on a database upgraded from before this
+/// landed (mirrors `ensure_consumed_invite_nonce_migrations`).
+pub async fn ensure_agent_network_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("AgentNetwork")
+        .context("get AgentNetwork collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::AGENT_NETWORK)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add AgentNetwork schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `NetworkMembership` control-plane
+/// collection exists (cut-2 network membership, Task 1). No-op on a fresh
+/// database (the collection comes from `schemas::ALL`); adds the schema on an
+/// upgraded database.
+pub async fn ensure_network_membership_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("NetworkMembership")
+        .context("get NetworkMembership collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::NETWORK_MEMBERSHIP)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add NetworkMembership schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `PeerEndpoint` control-plane collection
+/// exists (cut-2 network membership, Task 1). No-op on a fresh database (the
+/// collection comes from `schemas::ALL`); adds the schema on an upgraded
+/// database.
+pub async fn ensure_peer_endpoint_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("PeerEndpoint")
+        .context("get PeerEndpoint collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::PEER_ENDPOINT)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PeerEndpoint schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `NetworkJoinRequest` control-plane
+/// collection exists (cut-2 network membership, Task 1). No-op on a fresh
+/// database (the collection comes from `schemas::ALL`); adds the schema on an
+/// upgraded database.
+pub async fn ensure_network_join_request_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("NetworkJoinRequest")
+        .context("get NetworkJoinRequest collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::NETWORK_JOIN_REQUEST)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add NetworkJoinRequest schema"),
+    }
+}
+
 async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
     let existing = node
         .get_collection("PeerPairingApplied")
@@ -1444,6 +1537,18 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_consumed_invite_nonce_migrations(node.clone())
         .await
         .context("ensure ConsumedInviteNonce migrations")?;
+    ensure_agent_network_migrations(node.clone())
+        .await
+        .context("ensure AgentNetwork migrations")?;
+    ensure_network_membership_migrations(node.clone())
+        .await
+        .context("ensure NetworkMembership migrations")?;
+    ensure_peer_endpoint_migrations(node.clone())
+        .await
+        .context("ensure PeerEndpoint migrations")?;
+    ensure_network_join_request_migrations(node.clone())
+        .await
+        .context("ensure NetworkJoinRequest migrations")?;
     ensure_tool_service_registry_migrations(node.clone())
         .await
         .context("ensure ToolServiceRegistry migrations")?;
