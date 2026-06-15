@@ -35,7 +35,9 @@ theorem fromContract_toContract (phase : DiscoveryPhase) :
 
 end DiscoveryPhase
 
-/-- Stringly-typed transition kinds emitted by the discovery reconciler. -/
+/-- Stringly-typed transition kinds emitted by the discovery reconciler. One
+constructor per `Transition` constructor (`derive`, `join`, `reciprocalJoin`,
+`submitRequest`, `approveRequest`, `revoke`, `operatorWrite`). -/
 inductive TransitionKind where
   | derive
   | join
@@ -44,7 +46,9 @@ inductive TransitionKind where
   distinct kind so the Rust bridge cannot route a reciprocal join down a path
   that skips `decideAdmitsJoin` — it shares `join`'s admission decision. -/
   | reciprocalJoin
-  | removeEntry
+  | submitRequest
+  | approveRequest
+  | revoke
   | operatorWrite
   deriving DecidableEq, Repr
 
@@ -54,7 +58,9 @@ def fromString? : String → Option TransitionKind
   | "derive" => some .derive
   | "join" => some .join
   | "reciprocalJoin" => some .reciprocalJoin
-  | "removeEntry" => some .removeEntry
+  | "submitRequest" => some .submitRequest
+  | "approveRequest" => some .approveRequest
+  | "revoke" => some .revoke
   | "operatorWrite" => some .operatorWrite
   | _ => none
 
@@ -62,7 +68,9 @@ def toString : TransitionKind → String
   | .derive => "derive"
   | .join => "join"
   | .reciprocalJoin => "reciprocalJoin"
-  | .removeEntry => "removeEntry"
+  | .submitRequest => "submitRequest"
+  | .approveRequest => "approveRequest"
+  | .revoke => "revoke"
   | .operatorWrite => "operatorWrite"
 
 theorem fromString_toString (k : TransitionKind) :
@@ -72,13 +80,16 @@ theorem fromString_toString (k : TransitionKind) :
 end TransitionKind
 
 /-- Executable coarse transition relation for conformance extraction. A derive
-step settles; a registry edit (join/removeEntry) unsettles the derived view;
-an operator write leaves the derived view as-is. -/
+step settles; any membership/request edit (join, reciprocalJoin, submitRequest,
+approveRequest, revoke) unsettles the derived view; an operator write leaves the
+derived view as-is. -/
 def step? : DiscoveryPhase → TransitionKind → Option DiscoveryPhase
   | _, .derive => some .settled
   | _, .join => some .unsettled
   | _, .reciprocalJoin => some .unsettled
-  | _, .removeEntry => some .unsettled
+  | _, .submitRequest => some .unsettled
+  | _, .approveRequest => some .unsettled
+  | _, .revoke => some .unsettled
   | phase, .operatorWrite => some phase
 
 /-! ## Executable join-admission decision (mirrors Rust `decide_join_admission`)
@@ -102,5 +113,35 @@ theorem decideAdmitsJoin_agrees (s : DiscoveryState) (tok : Token) (tofuBootstra
     decideAdmitsJoin s tok tofuBootstrap = true ↔ admitsJoin s tok tofuBootstrap := by
   unfold decideAdmitsJoin
   exact decide_eq_true_iff
+
+/-! ## Executable membership / derivation decisions
+
+The Rust bridge also decides, with single booleans, whether a network's admin
+self-attestation verifies, whether a DID is an admitted member, and whether an
+endpoint is materializable. These mirror the corresponding Props, each fenced by
+an `_agrees` lemma so the executable decision and the relation cannot diverge. -/
+
+/-- The network record's admin self-attestation verifies. -/
+def decideValidNetwork (n : Network) : Bool := n.adminSigValid
+
+/-- A DID is an admitted member of `s`'s network. -/
+def decideAdmittedMember (did : Did) (s : DiscoveryState) : Bool := decide (admittedMember did s)
+
+/-- An endpoint the derivation materializes. -/
+def decideMaterializable (ep : Endpoint) (s : DiscoveryState) : Bool := decide (materializableEndpoint ep s)
+
+/-- `decideValidNetwork` agrees with the `validNetwork` predicate. -/
+theorem decideValidNetwork_agrees (n : Network) :
+    decideValidNetwork n = true ↔ validNetwork n := by
+  unfold decideValidNetwork validNetwork
+  exact Iff.rfl
+
+theorem decideAdmittedMember_agrees (did) (s) :
+    decideAdmittedMember did s = true ↔ admittedMember did s := by
+  unfold decideAdmittedMember; exact decide_eq_true_iff
+
+theorem decideMaterializable_agrees (ep) (s) :
+    decideMaterializable ep s = true ↔ materializableEndpoint ep s := by
+  unfold decideMaterializable; exact decide_eq_true_iff
 
 end PeerRegistryDiscovery
