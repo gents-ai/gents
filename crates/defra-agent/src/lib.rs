@@ -49,6 +49,7 @@ pub mod meta_tools;
 pub mod migration;
 pub mod native_executor_status;
 pub mod oneshot;
+pub mod periodic_recovery;
 pub mod prompt;
 pub(crate) mod registry;
 pub mod retry;
@@ -132,6 +133,10 @@ pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
+pub use periodic_recovery::{
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
+    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
