@@ -16,26 +16,6 @@ use crate::retry::RetryPolicy;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::watcher::AgentRequest;
 
-/// Force the legacy Chat Completions client for OpenAI-compatible backends
-/// (`DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1`). Default (unset) is the Responses
-/// API. Used by backends that don't serve `/v1/responses` and by the CLI
-/// integration tests whose mock + assertions are chat-format.
-fn force_chat_completions() -> bool {
-    // defra-agent's own lib unit tests (compiled with `cfg(test)`) boot in-process
-    // agents against Chat Completions mocks, so default to chat there. Integration
-    // tests link defra-agent WITHOUT `cfg(test)`, so they set the env explicitly;
-    // production + the real CLI binary default to the Responses API.
-    if cfg!(test) {
-        return true;
-    }
-    matches!(
-        std::env::var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("true")
-    )
-}
-
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
@@ -148,28 +128,17 @@ impl RuntimeContext {
                     "building OpenAI-compatible completion client for behavior {} against {}",
                     behavior.behavior_id, behavior.backend_endpoint
                 );
-                // Default OpenAI-compatible inference to the Responses API:
-                // rig's `openai::Client` defaults `Completion = Capable<ResponsesCompletionModel>`
-                // (vs `CompletionsClient` = Chat Completions). The owned loop already
-                // drives a `ResponsesCompletionModel` today via the ChatGptCodex path
-                // (`build_responses_client`), so this swap reuses that machinery. The
-                // Responses API gives first-class, round-trippable structured reasoning
-                // (`encrypted_content`) instead of the unstandardized chat side-channel.
-                //
-                // `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1` forces the legacy Chat
-                // Completions client (`CompletionsClient`) — for OpenAI-compatible
-                // backends that don't serve `/v1/responses`, and for the CLI
-                // integration tests whose mock + assertions are chat-format. The
-                // owned loop is identical for both, so this only changes the wire API.
-                if force_chat_completions() {
+                // The owned loop is identical for Responses and Chat Completions;
+                // this branch only chooses the OpenAI-compatible wire API.
+                if crate::inference_http::force_openai_chat_completions() {
                     let client: rig::providers::openai::CompletionsClient<
                         crate::inference_http::SessionTaggingHttpClient,
-                    > = rig::providers::openai::CompletionsClient::builder()
-                        .api_key(&api_key)
-                        .base_url(&behavior.backend_endpoint)
-                        .http_client(crate::inference_http::SessionTaggingHttpClient::default())
-                        .build()
-                        .with_context(|| build_context.clone())?;
+                    > = crate::inference_http::build_openai_chat_completions_client(
+                        &api_key,
+                        &behavior.backend_endpoint,
+                        crate::inference_http::SessionTaggingHttpClient::default(),
+                    )
+                    .with_context(|| build_context.clone())?;
                     self.run_behavior_with_client(
                         behavior,
                         request_rx,
@@ -184,12 +153,13 @@ impl RuntimeContext {
                 } else {
                     let client: rig::providers::openai::Client<
                         crate::inference_http::SessionTaggingHttpClient,
-                    > = rig::providers::openai::Client::builder()
-                        .api_key(&api_key)
-                        .base_url(&behavior.backend_endpoint)
-                        .http_client(crate::inference_http::SessionTaggingHttpClient::default())
-                        .build()
-                        .with_context(|| build_context.clone())?;
+                    > = crate::inference_http::build_openai_responses_client(
+                        &api_key,
+                        &behavior.backend_endpoint,
+                        crate::inference_http::SessionTaggingHttpClient::default(),
+                        Default::default(),
+                    )
+                    .with_context(|| build_context.clone())?;
                     self.run_behavior_with_client(
                         behavior,
                         request_rx,

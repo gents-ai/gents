@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use reqwest::header::HeaderName;
 use rig::http_client::{
@@ -25,6 +26,65 @@ use rig::wasm_compat::WasmCompatSend;
 
 /// Header carrying the agent session id on outbound inference requests.
 const SESSION_ID_HEADER: &str = "x-session-id";
+
+/// Force the legacy Chat Completions client for OpenAI-compatible backends.
+///
+/// Default production behavior is the Responses API. The override keeps
+/// compatibility with backends that do not serve `/v1/responses` and with test
+/// mocks whose assertions are chat-format.
+pub(crate) fn force_openai_chat_completions() -> bool {
+    // defra-agent's own lib unit tests (compiled with `cfg(test)`) boot
+    // in-process agents against Chat Completions mocks, so default to chat
+    // there. Integration tests link defra-agent WITHOUT `cfg(test)`, so they
+    // set the env explicitly; production + the real CLI binary default to the
+    // Responses API.
+    if cfg!(test) {
+        return true;
+    }
+    openai_chat_completions_override_enabled(
+        std::env::var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn openai_chat_completions_override_enabled(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("true"))
+}
+
+pub(crate) fn build_openai_responses_client<H>(
+    api_key: &str,
+    base_url: &str,
+    http_client: H,
+    http_headers: HeaderMap,
+) -> Result<rig::providers::openai::Client<H>>
+where
+    H: Default + HttpClientExt,
+{
+    rig::providers::openai::Client::builder()
+        .api_key(api_key)
+        .base_url(base_url)
+        .http_headers(http_headers)
+        .http_client(http_client)
+        .build()
+        .context("building OpenAI Responses client")
+}
+
+pub(crate) fn build_openai_chat_completions_client<H>(
+    api_key: &str,
+    base_url: &str,
+    http_client: H,
+) -> Result<rig::providers::openai::CompletionsClient<H>>
+where
+    H: Default + HttpClientExt,
+{
+    rig::providers::openai::CompletionsClient::builder()
+        .api_key(api_key)
+        .base_url(base_url)
+        .http_client(http_client)
+        .build()
+        .context("building OpenAI Chat Completions client")
+}
 
 /// A [`HttpClientExt`] that injects [`SESSION_ID_HEADER`] from the current
 /// admission request context onto each outbound request, then delegates to the
@@ -136,6 +196,36 @@ impl HttpClientExt for SessionTaggingHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_completions_override_parses_only_explicit_true_values() {
+        assert!(openai_chat_completions_override_enabled(Some("1")));
+        assert!(openai_chat_completions_override_enabled(Some("true")));
+        assert!(!openai_chat_completions_override_enabled(Some("TRUE")));
+        assert!(!openai_chat_completions_override_enabled(Some("0")));
+        assert!(!openai_chat_completions_override_enabled(Some("false")));
+        assert!(!openai_chat_completions_override_enabled(None));
+    }
+
+    #[test]
+    fn openai_client_builders_accept_session_tagging_transport() {
+        let _responses: rig::providers::openai::Client<SessionTaggingHttpClient> =
+            build_openai_responses_client(
+                "test-key",
+                "http://example.test/v1",
+                SessionTaggingHttpClient::default(),
+                HeaderMap::default(),
+            )
+            .expect("Responses client should build");
+
+        let _chat_completions: rig::providers::openai::CompletionsClient<SessionTaggingHttpClient> =
+            build_openai_chat_completions_client(
+                "test-key",
+                "http://example.test/v1",
+                SessionTaggingHttpClient::default(),
+            )
+            .expect("Chat Completions client should build");
+    }
 
     #[test]
     fn tag_is_noop_without_session_context() {
