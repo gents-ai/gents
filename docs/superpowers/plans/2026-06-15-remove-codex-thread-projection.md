@@ -591,11 +591,13 @@ git commit -m "feat(codex): real InferenceCall token usage helpers with proxy fa
 - Modify: `crates/defra-agent-cli/src/commands/codex_shim/thread_projection/storage.rs` (drop projection row/IO)
 - Modify: `crates/defra-agent-cli/src/commands/codex_shim/thread_projection/json.rs` (git derive + `started` fallback)
 
-- [ ] **Step 1: Drop projection storage**
+- [ ] **Step 1: Drop the projection write/list IO no longer used after this task**
 
-In `storage.rs` delete: `ProjectionRow`, `ProjectionUpdate` (struct + impl), `upsert_projection`, `update_projection_loaded_cwd`, `load_projection`, `list_projection_rows`, `default_memory_mode`, `empty_json_object`. Keep: `ensure_agent_session`, `ensure_agent_session_pinning`, `load_conversation`, `load_scoped_session`, `list_scoped_sessions`, `SessionRow`.
+In `storage.rs` delete: `ProjectionUpdate` (struct + impl), `upsert_projection`, `update_projection_loaded_cwd`, `list_projection_rows`. Keep: `ensure_agent_session`, `ensure_agent_session_pinning`, `load_conversation`, `load_scoped_session`, `list_scoped_sessions`, `SessionRow`.
 
-> This is where the dead `rollback_user_turn` field disappears — it existed only on `ProjectionUpdate`/the projection mutations being deleted here. No other code references it (verified in the spec audit).
+> **Do NOT delete `load_projection`, `ProjectionRow`, `default_memory_mode`, or `empty_json_object` here** — `goal.rs` still imports `load_projection` (`goal.rs:11`) and would fail to compile. Those are deleted in Task 7 (Goal), the last consumer, after `goal.rs` stops using them. `ProjectionRow` keeps `default_memory_mode`/`empty_json_object` alive via its serde defaults until then.
+
+> This is where the dead `rollback_user_turn` field disappears — it existed only on `ProjectionUpdate` being deleted here. No other code references it (verified in the spec audit).
 
 - [ ] **Step 2: Rebuild `CodexThreadRecord` assembly in `thread_projection.rs`**
 
@@ -604,7 +606,7 @@ The public record keeps its shape so callers are unchanged, but fields now come 
 Add an internal assembler (`thread_projection.rs` is the module root, so import its own `storage` submodule with `use storage::{...}`; the git helper is reached by its full path):
 
 ```rust
-use storage::{list_scoped_sessions, load_conversation, load_scoped_session, SessionRow};
+use storage::{list_scoped_sessions, load_conversation, load_scoped_session};
 use crate::commands::codex_shim::host_runtime::git::thread_git_info;
 
 async fn assemble_record(
@@ -623,7 +625,6 @@ async fn assemble_record(
         memory_mode: state.thread_memory_mode(session_id).await,
         name: String::new(), // name derives from conversation.title in json.rs
         settings_json: state.thread_settings(session_id).await,
-        goal_json: String::new(), // goal serves from the in-process map in goal.rs
         git_info, // NEW field — see Step 3
         projection_started: started,
         conversation,
@@ -632,29 +633,25 @@ async fn assemble_record(
 ```
 
 Adjust the `CodexThreadRecord` struct in `thread_projection.rs`:
-- Remove fields: `goal_json` (if unused by readers — `goal.rs` now reads the sidecar; keep `goal_json` only if json.rs needs it; it does not — remove it), `git_info_json` (replaced by structured `git_info: Option<Value>`), `projection_created_at`, `projection_updated_at`.
+- Remove fields: `goal_json` (goal now serves from the sidecar in `goal.rs`; no reader uses `record.goal_json`), `git_info_json` (replaced by structured `git_info: Option<Value>`), `projection_created_at`, `projection_updated_at`.
 - Add: `git_info: Option<serde_json::Value>`, `projection_started: Option<String>` (the `AgentSession.started` timestamp fallback).
 - Keep: `session_id`, `cwd`, `archived`, `loaded`, `memory_mode`, `name`, `settings_json`, `conversation`.
 
 > Decision note: `name` and `memory_mode`/`settings_json` are still record fields because `json.rs`/handlers read them. `name` stays `String::new()` here — `json.rs` already falls back to `conversation.title`, which is now the canonical name. `set_codex_thread_name` (Task 6) writes the conversation, so the title carries the name.
 
-`load_codex_thread`:
+`load_codex_thread` — **the scoped session is the gate**. A conversation-only or pre-upgrade (`agent_did`-less) row must NOT load; only when a scoped `AgentSession` exists do we left-join the conversation:
 ```rust
 pub(super) async fn load_codex_thread(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<CodexThreadRecord>> {
-    let session = load_scoped_session(state, thread_id).await?;
+    let Some(session) = load_scoped_session(state, thread_id).await? else {
+        return Ok(None);
+    };
     let conversation = load_conversation(state, thread_id).await?;
-    match (session, conversation) {
-        (None, None) => Ok(None),
-        (session, conversation) => {
-            let started = session.and_then(|s| s.started);
-            Ok(Some(
-                assemble_record(state, thread_id, started, conversation).await,
-            ))
-        }
-    }
+    Ok(Some(
+        assemble_record(state, thread_id, session.started, conversation).await,
+    ))
 }
 ```
 
@@ -675,13 +672,13 @@ pub(super) async fn create_codex_thread(
 }
 ```
 
-`resume_codex_thread` (cwd resolution: explicit override else the sidecar's current cwd; persistence via sidecar + ensure_agent_session):
+`resume_codex_thread` — **returns `Option`** so the handler can answer a scoped miss with a clean JSON-RPC error instead of unwinding (which closes the websocket). `ensure_agent_session` creates a scoped session for genuinely-new ids; a pre-upgrade (`agent_did`-less) id takes the upsert update-path (no `agent_did` added, since it is `@immutable`), so `load_codex_thread` then returns `None`:
 ```rust
 pub(super) async fn resume_codex_thread(
     state: &ShimState,
     thread_id: &str,
     cwd_override: Option<&str>,
-) -> Result<CodexThreadRecord> {
+) -> Result<Option<CodexThreadRecord>> {
     let cwd = match cwd_override.filter(|v| !v.trim().is_empty()) {
         Some(v) => PathBuf::from(v),
         None => state.thread_cwd(thread_id).await,
@@ -689,9 +686,7 @@ pub(super) async fn resume_codex_thread(
     ensure_agent_session(state, thread_id).await?;
     state.set_thread_cwd(thread_id, cwd).await;
     state.set_thread_loaded(thread_id, true).await;
-    load_codex_thread(state, thread_id)
-        .await?
-        .with_context(|| format!("loading resumed Codex thread {thread_id}"))
+    load_codex_thread(state, thread_id).await
 }
 ```
 
@@ -750,7 +745,60 @@ In `json.rs`:
 - In `thread_created_at`, replace `.or(record.projection_created_at.as_deref())` with `.or(record.projection_started.as_deref())`.
 - In `thread_updated_at`, replace both `record.projection_updated_at`/`record.projection_created_at` references with `record.projection_started.as_deref()` (conversation timestamps still take precedence; `started` is the zero-turn fallback).
 
-- [ ] **Step 4: Build**
+- [ ] **Step 4: Update the other readers of the removed record fields**
+
+The struct field rename ripples beyond `json.rs`:
+
+- `thread_routes.rs` `thread_sort_timestamp` (`:282-295`): replace both `record.projection_created_at.clone()` and `record.projection_updated_at.clone()` with `record.projection_started.clone()`. Final form:
+  ```rust
+  fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSortKey) -> String {
+      let conversation = record.conversation.as_ref();
+      match sort_key {
+          codex::ThreadSortKey::CreatedAt => conversation
+              .and_then(|c| c.created_at.clone())
+              .or_else(|| record.projection_started.clone()),
+          codex::ThreadSortKey::UpdatedAt => conversation
+              .and_then(|c| c.updated_at.clone())
+              .or_else(|| conversation.and_then(|c| c.created_at.clone()))
+              .or_else(|| record.projection_started.clone()),
+      }
+      .unwrap_or_default()
+  }
+  ```
+- `history_projection.rs` summary (`:406`): replace `"gitInfo": codex_git_info_summary_json(&record.git_info_json),` with `"gitInfo": record.git_info.clone(),`. Delete the now-unused `codex_git_info_summary_json` function (or, if its shaping differs from `thread_git_info`'s output and a summary-specific shape is required, have it take `&Option<serde_json::Value>` — but the derived `git_info` already has `sha`/`branch`/`originUrl`, so direct use is correct).
+- `history_projection.rs` fallback record construction (`:826-836`): this builds a `CodexThreadRecord` literal with the old fields. Replace `git_info_json: "{}".to_string(),`, `projection_created_at: None,`, `projection_updated_at: None,` with `git_info: None,` and `projection_started: None,`; remove `goal_json: ...` if present.
+
+- [ ] **Step 5: Handle the `resume_codex_thread` Option in callers**
+
+`resume_codex_thread` now returns `Option`. Update both call sites in `handlers/thread.rs` to answer a scoped miss with `JSONRPC_INVALID_PARAMS` instead of `?`-unwinding:
+
+- `ThreadResume` (~:66):
+  ```rust
+  let Some(record) = resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?
+  else {
+      return send_error(
+          outbound,
+          request_id,
+          JSONRPC_INVALID_PARAMS,
+          format!("unknown Codex thread `{}`", params.thread_id),
+      )
+      .await;
+  };
+  ```
+- `ThreadUnarchive` (~:252):
+  ```rust
+  let Some(record) = resume_codex_thread(state, &params.thread_id, None).await? else {
+      return send_error(
+          outbound,
+          request_id,
+          JSONRPC_INVALID_PARAMS,
+          format!("unknown Codex thread `{}`", params.thread_id),
+      )
+      .await;
+  };
+  ```
+
+- [ ] **Step 6: Build**
 
 Run: `cargo build -p defra-agent-cli`
 Expected: compiles. Fix any caller that referenced removed fields (`git_info_json`, `projection_created_at`, `projection_updated_at`, `goal_json`) — search:
@@ -758,10 +806,10 @@ Expected: compiles. Fix any caller that referenced removed fields (`git_info_jso
 grep -rn "git_info_json\|projection_created_at\|projection_updated_at\|\.goal_json" crates/defra-agent-cli/src/commands/codex_shim/
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/defra-agent-cli/src/commands/codex_shim/thread_projection.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection/
+git add crates/defra-agent-cli/src/commands/codex_shim/thread_projection.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection/ crates/defra-agent-cli/src/commands/codex_shim/thread_routes.rs crates/defra-agent-cli/src/commands/codex_shim/history_projection.rs crates/defra-agent-cli/src/commands/codex_shim/handlers/thread.rs
 git commit -m "refactor(codex): derive thread record from AgentSession/AgentConversation + sidecar + git"
 ```
 
@@ -1029,16 +1077,20 @@ pub(in crate::commands::codex_shim) struct StoredGoal {
 ```
 Delete `into_codex`, `decode_stored_goal`, `update_goal_json`, and the `load_projection` import (no longer used).
 
-- [ ] **Step 3: Build**
+- [ ] **Step 3: Delete the now-unused projection read storage (deferred from Task 6)**
+
+`goal.rs` was the last consumer of `load_projection`. Now delete from `storage.rs`: `load_projection`, `ProjectionRow`, `default_memory_mode`, `empty_json_object`. After this, `storage.rs` contains only `ensure_agent_session`, `ensure_agent_session_pinning`, `load_conversation`, `load_scoped_session`, `list_scoped_sessions`, `SessionRow` (+ their imports). Drop any now-unused imports (`absolute_path`, `serde::Deserialize` if unreferenced — let the compiler guide).
+
+- [ ] **Step 4: Build**
 
 Run: `cargo build -p defra-agent-cli`
-Expected: compiles.
+Expected: compiles. (`grep -rn "load_projection\|ProjectionRow" crates/defra-agent-cli/src/commands/codex_shim/` returns nothing.)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent-cli/src/commands/codex_shim.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection/goal.rs
-git commit -m "refactor(codex): goal served from sidecar with real token/time usage"
+git add crates/defra-agent-cli/src/commands/codex_shim.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection/goal.rs crates/defra-agent-cli/src/commands/codex_shim/thread_projection/storage.rs
+git commit -m "refactor(codex): goal served from sidecar with real token/time usage; drop projection read storage"
 ```
 
 ---
@@ -1227,6 +1279,17 @@ assert_eq!(row["title_source"], serde_json::json!("user"));
 ```
 Adapt variable names to the surrounding test. For any assertion that checked `cwd`/`memory_mode`/`archived` via the projection, assert via the thread get/list RPC response instead (those fields appear in `codex_thread_json`).
 
+- [ ] **Step 1b: Migrate the `ThreadMetadataUpdate` git-echo assertions**
+
+Two existing tests send `ThreadMetadataUpdate` with a fake client git sha and assert the response echoes it back (`cli_codex_shim.rs:405` → `git.sha == Some("abc123")`; `:1787` → `git.sha == Some(git_sha)`). Task 7 makes `set_codex_thread_git_info` **ignore** client-supplied git and derive from cwd, so these assertions will fail.
+
+Migrate each: run the thread under a temp git repo with a known HEAD sha (init + commit), then assert the response's `git_info.sha` equals the **real** repo sha (and `branch` the real branch), not the client-sent value. Concretely, for each test:
+- Set the thread's cwd (via `ThreadStart`/`ThreadSettingsUpdate` `cwd`) to a `tempfile::TempDir` where you've run `git init`, `git commit --allow-empty -m x`, and captured `git rev-parse HEAD`.
+- Keep the `ThreadMetadataUpdate` call (it still returns the record) but change the assertion to compare against the captured real sha.
+- The `:1787` test also asserts `thread.name == thread_name`; keep that assertion (name now comes from `AgentConversation.title` via the rename path — unaffected, since that test sets the name through `ThreadSetName`/metadata name, not git).
+
+If isolating a temp git repo per test is heavy, the alternative is to drop the sha-echo assertion entirely and assert only that `ThreadMetadataUpdate` succeeds (the derive path is covered by the dedicated test in Step 5). Prefer the real-repo assertion.
+
 - [ ] **Step 2: Add — zero-turn thread is listed**
 
 ```rust
@@ -1250,16 +1313,21 @@ async fn codex_rename_before_first_turn_persists() -> anyhow::Result<()> {
 }
 ```
 
-- [ ] **Step 4: Add — memory_mode defaults to disabled**
+- [ ] **Step 4: Add — memory_mode defaults to disabled (unit test on the accessor)**
+
+`memory_mode` is **not** serialized into the thread JSON and there is no get-memory-mode RPC, so the default is not observable through the protocol. Cover it with a unit test on the `ShimState` accessor instead. Add a `#[cfg(test)] mod` near the `CodexSidecar`/`ShimState` accessors in `codex_shim.rs` (or extend an existing test module there):
 
 ```rust
 #[tokio::test]
-async fn codex_memory_mode_defaults_disabled() -> anyhow::Result<()> {
-    // ThreadStart -> ThreadGet; assert thread.memoryMode == "disabled"
-    // (or whatever field codex_thread_json exposes; if memory_mode is not in
-    // the thread JSON, assert via the get-memory-mode RPC).
+async fn thread_memory_mode_defaults_disabled() {
+    // A sidecar with no entry for the thread returns "disabled".
+    let sidecar = std::sync::Arc::new(tokio::sync::Mutex::new(CodexSidecar::default()));
+    let mode = sidecar.lock().await.memory_mode.get("t1").cloned()
+        .unwrap_or_else(|| "disabled".to_string());
+    assert_eq!(mode, "disabled");
 }
 ```
+If a full `ShimState` is cheap to construct in tests, prefer asserting `state.thread_memory_mode("t1").await == "disabled"` directly. Either way the assertion is the same default.
 
 - [ ] **Step 5: Add — git info derived; non-git yields none**
 
