@@ -179,6 +179,16 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let thread_id = thread_start.thread.id.clone();
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
+    assert_eq!(
+        thread_start.cwd.as_path(),
+        home_dir.as_path(),
+        "thread/start should return the effective cwd without persisting it as sidecar state"
+    );
+    assert_eq!(
+        thread_start.thread.cwd.as_path(),
+        home_dir.as_path(),
+        "thread payload should carry the effective cwd"
+    );
 
     let projection_response = graphql_query(
         &graphql,
@@ -186,7 +196,6 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             r#"{{
                 CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
-                    cwd
                     archived
                     loaded
                 }}
@@ -205,11 +214,6 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(
         projection.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
-    );
-    let expected_cwd = home_dir.display().to_string();
-    assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
     );
     assert_eq!(
         projection.get("archived").and_then(Value::as_bool),
@@ -278,6 +282,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let thread_read: codex::ThreadReadResponse =
         read_typed_response(&mut ws, request_id(32)).await?;
     assert_eq!(thread_read.thread.id, thread_id);
+    assert_eq!(thread_read.thread.cwd.as_path(), home_dir.as_path());
 
     send_client_request(
         &mut ws,
@@ -1811,7 +1816,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             r#"{{
                 CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
-                    cwd
                     archived
                     loaded
                     memory_mode
@@ -1835,10 +1839,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     assert_eq!(
         projection.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
-    );
-    assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
     );
     assert_eq!(
         projection.get("archived").and_then(Value::as_bool),
@@ -1918,6 +1918,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     let thread_read: codex::ThreadReadResponse =
         read_typed_response(&mut ws, request_id(406)).await?;
     assert_eq!(thread_read.thread.id, thread_id);
+    assert_eq!(thread_read.thread.cwd.as_path(), smoke.home_dir.as_path());
     assert_eq!(
         thread_read.thread.name.as_deref(),
         Some(thread_name.as_str())

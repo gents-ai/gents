@@ -12,7 +12,7 @@ use super::super::protocol::{
 };
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
-    ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
+    ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread_with_cwd_hint,
     loaded_codex_thread_ids, resume_codex_thread, set_codex_thread_archived,
     set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
@@ -87,53 +87,68 @@ pub(super) async fn handle_thread_request(
         }
         codex::ClientRequest::ThreadList {
             request_id, params, ..
-        } => match thread_routes::list_threads_response(state, params).await {
-            Ok(response) => {
-                send_typed_json_result::<codex::ThreadListResponse>(outbound, request_id, response)
+        } => {
+            let cwd_hints = connection.thread_cwds.lock().await.clone();
+            match thread_routes::list_threads_response(state, params, &cwd_hints).await {
+                Ok(response) => {
+                    send_typed_json_result::<codex::ThreadListResponse>(
+                        outbound, request_id, response,
+                    )
                     .await
+                }
+                Err(err) => send_error(outbound, request_id, err.code, err.message).await,
             }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
+        }
         codex::ClientRequest::ThreadFork {
             request_id, params, ..
-        } => match thread_routes::fork_thread_response(state, params).await {
-            Ok((record, response)) => {
-                let thread_for_notification: codex::Thread = serde_json::from_value(
-                    response
-                        .get("thread")
-                        .cloned()
-                        .unwrap_or_else(|| codex_thread_json(&record, false)),
-                )
-                .context("validating forked thread notification")?;
-                connection
-                    .thread_cwds
-                    .lock()
-                    .await
-                    .insert(record.session_id.clone(), record.cwd.clone());
-                send_typed_json_result::<codex::ThreadForkResponse>(outbound, request_id, response)
+        } => {
+            let cwd_hints = connection.thread_cwds.lock().await.clone();
+            match thread_routes::fork_thread_response(state, params, &cwd_hints).await {
+                Ok((record, response)) => {
+                    let thread_for_notification: codex::Thread = serde_json::from_value(
+                        response
+                            .get("thread")
+                            .cloned()
+                            .unwrap_or_else(|| codex_thread_json(&record, false)),
+                    )
+                    .context("validating forked thread notification")?;
+                    connection
+                        .thread_cwds
+                        .lock()
+                        .await
+                        .insert(record.session_id.clone(), record.cwd.clone());
+                    send_typed_json_result::<codex::ThreadForkResponse>(
+                        outbound, request_id, response,
+                    )
                     .await?;
-                send_notification(
-                    outbound,
-                    state,
-                    codex::ServerNotification::ThreadStarted(codex::ThreadStartedNotification {
-                        thread: thread_for_notification,
-                    }),
-                )
-                .await
+                    send_notification(
+                        outbound,
+                        state,
+                        codex::ServerNotification::ThreadStarted(
+                            codex::ThreadStartedNotification {
+                                thread: thread_for_notification,
+                            },
+                        ),
+                    )
+                    .await
+                }
+                Err(err) => send_error(outbound, request_id, err.code, err.message).await,
             }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
+        }
         codex::ClientRequest::ThreadSearch {
             request_id, params, ..
-        } => match thread_routes::search_threads_response(state, params).await {
-            Ok(response) => {
-                send_typed_json_result::<codex::ThreadSearchResponse>(
-                    outbound, request_id, response,
-                )
-                .await
+        } => {
+            let cwd_hints = connection.thread_cwds.lock().await.clone();
+            match thread_routes::search_threads_response(state, params, &cwd_hints).await {
+                Ok(response) => {
+                    send_typed_json_result::<codex::ThreadSearchResponse>(
+                        outbound, request_id, response,
+                    )
+                    .await
+                }
+                Err(err) => send_error(outbound, request_id, err.code, err.message).await,
             }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
+        }
         codex::ClientRequest::ThreadLoadedList { request_id, .. } => {
             send_result(
                 outbound,
@@ -148,7 +163,16 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadRead {
             request_id, params, ..
         } => {
-            let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
+            let cwd_hint = connection
+                .thread_cwds
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned();
+            let Some(record) =
+                load_codex_thread_with_cwd_hint(state, &params.thread_id, cwd_hint.as_deref())
+                    .await?
+            else {
                 return send_error(
                     outbound,
                     request_id,
@@ -174,7 +198,16 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadTurnsList {
             request_id, params, ..
         } => {
-            let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
+            let cwd_hint = connection
+                .thread_cwds
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned();
+            let Some(record) =
+                load_codex_thread_with_cwd_hint(state, &params.thread_id, cwd_hint.as_deref())
+                    .await?
+            else {
                 return send_error(
                     outbound,
                     request_id,
@@ -196,7 +229,16 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadTurnsItemsList {
             request_id, params, ..
         } => {
-            let Some(record) = load_codex_thread(state, &params.thread_id).await? else {
+            let cwd_hint = connection
+                .thread_cwds
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned();
+            let Some(record) =
+                load_codex_thread_with_cwd_hint(state, &params.thread_id, cwd_hint.as_deref())
+                    .await?
+            else {
                 return send_error(
                     outbound,
                     request_id,
@@ -286,9 +328,20 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadMetadataUpdate {
             request_id, params, ..
         } => {
-            let record = set_codex_thread_git_info(state, &params.thread_id, &params.git_info)
-                .await?
-                .with_context(|| format!("unknown Codex thread `{}`", params.thread_id))?;
+            let cwd_hint = connection
+                .thread_cwds
+                .lock()
+                .await
+                .get(&params.thread_id)
+                .cloned();
+            let record = set_codex_thread_git_info(
+                state,
+                &params.thread_id,
+                &params.git_info,
+                cwd_hint.as_deref(),
+            )
+            .await?
+            .with_context(|| format!("unknown Codex thread `{}`", params.thread_id))?;
             send_typed_json_result::<codex::ThreadMetadataUpdateResponse>(
                 outbound,
                 request_id,
@@ -324,7 +377,10 @@ pub(super) async fn handle_thread_request(
         } => match params {
             codex::GetConversationSummaryParams::ThreadId { conversation_id } => {
                 let thread_id = conversation_id.to_string();
-                let Some(record) = load_codex_thread(state, &thread_id).await? else {
+                let cwd_hint = connection.thread_cwds.lock().await.get(&thread_id).cloned();
+                let Some(record) =
+                    load_codex_thread_with_cwd_hint(state, &thread_id, cwd_hint.as_deref()).await?
+                else {
                     return send_error(
                         outbound,
                         request_id,

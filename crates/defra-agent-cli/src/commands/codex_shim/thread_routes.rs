@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -12,7 +13,8 @@ use super::protocol::absolute_path;
 use super::store::query_node_json;
 use super::thread_projection::{
     codex_thread_json, codex_thread_json_with_turns, list_codex_threads_by_archived,
-    load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
+    load_codex_thread_with_cwd_hint, store_forked_codex_thread, thread_response_json,
+    CodexThreadRecord,
 };
 use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
 
@@ -25,6 +27,7 @@ pub(super) struct ThreadRouteError {
 pub(super) async fn fork_thread_response(
     state: &ShimState,
     params: codex::ThreadForkParams,
+    cwd_hints: &BTreeMap<String, PathBuf>,
 ) -> std::result::Result<(CodexThreadRecord, Value), ThreadRouteError> {
     if params.path.is_some() {
         return Err(invalid_params(
@@ -37,10 +40,14 @@ pub(super) async fn fork_thread_response(
         ));
     }
 
-    let source = load_codex_thread(state, &params.thread_id)
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| invalid_params(format!("unknown Codex thread `{}`", params.thread_id)))?;
+    let source = load_codex_thread_with_cwd_hint(
+        state,
+        &params.thread_id,
+        cwd_hints.get(&params.thread_id).map(PathBuf::as_path),
+    )
+    .await
+    .map_err(internal_error)?
+    .ok_or_else(|| invalid_params(format!("unknown Codex thread `{}`", params.thread_id)))?;
     let fork_at_user_turn = count_user_messages(state, &params.thread_id)
         .await
         .map_err(internal_error)?;
@@ -84,6 +91,7 @@ pub(super) async fn fork_thread_response(
 pub(super) async fn list_threads_response(
     state: &ShimState,
     params: codex::ThreadListParams,
+    cwd_hints: &BTreeMap<String, PathBuf>,
 ) -> std::result::Result<Value, ThreadRouteError> {
     if !source_filter_allows_cli(params.source_kinds.as_deref())
         || !model_provider_filter_allows_defra(params.model_providers.as_deref())
@@ -96,7 +104,7 @@ pub(super) async fn list_threads_response(
     }
 
     let archived = params.archived.unwrap_or(false);
-    let mut records = list_codex_threads_by_archived(state, archived)
+    let mut records = list_codex_threads_by_archived(state, archived, cwd_hints)
         .await
         .map_err(internal_error)?;
     if let Some(cwd_filter) = params.cwd.as_ref() {
@@ -149,6 +157,7 @@ pub(super) async fn list_threads_response(
 pub(super) async fn search_threads_response(
     state: &ShimState,
     params: codex::ThreadSearchParams,
+    cwd_hints: &BTreeMap<String, PathBuf>,
 ) -> std::result::Result<Value, ThreadRouteError> {
     let search_term = params.search_term.trim();
     if search_term.is_empty() {
@@ -166,7 +175,7 @@ pub(super) async fn search_threads_response(
 
     let mut matches = Vec::<(CodexThreadRecord, String)>::new();
     let archived = params.archived.unwrap_or(false);
-    let records = list_codex_threads_by_archived(state, archived)
+    let records = list_codex_threads_by_archived(state, archived, cwd_hints)
         .await
         .map_err(internal_error)?;
     for record in records {

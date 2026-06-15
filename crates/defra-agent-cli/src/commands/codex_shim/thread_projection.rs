@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -23,8 +24,8 @@ pub(super) use mutations::{
 
 pub(super) use storage::ensure_agent_session_pinning;
 use storage::{
-    ensure_agent_session, list_projection_rows, load_conversation, load_projection,
-    update_projection_loaded_cwd, upsert_projection, ProjectionUpdate,
+    derive_thread_cwd, ensure_agent_session, list_projection_rows, load_conversation,
+    load_projection, update_projection_loaded, upsert_projection, ProjectionRow, ProjectionUpdate,
 };
 
 #[allow(dead_code)]
@@ -71,12 +72,12 @@ pub(super) async fn create_codex_thread(
     ensure_agent_session(state, thread_id).await?;
     upsert_projection(
         state,
-        &ProjectionUpdate::new(thread_id, cwd)
+        &ProjectionUpdate::new(thread_id)
             .loaded(true)
             .memory_mode("enabled"),
     )
     .await?;
-    load_codex_thread(state, thread_id)
+    load_codex_thread_with_cwd_hint(state, thread_id, Some(cwd))
         .await?
         .with_context(|| format!("loading newly-created Codex thread {thread_id}"))
 }
@@ -98,61 +99,55 @@ pub(super) async fn resume_codex_thread(
     }
 
     match load_projection(state, thread_id).await? {
-        Some(existing) => {
-            let cwd = cwd_override
+        Some(_) => {
+            let cwd_hint = cwd_override
                 .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(existing.cwd));
-            update_projection_loaded_cwd(state, thread_id, true, &cwd).await?;
+                .map(PathBuf::from);
+            update_projection_loaded(state, thread_id, true).await?;
+            load_codex_thread_with_cwd_hint(state, thread_id, cwd_hint.as_deref())
+                .await?
+                .with_context(|| format!("loading resumed Codex thread {thread_id}"))
         }
         None => {
             upsert_projection(
                 state,
-                &ProjectionUpdate::new(thread_id, &cwd)
+                &ProjectionUpdate::new(thread_id)
                     .loaded(true)
                     .memory_mode("enabled"),
             )
             .await?;
+            load_codex_thread_with_cwd_hint(state, thread_id, Some(&cwd))
+                .await?
+                .with_context(|| format!("loading resumed Codex thread {thread_id}"))
         }
     }
-
-    load_codex_thread(state, thread_id)
-        .await?
-        .with_context(|| format!("loading resumed Codex thread {thread_id}"))
 }
 
-pub(super) async fn load_codex_thread(
+pub(super) async fn load_codex_thread_with_cwd_hint(
     state: &ShimState,
     thread_id: &str,
+    cwd_hint: Option<&Path>,
 ) -> Result<Option<CodexThreadRecord>> {
     let conversation = load_conversation(state, thread_id).await?;
     let projection = load_projection(state, thread_id).await?;
 
     match (conversation, projection) {
         (None, None) => Ok(None),
-        (conversation, Some(projection)) => Ok(Some(CodexThreadRecord {
-            session_id: projection.session_id,
-            cwd: PathBuf::from(projection.cwd),
-            archived: projection.archived,
-            loaded: projection.loaded,
-            memory_mode: projection.memory_mode,
-            name: projection.name,
-            settings_json: projection.settings_json,
-            goal_json: projection.goal_json,
-            git_info_json: projection.git_info_json,
-            projection_created_at: projection.created_at,
-            projection_updated_at: projection.updated_at,
-            conversation,
-        })),
+        (conversation, Some(projection)) => {
+            record_from_projection(state, thread_id, conversation, projection, cwd_hint)
+                .await
+                .map(Some)
+        }
         (Some(conversation), None) => {
             upsert_projection(
                 state,
-                &ProjectionUpdate::new(thread_id, &state.cwd).memory_mode("enabled"),
+                &ProjectionUpdate::new(thread_id).memory_mode("enabled"),
             )
             .await?;
+            let cwd = derive_thread_cwd(state, thread_id, None, cwd_hint).await?;
             Ok(Some(CodexThreadRecord {
                 session_id: thread_id.to_string(),
-                cwd: state.cwd.clone(),
+                cwd,
                 archived: false,
                 loaded: false,
                 memory_mode: "enabled".to_string(),
@@ -168,28 +163,44 @@ pub(super) async fn load_codex_thread(
     }
 }
 
+async fn record_from_projection(
+    state: &ShimState,
+    thread_id: &str,
+    conversation: Option<ConversationRow>,
+    projection: ProjectionRow,
+    cwd_hint: Option<&Path>,
+) -> Result<CodexThreadRecord> {
+    let cwd = derive_thread_cwd(state, thread_id, Some(&projection), cwd_hint).await?;
+    Ok(CodexThreadRecord {
+        session_id: projection.session_id,
+        cwd,
+        archived: projection.archived,
+        loaded: projection.loaded,
+        memory_mode: projection.memory_mode,
+        name: projection.name,
+        settings_json: projection.settings_json,
+        goal_json: projection.goal_json,
+        git_info_json: projection.git_info_json,
+        projection_created_at: projection.created_at,
+        projection_updated_at: projection.updated_at,
+        conversation,
+    })
+}
+
 pub(super) async fn list_codex_threads_by_archived(
     state: &ShimState,
     archived: bool,
+    cwd_hints: &BTreeMap<String, PathBuf>,
 ) -> Result<Vec<CodexThreadRecord>> {
     let rows = list_projection_rows(state, archived).await?;
     let mut records = Vec::with_capacity(rows.len());
     for projection in rows {
         let conversation = load_conversation(state, &projection.session_id).await?;
-        records.push(CodexThreadRecord {
-            session_id: projection.session_id,
-            cwd: PathBuf::from(projection.cwd),
-            archived: projection.archived,
-            loaded: projection.loaded,
-            memory_mode: projection.memory_mode,
-            name: projection.name,
-            settings_json: projection.settings_json,
-            goal_json: projection.goal_json,
-            git_info_json: projection.git_info_json,
-            projection_created_at: projection.created_at,
-            projection_updated_at: projection.updated_at,
-            conversation,
-        });
+        let thread_id = projection.session_id.clone();
+        let cwd_hint = cwd_hints.get(&thread_id).map(PathBuf::as_path);
+        records.push(
+            record_from_projection(state, &thread_id, conversation, projection, cwd_hint).await?,
+        );
     }
     Ok(records)
 }
@@ -202,14 +213,14 @@ pub(super) async fn store_forked_codex_thread(
 ) -> Result<CodexThreadRecord> {
     upsert_projection(
         state,
-        &ProjectionUpdate::new(child_session_id, cwd)
+        &ProjectionUpdate::new(child_session_id)
             .loaded(true)
             .memory_mode(&source.memory_mode)
             .settings_json(&source.settings_json)
             .git_info_json(&source.git_info_json),
     )
     .await?;
-    load_codex_thread(state, child_session_id)
+    load_codex_thread_with_cwd_hint(state, child_session_id, Some(cwd))
         .await?
         .with_context(|| format!("loading forked Codex thread {child_session_id}"))
 }

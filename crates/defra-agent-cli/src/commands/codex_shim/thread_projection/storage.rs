@@ -1,11 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::commands::codex_shim::protocol::absolute_path;
 use crate::commands::codex_shim::store::query_node_json;
 use crate::commands::codex_shim::ShimState;
 
@@ -15,7 +14,7 @@ use super::ConversationRow;
 pub(super) struct ProjectionRow {
     pub(super) session_id: String,
     #[serde(default)]
-    pub(super) cwd: String,
+    pub(super) cwd: Option<String>,
     #[serde(default)]
     pub(super) archived: bool,
     #[serde(default)]
@@ -38,7 +37,6 @@ pub(super) struct ProjectionRow {
 
 pub(super) struct ProjectionUpdate<'a> {
     session_id: &'a str,
-    cwd: &'a Path,
     archived: bool,
     loaded: bool,
     memory_mode: &'a str,
@@ -50,10 +48,9 @@ pub(super) struct ProjectionUpdate<'a> {
 }
 
 impl<'a> ProjectionUpdate<'a> {
-    pub(super) fn new(session_id: &'a str, cwd: &'a Path) -> Self {
+    pub(super) fn new(session_id: &'a str) -> Self {
         Self {
             session_id,
-            cwd,
             archived: false,
             loaded: false,
             memory_mode: "enabled",
@@ -160,7 +157,6 @@ pub(super) async fn upsert_projection(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(update.session_id);
-    let escaped_cwd = escape_graphql_string(&absolute_path(update.cwd));
     let escaped_memory_mode = escape_graphql_string(update.memory_mode);
     let escaped_name = escape_graphql_string(update.name);
     let escaped_settings_json = escape_graphql_string(update.settings_json);
@@ -172,7 +168,6 @@ pub(super) async fn upsert_projection(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 add: {{
                     session_id: "{escaped_session_id}",
-                    cwd: "{escaped_cwd}",
                     archived: {archived},
                     loaded: {loaded},
                     memory_mode: "{escaped_memory_mode}",
@@ -185,7 +180,6 @@ pub(super) async fn upsert_projection(
                     updated_at: "{now}"
                 }},
                 update: {{
-                    cwd: "{escaped_cwd}",
                     archived: {archived},
                     loaded: {loaded},
                     memory_mode: "{escaped_memory_mode}",
@@ -206,19 +200,17 @@ pub(super) async fn upsert_projection(
     Ok(())
 }
 
-pub(super) async fn update_projection_loaded_cwd(
+pub(super) async fn update_projection_loaded(
     state: &ShimState,
     thread_id: &str,
     loaded: bool,
-    cwd: &Path,
 ) -> Result<()> {
     let escaped_thread_id = escape_graphql_string(thread_id);
-    let escaped_cwd = escape_graphql_string(&absolute_path(cwd));
     let mutation = format!(
         r#"mutation {{
             update_CodexThreadProjection(
                 filter: {{ session_id: {{ _eq: "{escaped_thread_id}" }} }},
-                input: {{ loaded: {loaded}, cwd: "{escaped_cwd}", updated_at: "{now}" }}
+                input: {{ loaded: {loaded}, updated_at: "{now}" }}
             ) {{ _docID }}
         }}"#,
         now = chrono::Utc::now().to_rfc3339(),
@@ -312,6 +304,96 @@ pub(super) async fn load_conversation(
         .context("decoding AgentConversation row")
 }
 
+pub(super) async fn derive_thread_cwd(
+    state: &ShimState,
+    thread_id: &str,
+    projection: Option<&ProjectionRow>,
+    cwd_hint: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(cwd) = cwd_hint {
+        return Ok(absolute_cwd(&state.cwd, cwd));
+    }
+    if let Some(cwd) = latest_request_metadata_cwd(state, thread_id).await? {
+        return Ok(cwd);
+    }
+    if let Some(cwd) =
+        projection.and_then(|projection| settings_json_cwd(&state.cwd, &projection.settings_json))
+    {
+        return Ok(cwd);
+    }
+    if let Some(cwd) = projection
+        .and_then(|projection| projection.cwd.as_deref())
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    {
+        return Ok(PathBuf::from(cwd));
+    }
+    Ok(state.cwd.clone())
+}
+
+async fn latest_request_metadata_cwd(
+    state: &ShimState,
+    thread_id: &str,
+) -> Result<Option<PathBuf>> {
+    let escaped_thread_id = escape_graphql_string(thread_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _eq: "{escaped_thread_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 10
+            ) {{
+                metadata
+            }}
+        }}"#
+    );
+    let response = query_node_json(&state.node, &query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for row in rows {
+        let Some(metadata) = row.get("metadata").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(cwd) = metadata_json_cwd(&state.cwd, metadata) {
+            return Ok(Some(cwd));
+        }
+    }
+    Ok(None)
+}
+
+fn settings_json_cwd(base_cwd: &Path, settings_json: &str) -> Option<PathBuf> {
+    json_path_cwd(base_cwd, settings_json, &["cwd"])
+}
+
+fn metadata_json_cwd(base_cwd: &Path, metadata: &str) -> Option<PathBuf> {
+    json_path_cwd(base_cwd, metadata, &["codex_shim", "cwd"])
+}
+
+fn json_path_cwd(base_cwd: &Path, raw: &str, path: &[&str]) -> Option<PathBuf> {
+    let parsed = serde_json::from_str::<Value>(raw).ok()?;
+    let mut value = &parsed;
+    for segment in path {
+        value = value.get(*segment)?;
+    }
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+        .map(Path::new)
+        .map(|cwd| absolute_cwd(base_cwd, cwd))
+}
+
+fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
+    if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        base_cwd.join(cwd)
+    }
+}
+
 fn behavior_id(state: &ShimState) -> String {
     state.behavior_id.as_ref().to_string()
 }
@@ -326,4 +408,44 @@ fn default_memory_mode() -> String {
 
 fn empty_json_object() -> String {
     "{}".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_json_cwd_reads_codex_shim_cwd() {
+        let base_cwd = Path::new("/workspace");
+        assert_eq!(
+            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"/repo"}}"#),
+            Some(PathBuf::from("/repo"))
+        );
+        assert_eq!(
+            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"repo"}}"#),
+            Some(PathBuf::from("/workspace/repo"))
+        );
+    }
+
+    #[test]
+    fn settings_json_cwd_reads_thread_settings_cwd() {
+        let base_cwd = Path::new("/workspace");
+        assert_eq!(
+            settings_json_cwd(base_cwd, r#"{"cwd":"/repo-from-settings"}"#),
+            Some(PathBuf::from("/repo-from-settings"))
+        );
+        assert_eq!(settings_json_cwd(base_cwd, "{}"), None);
+    }
+
+    #[test]
+    fn projection_row_accepts_null_legacy_cwd() {
+        let row: ProjectionRow = serde_json::from_value(serde_json::json!({
+            "session_id": "thread-1",
+            "cwd": null
+        }))
+        .expect("row with null cwd should decode");
+
+        assert_eq!(row.session_id, "thread-1");
+        assert_eq!(row.cwd, None);
+    }
 }
