@@ -39,11 +39,17 @@ cargo test -p defra-agent-cli
 - `crates/defra-agent/src/document_config/behavior.rs` — struct + queries + writers + default.
 - `crates/defra-agent/src/config.rs` — `AgentBehavior` runtime config field.
 - `crates/defra-agent/src/agent/document_view/snapshot.rs` (and `runtime_snapshot.rs` if it carries behavior) — carry the field into the resolved behavior.
+- `crates/defra-agent/src/migration.rs` — patch `request_context_template` into upgraded DBs (CRITICAL — load query selects it).
+- `crates/defra-agent-cli/src/config_writes/agent_behavior.rs` — second CLI write path for the new field.
 - `crates/defra-agent-cli/src/desired_state/mod.rs` — accept the new behavior field.
+- `crates/defra-agent-cli/src/desired_state/load.rs` — `DesiredAgentBehavior` field + sidecar hydration.
+- `crates/defra-agent-cli/src/desired_state/validate.rs` — full-ref catalog-aware task scope validation.
 - `crates/defra-agent-cli/src/main.rs` — export allowlist.
 - `crates/defra-agent/src/prompt.rs` — render `system_prompt` as run-constant template into the frozen preamble.
-- `crates/defra-agent/src/agent/loop_stream.rs` — render + inject the per-request context message.
-- `crates/defra-agent/src/hook/persistence/message_spawn.rs` + `prompt_hook.rs` — persist the context message with sequence before the prompt.
+- `crates/defra-agent/src/completion_factory.rs` — default `LoopConfig.context_message` to `None`.
+- `crates/defra-agent/src/agent/daemon/inference.rs` — render the per-request context (fail-closed) and set it on the config.
+- `crates/defra-agent/src/agent/loop_stream.rs` — `LoopConfig.context_message` field + inject ahead of prompt.
+- `crates/defra-agent/src/hook/persistence/message_spawn.rs` + `prompt_hook.rs` — persist the context message (turn 1 only) with sequence before the prompt.
 - `crates/defra-agent/src/trigger_engine/mod.rs` — merge `node`/`ctx` into task `TemplateScope`.
 
 ---
@@ -228,18 +234,28 @@ theorem assembleWithContext_spec (skillCount summaryCount conversationLen : Nat)
             (List.range conversationLen).map Slot.conversation)) ++
         [Slot.contextPreamble, Slot.prompt] := rfl
 
-/-- Context immediately precedes the prompt (the last two slots). -/
-theorem assembleWithContext_context_before_prompt
+/-- The assembly ends with exactly `[contextPreamble, prompt]` — context
+immediately precedes the prompt. This is the ordering the conformance fence and
+`loop_stream.rs` injection must match; it is stronger than "last slot is
+prompt". -/
+theorem assembleWithContext_tail
+    (skillCount summaryCount conversationLen : Nat) :
+    ∃ pre, assembleWithContext skillCount summaryCount conversationLen
+        = pre ++ [Slot.contextPreamble, Slot.prompt] :=
+  ⟨_, rfl⟩
+
+/-- Corollary: the last slot is the prompt. -/
+theorem assembleWithContext_last
     (skillCount summaryCount conversationLen : Nat) :
     (assembleWithContext skillCount summaryCount conversationLen).getLast? = some Slot.prompt := by
-  rw [assembleWithContext]
-  simp [List.getLast?_concat]
+  obtain ⟨pre, h⟩ := assembleWithContext_tail skillCount summaryCount conversationLen
+  rw [h, List.getLast?_concat]
 ```
 
 - [ ] **Step 3: Build**
 
 Run: `cd crates/defra-agent/proofs && lake build`
-Expected: clean, zero sorry. (If `getLast?_concat` simp form differs, prove via `rw [← List.cons_append, ← List.cons_append, List.getLast?_concat]` as in the existing `assemble_last`.)
+Expected: clean, zero sorry. (`assembleWithContext_tail` is `rfl` from the definition; if `List.getLast?_concat` resolves to a different name in the pinned Mathlib, the corollary can also be proved `by rw [h]; rfl`.)
 
 - [ ] **Step 4: Commit**
 
@@ -294,9 +310,17 @@ git commit -m "test(proofs): ledger entry for Template.system_render_stable (#49
 > existing `PromptAssembly → conformance/prompt_assembly.rs` home — no
 > `model_homes()` change is needed. We add a sibling module for clarity.
 
-This task depends on the Rust catalog + guard API (Tasks 6–8). **Order:** implement Tasks 6–8 first, then return here. The test imports the public API created there: `defra_agent::template::catalog::{Volatility, Catalog}` and `defra_agent::template::reads::{collect_system_reads, validate_system_template}`.
+> **⚠️ HARD ORDERING GATE (finding 1).** This task's wiring + commit MUST run
+> AFTER Tasks 5–8 (the Rust `template::catalog` / `template::reads` API and the
+> extended `TemplateScope`). Authoring the file early is fine, but do **not**
+> add the `#[path]` line to `conformance.rs` or commit until the API exists and
+> the module compiles — wiring a non-compiling module breaks the branch build
+> and the phase gate between commits. In subagent-driven execution, schedule
+> this task immediately after Task 8.
 
-- [ ] **Step 1: Write the conformance module**
+The test imports the public API created in Tasks 6–8: `defra_agent::template::catalog::{Volatility, default_catalog}`, `defra_agent::template::reads::{collect_system_reads, validate_system_template}`, and the extended `defra_agent::template::{render_template, TemplateScope}`.
+
+- [ ] **Step 1: Write the conformance module (after Tasks 6–8 compile)**
 
 Create `crates/defra-agent/tests/conformance/prompt_template.rs`:
 
@@ -409,12 +433,12 @@ mod prompt_template;
 
 (Match the surrounding `#[path]` + `mod name;` two-line pattern exactly.)
 
-- [ ] **Step 3: Verify it fails to compile (API not yet built)**
+- [ ] **Step 3: Verify it compiles and passes**
 
-Run: `cargo test -p defra-agent --test conformance prompt_template 2>&1 | head -30`
-Expected: compile errors referencing `template::catalog` / `template::reads` — confirms the fence is driving the API. (Proceed to Phase C; return after Task 8 to make it pass.)
+Run: `cargo test -p defra-agent --test conformance prompt_template 2>&1 | tail -30`
+Expected: all `prompt_template` tests PASS. (Tasks 6–8 must already be done — see the ordering gate above.) If any fail to compile, the API names drifted from Tasks 6–8; reconcile before committing.
 
-- [ ] **Step 4: Commit (compiling-deferred)**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/defra-agent/tests/conformance/prompt_template.rs crates/defra-agent/tests/conformance.rs
@@ -601,7 +625,8 @@ Create `crates/defra-agent/src/template/reads.rs`:
 
 use std::collections::BTreeSet;
 
-use minijinja::machinery::{parse, Stmt, Expr};
+use minijinja::machinery::ast::{Expr, Stmt};
+use minijinja::machinery::parse;
 use minijinja::syntax::SyntaxConfig;
 
 use super::catalog::{Catalog, Volatility};
@@ -890,16 +915,49 @@ In `crates/defra-agent-cli/src/desired_state/mod.rs` (line ~39 rejects unknown b
 
 In `crates/defra-agent-cli/src/main.rs` (export allowlist ~line 375), add `request_context_template` to the behavior export field list, mirroring `system_prompt`.
 
-- [ ] **Step 8: Build both crates**
+- [ ] **Step 8: DB migration for upgraded databases (CRITICAL)**
+
+Adding the field to the load query (Step 2) makes GraphQL reads select `request_context_template`; an existing DB upgraded from a prior schema lacks the column and **every behavior read fails** until patched. In `crates/defra-agent/src/migration.rs`, in `ensure_agent_behavior_migrations` (~line 949), add a patch alongside the existing `description`/`summary`/`skill_refs` patches (Kind 11 = nullable String):
+
+```rust
+    if !collection_has_field(&collection, "request_context_template") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":11}}"#,
+        );
+    }
+```
+
+- [ ] **Step 9: Second CLI write path**
+
+`crates/defra-agent-cli/src/config_writes/agent_behavior.rs` is a *separate* behavior write path (CLI config apply) from the document_config writers in Step 2. In `write_agent_behavior_document`, add to the `add_fields` vec, mirroring the `system_prompt` line:
+
+```rust
+        optional_string_field("request_context_template", behavior.request_context_template.as_deref()),
+```
+
+(This uses `defra_agent::AgentBehaviorDocument` — the document_config `AgentBehavior` re-export — so the field added in Step 2 is what it reads.)
+
+- [ ] **Step 10: Desired-state struct + sidecar load + normalize/convert**
+
+The desired-state layer parses sidecar config into `DesiredAgentBehavior` and converts to a document. Wire the field through all of it:
+- Find the `DesiredAgentBehavior` struct (grep `struct DesiredAgentBehavior` under `crates/defra-agent-cli/src/desired_state/`) and add `pub request_context_template: Option<String>,` mirroring `system_prompt`.
+- In `crates/defra-agent-cli/src/desired_state/load.rs` (~line 52), `system_prompt` is hydrated from a sidecar file. Add the same sidecar hydration for `request_context_template` so a long template can live in its own file (mirror the `hydrate_sidecar(&mut behavior.system_prompt, &dir)` block). If a separate sidecar filename is needed, follow the per-field sidecar naming convention already in `hydrate_sidecar`.
+- Wherever `DesiredAgentBehavior` is converted to the document `AgentBehavior` (grep `system_prompt` in `desired_state/` — normalize/convert/to-document fns), carry `request_context_template` across.
+
+- [ ] **Step 11: Build both crates**
 
 Run: `cargo build -p defra-agent -p defra-agent-cli 2>&1 | tail -10`
-Expected: builds. Fix any remaining `AgentBehavior { … }` literals the compiler flags (missing field) by adding `request_context_template: None`.
+Expected: builds. Fix any remaining `AgentBehavior { … }` / `DesiredAgentBehavior { … }` literals the compiler flags (missing field) by adding `request_context_template: None`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 12: Round-trip test**
+
+Add/extend a desired-state or config round-trip test asserting `request_context_template` survives export→import (mirror an existing `system_prompt` round-trip assertion; grep `system_prompt` in `crates/defra-agent-cli/tests` / `desired_state` tests).
+
+- [ ] **Step 13: Commit**
 
 ```bash
-git add crates/defra-agent-schemas crates/defra-agent/src/document_config crates/defra-agent/src/config.rs crates/defra-agent/src/agent/document_view/snapshot.rs crates/defra-agent-cli/src/desired_state/mod.rs crates/defra-agent-cli/src/main.rs crates/defra-agent/src/document_config/tests.rs
-git commit -m "feat(behavior): request_context_template config surface (#497)"
+git add crates/defra-agent-schemas crates/defra-agent/src/document_config crates/defra-agent/src/config.rs crates/defra-agent/src/agent/document_view/snapshot.rs crates/defra-agent/src/migration.rs crates/defra-agent-cli/src/desired_state crates/defra-agent-cli/src/config_writes/agent_behavior.rs crates/defra-agent-cli/src/main.rs crates/defra-agent/src/document_config/tests.rs
+git commit -m "feat(behavior): request_context_template config surface + migration (#497)"
 ```
 
 ---
@@ -986,69 +1044,40 @@ git commit -m "feat(prompt): render system_prompt as run-constant template into 
 
 ## Phase F — Per-request context render + persistence
 
-### Task 11: Render and inject the context message in the owned loop
+### Task 11: Render the context message at the daemon path; carry it via `LoopConfig`
+
+**Rationale (findings 2 & 3):** `LoopConfig` carries only provider/turn knobs, and `run_loop_stream` is shared by compaction/title/oneshot/subagent paths — rendering inside it would wrongly apply context to those and has no access to the behavior/request/node. So we render at the **per-request daemon inference path** (`agent/daemon/inference.rs`, where `behavior` + `request` + node/db are in scope), **fail the request on render error** (a configured template must render — never silently skip), and pass the rendered `Option<Message>` through `LoopConfig` to the loop, which only injects it.
 
 **Files:**
-- Modify: `crates/defra-agent/src/agent/loop_stream.rs`
+- Modify: `crates/defra-agent/src/agent/loop_stream.rs` (LoopConfig field + injection)
+- Modify: `crates/defra-agent/src/completion_factory.rs` (default the field to `None`)
+- Modify: `crates/defra-agent/src/agent/daemon/inference.rs` (render + fail-closed + set)
+- Modify: `crates/defra-agent/src/template/reads.rs` (`collect_request_reads`)
+- Modify: `crates/defra-agent/src/agent/loop_stream/tests.rs`, `crates/defra-agent/src/compaction/tests.rs` (add field to test `LoopConfig` literals)
 
-- [ ] **Step 1: Build the per-request ctx scope + render the context message**
+- [ ] **Step 1: Add the carried field to `LoopConfig`, default `None`**
 
-In `crates/defra-agent/src/agent/loop_stream.rs`, in `run_loop_stream` just before `let mut new_messages: Vec<Message> = vec![prompt];` (line ~96), render the behavior's `request_context_template` (if present) and prepend it.
-
-The render needs `node` (run-constant) + `ctx` (per-request). Build `ctx` lazily — only compute `collection_summary` if the template reads it:
+In `crates/defra-agent/src/agent/loop_stream.rs`, add to the `LoopConfig` struct (after `max_turns`):
 
 ```rust
-    // Per-request context message (#497). Rendered ahead of the prompt; the
-    // <context> tag matches the system-reminder shape so it reads as ambient.
-    let context_message: Option<Message> = match &config.request_context_template {
-        Some(tmpl) if !tmpl.trim().is_empty() => {
-            let cat = crate::template::catalog::default_catalog();
-            // Best-effort reads for lazy provider evaluation; on parse failure
-            // compute the cheap vars only and let strict-undefined surface gaps.
-            let reads = crate::template::reads::collect_request_reads(tmpl).unwrap_or_default();
-            let ctx = build_ctx_scope(&self_ctx_inputs, &reads).await; // see Step 2
-            let node = serde_json::json!({
-                "node_did": config.principal.agent_did,
-                "behavior_id": config.behavior_id,
-            });
-            let scope = crate::template::TemplateScope {
-                event: serde_json::json!({}),
-                doc: None,
-                args: None,
-                node,
-                ctx,
-            };
-            match crate::template::render_template(tmpl, &scope) {
-                Ok(rendered) => Some(Message::User {
-                    content: vec![message::UserContent::Text(message::Text {
-                        text: format!("<context>\n{rendered}\n</context>"),
-                    })],
-                }),
-                Err(e) => {
-                    tracing::error!(error = %e, "request_context_template render failed; skipping context");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
-
-    let mut new_messages: Vec<Message> = match context_message.clone() {
-        Some(ctx_msg) => vec![ctx_msg, prompt],
-        None => vec![prompt],
-    };
+    /// Pre-rendered per-request context message (#497), injected ahead of the
+    /// prompt. `None` for non-daemon paths (compaction/title/oneshot/subagent)
+    /// and for behaviors without a `request_context_template`.
+    pub(crate) context_message: Option<Message>,
 ```
 
-> The exact accessors (`config.principal.agent_did`, `config.behavior_id`, `config.request_context_template`) follow the `AgentBehavior` runtime config from Task 9 Step 4. `Message`/`UserContent`/`Text` are already imported in this file (used elsewhere); confirm the import path matches existing usage.
+In `crates/defra-agent/src/completion_factory.rs`, the base `loop_config` builder (the `LoopConfig { … }` literal at ~line 40) gains `context_message: None,`. `loop_config_for_request` inherits it via `loop_config(...)`, so no change there beyond the inference path setting it (Step 3).
 
-- [ ] **Step 2: Add `collect_request_reads` + a `ctx`-scope builder**
+Add `context_message: None,` to every test `LoopConfig { … }` literal: `crates/defra-agent/src/agent/loop_stream/tests.rs:240` and `crates/defra-agent/src/compaction/tests.rs:588` (grep `LoopConfig {` to catch all).
 
-In `crates/defra-agent/src/template/reads.rs`, add a non-rejecting reads collector for request-context/task templates (control flow is allowed there; we only need the ref set for lazy eval + availability):
+- [ ] **Step 2: Add `collect_request_reads` (non-rejecting) to `reads.rs`**
+
+In `crates/defra-agent/src/template/reads.rs`, add a best-effort reads collector for request-context/task templates (control flow is allowed off the cache path; we only need the ref set for lazy provider eval):
 
 ```rust
 /// Collect refs from a request-context/task template without the system-only
 /// statement restriction (loops/conditionals are allowed off the cache path).
-/// Used for lazy provider evaluation and the availability check.
+/// Best-effort: used only for lazy provider evaluation, never as a guard.
 pub fn collect_request_reads(template: &str) -> Result<BTreeSet<String>, TemplateError> {
     let ast = parse(template, "request_context", SyntaxConfig::default(), Default::default())
         .map_err(|e| TemplateError::Parse(e.to_string()))?;
@@ -1057,8 +1086,7 @@ pub fn collect_request_reads(template: &str) -> Result<BTreeSet<String>, Templat
     Ok(reads)
 }
 
-/// Recurse all statements collecting variable refs from every embedded
-/// expression (best-effort; never rejects).
+/// Recurse all statements collecting variable refs from embedded expressions.
 fn walk_stmt_any(stmt: &Stmt, reads: &mut BTreeSet<String>) {
     match stmt {
         Stmt::Template(t) => for c in &t.children { walk_stmt_any(c, reads); },
@@ -1080,47 +1108,81 @@ fn walk_stmt_any(stmt: &Stmt, reads: &mut BTreeSet<String>) {
 
 > Field names (`f.iter`, `f.body`, `i.true_body`, …) are minijinja-2.19 pinned; verify against `machinery/ast.rs` as in Task 7.
 
-For the `ctx`-scope builder, add a free function in `loop_stream.rs` (or a small `agent/context_scope.rs` module) that, given the runtime handles already available in `run_loop_stream` (the `node`/session/db handle used elsewhere in the loop) and the `reads` set, produces the `ctx` JSON object:
+- [ ] **Step 3: Render at the daemon inference path (fail-closed) and set on the config**
+
+In `crates/defra-agent/src/agent/daemon/inference.rs`, the per-request `loop_config_for_request(...)` is built at ~line 181 and the loop runs at ~line 222. Between them, render the context message and set it on the (now `mut`) config. **On render/parse error, fail the request** (route through the same request-failure path this function already uses for inference errors — do not skip):
 
 ```rust
-async fn build_ctx_scope(/* runtime handles */, reads: &std::collections::BTreeSet<String>) -> serde_json::Value {
-    use chrono::SecondsFormat;
-    let mut ctx = serde_json::Map::new();
-    // Always-cheap per-request vars.
-    ctx.insert("now".to_string(), serde_json::json!(
-        chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
-    ));
-    // Actor identity, if the runtime has it on the request (acting seat/DID).
-    // Populate from the request's acting principal; empty string if absent.
-    // ctx.insert("acting_seat", …); ctx.insert("acting_did", …);
-    // Lazy: only query the live summary when the template reads it.
-    if reads.contains("ctx.collection_summary") {
-        ctx.insert("collection_summary".to_string(), serde_json::json!(
-            collection_summary(/* db handle */).await.unwrap_or_default()
-        ));
+    // Per-request dynamic context (#497). Rendered here where behavior + request
+    // + node are in scope; a configured template MUST render or the request fails
+    // (fail-closed: silent skip would serve the model different conditioning than
+    // configured, and persistence would lack the intended message).
+    if let Some(tmpl) = behavior
+        .request_context_template
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        let reads = crate::template::reads::collect_request_reads(tmpl).unwrap_or_default();
+        let mut ctx = serde_json::Map::new();
+        ctx.insert(
+            "now".to_string(),
+            serde_json::json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        );
+        // Actor identity from the request's acting principal (see note below).
+        ctx.insert("acting_seat".to_string(), serde_json::json!(request.acting_seat_or_empty()));
+        ctx.insert("acting_did".to_string(), serde_json::json!(request.acting_did_or_empty()));
+        // Lazy: only query the live summary when the template reads it.
+        if reads.contains("ctx.collection_summary") {
+            let summary = crate::template::collection_summary(&node).await?; // ? = fail request
+            ctx.insert("collection_summary".to_string(), serde_json::json!(summary));
+        }
+        let scope = crate::template::TemplateScope {
+            event: serde_json::json!({}),
+            doc: None,
+            args: None,
+            node: serde_json::json!({
+                "node_did": behavior.principal.agent_did,
+                "behavior_id": behavior.behavior_id,
+            }),
+            ctx: serde_json::Value::Object(ctx),
+        };
+        let rendered = crate::template::render_template(tmpl, &scope)
+            .map_err(|e| anyhow::anyhow!("request_context_template render failed: {e}"))?; // fail-closed
+        loop_config.context_message = Some(Message::User {
+            content: vec![message::UserContent::Text(message::Text {
+                text: format!("<context>\n{rendered}\n</context>"),
+            })],
+        });
     }
-    serde_json::Value::Object(ctx)
-}
 ```
 
-> `acting_seat`/`acting_did` and `collection_summary` source: wire from the
-> request's acting principal and a small DefraDB summary query. If the acting
-> principal is not yet plumbed into `run_loop_stream`, populate `now` (+
-> `collection_summary` when read) for v1 and leave actor identity emitting empty
-> strings; capture the gap in a follow-up rather than blocking. `collection_summary`
-> should escape nothing into a mutation directly — it is a *read* query; the
-> rendered value reaches persistence via Task 12 which escapes at the mutation.
+> **Field accessors to verify against the real types:** `behavior.request_context_template` (Task 9 Step 4 runtime config), `behavior.principal.agent_did` (`AgentPrincipal`), `behavior.behavior_id`. For `request.acting_seat`/`acting_did`: source from whatever acting-identity field `AgentRequest` carries. **If the acting identity is not yet on `AgentRequest` in v1, do NOT emit empty strings** — instead remove `ctx.acting_seat`/`ctx.acting_did` from `default_catalog()` (Task 6) and the spec's v1 list so a template referencing them is rejected at apply-time validation (fail-closed), and file a follow-up to add them. Keep `now` and `collection_summary`. Make `loop_config` a `let mut`.
+>
+> `collection_summary(&node)` is a new small read-only helper (in `template/mod.rs` or a `runtime` module) returning a `String` summary of collections (names/counts) via a DefraDB read query — it does not write, so no `escape_graphql_string` there; the rendered value is escaped where Task 12 persists it.
 
-- [ ] **Step 3: Build**
+- [ ] **Step 4: Inject the carried context in the loop**
+
+In `crates/defra-agent/src/agent/loop_stream.rs`, change the `new_messages` initializer (~line 96) to prepend the carried context message:
+
+```rust
+        let mut new_messages: Vec<Message> = match config.context_message.clone() {
+            Some(ctx_msg) => vec![ctx_msg, prompt],
+            None => vec![prompt],
+        };
+```
+
+(`Message`/`UserContent`/`Text` are already in scope in these files via existing usage; confirm the import path.)
+
+- [ ] **Step 5: Build**
 
 Run: `cargo build -p defra-agent 2>&1 | tail -10`
 Expected: builds.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/defra-agent/src/agent/loop_stream.rs crates/defra-agent/src/template/reads.rs
-git commit -m "feat(loop): render + inject per-request <context> message (#497)"
+git add crates/defra-agent/src/agent/loop_stream.rs crates/defra-agent/src/completion_factory.rs crates/defra-agent/src/agent/daemon/inference.rs crates/defra-agent/src/template/reads.rs crates/defra-agent/src/agent/loop_stream/tests.rs crates/defra-agent/src/compaction/tests.rs
+git commit -m "feat(loop): render per-request <context> at daemon path, carry via LoopConfig, fail-closed (#497)"
 ```
 
 ---
@@ -1173,32 +1235,45 @@ In `crates/defra-agent/src/hook/persistence/prompt_hook.rs`, extend `on_completi
 
 > `persist_message` (in `message_spawn.rs`) already calls `session::append_message`, which assigns the next sequence; persisting context first then prompt yields the correct ordering with no new sequence logic.
 
-- [ ] **Step 2: Pass the context message at the call site**
+- [ ] **Step 2: Pass the context message ON TURN 1 ONLY (finding 4)**
 
-In `crates/defra-agent/src/agent/loop_stream.rs`, find the `on_completion_call(&prompt, …)` invocation (the first-turn persistence call) and pass the context message built in Task 11:
+`on_completion_call` runs **inside** the per-turn loop (it fires every turn; the hook's internal state dedupes the prompt across turns). The context message must be persisted **once**, so pass it only on the first turn — otherwise every tool round-trip re-persists the `<context>` row.
+
+In `crates/defra-agent/src/agent/loop_stream.rs`, at the existing `hook.on_completion_call(&current_prompt, &history_snapshot)` call (~line 127), gate the context arg on `current_turn == 1` (recall `current_turn` is incremented to 1 at the top of the loop's first iteration):
 
 ```rust
-    hook.on_completion_call(&new_messages.last().unwrap(), context_message.as_ref(), &history).await;
+                let context_for_turn = if current_turn == 1 {
+                    config.context_message.as_ref()
+                } else {
+                    None
+                };
+                if let HookAction::Terminate { reason } = hook
+                    .on_completion_call(&current_prompt, context_for_turn, &history_snapshot)
+                    .await
+                {
 ```
 
-> Match the real existing call shape — the prompt argument it currently passes (likely `&new_messages[0]` or the original `prompt`). Pass `context_message.as_ref()` as the new arg. Update any other `on_completion_call` call sites (grep) to pass `None`.
+> Update any other `on_completion_call` call sites (grep — e.g. tests) to pass `None` for the new `context: Option<&Message>` arg.
 
-- [ ] **Step 3: Integration test — context persisted with correct order**
+- [ ] **Step 3: Tests — persisted once, correct order, multi-turn safe**
 
-Add a focused test asserting both existence and ordering. Prefer extending an existing loop/persistence integration test; if writing fresh, add to the existing persistence test module. The assertion:
+Add two assertions (extend an existing loop/persistence integration test, or the persistence test module):
 
 ```rust
-// After driving one request whose behavior sets request_context_template:
-// load AgentMessage rows for the session ordered by sequence; assert the
-// <context> user message has a strictly smaller sequence than the prompt.
+// (a) Single-turn ordering: context persisted with a smaller sequence than prompt.
 let rows = load_messages_for_session(&node, &session_id).await;
-let ctx_seq = rows.iter().find(|m| m.content.contains("<context>")).map(|m| m.sequence);
+let ctx_rows: Vec<_> = rows.iter().filter(|m| m.content.contains("<context>")).collect();
+let ctx_seq = ctx_rows.first().map(|m| m.sequence);
 let prompt_seq = rows.iter().find(|m| m.content.contains(PROMPT_MARKER)).map(|m| m.sequence);
+assert_eq!(ctx_rows.len(), 1, "context message must be persisted exactly once");
 assert!(ctx_seq.is_some(), "context message must be durably persisted");
 assert!(ctx_seq < prompt_seq, "context sequence must precede prompt sequence");
+
+// (b) Multi-turn: drive a request that makes >=2 tool round-trips; assert the
+// <context> row count is still exactly 1 (no per-turn duplication).
 ```
 
-> Use the existing test harness's session/message loader (grep `load_messages` / `AgentMessage` in `tests/`). If a full loop test is too heavy, assert at the `persist_message` level that two calls in order produce ascending sequences and the context content round-trips.
+> Use the existing harness's session/message loader (grep `load_messages` / `AgentMessage` in `tests/`). For (b), reuse a test fixture that already exercises a multi-turn tool loop and set a `request_context_template` on its behavior. If a full multi-turn loop test is too heavy here, at minimum assert at the `on_completion_call` level that a second call with `context = None` adds no `<context>` row.
 
 - [ ] **Step 4: Build + test**
 
@@ -1220,7 +1295,8 @@ git commit -m "feat(persistence): durably capture context message before prompt 
 
 **Files:**
 - Modify: `crates/defra-agent/src/trigger_engine/mod.rs`
-- Modify: `crates/defra-agent/src/template/mod.rs` (availability check helper, optional)
+- Modify: `crates/defra-agent-cli/src/desired_state/validate.rs` (apply-time task scope validation)
+- Modify: `crates/defra-agent/src/template/mod.rs` (availability check helper)
 
 - [ ] **Step 1: Populate node/ctx at trigger fire**
 
@@ -1255,9 +1331,26 @@ Extend it with the task-available catalog vars (`node.*` run-constant + `ctx.now
 
 > Source the DID from whatever the dispatch already has (the `ResolvedTask`/`FireIntent` carries `behavior_id`; the deployment DID is available on the runtime snapshot used here — mirror how the request is written with `agent_did` in `lifecycle/manual.rs`). For v1, `ctx.now` is the only task `ctx.*` var (matches the "system time into task start" interop ask); `event.fired_at` remains for existing templates.
 
-- [ ] **Step 2: Extend trigger-scope validation to know node/ctx**
+- [ ] **Step 2: Extend apply-time task scope validation (full-ref, catalog-aware)**
 
-The apply-time `parse_template_for_validation` scope check rejects scopes a trigger kind doesn't supply. Add `node` and `ctx` (with `ctx` limited to task-available vars) to the allowed roots for task templates so `{{ node.node_did }}` / `{{ ctx.now }}` validate. Find the validation match (grep `parse_template_for_validation` usage in trigger/apply paths) and add `"node"` and `"ctx"` to the permitted roots for the task render site, rejecting non-task `ctx.*` vars (`acting_seat`, `acting_did`, `collection_summary`) via the catalog `is_available_at(.., Site::Task)` check.
+The real apply-time task scope check lives in `crates/defra-agent-cli/src/desired_state/validate.rs` (~line 574, the `parse_template_for_validation(&task.prompt_template)` block that today forbids `args` for event triggers). Two problems for interop (finding 6): it is **root-based** (`vref.root()`), and `parse_template_for_validation` only tracks `event`/`doc`/`args` roots — it never even *sees* `node.*`/`ctx.*` refs.
+
+Make this validation catalog-aware at the **full-ref** level so `{{ node.node_did }}` and `{{ ctx.now }}` are accepted for tasks while `{{ ctx.acting_did }}` / `{{ ctx.collection_summary }}` (not task-available) are rejected:
+
+1. Extend `parse_template_for_validation` in `crates/defra-agent/src/template/mod.rs` to also track `node` and `ctx` as roots — add them to `is_tracked_root` (the function that currently matches `event`/`doc`/`args`). This makes the existing textual collector return `node.*`/`ctx.*` refs too (best-effort is fine for an *availability* check; the cache-safety guard for system templates uses the separate parser-backed collector from Task 7).
+2. In `validate.rs`, for each collected `VariableRef` whose root is `node` or `ctx`, join the path to a full ref (`vref.path.join(".")`) and check `default_catalog().is_available_at(&full_ref, Site::Task)`. If not available, push an error naming the var, e.g.:
+   ```rust
+   let full = vref.path.join(".");
+   if matches!(vref.root(), Some("node") | Some("ctx"))
+       && !catalog.is_available_at(&full, defra_agent::template::catalog::Site::Task)
+   {
+       errors.push(format!(
+           "task {} prompt template references `{}`, which is not available in task scope",
+           task.task_id, full
+       ));
+   }
+   ```
+   (Keep the existing `args`-forbidden check for event triggers.) Import `default_catalog`/`Site` from `defra_agent::template::catalog`.
 
 - [ ] **Step 3: Test task interop**
 
@@ -1271,13 +1364,14 @@ Extend an existing trigger e2e/conformance test (e.g. `tests/conformance/trigger
 - [ ] **Step 4: Build + test**
 
 Run: `cargo test -p defra-agent trigger 2>&1 | tail -20`
-Expected: builds and passes.
+Run: `cargo test -p defra-agent-cli desired_state 2>&1 | tail -20`
+Expected: builds and passes (including the new task-scope availability rejection — add a `validate.rs` test asserting a task template reading `{{ ctx.acting_did }}` is rejected while `{{ ctx.now }}` is accepted).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent/src/trigger_engine/mod.rs crates/defra-agent/src/template/mod.rs
-git commit -m "feat(triggers): node/ctx catalog scopes in task templates (#497)"
+git add crates/defra-agent/src/trigger_engine/mod.rs crates/defra-agent/src/template/mod.rs crates/defra-agent-cli/src/desired_state/validate.rs
+git commit -m "feat(triggers): node/ctx catalog scopes in task templates + apply-time availability check (#497)"
 ```
 
 ---
@@ -1334,6 +1428,7 @@ Use `superpowers:finishing-a-development-branch` to choose merge/PR. (Per worktr
 
 ## Self-review notes (plan author)
 
-- **Spec coverage:** D1 (context user msg)→Task 11; D2 (reuse engine)→Tasks 6–8; D3 (catalog)→Task 6; D4 (system render-once frozen)→Task 10; D5 (request_context_template)→Tasks 9, 11; D6 (lazy providers)→Task 11 Step 2; D7 (complete-or-reject)→Task 7. Catalog v1→Task 6. Lean theorems→Tasks 1–2; conformance→Tasks 3–4; config surface→Task 9; persistence order→Task 12; task interop→Task 13.
-- **Known soft spots flagged inline (not placeholders):** minijinja AST field names are version-pinned and must be verified against the 2.19 source (Tasks 7, 11); `acting_seat`/`acting_did` plumbing may be deferred to a follow-up if the acting principal isn't in `run_loop_stream` yet (Task 11) — emit empty strings, don't block.
-- **Type consistency:** `Volatility` (Lean) ↔ `catalog::Volatility` (Rust); `collect_system_reads`/`validate_system_template`/`collect_request_reads`/`render_system_prompt`/`default_catalog` names are used identically across Tasks 4, 6, 7, 8, 10, 11.
+- **Spec coverage:** D1 (context user msg)→Task 11; D2 (reuse engine)→Tasks 6–8; D3 (catalog)→Task 6; D4 (system render-once frozen)→Task 10; D5 (request_context_template)→Tasks 9, 11; D6 (lazy providers)→Task 11 Step 3; D7 (complete-or-reject)→Task 7. Catalog v1→Task 6. Lean theorems→Tasks 1–2; conformance→Tasks 3–4; config surface + migration→Task 9; per-request render fail-closed→Task 11; persistence order + turn-1-once→Task 12; task interop + apply validation→Task 13.
+- **Plan-review revisions applied (3rd pass):** conformance module wired/committed only after the API exists (Task 4 ordering gate); context rendered at the daemon path and carried via `LoopConfig`, not in the shared loop (Task 11); fail-closed on render error (Task 11); context persisted turn-1-only to avoid per-turn duplication (Task 12); DB migration + 2nd CLI write path + desired-state load/validate added (Tasks 9, 13); Lean tail theorem strengthened (Task 2); minijinja `ast` import path corrected (Task 7).
+- **Known soft spots flagged inline (not placeholders):** minijinja AST field names are version-pinned and must be verified against the 2.19 source (Tasks 7, 11); if the acting identity isn't on `AgentRequest` in v1, **drop `ctx.acting_seat`/`ctx.acting_did` from the catalog** (so referencing them fails at apply — fail-closed) rather than emitting empty strings — file a follow-up (Task 11 Step 3 note).
+- **Type consistency:** `Volatility` (Lean) ↔ `catalog::Volatility` (Rust); `Site`, `default_catalog`, `is_available_at`, `collect_system_reads`, `validate_system_template`, `collect_request_reads`, `render_system_prompt` names are used identically across Tasks 4, 6, 7, 8, 10, 11, 13.
