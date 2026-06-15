@@ -61,8 +61,9 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         // Discovery derivation + signed-invite guard. peer_registry_discovery.rs
         // fences the derivation/ownership properties AND the membership half of
-        // the join gate (`signedByMember`/`isMember`) via the real
-        // `decide_join_admission` engine fn. The signature half (`sigValid`) is
+        // the join gate (`signedByMember` and the leaf theorem
+        // `non_member_invite_rejected`) via the real `decide_join_admission`
+        // engine fn. The signature half (`sigValid`) is
         // fenced separately by defra-agent-protocol::pairing_token verify/tamper
         // tests; identity-binding of the admitted entry is intentionally out of
         // scope (trusted-fleet TOFU — see Transition.join docstring).

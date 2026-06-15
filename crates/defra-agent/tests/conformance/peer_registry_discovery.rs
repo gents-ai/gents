@@ -7,6 +7,7 @@
 //! touch — the Rust analogue of the Lean two-finset partition.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -32,8 +33,12 @@ fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     }
 }
 
-/// Mirrors Lean `mem_deriveRegistryDesired` + `self_not_mem_derive`: a peer is
-/// derived iff it is a live, non-self registry entry.
+/// Fences the soon-to-be-replaced registry-era reconciler `derive_registry_desired`
+/// (from #490, carried until cut 5's membership reconciler lands). The Lean analogue
+/// is the derivation soundness/completeness pair `materialized_implies_admitted` +
+/// `materializable_is_derived` (bridged by `mem_deriveMaterializable`) and the
+/// "self never derived" lemma `self_not_mem_derive`: a peer is derived iff it is a
+/// live, non-self materializable entry.
 #[test]
 fn derive_matches_live_non_self_membership() {
     let reg = vec![
@@ -45,8 +50,10 @@ fn derive_matches_live_non_self_membership() {
     assert_eq!(d, BTreeSet::from(["peerA".to_string()]));
 }
 
-/// Mirrors Lean `derive_idempotent` / `derive_convergent`: the derivation is a
-/// pure function of the registry, so it is stable across ticks.
+/// Mirrors Lean `derive_idempotent` / `deriveMaterializable_idempotent` /
+/// `derive_convergent`: the derivation is a pure function of the membership world,
+/// so it is stable across ticks. (Fences the registry-era `derive_registry_desired`
+/// carried until cut 5.)
 #[test]
 fn derive_is_idempotent_and_convergent_over_stable_registry() {
     let reg = vec![entry("peerA", true), entry("peerB", true)];
@@ -144,9 +151,11 @@ async fn ownership_safe_operator_rows_never_touched() {
     }
 }
 
-/// Mirrors Lean `retraction_sound` / `retraction_drops_unique_source` /
-/// `retraction_preserves_others`: staling an entry retracts exactly its
-/// registry-owned row, and an operator-owned row for a different peer survives.
+/// Mirrors Lean `revoke_retracts_exactly` (O3): retracting a member removes
+/// EXACTLY its network-owned rows and no others — here staling an entry retracts
+/// exactly its registry-owned row, and an operator-owned row for a different peer
+/// survives (the cross-partition analogue of O3's "peers reachable via another
+/// admitted DID survive"). Fences the registry-era reconciler carried until cut 5.
 #[tokio::test]
 async fn retraction_sound_removes_only_staled_registry_row() {
     let store = PartitionStore::new(
@@ -169,12 +178,14 @@ async fn retraction_sound_removes_only_staled_registry_row() {
 }
 
 // ---------------------------------------------------------------------------
-// Signed-invite membership gate (Lean `signedByMember` / `isMember`).
+// Signed-invite membership gate (Lean `signedByMember` / `admitsJoin` and the
+// leaf theorems `non_member_invite_rejected` / `no_join_without_admissible_token`).
 //
 // These fence the registry-membership half of the join authorization gate via
-// the real `decide_join_admission` engine fn — the same predicate the CLI join
-// path calls. Token signature validity (`sigValid`) is checked separately at
-// token decode (defra-agent-protocol::pairing_token) and is out of this fence.
+// the real `decide_join_admission` engine fn — the registry-era reconciler from
+// #490, carried until cut 5's membership reconciler supersedes it. Token signature
+// validity (`sigValid`) is checked separately at token decode
+// (defra-agent-protocol::pairing_token) and is out of this fence.
 // ---------------------------------------------------------------------------
 
 fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow {
@@ -211,7 +222,8 @@ fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
     );
 }
 
-/// Mirrors `isMember`: a live (online + fresh) issuer row admits the join.
+/// Mirrors the registry/member arm of Lean `signedByMember` (`admittedMember
+/// tok.issuer s`): a live (online + fresh) issuer row admits the join.
 #[test]
 fn join_gate_admits_live_member_issuer() {
     let rows = [member_row("did:key:issuer", "online", FRESH)];
@@ -227,9 +239,10 @@ fn join_gate_admits_live_member_issuer() {
     );
 }
 
-/// Mirrors `non_member_invite_rejected`: with a non-empty registry, an issuer
-/// that is absent, offline, or stale is NOT a live member, so the join is
-/// rejected (the TOFU arm does not apply once peers exist).
+/// Mirrors Lean `non_member_invite_rejected` over the registry/member arm of
+/// `signedByMember`: with a non-empty registry, an issuer that is absent, offline,
+/// or stale is NOT a live member, so the join is rejected (the TOFU arm does not
+/// apply once peers exist — Lean guards it with `s.memberships = ∅`).
 #[test]
 fn join_gate_rejects_non_live_member_when_registry_nonempty() {
     let now = Utc::now();
@@ -460,4 +473,108 @@ fn materializable_endpoint_truth_table() {
             ..ep
         }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Stale-citation guard.
+//
+// This module's doc-comments cite Lean theorems/defs by name as the contract
+// each test fences. When the model is rewritten (as in cut 1, which deleted
+// `mem_deriveRegistryDesired`, the `retraction_*` family, `isMember`, and
+// `hasPeerMember`), those citations can silently rot — pointing at symbols that
+// no longer exist in `Proofs/`. This test makes that class of drift loud: every
+// name in `CITED` below MUST appear as a `theorem`/`def`/`abbrev`/`structure`/
+// `inductive` declaration somewhere under `Proofs/PeerRegistryDiscovery/`.
+//
+// LIMITS (by design, kept honest):
+//   * `CITED` is maintained by hand next to the comments — it is NOT auto-scraped
+//     from the doc-text, so a NEW citation added to a comment without being added
+//     here is not checked. The payoff is no false positives from prose that
+//     merely mentions a Lean concept in passing.
+//   * It checks EXISTENCE, not that the right test cites the right theorem. It
+//     catches deletion/rename drift (the cut-1 failure mode), not mis-attribution.
+//   * Matching is a declaration-keyword + name scan; it would accept a same-named
+//     decl in any file under the model dir, which is acceptable here.
+const CITED: &[&str] = &[
+    // derivation / ownership / convergence
+    "materialized_implies_admitted",
+    "materializable_is_derived",
+    "mem_deriveMaterializable",
+    "self_not_mem_derive",
+    "derive_idempotent",
+    "deriveMaterializable_idempotent",
+    "derive_convergent",
+    "ownership_safe",
+    "revoke_retracts_exactly",
+    // signed-invite join gate
+    "signedByMember",
+    "admitsJoin",
+    "non_member_invite_rejected",
+    "no_join_without_admissible_token",
+    // membership / endpoint trust predicates
+    "admittedMember",
+    "materializableEndpoint",
+];
+
+/// Guard: every Lean symbol cited in this module's doc-comments must still exist
+/// in `Proofs/PeerRegistryDiscovery/`. Fails loudly on the cut-1 deletion/rename
+/// drift class. See the `CITED` block above for what is (and is not) checked.
+#[test]
+fn cited_lean_symbols_exist_in_proofs() {
+    let model_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .join("crates/defra-agent/proofs/Proofs/PeerRegistryDiscovery");
+
+    // Concatenate every .lean source under the model directory.
+    let mut sources = String::new();
+    for entry in std::fs::read_dir(&model_dir)
+        .expect("read PeerRegistryDiscovery/")
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "lean") {
+            sources.push_str(&std::fs::read_to_string(&path).expect("read .lean"));
+            sources.push('\n');
+        }
+    }
+
+    // A symbol "exists" if it appears as the name in a declaration. We accept any
+    // of the Lean declaration keywords; private/protected/noncomputable modifiers
+    // sit before the keyword, so keyword-then-name still matches the decl line.
+    let decl_keywords = [
+        "theorem", "lemma", "def", "abbrev", "structure", "inductive", "instance",
+    ];
+    let declares = |name: &str| -> bool {
+        decl_keywords.iter().any(|kw| {
+            sources.lines().any(|line| {
+                let t = line.trim_start();
+                t.strip_prefix(kw)
+                    .and_then(|rest| rest.strip_prefix(' '))
+                    .map(|rest| rest.trim_start())
+                    .is_some_and(|rest| {
+                        rest.strip_prefix(name).is_some_and(|after| {
+                            // Next char must be a non-identifier boundary so
+                            // `derive_idempotent` does not match
+                            // `derive_idempotent_extra`.
+                            after
+                                .chars()
+                                .next()
+                                .map(|c| !(c.is_alphanumeric() || c == '_' || c == '\''))
+                                .unwrap_or(true)
+                        })
+                    })
+            })
+        })
+    };
+
+    let missing: Vec<&str> = CITED.iter().copied().filter(|n| !declares(n)).collect();
+    assert!(
+        missing.is_empty(),
+        "doc-comments in peer_registry_discovery.rs cite Lean symbols absent from \
+         Proofs/PeerRegistryDiscovery/ (a deleted/renamed theorem — repoint the \
+         citation and update CITED):\n{}",
+        missing.join("\n")
+    );
 }
