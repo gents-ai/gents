@@ -59,6 +59,10 @@ struct ShimState {
 
 type Outbound = mpsc::UnboundedSender<String>;
 
+/// Codex threads default to memory disabled: this shim does not wire the Codex
+/// memory feature, so reporting it as enabled would be dishonest (#494).
+pub(crate) const DEFAULT_MEMORY_MODE: &str = "disabled";
+
 #[derive(Default)]
 pub(crate) struct CodexSidecar {
     pub(crate) cwd: BTreeMap<String, PathBuf>,
@@ -67,6 +71,17 @@ pub(crate) struct CodexSidecar {
     pub(crate) memory_mode: BTreeMap<String, String>,
     pub(crate) settings: BTreeMap<String, String>,
     pub(crate) goal: BTreeMap<String, crate::commands::codex_shim::thread_projection::StoredGoal>,
+}
+
+impl CodexSidecar {
+    /// The thread's memory mode, falling back to [`DEFAULT_MEMORY_MODE`] when the
+    /// thread has no explicit `ThreadMemoryModeSet` override.
+    pub(crate) fn memory_mode_or_default(&self, thread_id: &str) -> String {
+        self.memory_mode
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_MEMORY_MODE.to_string())
+    }
 }
 
 #[derive(Clone)]
@@ -316,13 +331,7 @@ impl ShimState {
     }
 
     async fn thread_memory_mode(&self, thread_id: &str) -> String {
-        self.sidecar
-            .lock()
-            .await
-            .memory_mode
-            .get(thread_id)
-            .cloned()
-            .unwrap_or_else(|| "disabled".to_string())
+        self.sidecar.lock().await.memory_mode_or_default(thread_id)
     }
 
     async fn set_thread_memory_mode(&self, thread_id: &str, mode: &str) {
@@ -385,5 +394,27 @@ impl ConnectionState {
 
     async fn take_steering_input(&self, request_id: &str) -> Option<Vec<codex::UserInput>> {
         self.pending_steering_inputs.lock().await.remove(request_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CodexSidecar, DEFAULT_MEMORY_MODE};
+
+    #[test]
+    fn memory_mode_defaults_to_disabled_for_unknown_thread() {
+        let sidecar = CodexSidecar::default();
+        assert_eq!(sidecar.memory_mode_or_default("never-set"), "disabled");
+        assert_eq!(DEFAULT_MEMORY_MODE, "disabled");
+    }
+
+    #[test]
+    fn memory_mode_returns_explicit_override_when_set() {
+        let mut sidecar = CodexSidecar::default();
+        sidecar
+            .memory_mode
+            .insert("t1".to_string(), "enabled".to_string());
+        assert_eq!(sidecar.memory_mode_or_default("t1"), "enabled");
+        assert_eq!(sidecar.memory_mode_or_default("t2"), "disabled");
     }
 }

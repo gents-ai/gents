@@ -153,10 +153,16 @@ pub(super) async fn load_conversation(
     thread_id: &str,
 ) -> Result<Option<ConversationRow>> {
     let escaped_thread_id = escape_graphql_string(thread_id);
+    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
+    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
     let query = format!(
         r#"{{
             AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_thread_id}" }} }},
+                filter: {{
+                    session_id: {{ _eq: "{escaped_thread_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                }},
                 limit: 1
             ) {{
                 title preview_text status created_at updated_at latest_request_id forked_from_session_id

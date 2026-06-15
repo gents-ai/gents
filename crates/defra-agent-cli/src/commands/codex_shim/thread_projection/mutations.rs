@@ -51,7 +51,11 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
     let mutation = format!(
         r#"mutation {{
             upsert_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                }},
                 add: {{
                     session_id: "{escaped_session_id}",
                     agent_name: "{escaped_behavior_id}",

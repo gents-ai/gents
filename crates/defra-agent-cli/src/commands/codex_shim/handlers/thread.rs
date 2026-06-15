@@ -305,19 +305,26 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadSettingsUpdate {
             request_id, params, ..
         } => {
+            // `set_codex_thread_settings` is the single writer of the per-thread
+            // cwd sidecar entry (it resolves `params.cwd` against `state.cwd`),
+            // so the handler must not re-resolve and re-write it here.
             set_codex_thread_settings(state, &params.thread_id, &params).await?;
-            if let Some(cwd) = params.cwd.as_deref() {
-                let cwd = effective_cwd(state, cwd.to_str());
-                state.set_thread_cwd(&params.thread_id, cwd).await;
-            }
             send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await
         }
         codex::ClientRequest::ThreadMetadataUpdate {
             request_id, params, ..
         } => {
-            let record = set_codex_thread_git_info(state, &params.thread_id, &params.git_info)
-                .await?
-                .with_context(|| format!("unknown Codex thread `{}`", params.thread_id))?;
+            let Some(record) =
+                set_codex_thread_git_info(state, &params.thread_id, &params.git_info).await?
+            else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
             send_typed_json_result::<codex::ThreadMetadataUpdateResponse>(
                 outbound,
                 request_id,
