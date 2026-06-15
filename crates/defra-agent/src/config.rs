@@ -39,6 +39,7 @@ pub struct AgentBehavior {
     pub max_output_tokens: usize,
     pub max_turns: usize,
     pub system_prompt: String,
+    pub request_context_template: Option<String>,
     pub tools: BehaviorToolConfig,
     pub compaction_threshold: f64,
     pub compaction_strategy: CompactionStrategy,
@@ -100,6 +101,7 @@ impl std::fmt::Debug for AgentBehavior {
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
             .field("system_prompt", &self.system_prompt)
+            .field("request_context_template", &self.request_context_template)
             .field("tools", &self.tools)
             .field("compaction_threshold", &self.compaction_threshold)
             .field("compaction_strategy", &self.compaction_strategy)

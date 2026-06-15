@@ -445,6 +445,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: String::new(),
+        request_context_template: None,
         tools: BehaviorToolConfig::default(),
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,

@@ -498,6 +498,145 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 }
 
 #[tokio::test]
+async fn completion_call_persists_context_once_before_prompt() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
+    let first_prompt = user_text_message("First request");
+    assert!(matches!(
+        hook.on_completion_call_with_context(&first_prompt, &[], Some(&context))
+            .await,
+        HookAction::Continue
+    ));
+    let second_prompt = user_text_message("Second turn");
+    assert!(matches!(
+        hook.on_completion_call_with_context(&second_prompt, &[], None)
+            .await,
+        HookAction::Continue
+    ));
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(matches!(
+        &history[0],
+        Message::User { content }
+            if matches!(first_content(&content), UserContent::Text(Text { text }) if text.starts_with("<context>"))
+    ));
+    assert!(matches!(
+        &history[1],
+        Message::User { content }
+            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "First request")
+    ));
+    assert!(matches!(
+        &history[2],
+        Message::User { content }
+            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "Second turn")
+    ));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn context_and_prompt_deduped_across_retry_attempts() {
+    // B2 (#497): the daemon retry loop builds a FRESH hook per attempt. A
+    // transient failure before the first assistant token re-runs turn 1, which
+    // would otherwise re-persist the <context> message + prompt. Durable
+    // request-scoped dedup (keyed on session_id + request_id + content) must
+    // keep them exactly-once across attempts.
+    let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
+    let prompt = user_text_message("Do the thing");
+
+    // Attempt 1: fresh hook, stamp the active request id, persist turn 1.
+    let hook1 = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    hook1
+        .set_active_request_id(Some("req-retry".to_string()))
+        .await;
+    assert!(matches!(
+        hook1
+            .on_completion_call_with_context(&prompt, &[], Some(&context))
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook1.session_id().await.expect("session id");
+
+    // Attempt 2 (retry): a brand-new hook resuming the same session with the
+    // same request id re-runs turn 1, as the daemon retry loop would.
+    let hook2 = DefraSessionHook::resume_or_create_with_identity_policy(
+        node.clone(),
+        &session_id,
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    hook2
+        .set_active_request_id(Some("req-retry".to_string()))
+        .await;
+    assert!(matches!(
+        hook2
+            .on_completion_call_with_context(&prompt, &[], Some(&context))
+            .await,
+        HookAction::Continue
+    ));
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    let context_count = history
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::User { content }
+                if matches!(first_content(content), UserContent::Text(Text { text }) if text.starts_with("<context>")))
+        })
+        .count();
+    assert_eq!(
+        context_count, 1,
+        "context must be persisted exactly once across retries, got {history:?}"
+    );
+    assert_eq!(
+        history.len(),
+        2,
+        "retry must not duplicate turn-1 messages; expected [context, prompt], got {history:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));

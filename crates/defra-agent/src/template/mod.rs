@@ -11,10 +11,15 @@ mod tests;
 
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 
+pub mod catalog;
+pub mod reads;
+
 pub struct TemplateScope {
     pub event: serde_json::Value,
     pub doc: Option<serde_json::Value>,
     pub args: Option<serde_json::Value>,
+    pub node: serde_json::Value,
+    pub ctx: serde_json::Value,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +77,8 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         if let Some(args) = scope.args.clone() {
             ctx.insert("args".to_string(), args);
         }
+        ctx.insert("node".to_string(), scope.node.clone());
+        ctx.insert("ctx".to_string(), scope.ctx.clone());
         serde_json::Value::Object(ctx)
     };
 
@@ -86,6 +93,110 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         return Err(TemplateError::SizeCap(rendered.len()));
     }
     Ok(rendered)
+}
+
+/// Render a system template against run-constant `node` scope.
+pub fn render_system_prompt(
+    template: &str,
+    node: serde_json::Value,
+    cat: &catalog::Catalog,
+) -> Result<String, TemplateError> {
+    if !template.contains("{{") && !template.contains("{%") && !template.contains("{#") {
+        return Ok(template.to_string());
+    }
+    reads::validate_system_template(template, cat)?;
+    let scope = TemplateScope {
+        event: serde_json::json!({}),
+        doc: None,
+        args: None,
+        node,
+        ctx: serde_json::json!({}),
+    };
+    render_template(template, &scope)
+}
+
+/// Render a per-request context template against `node` and `ctx` scope.
+pub fn render_request_context_template(
+    template: &str,
+    node: serde_json::Value,
+    ctx: serde_json::Value,
+    cat: &catalog::Catalog,
+) -> Result<String, TemplateError> {
+    validate_catalog_scope(template, cat, catalog::Site::RequestContext)?;
+    let scope = TemplateScope {
+        event: serde_json::json!({}),
+        doc: None,
+        args: None,
+        node,
+        ctx,
+    };
+    render_template(template, &scope)
+}
+
+/// Apply-time validation for a behavior's `request_context_template`: the
+/// template must parse and reference only catalog variables available at the
+/// request-context render site. Mirrors the system-template guard's role on the
+/// cacheable path, so a misconfigured template fails apply rather than the
+/// first production request.
+pub fn validate_request_context_template(
+    template: &str,
+    cat: &catalog::Catalog,
+) -> Result<(), TemplateError> {
+    validate_catalog_scope(template, cat, catalog::Site::RequestContext)
+}
+
+fn validate_catalog_scope(
+    template: &str,
+    cat: &catalog::Catalog,
+    site: catalog::Site,
+) -> Result<(), TemplateError> {
+    let reads = reads::collect_request_reads(template)?;
+    for var in reads {
+        if !is_catalog_scoped_ref(&var) {
+            continue;
+        }
+        if !cat.is_available_at(&var, site) {
+            return Err(TemplateError::Render(format!(
+                "template references unavailable variable `{var}` at {site:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_catalog_scoped_ref(var: &str) -> bool {
+    var == "node" || var == "ctx" || var.starts_with("node.") || var.starts_with("ctx.")
+}
+
+/// Summarize the local node's active collection schemas for `ctx.collection_summary`.
+pub fn collection_summary(node: &defra_node::EmbeddedNode) -> anyhow::Result<String> {
+    let mut names = node.list_collections()?;
+    names.sort();
+    let mut lines = Vec::with_capacity(names.len() + 1);
+    lines.push(format!("collections: {}", names.len()));
+    for name in names {
+        let Some(collection) = node.get_collection(&name)? else {
+            continue;
+        };
+        lines.push(format!(
+            "- {}: {} fields",
+            collection.name,
+            collection.fields.len()
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Build the task-scope `node`/`ctx` JSON for a fire at `now` (RFC3339).
+pub fn task_node_ctx(
+    node_did: &str,
+    behavior_id: &str,
+    now: &str,
+) -> (serde_json::Value, serde_json::Value) {
+    (
+        serde_json::json!({ "node_did": node_did, "behavior_id": behavior_id }),
+        serde_json::json!({ "now": now }),
+    )
 }
 
 /// Parse `template` and return every variable access whose root identifier is
@@ -161,6 +272,20 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
                 let end = find_close(bytes, start, b'%');
                 if let Some(end_idx) = end {
                     let body = &template[start..end_idx];
+                    // `{% raw %}...{% endraw %}` is literal text — its contents
+                    // are NOT variable references. Skip the whole span so the
+                    // documented escape hatch (wrap literal braces in raw) is
+                    // honored here exactly as the parser-backed system guard
+                    // honors it (otherwise valid task templates false-reject).
+                    if body.trim() == "raw" {
+                        match find_endraw(bytes, end_idx + 2) {
+                            Some(after_endraw) => {
+                                i = after_endraw;
+                                continue;
+                            }
+                            None => break,
+                        }
+                    }
                     collect_refs_in_body(body, &mut refs);
                     i = end_idx + 2;
                 } else {
@@ -174,6 +299,27 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
     }
 
     Ok(refs)
+}
+
+/// Find the index just past the closing `%}` of the next `{% endraw %}` tag at
+/// or after `from`. Used to skip over a `{% raw %}` literal span. Returns `None`
+/// if no `endraw` close is found (malformed/unterminated raw block).
+fn find_endraw(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'%' {
+            let start = i + 2;
+            let end = find_close(bytes, start, b'%')?;
+            let body = std::str::from_utf8(&bytes[start..end]).ok()?.trim();
+            if body == "endraw" {
+                return Some(end + 2);
+            }
+            i = end + 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Locate the closing sequence `<close>}` starting from `from`, returning the
@@ -316,7 +462,7 @@ fn utf8_char_len(first: u8) -> usize {
 }
 
 fn is_tracked_root(ident: &str) -> bool {
-    matches!(ident, "event" | "doc" | "args")
+    matches!(ident, "event" | "doc" | "args" | "node" | "ctx")
 }
 
 fn is_ident_start(c: u8) -> bool {

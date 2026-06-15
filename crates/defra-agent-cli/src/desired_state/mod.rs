@@ -47,6 +47,8 @@ pub(crate) struct DesiredAgentBehavior {
     #[serde(default)]
     pub(crate) summary: Option<String>,
     pub(crate) system_prompt: Option<String>,
+    #[serde(default)]
+    pub(crate) request_context_template: Option<String>,
     pub(crate) backend_id: Option<String>,
     pub(crate) model_name: Option<String>,
     pub(crate) tool_selection_id: Option<String>,

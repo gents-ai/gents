@@ -18,6 +18,7 @@ pub struct AgentBehavior {
     pub description: Option<String>,
     pub summary: Option<String>,
     pub system_prompt: Option<String>,
+    pub request_context_template: Option<String>,
     pub backend_id: Option<String>,
     pub model_name: Option<String>,
     pub tool_selection_id: Option<String>,
@@ -65,6 +66,7 @@ pub(crate) async fn load_agent_behavior_record(
                 description
                 summary
                 system_prompt
+                request_context_template
                 backend_id
                 model_name
                 tool_selection_id
@@ -105,6 +107,7 @@ pub(crate) async fn load_agent_behavior_by_doc_id(
                 description
                 summary
                 system_prompt
+                request_context_template
                 backend_id
                 model_name
                 tool_selection_id
@@ -156,6 +159,7 @@ pub(crate) async fn list_agent_behavior_records(
                 description
                 summary
                 system_prompt
+                request_context_template
                 backend_id
                 model_name
                 tool_selection_id
@@ -194,6 +198,10 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         graphql_fields::graphql_string_field("description", behavior.description.as_deref()),
         graphql_fields::graphql_string_field("summary", behavior.summary.as_deref()),
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
+        graphql_fields::graphql_string_field(
+            "request_context_template",
+            behavior.request_context_template.as_deref(),
+        ),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
         graphql_fields::graphql_string_field(
@@ -232,6 +240,10 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         graphql_fields::graphql_string_field("description", behavior.description.as_deref()),
         graphql_fields::graphql_string_field("summary", behavior.summary.as_deref()),
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
+        graphql_fields::graphql_string_field(
+            "request_context_template",
+            behavior.request_context_template.as_deref(),
+        ),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
         graphql_fields::graphql_string_field(
@@ -296,6 +308,7 @@ pub(super) async fn create_default_behavior(
             description: None,
             summary: None,
             system_prompt: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: None,

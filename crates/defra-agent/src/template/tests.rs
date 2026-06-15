@@ -6,6 +6,8 @@ fn renders_event_var() {
         event: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z", "trigger_kind": "schedule"}),
         doc: None,
         args: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let out = render_template("fired at {{ event.fired_at }}", &scope).unwrap();
     assert_eq!(out, "fired at 2026-04-21T00:00:00Z");
@@ -17,6 +19,8 @@ fn strict_undefined_errors_on_missing_var() {
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let err = render_template("{{ event.missing }}", &scope).unwrap_err();
     assert!(matches!(err, TemplateError::Render(_)));
@@ -28,6 +32,8 @@ fn renders_args_var_when_scope_has_args() {
         event: serde_json::json!({"trigger_kind": "manual"}),
         doc: None,
         args: Some(serde_json::json!({"name": "Amy", "count": 3})),
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let out = render_template("hi {{ args.name }}, n={{ args.count }}", &scope).unwrap();
     assert_eq!(out, "hi Amy, n=3");
@@ -39,6 +45,8 @@ fn errors_on_missing_args_key() {
         event: serde_json::json!({}),
         doc: None,
         args: Some(serde_json::json!({})), // args present but empty
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let err = render_template("{{ args.missing }}", &scope).unwrap_err();
     assert!(matches!(err, TemplateError::Render(_)));
@@ -52,6 +60,8 @@ fn enforces_rendered_size_cap() {
         event: serde_json::json!({"big": big}),
         doc: None,
         args: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let err = render_template("{{ event.big }}", &scope).unwrap_err();
     assert!(matches!(err, TemplateError::SizeCap(_)));
@@ -64,6 +74,8 @@ fn enforces_template_size_cap() {
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
     };
     let err = render_template(&big, &scope).unwrap_err();
     assert!(matches!(err, TemplateError::Parse(_)));

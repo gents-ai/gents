@@ -9,9 +9,12 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
+use crate::config::AgentBehavior;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
+use crate::llm::message::Message;
 use crate::streaming::{StreamStatus, StreamWriter};
+use crate::watcher::AgentRequest;
 
 enum InferenceAttemptOutcome {
     Retry(crate::error::InferenceError),
@@ -68,6 +71,57 @@ fn request_workspace_cwd(request: &crate::watcher::AgentRequest) -> Option<PathB
         .map(PathBuf::from)
 }
 
+fn render_request_context_message(
+    node: &defra_node::EmbeddedNode,
+    behavior: &AgentBehavior,
+    request: &AgentRequest,
+) -> Result<Option<Message>> {
+    let Some(template) = behavior.request_context_template.as_deref() else {
+        return Ok(None);
+    };
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut ctx = serde_json::Map::new();
+    ctx.insert(
+        "now".to_string(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    // Populate the (potentially expensive) live summary whenever the template
+    // could reference it. A literal substring check can never miss a real read
+    // — the catalog variable name must appear verbatim to be referenced — while
+    // a best-effort AST walk drops names bound inside set/with/filter/macro
+    // bodies, which would leave `collection_summary` undefined and fail the
+    // render under strict-undefined for an otherwise-valid template.
+    if template.contains("collection_summary") {
+        ctx.insert(
+            "collection_summary".to_string(),
+            serde_json::json!(crate::template::collection_summary(node)?),
+        );
+    }
+
+    let rendered = crate::template::render_request_context_template(
+        template,
+        serde_json::json!({
+            "node_did": behavior.agent_did(),
+            "behavior_id": behavior.behavior_id.as_str(),
+        }),
+        serde_json::Value::Object(ctx),
+        &crate::template::catalog::default_catalog(),
+    )
+    .map_err(|error| anyhow!("request_context_template render failed: {error}"))?;
+
+    tracing::debug!(
+        request_id = %request.request_id,
+        behavior_id = %behavior.behavior_id,
+        "rendered request context template"
+    );
+    Ok(Some(Message::user(format!(
+        "<context>\n{rendered}\n</context>"
+    ))))
+}
+
 async fn await_with_request_deadline<F, T>(
     deadline: RequestDeadline,
     future: F,
@@ -114,6 +168,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let workspace_cwd_set = workspace_cwd.is_some();
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
+
+        // Render the per-request <context> message ONCE, before the retry loop.
+        // Rendering per attempt would (a) recompute ctx.now so each retry's
+        // persisted/visible context diverges from what the model consumed, and
+        // (b) defeat exactly-once persistence. A render error here is permanent
+        // (not transient), so failing before the first attempt is correct.
+        let request_context_message =
+            render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
 
         for attempt in 0..max_attempts {
             ensure_request_deadline_open(request_deadline, "starting inference attempt")?;
@@ -178,12 +240,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // over the model + tool surface. Per-request sampling is resolved
                 // into the loop config from the behavior + request.
                 let model = (*self.model).clone();
-                let loop_config = crate::completion_factory::loop_config_for_request(
+                let mut loop_config = crate::completion_factory::loop_config_for_request(
                     &self.behavior,
                     self.preamble.clone(),
                     request,
                     self.loop_tools.len(),
                 );
+                loop_config.context_message = request_context_message.clone();
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();

@@ -5,6 +5,7 @@ type AgentBehavior {
     description: String
     summary: String
     system_prompt: String
+    request_context_template: String
     backend_id: String @index
     model_name: String
     tool_selection_id: String @index

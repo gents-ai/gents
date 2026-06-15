@@ -55,6 +55,9 @@ pub(crate) fn load_manifest_root(
         if let Err(error) = hydrate_sidecar(&mut behavior.system_prompt, &dir) {
             errors.push(error);
         }
+        if let Err(error) = hydrate_sidecar(&mut behavior.request_context_template, &dir) {
+            errors.push(error);
+        }
     }
     for task in &mut tasks {
         let dir = per_doc_dir(root, Collection::Task, task.unique_id());

@@ -95,6 +95,8 @@ mod managed_exec;
 mod mcp_health;
 #[path = "conformance/process.rs"]
 mod process;
+#[path = "conformance/prompt_template.rs"]
+mod prompt_template;
 #[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
 #[path = "conformance/recovery_sweeps.rs"]
