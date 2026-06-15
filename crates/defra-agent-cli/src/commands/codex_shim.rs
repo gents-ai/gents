@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -54,15 +54,24 @@ struct ShimState {
     id_counter: Arc<AtomicU64>,
     timeout: Duration,
     poll_interval: Duration,
+    sidecar: Arc<Mutex<CodexSidecar>>,
 }
 
 type Outbound = mpsc::UnboundedSender<String>;
+
+#[derive(Default)]
+pub(crate) struct CodexSidecar {
+    pub(crate) cwd: BTreeMap<String, PathBuf>,
+    pub(crate) loaded: BTreeSet<String>,
+    pub(crate) archived: BTreeSet<String>,
+    pub(crate) memory_mode: BTreeMap<String, String>,
+    pub(crate) settings: BTreeMap<String, String>,
+}
 
 #[derive(Clone)]
 struct ConnectionState {
     outbound: Outbound,
     turn_streams: Arc<Mutex<BTreeMap<String, TurnStreamControl>>>,
-    thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
     pending_steering_inputs: Arc<Mutex<BTreeMap<String, Vec<codex::UserInput>>>>,
 }
@@ -155,6 +164,7 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
+        sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
     };
 
     let app = Router::new()
@@ -193,7 +203,6 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
     let connection = ConnectionState {
         outbound,
         turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
-        thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
     };
@@ -248,6 +257,97 @@ impl ShimState {
     fn next_id(&self, prefix: &str) -> String {
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}-{id}")
+    }
+
+    async fn thread_cwd(&self, thread_id: &str) -> PathBuf {
+        self.sidecar
+            .lock()
+            .await
+            .cwd
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| self.cwd.clone())
+    }
+
+    async fn set_thread_cwd(&self, thread_id: &str, cwd: PathBuf) {
+        self.sidecar
+            .lock()
+            .await
+            .cwd
+            .insert(thread_id.to_string(), cwd);
+    }
+
+    async fn is_thread_loaded(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.loaded.contains(thread_id)
+    }
+
+    async fn set_thread_loaded(&self, thread_id: &str, loaded: bool) {
+        let mut guard = self.sidecar.lock().await;
+        if loaded {
+            guard.loaded.insert(thread_id.to_string());
+        } else {
+            guard.loaded.remove(thread_id);
+        }
+    }
+
+    async fn loaded_thread_ids(&self) -> Vec<String> {
+        let guard = self.sidecar.lock().await;
+        guard
+            .loaded
+            .iter()
+            .filter(|thread_id| !guard.archived.contains(*thread_id))
+            .cloned()
+            .collect()
+    }
+
+    async fn is_thread_archived(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.archived.contains(thread_id)
+    }
+
+    async fn set_thread_archived(&self, thread_id: &str, archived: bool) {
+        let mut guard = self.sidecar.lock().await;
+        if archived {
+            guard.archived.insert(thread_id.to_string());
+            guard.loaded.remove(thread_id);
+        } else {
+            guard.archived.remove(thread_id);
+        }
+    }
+
+    async fn thread_memory_mode(&self, thread_id: &str) -> String {
+        self.sidecar
+            .lock()
+            .await
+            .memory_mode
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| "disabled".to_string())
+    }
+
+    async fn set_thread_memory_mode(&self, thread_id: &str, mode: String) {
+        self.sidecar
+            .lock()
+            .await
+            .memory_mode
+            .insert(thread_id.to_string(), mode);
+    }
+
+    async fn thread_settings(&self, thread_id: &str) -> String {
+        self.sidecar
+            .lock()
+            .await
+            .settings
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string())
+    }
+
+    async fn set_thread_settings(&self, thread_id: &str, settings_json: String) {
+        self.sidecar
+            .lock()
+            .await
+            .settings
+            .insert(thread_id.to_string(), settings_json);
     }
 }
 

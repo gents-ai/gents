@@ -22,7 +22,7 @@ use super::super::thread_routes;
 use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_thread_request(
-    connection: &ConnectionState,
+    _connection: &ConnectionState,
     state: &ShimState,
     outbound: &Outbound,
     request: codex::ClientRequest,
@@ -34,11 +34,7 @@ pub(super) async fn handle_thread_request(
             let cwd = effective_cwd(state, params.cwd.as_deref());
             let thread_id = state.next_thread_id();
             let record = create_codex_thread(state, &thread_id, &cwd).await?;
-            connection
-                .thread_cwds
-                .lock()
-                .await
-                .insert(thread_id.clone(), cwd.clone());
+            state.set_thread_cwd(&thread_id, cwd.clone()).await;
             let bound_model_id =
                 load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
@@ -64,11 +60,9 @@ pub(super) async fn handle_thread_request(
             }
             let record =
                 resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?;
-            connection
-                .thread_cwds
-                .lock()
-                .await
-                .insert(record.session_id.clone(), record.cwd.clone());
+            state
+                .set_thread_cwd(&record.session_id, record.cwd.clone())
+                .await;
             let turns = if params.exclude_turns {
                 Vec::new()
             } else {
@@ -105,11 +99,9 @@ pub(super) async fn handle_thread_request(
                         .unwrap_or_else(|| codex_thread_json(&record, false)),
                 )
                 .context("validating forked thread notification")?;
-                connection
-                    .thread_cwds
-                    .lock()
-                    .await
-                    .insert(record.session_id.clone(), record.cwd.clone());
+                state
+                    .set_thread_cwd(&record.session_id, record.cwd.clone())
+                    .await;
                 send_typed_json_result::<codex::ThreadForkResponse>(outbound, request_id, response)
                     .await?;
                 send_notification(
@@ -275,11 +267,7 @@ pub(super) async fn handle_thread_request(
             set_codex_thread_settings(state, &params.thread_id, &params).await?;
             if let Some(cwd) = params.cwd.as_deref() {
                 let cwd = effective_cwd(state, cwd.to_str());
-                connection
-                    .thread_cwds
-                    .lock()
-                    .await
-                    .insert(params.thread_id.clone(), cwd);
+                state.set_thread_cwd(&params.thread_id, cwd).await;
             }
             send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await
         }
