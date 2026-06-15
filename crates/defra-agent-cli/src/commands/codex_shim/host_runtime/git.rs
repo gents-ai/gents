@@ -43,6 +43,33 @@ pub(in crate::commands::codex_shim) async fn git_diff_to_remote(
     })
 }
 
+pub(in crate::commands::codex_shim) async fn thread_git_info(
+    cwd: &Path,
+) -> Option<serde_json::Value> {
+    let sha = run_git(cwd, &["rev-parse", "HEAD"]).await.ok()?;
+    let sha = sha.trim();
+    if sha.is_empty() {
+        return None;
+    }
+
+    let branch = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .ok()
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty() && branch != "HEAD");
+    let origin = run_git(cwd, &["config", "--get", "remote.origin.url"])
+        .await
+        .ok()
+        .map(|origin| origin.trim().to_string())
+        .filter(|origin| !origin.is_empty());
+
+    Some(serde_json::json!({
+        "sha": sha,
+        "branch": branch,
+        "originUrl": origin,
+    }))
+}
+
 async fn run_git(cwd: &Path, args: &[&str]) -> Result<String, HostRuntimeError> {
     let output = run_git_output(cwd, args).await?;
     if !output.status.success() {

@@ -403,7 +403,7 @@ pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadR
             "cwd": absolute_path(&record.cwd),
             "cliVersion": env!("CARGO_PKG_VERSION"),
             "source": "cli",
-            "gitInfo": codex_git_info_summary_json(&record.git_info_json),
+            "gitInfo": record.git_info.clone(),
         }
     })
 }
@@ -768,22 +768,6 @@ fn parse_timestamp_seconds(raw: &str) -> Option<i64> {
         .map(|timestamp| timestamp.timestamp())
 }
 
-fn codex_git_info_summary_json(raw: &str) -> Option<Value> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    let object = value.as_object()?;
-    if object.is_empty() {
-        return None;
-    }
-    Some(json!({
-        "sha": object.get("sha").and_then(Value::as_str),
-        "branch": object.get("branch").and_then(Value::as_str),
-        "origin_url": object
-            .get("originUrl")
-            .or_else(|| object.get("origin_url"))
-            .and_then(Value::as_str),
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -830,10 +814,8 @@ mod tests {
             memory_mode: "enabled".to_string(),
             name: String::new(),
             settings_json: "{}".to_string(),
-            goal_json: "{}".to_string(),
-            git_info_json: "{}".to_string(),
-            projection_created_at: None,
-            projection_updated_at: None,
+            git_info: None,
+            projection_started: None,
             conversation: None,
         };
         let request = RequestRow {

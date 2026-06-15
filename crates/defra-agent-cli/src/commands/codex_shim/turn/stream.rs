@@ -16,8 +16,11 @@ use super::super::progress::{
     defra_turn_progress_query, response_field_is_blank, terminal_error_message,
     terminal_turn_status,
 };
-use super::super::protocol::send_committed_user_message;
+use super::super::protocol::{send_committed_user_message, send_notification};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
+use super::super::thread_projection::{
+    requests_token_usage, session_token_usage, thread_token_usage,
+};
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
@@ -32,6 +35,7 @@ pub(super) async fn stream_defra_turn(
 ) -> Result<()> {
     let outbound = &connection.outbound;
     let mut current = submitted.clone();
+    let mut turn_request_ids = vec![current.request_id.clone()];
     let mut known_tool_calls: BTreeMap<String, ToolProjectionStatus> = BTreeMap::new();
     let mut running_background_tools: BTreeMap<String, codex::CommandExecutionStatus> =
         BTreeMap::new();
@@ -237,6 +241,7 @@ pub(super) async fn stream_defra_turn(
                     )
                     .await?;
                     current.request_id = next_request.request_id;
+                    turn_request_ids.push(current.request_id.clone());
                     known_tool_calls.clear();
                     latest_content.clear();
                     latest_reasoning.clear();
@@ -246,6 +251,25 @@ pub(super) async fn stream_defra_turn(
                     continue;
                 }
             }
+            let last_usage = requests_token_usage(state, &turn_request_ids)
+                .await
+                .unwrap_or_default();
+            let total_usage = session_token_usage(state, &current.session_id)
+                .await
+                .unwrap_or_default();
+            send_notification(
+                outbound,
+                state,
+                codex::ServerNotification::ThreadTokenUsageUpdated(
+                    codex::ThreadTokenUsageUpdatedNotification {
+                        thread_id: projection.thread_id.to_string(),
+                        turn_id: projection.turn_id.to_string(),
+                        token_usage: thread_token_usage(total_usage, last_usage),
+                    },
+                ),
+            )
+            .await?;
+
             projection
                 .finish_turn(outbound, turn_status, error_message)
                 .await?;
