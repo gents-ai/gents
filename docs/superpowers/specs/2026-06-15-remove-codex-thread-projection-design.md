@@ -37,7 +37,7 @@ mechanical removal of `CodexThreadProjection` from the collection registries.
 |---|---|---|
 | `session_id` | key | Shared key with `AgentConversation`/`AgentSession`. |
 | `name` | `ThreadSetName` | **Relocate** to `AgentConversation.title` with `title_source="user"`, **create-if-absent**. The existing `update_conversation_title_with_source` (session/conversation.rs:282) is a no-op when no conversation row exists yet — and a freshly-started thread has no conversation until its first turn. So `ThreadSetName` must *upsert* the conversation (identity from `ShimState`), not just update it, or an early rename is silently lost. The runtime's `existing_title_state` (session/conversation.rs:375) preserves a `"user"` title source against auto-titling, so the name survives later turns. `json.rs` already reads `conversation.title`. |
-| `created_at` / `updated_at` | projection write | **Derive** from `AgentConversation.created_at`/`updated_at`. `json.rs:132-155` already prefers the conversation timestamps. |
+| `created_at` / `updated_at` | projection write | **Derive** from `AgentConversation.created_at`/`updated_at` when a conversation exists, falling back to **`AgentSession.started`** for zero-turn threads (which have no conversation row). `createdAt`, `updatedAt`, and list ordering all use this fallback. `json.rs:132-155` already prefers conversation timestamps; extend the fallback chain to `AgentSession.started`. |
 | `preview` | (from conversation) | **Derive** from `AgentConversation.preview_text` (already). |
 | `cwd` | `ThreadSettingsUpdate` / create | **Derive** from a server-scoped per-thread cwd override (moved from `ConnectionState.thread_cwds` to the `ShimState` sidecar — see below) falling back to `ShimState.cwd`. The per-thread cwd is already the live source of truth for turn execution (`turn.rs:54`, `turn.rs:170`); it must move to `ShimState` because record-assembly APIs only receive `&ShimState`, and `ConnectionState` is recreated per websocket. |
 | `git_info_json` | `ThreadMetadataUpdate` (client-supplied) | **Derive at read time** from `cwd` via a **new** non-fatal `thread_git_info(cwd) -> Option<GitInfo>` helper (`host_runtime/git.rs` today exposes only `git_diff_to_remote`, not sha/branch/origin). Non-git directories or git failures yield no `gitInfo`, never a failed thread read. |
@@ -92,6 +92,14 @@ tests list a thread immediately after start. Therefore:
 - `load_codex_thread` and `list_codex_threads_by_archived` resolve threads from
   `AgentSession`, left-joining `AgentConversation` for title/preview/timestamps
   when present, and filter by the in-process archived set.
+- **The `AgentSession` query must be scoped to the shim's `agent_did` and
+  `behavior_id`**, or `thread/list` will surface unrelated runtime sessions that
+  happen to share the node. This requires fixing `ensure_agent_session`
+  (`storage.rs:89`), which today writes `agent_name` + `behavior_id` but **omits
+  `agent_did`** (unlike the runtime helper `session/sessions.rs:24`). Write
+  `agent_did` at session create so the scoped filter matches the shim's own
+  sessions. `agent_did` is `@immutable`, so this is write-once-at-create.
+- Zero-turn timestamps fall back to `AgentSession.started` (see field audit).
 - This avoids eagerly creating empty `AgentConversation` rows for every thread
   (which would pollute the desktop chat list). A conversation row appears only
   once the thread has a turn — or once the user explicitly names it (see `name`
@@ -139,6 +147,10 @@ failure.
   and the `CODEX_THREAD_PROJECTION*` consts; remove from `ALL`,
   `ALL_COLLECTION_NAMES`, `BRANCHABLE_COLLECTION_NAMES`; update the
   `all_contains_every_agent_schema` test count (`23 → 22`, `src/lib.rs:137`).
+- `crates/defra-agent-protocol/src/schemas.rs`: remove the `CODEX_THREAD_PROJECTION`
+  / `CODEX_THREAD_PROJECTION_NAME` re-exports (lines 17-18), and the entries in
+  the protocol-level `ALL` (line 65) and `ALL_COLLECTION_NAMES` (line 94); update
+  the `all_contains_every_schema` test count (`27 → 26`, `src/schemas.rs:118`).
 - `crates/defra-agent/src/schema.rs` and `crates/defra-agent/src/lib.rs:151`:
   remove the `CODEX_THREAD_PROJECTION_SCHEMA` re-exports.
 - `crates/defra-agent/src/agent/p2p_reconcile/profiles.rs`: remove from
@@ -149,8 +161,10 @@ failure.
   entry.
 - `crates/defra-agent-desktop-core/`: remove any enumeration of the name
   (`client/schema.rs`, `client/collection_resolver.rs`) if present.
-- Final `grep -rn "CodexThreadProjection\|CODEX_THREAD_PROJECTION"` must come
-  back empty (outside this spec) before the PR is considered complete.
+- Final `grep -rn "CodexThreadProjection\|CODEX_THREAD_PROJECTION" crates/` must
+  come back empty before the PR is considered complete. (Scope to `crates/` — the
+  gate deliberately excludes `docs/`, where this spec and the older #490
+  spec/plan reference the name as historical context.)
 
 ### Part B — wire real token usage (visibility)
 
@@ -228,10 +242,21 @@ cargo test -p defra-agent && cargo test -p defra-agent-cli
 
 No `lake build` (no Lean / ApplyReconcile touched — verified).
 
-## Accepted tradeoff
+## Accepted tradeoffs
 
-Restarting the embedded node resets Codex-only UI sugar (archive flag, memory
-toggle, goal, thread settings) to defaults. Conversations, history, and titles
-(including user-set names, now on `AgentConversation.title`) persist. This is the
-cost of deleting an unnecessary replicated collection, and is consistent with the
-single-process, local nature of the Codex shim.
+**Restart resets UI sugar.** Restarting the embedded node resets Codex-only UI
+sugar (archive flag, memory toggle, goal, thread settings) to defaults.
+Conversations, history, and titles (including user-set names, now on
+`AgentConversation.title`) persist. This is the cost of deleting an unnecessary
+replicated collection, and is consistent with the single-process, local nature
+of the Codex shim.
+
+**No backfill of pre-upgrade data (accepted loss).** Existing
+`CodexThreadProjection` rows are not migrated. User-set names revert to
+auto-generated conversation titles; archive flags, goals, and settings reset.
+Additionally, the list scopes by `agent_did + behavior_id`, and pre-upgrade shim
+`AgentSession` rows were written without `agent_did` (which is `@immutable` and
+cannot be backfilled), so pre-upgrade threads drop off `thread/list`. Their
+conversations and history remain intact in the runtime collections; only the
+Codex-shim list view and UI sugar are affected. This is acceptable for local,
+pre-release tooling and avoids a one-time migration path.
