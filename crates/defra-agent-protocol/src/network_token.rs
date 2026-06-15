@@ -281,7 +281,11 @@ mod tests {
 
         let mut c = sample_pointer();
         c.admin_ticket = "/ip4/2".into();
-        assert_ne!(baseline, c.signing_payload(), "admin_ticket must be covered");
+        assert_ne!(
+            baseline,
+            c.signing_payload(),
+            "admin_ticket must be covered"
+        );
     }
 
     #[test]
