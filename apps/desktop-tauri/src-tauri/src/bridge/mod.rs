@@ -50,6 +50,7 @@ pub fn run() {
             tauri_commands::config::desktop_agent_config_save,
             tauri_commands::config::desktop_behavior_save,
             tauri_commands::config::desktop_skill_save,
+            tauri_commands::config::desktop_skill_delete,
             tauri_commands::config::desktop_backend_save,
             tauri_commands::config::desktop_inference_profile_save,
             tauri_commands::config::desktop_tool_selection_save,

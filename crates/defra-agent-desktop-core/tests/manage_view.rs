@@ -1,7 +1,7 @@
 use anyhow::Result;
 use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
+    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, SkillRow, TaskRow,
     ToolSelectionRow,
 };
 
@@ -91,6 +91,21 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     })
     .await?;
 
+    core.save_skill(&SkillRow {
+        skill_id: "amy-skill".to_string(),
+        agent_did: Some("did:defra:amy".to_string()),
+        scope: Some("behavior".to_string()),
+        name: Some("Amy Skill".to_string()),
+        description: Some("Focus Amy on the queue.".to_string()),
+        instructions: Some("Inspect the queue and summarize the next action.".to_string()),
+        tool_refs: vec!["read_file".to_string()],
+        display_name: Some("Queue Skill".to_string()),
+        interface_json: None,
+        enabled: Some(true),
+        created_at: None,
+    })
+    .await?;
+
     core.save_behavior(&AgentBehaviorRow {
         behavior_id: "amy-default".to_string(),
         agent_did: Some("did:defra:amy".to_string()),
@@ -103,8 +118,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         compaction_strategy: Some("rolling-summary".to_string()),
         compaction_threshold: Some(0.7),
         enabled: Some(true),
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
+        skill_refs: vec!["amy-skill".to_string()],
+        skill_excludes: vec!["amy-skill".to_string()],
         created_at: Some("2026-04-14T00:00:00Z".to_string()),
     })
     .await?;
@@ -168,13 +183,21 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(tools.subagent_background_enabled, Some(true));
     assert_eq!(tools.subagent_allow_cross_deployment, Some(true));
     assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
-    assert!(snapshot
+    assert!(snapshot.skills.iter().any(|row| row.skill_id == "amy-skill"
+        && row.name.as_deref() == Some("Amy Skill")
+        && row.tool_refs == vec!["read_file".to_string()]));
+    let behavior = snapshot
         .behaviors
         .iter()
-        .any(|row| row.behavior_id == "amy-default"
-            && row.backend_id.as_deref() == Some("backend-amy")
-            && row.inference_profile_id.as_deref() == Some("profile-amy")
-            && row.tool_selection_id.as_deref() == Some("tools-amy")));
+        .find(|row| {
+            row.behavior_id == "amy-default"
+                && row.backend_id.as_deref() == Some("backend-amy")
+                && row.inference_profile_id.as_deref() == Some("profile-amy")
+                && row.tool_selection_id.as_deref() == Some("tools-amy")
+        })
+        .expect("behavior should be present");
+    assert_eq!(behavior.skill_refs, vec!["amy-skill".to_string()]);
+    assert_eq!(behavior.skill_excludes, vec!["amy-skill".to_string()]);
     let task = snapshot
         .tasks
         .iter()
@@ -196,6 +219,20 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     // the runtime owns this field and may not seed it on first write.
     // We only assert that the schedule exists with the expected
     // apply-owned shape here.
+
+    core.delete_skill("did:defra:amy", "amy-skill").await?;
+    let snapshot = core.store().snapshot();
+    assert!(!snapshot
+        .skills
+        .iter()
+        .any(|row| row.skill_id == "amy-skill"));
+    let behavior = snapshot
+        .behaviors
+        .iter()
+        .find(|row| row.behavior_id == "amy-default")
+        .expect("behavior should survive skill deletion");
+    assert!(behavior.skill_refs.is_empty());
+    assert!(behavior.skill_excludes.is_empty());
 
     core.shutdown().await?;
     Ok(())

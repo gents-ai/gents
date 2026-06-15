@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
@@ -338,6 +338,97 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("rename conversation", error)),
         }
+    }
+
+    pub async fn delete_skill(&self, agent_did: &str, skill_id: &str) -> Result<()> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let skill_id = normalize_required("skill_id", skill_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .skills
+            .iter()
+            .any(|row| row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did))
+        {
+            bail!("no Skill document with skill_id {skill_id:?} for {agent_did}");
+        }
+
+        let affected_behaviors = snapshot
+            .behaviors
+            .iter()
+            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+            .filter_map(|row| {
+                let mut next = row.clone();
+                let refs_before = next.skill_refs.len();
+                let excludes_before = next.skill_excludes.len();
+                next.skill_refs.retain(|id| id != skill_id);
+                next.skill_excludes.retain(|id| id != skill_id);
+                (next.skill_refs.len() != refs_before
+                    || next.skill_excludes.len() != excludes_before)
+                    .then_some(next)
+            })
+            .collect::<Vec<_>>();
+
+        let result = async {
+            let deleted = mutations::delete_skill(self.node.as_ref(), agent_did, skill_id).await?;
+            if deleted == 0 {
+                bail!("no Skill document with skill_id {skill_id:?} for {agent_did}");
+            }
+            for behavior in affected_behaviors {
+                mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?;
+            }
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.prune_deleted_skill_from_store(agent_did, skill_id);
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    action = "config_skill_delete",
+                    row_id = %skill_id,
+                    agent_did,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("delete skill", error)),
+        }
+    }
+
+    fn prune_deleted_skill_from_store(&self, agent_did: &str, skill_id: &str) {
+        let snapshot = self.store.snapshot();
+        let mut rows = snapshot.to_rows();
+        let mut pruned_skills = Vec::with_capacity(rows.skills.len());
+        let mut pruned_skill_sources = Vec::with_capacity(rows.skill_source_agent_dids.len());
+
+        for (index, row) in rows.skills.into_iter().enumerate() {
+            if row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did) {
+                continue;
+            }
+            pruned_skill_sources.push(
+                rows.skill_source_agent_dids
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            pruned_skills.push(row);
+        }
+        rows.skills = pruned_skills;
+        rows.skill_source_agent_dids = pruned_skill_sources;
+
+        for behavior in rows
+            .behaviors
+            .iter_mut()
+            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+        {
+            behavior.skill_refs.retain(|id| id != skill_id);
+            behavior.skill_excludes.retain(|id| id != skill_id);
+        }
+
+        self.store.replace_snapshot(ClientStore::from_rows(rows));
     }
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {

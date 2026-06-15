@@ -7,6 +7,7 @@ import type {
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
   ScheduleSaveRequest,
+  SkillDeleteRequest,
   SkillSaveRequest,
   TaskRunResult,
   TaskSaveRequest,
@@ -49,6 +50,7 @@ type ConfigWorkspaceProps = {
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
@@ -71,6 +73,7 @@ export function ConfigWorkspace({
   onSaveToolServiceConfig,
   onTestToolService,
   onSaveBehaviorConfig,
+  onDeleteSkillConfig,
   onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
@@ -224,6 +227,8 @@ export function ConfigWorkspace({
           saving={saving}
           selectedSkillId={selectedSkillId}
           onCreateSkill={() => setSelectedSkillId(NEW_DOCUMENT_ID)}
+          onDeleteSkillConfig={onDeleteSkillConfig}
+          onDeletedSkill={() => setSelectedSkillId(null)}
           onSaveSkillConfig={onSaveSkillConfig}
           onSavedStatusChange={setSavedStatus}
           onSelectSkill={setSelectedSkillId}

@@ -74,6 +74,13 @@ pub(crate) struct BehaviorSaveRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct SkillDeleteRequest {
+    pub skill_id: String,
+    pub agent_did: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BackendSaveRequest {
     pub backend_id: String,
     pub name: String,

@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import {
+  deleteSkillConfig,
   saveAgentConfig,
   saveBackendConfig,
   saveBehaviorConfig,
@@ -16,6 +17,7 @@ import type {
   BehaviorSaveRequest,
   DesktopClientSnapshot,
   InferenceProfileSaveRequest,
+  SkillDeleteRequest,
   SkillSaveRequest,
   ToolSelectionSaveRequest,
   ToolServiceSaveRequest,
@@ -81,6 +83,22 @@ export function createDesktopShellConfigActions({
     setError(null);
     try {
       const next = await saveSkillConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteSkillConfig(request: SkillDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteSkillConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -169,6 +187,7 @@ export function createDesktopShellConfigActions({
     onSaveAgentConfig,
     onSaveBackendConfig,
     onSaveBehaviorConfig,
+    onDeleteSkillConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

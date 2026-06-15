@@ -102,6 +102,7 @@ function App() {
           <ConfigWorkspace
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={() => setWorkspaceView("chat")}
+            onDeleteSkillConfig={shell.onDeleteSkillConfig}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}

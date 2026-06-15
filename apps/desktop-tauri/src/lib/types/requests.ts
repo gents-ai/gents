@@ -120,6 +120,11 @@ export type SkillSaveRequest = {
   enabled?: boolean | null;
 };
 
+export type SkillDeleteRequest = {
+  skillId: string;
+  agentDid: string;
+};
+
 export type TaskSaveRequest = {
   taskId: string;
   name: string;

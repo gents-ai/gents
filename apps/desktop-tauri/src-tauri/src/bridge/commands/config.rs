@@ -7,7 +7,7 @@ use defra_agent_protocol::row::{
 
 use super::super::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, InferenceProfileSaveRequest,
-    SkillSaveRequest, ToolSelectionSaveRequest,
+    SkillDeleteRequest, SkillSaveRequest, ToolSelectionSaveRequest,
 };
 use super::util::{require_trimmed, sanitize_id_list, trim_optional};
 
@@ -110,6 +110,7 @@ pub(crate) async fn save_behavior_config(
     Ok(())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) async fn save_skill_config(core: &ClientCore, request: SkillSaveRequest) -> Result<()> {
     let skill_id = require_trimmed("skill_id", request.skill_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
@@ -149,6 +150,16 @@ pub(crate) async fn save_skill_config(core: &ClientCore, request: SkillSaveReque
     row.enabled = request.enabled.or(row.enabled).or(Some(true));
     core.save_skill(&row).await?;
     Ok(())
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_skill_config(
+    core: &ClientCore,
+    request: SkillDeleteRequest,
+) -> Result<()> {
+    let skill_id = require_trimmed("skill_id", request.skill_id)?;
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_skill(&agent_did, &skill_id).await
 }
 
 pub(crate) async fn save_backend_config(

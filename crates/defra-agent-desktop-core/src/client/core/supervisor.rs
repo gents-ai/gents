@@ -707,7 +707,9 @@ mod pairing_reconcile_tests {
         let stub = StubRemoteAdmin::new();
         let desired = PairingDesired {
             collections: ["c1", "c2"].iter().map(|s| s.to_string()).collect(),
+            replicator_collections: ["c1", "c2"].iter().map(|s| s.to_string()).collect(),
             replicator_addresses: ["/ip4/1/p2p/p"].iter().map(|s| s.to_string()).collect(),
+            replicator_filter: Default::default(),
         };
 
         let actual_1 = read_remote_actual(&stub).await;

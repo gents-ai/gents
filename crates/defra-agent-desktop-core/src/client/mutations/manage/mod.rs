@@ -10,7 +10,7 @@ pub use behavior::{upsert_agent_behavior, upsert_agent_behavior_to_graphql};
 pub use inference::upsert_inference_backend;
 pub use principal::{upsert_agent_principal, upsert_agent_principal_to_graphql};
 pub use profile::upsert_inference_profile;
-pub use skill::upsert_skill;
+pub use skill::{delete_skill, upsert_skill};
 pub use task::{
     fire_schedule_now, fire_task_now, upsert_event_trigger, upsert_schedule, upsert_task,
 };

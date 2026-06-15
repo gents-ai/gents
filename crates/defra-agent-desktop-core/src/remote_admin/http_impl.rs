@@ -638,6 +638,7 @@ mod tests {
         let add_replicator = AddReplicatorBody {
             collections: &collections,
             addresses: &addresses,
+            filters: BTreeMap::new(),
         };
         mount_signed_request(
             &server,

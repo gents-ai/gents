@@ -53,6 +53,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:00Z".to_string()),
             },
             AgentMessageRow {
@@ -64,6 +65,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
                     serde_json::to_string(&Message::assistant("final answer"))
                         .expect("serialize assistant"),
                 ),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:01Z".to_string()),
             },
         ],
@@ -351,6 +353,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:00Z".to_string()),
             },
             AgentMessageRow {
@@ -359,6 +362,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
                 content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer one\"}]}".to_string()),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:05Z".to_string()),
             },
             AgentMessageRow {
@@ -367,6 +371,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 sequence: Some(3),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn two")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:01:00Z".to_string()),
             },
             AgentMessageRow {
@@ -375,6 +380,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 sequence: Some(4),
                 role: Some("assistant".to_string()),
                 content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer two\"}]}".to_string()),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:01:05Z".to_string()),
             },
         ],

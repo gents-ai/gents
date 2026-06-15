@@ -39,6 +39,7 @@ export type {
   InferenceProfileSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
+  SkillDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
   TaskRunResult,

@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  SkillDeleteRequest,
   SkillSaveRequest,
   SkillView,
 } from "../../lib/types";
@@ -14,9 +15,11 @@ export type SkillConfigPanelProps = {
   selectedSkillId: string | null;
   saving: boolean;
   savedStatus: string | null;
-  onSelectSkill: (skillId: string) => void;
+  onSelectSkill: (skillId: string | null) => void;
   onCreateSkill: () => void;
-  onSavedStatusChange: (value: string) => void;
+  onDeletedSkill: () => void;
+  onSavedStatusChange: (value: string | null) => void;
+  onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
 };
 
@@ -27,7 +30,9 @@ export function SkillConfigPanel({
   savedStatus,
   onSelectSkill,
   onCreateSkill,
+  onDeletedSkill,
   onSavedStatusChange,
+  onDeleteSkillConfig,
   onSaveSkillConfig,
 }: SkillConfigPanelProps) {
   const selectedSkill = useMemo(
@@ -63,6 +68,12 @@ export function SkillConfigPanel({
           onSelectSkill(skillId);
           onSavedStatusChange(`skill:${skillId}`);
         }}
+        onDeleted={() => {
+          onSelectSkill(null);
+          onSavedStatusChange(null);
+          onDeletedSkill();
+        }}
+        onDeleteSkillConfig={onDeleteSkillConfig}
         onSaveSkillConfig={onSaveSkillConfig}
       />
     </section>
@@ -75,6 +86,8 @@ export type SkillConfigEditorProps = {
   savedStatus: string | null;
   saving: boolean;
   onSaved: (skillId: string) => void;
+  onDeleted: () => void;
+  onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
 };
 
@@ -84,6 +97,8 @@ export function SkillConfigEditor({
   savedStatus,
   saving,
   onSaved,
+  onDeleted,
+  onDeleteSkillConfig,
   onSaveSkillConfig,
 }: SkillConfigEditorProps) {
   const [skillId, setSkillId] = useState("");
@@ -122,6 +137,25 @@ export function SkillConfigEditor({
         enabled,
       });
       onSaved(nextId);
+    } catch (error) {
+      ignoreHandledActionError(error);
+    }
+  }
+
+  async function deleteSkill() {
+    const nextId = skill?.skillId ?? skillId.trim();
+    if (!skill || !nextId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete skill "${nextId}" and remove it from behavior bindings?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await onDeleteSkillConfig({ skillId: nextId, agentDid });
+      onDeleted();
     } catch (error) {
       ignoreHandledActionError(error);
     }
@@ -216,6 +250,17 @@ export function SkillConfigEditor({
         />
       </label>
       <div className="config-actions">
+        {skill ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="skill-delete"
+            disabled={saving}
+            onClick={deleteSkill}
+            type="button"
+          >
+            Delete Skill
+          </button>
+        ) : null}
         <button
           className="primary-button"
           data-testid="skill-save"

@@ -12,10 +12,11 @@
 //! CLI's `commands/config/skill.rs` carries the import/export + SKILL.md
 //! parsing surface, which the desktop intentionally does not duplicate.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use defra_agent_protocol::row::SkillRow;
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
@@ -114,4 +115,42 @@ pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_skill").await
+}
+
+pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) -> Result<usize> {
+    let agent_did = normalize_required("agent_did", agent_did)?;
+    let skill_id = normalize_required("skill_id", skill_id)?;
+    let agent_did = escape_graphql_string(agent_did);
+    let skill_id = escape_graphql_string(skill_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_Skill(
+                filter: {{
+                    _and: [
+                        {{ skill_id: {{ _eq: "{skill_id}" }} }},
+                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                    ]
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_skill failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_Skill"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
 }
