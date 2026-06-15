@@ -27,6 +27,8 @@ struct PeerPairingDesiredRow {
     replicator_addresses: Vec<String>,
     profiles: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     updated_at: Option<String>,
@@ -201,6 +203,7 @@ fn pairings_list_query() -> &'static str {
             collections
             replicator_addresses
             profiles
+            template
             created_at
             updated_at
         }
@@ -226,7 +229,8 @@ pub(super) async fn write_pairing_desired(
     template: &str,
     now: &str,
 ) -> Result<String> {
-    let mutation = upsert_pairing_mutation(peer_id, agent_did, collections, addresses, template, now);
+    let mutation =
+        upsert_pairing_mutation(peer_id, agent_did, collections, addresses, template, now);
     let response = access
         .execute(&mutation)
         .await
@@ -270,8 +274,8 @@ pub(super) fn upsert_pairing_mutation(
     } else {
         format!("agent_did: {agent_did},")
     };
-    let collections = graphql_string_list_literal(collections);
-    let addresses = graphql_string_list_literal(addresses);
+    let collections = graphql_nullable_string_list_literal(collections);
+    let addresses = graphql_nullable_string_list_literal(addresses);
     let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
 
@@ -343,6 +347,7 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                 collections: string_list(&row, "collections"),
                 replicator_addresses: string_list(&row, "replicator_addresses"),
                 profiles: string_list(&row, "profiles"),
+                template: optional_string(&row, "template"),
                 created_at: optional_string(&row, "created_at"),
                 updated_at: optional_string(&row, "updated_at"),
                 connected: false,
@@ -394,24 +399,52 @@ fn annotate_pairing_health(
         })
         .collect::<BTreeMap<_, _>>();
 
+    let connected_set = connected.iter().cloned().collect::<BTreeSet<_>>();
+
     for row in &mut desired {
-        row.connected = connected.iter().any(|peer| peer.contains(&row.peer_id));
+        // Exact peer-id equality (matching network.rs `BTreeSet::contains`): a
+        // peer id that is merely a *substring* of a connected id must not count
+        // as connected.
+        row.connected = connected_set.contains(&row.peer_id);
         let (applied_collections, applied_replicators) = applied_by_peer
             .get(row.peer_id.as_str())
             .cloned()
             .unwrap_or_default();
-        row.subscribed = !row.collections.is_empty()
-            && row
-                .collections
-                .iter()
-                .all(|collection| applied_collections.contains(collection));
         row.replicating = !row.replicator_addresses.is_empty()
             && row
                 .replicator_addresses
                 .iter()
                 .all(|address| applied_replicators.contains(address));
+        // Push-delivery templates (the default `conversation`) deliberately
+        // subscribe to NOTHING — the filtered replicator is the only channel —
+        // so `applied.collections` is legitimately empty. Reporting subscription
+        // health off the collection set would falsely mark every healthy Push
+        // pairing unhealthy. For Push, key the "subscribed" health off the
+        // replicator being applied (REPLICATING) instead; only Replicate
+        // templates carry the strict `desired ⊆ applied` collections check.
+        row.subscribed = if is_push_template(row.template.as_deref()) {
+            row.replicating
+        } else {
+            !row.collections.is_empty()
+                && row
+                    .collections
+                    .iter()
+                    .all(|collection| applied_collections.contains(collection))
+        };
     }
     desired
+}
+
+/// Whether the pairing's template uses Push delivery (filtered replicator is the
+/// only channel; no DefraDB subscription). Unknown/absent templates fall back to
+/// the strict Replicate-style collection check, which is the conservative choice
+/// (a missing subscription reports unhealthy rather than falsely healthy).
+fn is_push_template(template: Option<&str>) -> bool {
+    use defra_agent::agent::p2p_reconcile::{resolve_template, Delivery};
+    template
+        .and_then(resolve_template)
+        .map(|t| t.delivery == Delivery::Push)
+        .unwrap_or(false)
 }
 
 fn optional_string(row: &Value, field: &str) -> Option<String> {
@@ -445,6 +478,19 @@ fn graphql_nullable_string_literal(value: Option<&str>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+/// Render a string list as a GraphQL literal, emitting `null` (never `[]`) when
+/// the list is empty. A bare `[]` literal is typed by DefraDB as JsonArray and
+/// corrupts nillable array columns (`replicator_addresses`, `collections`): the
+/// create may appear to succeed, but later updates fail re-validation. Matches
+/// the empty-list handling in `graphql_input_literal` / `string_list_field`.
+fn graphql_nullable_string_list_literal(values: &[String]) -> String {
+    if values.is_empty() {
+        "null".to_string()
+    } else {
+        graphql_string_list_literal(values)
+    }
+}
+
 pub(super) async fn wait_for_pairing_connected(
     _home: Option<&std::path::Path>,
     graphql: &str,
@@ -454,7 +500,9 @@ pub(super) async fn wait_for_pairing_connected(
     let deadline = Instant::now() + timeout;
     loop {
         let peers = fetch_connected_peer_ids(graphql).await?;
-        if peers.iter().any(|peer| peer.contains(peer_id)) {
+        // Exact equality (matching network.rs): a substring match could falsely
+        // satisfy the wait against an unrelated peer id.
+        if peers.iter().any(|peer| peer == peer_id) {
             return Ok(json!({
                 "p2p_connected_peers": peers,
             }));
@@ -596,6 +644,164 @@ mod tests {
 
         assert!(mutation.contains("profiles: null"));
         assert!(!mutation.contains("profiles: []"));
+    }
+
+    #[test]
+    fn upsert_pairing_mutation_empty_replicator_addresses_emits_null_not_empty_list() {
+        let mutation = upsert_pairing_mutation(
+            "peer-one",
+            Some("did:key:agent-one"),
+            &["AgentRequest".to_string()],
+            &[],
+            "conversation",
+            "2026-06-10T00:00:00Z",
+        );
+
+        // Empty list fields must render `null`, never `[]` (a bare `[]` literal
+        // types as JsonArray and corrupts the nillable array column).
+        assert!(mutation.contains("replicator_addresses: null"));
+        assert!(!mutation.contains("replicator_addresses: ["));
+        // No `[]` literal anywhere in the mutation.
+        assert!(!mutation.contains("[]"));
+    }
+
+    #[test]
+    fn upsert_pairing_mutation_empty_collections_emits_null_not_empty_list() {
+        let mutation = upsert_pairing_mutation(
+            "peer-one",
+            None,
+            &[],
+            &[],
+            "conversation",
+            "2026-06-10T00:00:00Z",
+        );
+
+        assert!(mutation.contains("collections: null"));
+        assert!(!mutation.contains("collections: ["));
+        assert!(!mutation.contains("[]"));
+    }
+
+    fn applied(peer_id: &str, collections: &[&str], addresses: &[&str]) -> PeerPairingAppliedRow {
+        PeerPairingAppliedRow {
+            peer_id: peer_id.to_string(),
+            collections: collections.iter().map(|c| c.to_string()).collect(),
+            replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    fn desired_row(
+        peer_id: &str,
+        template: &str,
+        collections: &[&str],
+        addresses: &[&str],
+    ) -> PeerPairingDesiredRow {
+        PeerPairingDesiredRow {
+            peer_id: peer_id.to_string(),
+            agent_did: None,
+            collections: collections.iter().map(|c| c.to_string()).collect(),
+            replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            profiles: Vec::new(),
+            template: Some(template.to_string()),
+            created_at: None,
+            updated_at: None,
+            connected: false,
+            subscribed: false,
+            replicating: false,
+        }
+    }
+
+    #[test]
+    fn push_template_health_keys_off_replicating_not_subscribed_collections() {
+        // A healthy `conversation` (Push) pairing: it deliberately subscribes to
+        // NOTHING (applied.collections empty), but its replicator IS applied.
+        // It must report healthy (subscribed = true), not a false `no`.
+        let desired = vec![desired_row(
+            "peer-a",
+            "conversation",
+            &["AgentRequest", "AgentResponse"],
+            &["/ip4/1/tcp/4001"],
+        )];
+        let applied = vec![applied("peer-a", &[], &["/ip4/1/tcp/4001"])];
+
+        let annotated = annotate_pairing_health(desired, &applied, &[]);
+
+        assert!(
+            annotated[0].replicating,
+            "replicator is applied → replicating"
+        );
+        assert!(
+            annotated[0].subscribed,
+            "Push pairing with applied replicator must report healthy (subscribed)"
+        );
+    }
+
+    #[test]
+    fn push_template_without_applied_replicator_is_unhealthy() {
+        let desired = vec![desired_row(
+            "peer-a",
+            "conversation",
+            &["AgentRequest"],
+            &["/ip4/1/tcp/4001"],
+        )];
+        // No applied replicator → not replicating → not healthy.
+        let applied = vec![applied("peer-a", &[], &[])];
+
+        let annotated = annotate_pairing_health(desired, &applied, &[]);
+
+        assert!(!annotated[0].replicating);
+        assert!(!annotated[0].subscribed);
+    }
+
+    #[test]
+    fn replicate_template_health_still_requires_collection_set() {
+        // `agent-config` is Replicate delivery: the strict `desired ⊆ applied`
+        // collections check still governs subscribed health.
+        let desired = vec![desired_row(
+            "peer-a",
+            "agent-config",
+            &["AgentBehavior", "ToolSelection"],
+            &[],
+        )];
+        // Only one of the two desired collections is applied → unhealthy.
+        let partial = vec![applied("peer-a", &["AgentBehavior"], &[])];
+        let annotated = annotate_pairing_health(desired.clone(), &partial, &[]);
+        assert!(
+            !annotated[0].subscribed,
+            "Replicate pairing missing a collection must report unhealthy"
+        );
+
+        // Full collection set applied → healthy.
+        let full = vec![applied("peer-a", &["AgentBehavior", "ToolSelection"], &[])];
+        let annotated = annotate_pairing_health(desired, &full, &[]);
+        assert!(
+            annotated[0].subscribed,
+            "Replicate pairing with full collection set must report healthy"
+        );
+    }
+
+    #[test]
+    fn connected_health_uses_exact_peer_id_match_not_substring() {
+        // Peer id "abc" must NOT report connected against a connected set that
+        // contains only "abcd" (substring of which "abc" is a prefix).
+        let desired = vec![desired_row("abc", "conversation", &["AgentRequest"], &[])];
+        let connected = vec!["abcd".to_string()];
+
+        let annotated = annotate_pairing_health(desired, &[], &connected);
+
+        assert!(
+            !annotated[0].connected,
+            "substring of a connected peer id must not falsely report connected"
+        );
+    }
+
+    #[test]
+    fn connected_health_matches_exact_peer_id() {
+        let desired = vec![desired_row("abcd", "conversation", &["AgentRequest"], &[])];
+        let connected = vec!["abcd".to_string()];
+
+        let annotated = annotate_pairing_health(desired, &[], &connected);
+
+        assert!(annotated[0].connected);
     }
 
     #[test]
