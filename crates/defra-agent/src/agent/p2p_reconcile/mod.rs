@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod embedded_impl;
 pub mod engine;
 pub mod error_class;
+pub mod network_membership;
 pub mod profiles;
 pub mod registry;
 pub mod templates;
