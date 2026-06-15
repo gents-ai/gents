@@ -42,11 +42,51 @@
               "items": {
                 "additionalProperties": false,
                 "properties": {
+                  "agent_did": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "behavior_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "id": {
                     "type": "string"
                   },
                   "kind": {
                     "type": "string"
+                  },
+                  "parent_request_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "parent_tool_call_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "request_id": {
                     "anyOf": [
