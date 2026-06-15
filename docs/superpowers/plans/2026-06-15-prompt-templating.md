@@ -43,7 +43,9 @@ cargo test -p defra-agent-cli
 - `crates/defra-agent-cli/src/config_writes/agent_behavior.rs` — second CLI write path for the new field.
 - `crates/defra-agent-cli/src/desired_state/mod.rs` — accept the new behavior field.
 - `crates/defra-agent-cli/src/desired_state/load.rs` — `DesiredAgentBehavior` field + sidecar hydration.
-- `crates/defra-agent-cli/src/desired_state/validate.rs` — full-ref catalog-aware task scope validation.
+- `crates/defra-agent-cli/src/desired_state/write.rs` — sidecar spill for the new field.
+- `crates/defra-agent-cli/src/desired_state/validate.rs` — apply-time system-template cache-safety guard + full-ref catalog-aware task scope validation.
+- `crates/defra-agent/src/lifecycle/manual.rs`, `crates/defra-agent-cli/src/commands/config/task_run.rs` — supply node/ctx at the manual/CLI task render paths.
 - `crates/defra-agent-cli/src/main.rs` — export allowlist.
 - `crates/defra-agent/src/prompt.rs` — render `system_prompt` as run-constant template into the frozen preamble.
 - `crates/defra-agent/src/completion_factory.rs` — default `LoopConfig.context_message` to `None`.
@@ -831,8 +833,8 @@ In `render_template`, after the `args` insertion in the `context` builder, add:
 
 Every existing `TemplateScope { event, doc, args }` literal now needs `node`/`ctx`. Find them:
 
-Run: `grep -rn "TemplateScope {" crates/defra-agent/src crates/defra-agent/tests`
-For each non-`node` literal (the trigger-engine dispatch and template tests), add `node: serde_json::json!({}), ctx: serde_json::json!({}),` (Task 13 supplies real values at the trigger site). In `crates/defra-agent/src/template/tests.rs` add the two fields as empty objects to each constructor.
+Run: `grep -rn "TemplateScope {" crates/defra-agent/src crates/defra-agent/tests crates/defra-agent-cli/src`
+For each existing literal — the trigger-engine dispatch, the manual/CLI task render paths (`lifecycle/manual.rs`, `commands/config/task_run.rs`), and the template tests — add `node: serde_json::json!({}), ctx: serde_json::json!({}),` to make them compile now. **Task 13 replaces the empties with real node/ctx values at all three task render sites** (required, or `{{ ctx.now }}` task templates would render against empty scopes and fail strict-undefined). In `crates/defra-agent/src/template/tests.rs` add the two fields as empty objects to each constructor.
 
 - [ ] **Step 3: Build + run template tests + the stability conformance test**
 
@@ -929,7 +931,7 @@ Adding the field to the load query (Step 2) makes GraphQL reads select `request_
 
 - [ ] **Step 9: Second CLI write path**
 
-`crates/defra-agent-cli/src/config_writes/agent_behavior.rs` is a *separate* behavior write path (CLI config apply) from the document_config writers in Step 2. In `write_agent_behavior_document`, add to the `add_fields` vec, mirroring the `system_prompt` line:
+`crates/defra-agent-cli/src/config_writes/agent_behavior.rs` is a *separate* behavior write path (CLI config apply) from the document_config writers in Step 2. `write_agent_behavior_document` builds **two** vecs — `add_fields` (insert) and `update_fields` (upsert update). Add the field to **both**, mirroring the `system_prompt` line in each (otherwise updates to an existing behavior never propagate a changed context template):
 
 ```rust
         optional_string_field("request_context_template", behavior.request_context_template.as_deref()),
@@ -937,27 +939,57 @@ Adding the field to the load query (Step 2) makes GraphQL reads select `request_
 
 (This uses `defra_agent::AgentBehaviorDocument` — the document_config `AgentBehavior` re-export — so the field added in Step 2 is what it reads.)
 
-- [ ] **Step 10: Desired-state struct + sidecar load + normalize/convert**
+- [ ] **Step 10: Desired-state struct + sidecar load/spill + normalize/convert**
 
 The desired-state layer parses sidecar config into `DesiredAgentBehavior` and converts to a document. Wire the field through all of it:
 - Find the `DesiredAgentBehavior` struct (grep `struct DesiredAgentBehavior` under `crates/defra-agent-cli/src/desired_state/`) and add `pub request_context_template: Option<String>,` mirroring `system_prompt`.
-- In `crates/defra-agent-cli/src/desired_state/load.rs` (~line 52), `system_prompt` is hydrated from a sidecar file. Add the same sidecar hydration for `request_context_template` so a long template can live in its own file (mirror the `hydrate_sidecar(&mut behavior.system_prompt, &dir)` block). If a separate sidecar filename is needed, follow the per-field sidecar naming convention already in `hydrate_sidecar`.
-- Wherever `DesiredAgentBehavior` is converted to the document `AgentBehavior` (grep `system_prompt` in `desired_state/` — normalize/convert/to-document fns), carry `request_context_template` across.
+- **Load (hydrate):** in `crates/defra-agent-cli/src/desired_state/load.rs` (~line 52), `system_prompt` is hydrated from a sidecar file. Add the same hydration for `request_context_template`, mirroring the `hydrate_sidecar(&mut behavior.system_prompt, &dir)` block.
+- **Write (spill):** in `crates/defra-agent-cli/src/desired_state/write.rs` (~line 221), `spill_behavior_sidecar` currently spills only `system_prompt` → `system_prompt.md`. Add a second spill so the round-trip is symmetric:
+  ```rust
+  fn spill_behavior_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
+      spill_string_field(doc_dir, body, "system_prompt", "system_prompt.md")?;
+      spill_string_field(doc_dir, body, "request_context_template", "request_context_template.md")
+  }
+  ```
+- **Convert:** wherever `DesiredAgentBehavior` is converted to the document `AgentBehavior` (grep `system_prompt` in `desired_state/` — normalize/convert/to-document fns), carry `request_context_template` across.
 
-- [ ] **Step 11: Build both crates**
+- [ ] **Step 11: Wire the system-template guard into apply-time validation (fail-closed)**
+
+The guard from Task 7 must actually gate apply. In `crates/defra-agent-cli/src/desired_state/validate.rs`, in the `for behavior in &manifest.agent_behaviors` loop (~line 289), validate the (post-sidecar-hydration) `system_prompt` against the catalog:
+
+```rust
+        if let Some(sp) = non_empty(&behavior.system_prompt) {
+            // Mirrors the runtime fast-path: only marker-bearing prompts are templates.
+            if sp.contains("{{") || sp.contains("{%") || sp.contains("{#") {
+                if let Err(e) = defra_agent::template::reads::validate_system_template(
+                    sp,
+                    &defra_agent::template::catalog::default_catalog(),
+                ) {
+                    errors.push(format!(
+                        "behavior {} system_prompt is not cache-safe: {e}",
+                        behavior.behavior_id
+                    ));
+                }
+            }
+        }
+```
+
+Add `validate.rs` tests: `{{ ctx.now }}` in `system_prompt` is rejected; `{% raw %}{{ ctx.now }}{% endraw %}` is accepted; a no-marker literal is accepted; `{{ node.node_did }}` is accepted.
+
+- [ ] **Step 12: Build both crates**
 
 Run: `cargo build -p defra-agent -p defra-agent-cli 2>&1 | tail -10`
 Expected: builds. Fix any remaining `AgentBehavior { … }` / `DesiredAgentBehavior { … }` literals the compiler flags (missing field) by adding `request_context_template: None`.
 
-- [ ] **Step 12: Round-trip test**
+- [ ] **Step 13: Round-trip test**
 
-Add/extend a desired-state or config round-trip test asserting `request_context_template` survives export→import (mirror an existing `system_prompt` round-trip assertion; grep `system_prompt` in `crates/defra-agent-cli/tests` / `desired_state` tests).
+Add/extend a desired-state round-trip test asserting `request_context_template` survives export→import including the sidecar spill/hydrate path (mirror an existing `system_prompt` round-trip assertion; grep `system_prompt` in `crates/defra-agent-cli/tests` / `desired_state` tests).
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 git add crates/defra-agent-schemas crates/defra-agent/src/document_config crates/defra-agent/src/config.rs crates/defra-agent/src/agent/document_view/snapshot.rs crates/defra-agent/src/migration.rs crates/defra-agent-cli/src/desired_state crates/defra-agent-cli/src/config_writes/agent_behavior.rs crates/defra-agent-cli/src/main.rs crates/defra-agent/src/document_config/tests.rs
-git commit -m "feat(behavior): request_context_template config surface + migration (#497)"
+git commit -m "feat(behavior): request_context_template config surface + migration + apply guard (#497)"
 ```
 
 ---
@@ -1001,32 +1033,31 @@ pub fn render_system_prompt(
 }
 ```
 
-- [ ] **Step 2: Render at preamble construction**
+- [ ] **Step 2: Render at the behavior-resolution path (fail-closed, NOT in `prompt.rs`)**
 
-In `crates/defra-agent/src/prompt.rs`, locate `build_preamble_with_targets` (line ~261) — the first thing it does with `system_prompt` is `strip_title_generation_suffix(system_prompt)` then push it. The caller `for_behavior` (line ~170) has access to the behavior's principal (for `node.node_did`) and `behavior_name` (for `node.behavior_id`).
+Render the system prompt **before** `prompt.rs::for_behavior`, at the behavior-resolution/load site, and pass the already-rendered string into `for_behavior` as `system_prompt`. That site returns `Result` (behavior load/reconcile), so a render/validation error **fails the behavior load** — fail-closed — instead of `prompt.rs` swallowing it and emitting raw `{{ }}` to the model. This also keeps `for_behavior`/`build_preamble_with_targets` signatures unchanged.
 
-Thread a rendered system prompt in: at the start of `build_preamble_with_targets`, before the existing `let system_prompt = strip_title_generation_suffix(system_prompt);`, render it:
+Find the `for_behavior(` call site(s) (grep — the daemon behavior setup / `snapshot.rs` reconcile where the runtime `AgentBehavior` and its principal DID are in scope). Immediately before the call, render:
 
 ```rust
-    let node = serde_json::json!({
-        "node_did": agent_did,        // pass the principal DID into for_behavior/build_preamble
-        "behavior_id": behavior_name, // already a param
-    });
-    let rendered = crate::template::render_system_prompt(
-        system_prompt,
-        node,
+    let rendered_system_prompt = crate::template::render_system_prompt(
+        behavior.system_prompt.as_str(), // or &behavior.system_prompt
+        serde_json::json!({
+            "node_did": behavior.principal.agent_did,
+            "behavior_id": behavior.behavior_id,
+        }),
         &crate::template::catalog::default_catalog(),
-    )
-    .unwrap_or_else(|e| {
-        tracing::error!(error = %e, "system_prompt template invalid; using literal");
-        system_prompt.to_string()
-    });
-    let system_prompt = strip_title_generation_suffix(&rendered);
+    )?; // fail-closed: invalid/non-cache-safe template aborts behavior load
+
+    let prompt_builder = PromptBuilder::for_behavior(
+        &rendered_system_prompt, // was: &behavior.system_prompt
+        /* …unchanged args… */
+    );
 ```
 
-> The signature of `build_preamble_with_targets` currently takes `system_prompt: &str, behavior_name: &str, …`. Add an `agent_did: &str` parameter and pass `behavior.principal.agent_did` (or the existing did available in `for_behavior`) through from `for_behavior`. Mirror how `behavior_name` flows.
+> The apply-time guard (Task 9 Step 11) is the primary gate; this runtime render is the backstop and must agree with it — both use `render_system_prompt`/`validate_system_template` + `default_catalog()`, both fail-closed. The no-marker fast path in `render_system_prompt` keeps existing literal prompts unaffected (no behavior-load regression). If the chosen call site is not already `Result`-returning, propagate via the nearest enclosing `Result` fn; do **not** reintroduce a literal fallback.
 
-> **Cache-safety note:** because validation guarantees no per-request refs, rendering once here freezes the preamble; the `unwrap_or_else` literal fallback only triggers on an *invalid* template (logged), never on a valid one.
+> **Cache-safety note:** validation guarantees no per-request refs, so rendering once here freezes the preamble for the run.
 
 - [ ] **Step 3: Build + run prompt tests**
 
@@ -1294,42 +1325,50 @@ git commit -m "feat(persistence): durably capture context message before prompt 
 ### Task 13: Merge `node`/`ctx` into task `TemplateScope`
 
 **Files:**
-- Modify: `crates/defra-agent/src/trigger_engine/mod.rs`
+- Modify: `crates/defra-agent/src/trigger_engine/mod.rs` (trigger fire render)
+- Modify: `crates/defra-agent/src/lifecycle/manual.rs` (manual request render)
+- Modify: `crates/defra-agent-cli/src/commands/config/task_run.rs` (CLI `task run` render)
 - Modify: `crates/defra-agent-cli/src/desired_state/validate.rs` (apply-time task scope validation)
-- Modify: `crates/defra-agent/src/template/mod.rs` (availability check helper)
+- Modify: `crates/defra-agent/src/template/mod.rs` (availability check helper + `is_tracked_root`)
 
-- [ ] **Step 1: Populate node/ctx at trigger fire**
+- [ ] **Step 1: Populate node/ctx at ALL THREE task render sites (finding 4)**
 
-In `crates/defra-agent/src/trigger_engine/mod.rs`, the dispatch path (lines ~294–316) builds:
+After Task 8 made `node`/`ctx` required `TemplateScope` fields, every task render site builds them as empty `{}` — so a task template using `{{ ctx.now }}` (which Step 2 validation now *accepts*) would hit strict-undefined and **fail to render**. All three task render paths must supply real values. The values for v1: `node.node_did`, `node.behavior_id` (run-constant) + `ctx.now` (per-request). Define a tiny shared helper to avoid drift:
 
-```rust
-   let scope = crate::template::TemplateScope {
-       event: intent.event_vars.clone(),
-       doc: intent.doc_vars.clone(),
-       args: intent.args_vars.clone(),
-   };
-```
-
-Extend it with the task-available catalog vars (`node.*` run-constant + `ctx.now`):
+In `crates/defra-agent/src/template/mod.rs`:
 
 ```rust
-   let node = serde_json::json!({
-       "node_did": intent.task.agent_did_or_principal,   // the deployment DID
-       "behavior_id": intent.task.behavior_id,
-   });
-   let ctx = serde_json::json!({
-       "now": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-   });
-   let scope = crate::template::TemplateScope {
-       event: intent.event_vars.clone(),
-       doc: intent.doc_vars.clone(),
-       args: intent.args_vars.clone(),
-       node,
-       ctx,
-   };
+/// Build the task-scope `node`/`ctx` JSON for a fire at `now` (RFC3339).
+/// v1 task scope: node identity + ctx.now (see catalog availability).
+pub fn task_node_ctx(node_did: &str, behavior_id: &str, now: &str)
+    -> (serde_json::Value, serde_json::Value) {
+    (
+        serde_json::json!({ "node_did": node_did, "behavior_id": behavior_id }),
+        serde_json::json!({ "now": now }),
+    )
+}
 ```
 
-> Source the DID from whatever the dispatch already has (the `ResolvedTask`/`FireIntent` carries `behavior_id`; the deployment DID is available on the runtime snapshot used here — mirror how the request is written with `agent_did` in `lifecycle/manual.rs`). For v1, `ctx.now` is the only task `ctx.*` var (matches the "system time into task start" interop ask); `event.fired_at` remains for existing templates.
+Then at each site, set `node`/`ctx` from it (the `now` value each site already computes for `event.fired_at`):
+
+- **`crates/defra-agent/src/trigger_engine/mod.rs`** (dispatch ~lines 294–316): the DID is on the runtime snapshot used here (mirror how `agent_did` is written in `lifecycle/manual.rs`); `behavior_id` is on the `ResolvedTask`/`FireIntent`.
+- **`crates/defra-agent/src/lifecycle/manual.rs`** (~line 64, `write_manual_agent_request`): `agent_did` + `behavior_id` are already params; reuse the `now` it computes.
+- **`crates/defra-agent-cli/src/commands/config/task_run.rs`** (~line 174): `behavior_id` is in scope; the agent DID is loaded with the behavior — pass both.
+
+Example (manual.rs):
+
+```rust
+    let (node, ctx) = crate::template::task_node_ctx(agent_did, behavior_id, &now);
+    let scope = TemplateScope {
+        event: serde_json::json!({ "fired_at": now, "trigger_id": serde_json::Value::Null, "trigger_kind": "manual" }),
+        doc: None,
+        args: Some(args),
+        node,
+        ctx,
+    };
+```
+
+> For v1, `ctx.now` is the only task `ctx.*` var (matches the "system time into task start" interop ask); `event.fired_at` remains for existing templates.
 
 - [ ] **Step 2: Extend apply-time task scope validation (full-ref, catalog-aware)**
 
@@ -1370,8 +1409,8 @@ Expected: builds and passes (including the new task-scope availability rejection
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent/src/trigger_engine/mod.rs crates/defra-agent/src/template/mod.rs crates/defra-agent-cli/src/desired_state/validate.rs
-git commit -m "feat(triggers): node/ctx catalog scopes in task templates + apply-time availability check (#497)"
+git add crates/defra-agent/src/trigger_engine/mod.rs crates/defra-agent/src/lifecycle/manual.rs crates/defra-agent-cli/src/commands/config/task_run.rs crates/defra-agent/src/template/mod.rs crates/defra-agent-cli/src/desired_state/validate.rs
+git commit -m "feat(triggers): node/ctx catalog scopes in all task render paths + apply-time availability check (#497)"
 ```
 
 ---
@@ -1430,5 +1469,6 @@ Use `superpowers:finishing-a-development-branch` to choose merge/PR. (Per worktr
 
 - **Spec coverage:** D1 (context user msg)→Task 11; D2 (reuse engine)→Tasks 6–8; D3 (catalog)→Task 6; D4 (system render-once frozen)→Task 10; D5 (request_context_template)→Tasks 9, 11; D6 (lazy providers)→Task 11 Step 3; D7 (complete-or-reject)→Task 7. Catalog v1→Task 6. Lean theorems→Tasks 1–2; conformance→Tasks 3–4; config surface + migration→Task 9; per-request render fail-closed→Task 11; persistence order + turn-1-once→Task 12; task interop + apply validation→Task 13.
 - **Plan-review revisions applied (3rd pass):** conformance module wired/committed only after the API exists (Task 4 ordering gate); context rendered at the daemon path and carried via `LoopConfig`, not in the shared loop (Task 11); fail-closed on render error (Task 11); context persisted turn-1-only to avoid per-turn duplication (Task 12); DB migration + 2nd CLI write path + desired-state load/validate added (Tasks 9, 13); Lean tail theorem strengthened (Task 2); minijinja `ast` import path corrected (Task 7).
+- **Plan-review revisions applied (4th pass):** system-template guard actually wired into apply validation `validate.rs` behavior loop, with tests (Task 9 Step 11); runtime system render made fail-closed at the behavior-resolution path (no literal fallback) (Task 10); 2nd CLI write path patched in BOTH `add_fields` and `update_fields` (Task 9 Step 9); desired-state sidecar **spill** added to match hydration (Task 9 Step 10); node/ctx populated at ALL THREE task render sites — trigger_engine + manual.rs + task_run.rs — via shared `task_node_ctx` helper (Task 13 Step 1).
 - **Known soft spots flagged inline (not placeholders):** minijinja AST field names are version-pinned and must be verified against the 2.19 source (Tasks 7, 11); if the acting identity isn't on `AgentRequest` in v1, **drop `ctx.acting_seat`/`ctx.acting_did` from the catalog** (so referencing them fails at apply — fail-closed) rather than emitting empty strings — file a follow-up (Task 11 Step 3 note).
 - **Type consistency:** `Volatility` (Lean) ↔ `catalog::Volatility` (Rust); `Site`, `default_catalog`, `is_available_at`, `collect_system_reads`, `validate_system_template`, `collect_request_reads`, `render_system_prompt` names are used identically across Tasks 4, 6, 7, 8, 10, 11, 13.
