@@ -17,6 +17,10 @@ use defra_agent::agent::p2p_reconcile::discovery::{
     decide_join_admission, derive_registry_desired, reconcile_discovery_tick, DiscoveredEntry,
     DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
+use defra_agent::agent::p2p_reconcile::network_membership::{
+    admitted_member, materializable_endpoint, membership_admits_did, EndpointDecision,
+    MembershipDecision, NetworkDecision,
+};
 
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     DiscoveredEntry {
@@ -247,4 +251,213 @@ fn join_gate_rejects_non_live_member_when_registry_nonempty() {
         decide_join_admission("did:key:issuer", "did:key:self", &stale, now, STALE_AFTER),
         JoinAdmission::Rejected
     );
+}
+
+// ---------------------------------------------------------------------------
+// Membership / endpoint trust predicates (Lean `Transition.lean`):
+// `membershipAdmitsDid` (the per-row body of `admittedMember`'s ∃),
+// `admittedMember`, and `materializableEndpoint`.
+//
+// These fence the pure decision fns in
+// `agent::p2p_reconcile::network_membership` against the Lean predicates. The
+// model is the source of truth; each assertion states the value the Lean
+// predicate specifies for the same inputs and checks the Rust fn agrees.
+// ---------------------------------------------------------------------------
+
+/// A network whose admin self-attestation verifies (`validNetwork = true`),
+/// admin DID `did:a`.
+fn valid_net() -> NetworkDecision {
+    NetworkDecision {
+        admin_did: "did:a".to_string(),
+        admin_sig_valid: true,
+    }
+}
+
+/// A membership row that admits `did:x`: admin-signed by `did:a`, network-scoped,
+/// active. Every "false" case below flips exactly one bit off this baseline.
+fn admitting_membership() -> MembershipDecision {
+    MembershipDecision {
+        member_did: "did:x".to_string(),
+        network_match: true,
+        active: true,
+        admin_sig_valid: true,
+        signed_by: "did:a".to_string(),
+    }
+}
+
+/// An endpoint announcing `did:x`'s peer: member-signed, fresh, not self. Every
+/// "false" case below flips exactly one bit off this baseline.
+fn announcing_endpoint() -> EndpointDecision {
+    EndpointDecision {
+        did: "did:x".to_string(),
+        peer: "peerX".to_string(),
+        member_sig_valid: true,
+        fresh: true,
+        peer_is_self: false,
+    }
+}
+
+/// Mirrors the per-row body of the ∃ in Lean `admittedMember`
+/// (`membership_admits_did`): admin-signed (`adminSigValid ∧ signedBy = adminDid
+/// ∧ networkId match`) ∧ `active` ∧ `memberDid = did`. Truth table: every single
+/// flipped bit denies.
+#[test]
+fn membership_admits_did_single_row_truth_table() {
+    let net = valid_net();
+    let base = admitting_membership();
+
+    // All conjuncts hold ⇒ admits.
+    assert!(membership_admits_did(&net, &base, "did:x"));
+
+    // adminSigValid = false ⇒ deny.
+    assert!(!membership_admits_did(
+        &net,
+        &MembershipDecision {
+            admin_sig_valid: false,
+            ..base.clone()
+        },
+        "did:x"
+    ));
+    // signedBy ≠ adminDid (wrong admin) ⇒ deny.
+    assert!(!membership_admits_did(
+        &net,
+        &MembershipDecision {
+            signed_by: "did:evil".to_string(),
+            ..base.clone()
+        },
+        "did:x"
+    ));
+    // networkId mismatch ⇒ deny.
+    assert!(!membership_admits_did(
+        &net,
+        &MembershipDecision {
+            network_match: false,
+            ..base.clone()
+        },
+        "did:x"
+    ));
+    // active = false (revoked) ⇒ deny.
+    assert!(!membership_admits_did(
+        &net,
+        &MembershipDecision {
+            active: false,
+            ..base.clone()
+        },
+        "did:x"
+    ));
+    // memberDid ≠ did (row is for someone else) ⇒ deny.
+    assert!(!membership_admits_did(&net, &base, "did:other"));
+}
+
+/// Mirrors Lean `admittedMember` (`validNetwork ∧ ∃ m ∈ memberships, …`): the
+/// existential over the membership slice plus the valid-network guard.
+#[test]
+fn admitted_member_existential_truth_table() {
+    let net = valid_net();
+    let good = admitting_membership();
+
+    // Valid network + one admitting row ⇒ admitted.
+    assert!(admitted_member(&net, &[good.clone()], "did:x"));
+
+    // adminSigValid = false on the membership ⇒ not admitted.
+    assert!(!admitted_member(
+        &net,
+        &[MembershipDecision {
+            admin_sig_valid: false,
+            ..good.clone()
+        }],
+        "did:x"
+    ));
+    // Wrong admin signed the membership ⇒ not admitted.
+    assert!(!admitted_member(
+        &net,
+        &[MembershipDecision {
+            signed_by: "did:evil".to_string(),
+            ..good.clone()
+        }],
+        "did:x"
+    ));
+    // Revoked (active = false) ⇒ not admitted.
+    assert!(!admitted_member(
+        &net,
+        &[MembershipDecision {
+            active: false,
+            ..good.clone()
+        }],
+        "did:x"
+    ));
+    // networkId mismatch ⇒ not admitted.
+    assert!(!admitted_member(
+        &net,
+        &[MembershipDecision {
+            network_match: false,
+            ..good.clone()
+        }],
+        "did:x"
+    ));
+    // Empty membership slice ⇒ existential is vacuously false ⇒ not admitted.
+    assert!(!admitted_member(&net, &[], "did:x"));
+    // DID not present (only a row for someone else) ⇒ not admitted.
+    assert!(!admitted_member(&net, &[good.clone()], "did:other"));
+    // Invalid network (admin self-attestation fails) denies even a good row.
+    assert!(!admitted_member(
+        &NetworkDecision {
+            admin_sig_valid: false,
+            ..net.clone()
+        },
+        &[good],
+        "did:x"
+    ));
+}
+
+/// Mirrors Lean `materializableEndpoint` (`admittedMember ep.did s ∧
+/// memberSignedEndpoint ep ∧ ep.peer ≠ s.self`): admitted member, member-signed,
+/// fresh, and not self. Truth table: every single flipped bit denies.
+#[test]
+fn materializable_endpoint_truth_table() {
+    let net = valid_net();
+    let good = admitting_membership();
+    let ep = announcing_endpoint();
+
+    // All conjuncts hold ⇒ materializable.
+    assert!(materializable_endpoint(&net, &[good.clone()], &ep));
+
+    // Announcing DID is not an admitted member (empty memberships) ⇒ deny.
+    assert!(!materializable_endpoint(&net, &[], &ep));
+    // Announcing DID has no admitting row (row is for someone else) ⇒ deny.
+    assert!(!materializable_endpoint(
+        &net,
+        &[good.clone()],
+        &EndpointDecision {
+            did: "did:other".to_string(),
+            ..ep.clone()
+        }
+    ));
+    // memberSigValid = false ⇒ deny.
+    assert!(!materializable_endpoint(
+        &net,
+        &[good.clone()],
+        &EndpointDecision {
+            member_sig_valid: false,
+            ..ep.clone()
+        }
+    ));
+    // fresh = false ⇒ deny.
+    assert!(!materializable_endpoint(
+        &net,
+        &[good.clone()],
+        &EndpointDecision {
+            fresh: false,
+            ..ep.clone()
+        }
+    ));
+    // peer is self ⇒ deny.
+    assert!(!materializable_endpoint(
+        &net,
+        &[good],
+        &EndpointDecision {
+            peer_is_self: true,
+            ..ep
+        }
+    ));
 }
