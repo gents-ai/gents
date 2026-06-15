@@ -13,16 +13,16 @@ use super::super::protocol::{
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
     ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
-    loaded_codex_thread_ids, resume_codex_thread, set_codex_thread_archived,
+    loaded_codex_thread_ids, resume_codex_thread, session_token_usage, set_codex_thread_archived,
     set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
-    thread_resume_response_json, thread_start_response_json,
+    thread_resume_response_json, thread_start_response_json, thread_token_usage,
 };
 use super::super::thread_routes;
 use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_thread_request(
-    connection: &ConnectionState,
+    _connection: &ConnectionState,
     state: &ShimState,
     outbound: &Outbound,
     request: codex::ClientRequest,
@@ -34,11 +34,7 @@ pub(super) async fn handle_thread_request(
             let cwd = effective_cwd(state, params.cwd.as_deref());
             let thread_id = state.next_thread_id();
             let record = create_codex_thread(state, &thread_id, &cwd).await?;
-            connection
-                .thread_cwds
-                .lock()
-                .await
-                .insert(thread_id.clone(), cwd.clone());
+            state.set_thread_cwd(&thread_id, cwd.clone()).await;
             let bound_model_id =
                 load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
@@ -62,13 +58,20 @@ pub(super) async fn handle_thread_request(
                 )
                 .await;
             }
-            let record =
-                resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?;
-            connection
-                .thread_cwds
-                .lock()
-                .await
-                .insert(record.session_id.clone(), record.cwd.clone());
+            let Some(record) =
+                resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?
+            else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
+            state
+                .set_thread_cwd(&record.session_id, record.cwd.clone())
+                .await;
             let turns = if params.exclude_turns {
                 Vec::new()
             } else {
@@ -82,6 +85,21 @@ pub(super) async fn handle_thread_request(
                 outbound,
                 request_id,
                 thread_resume_response_json(&record, turns, &bound_model_id),
+            )
+            .await?;
+            let total_usage = session_token_usage(state, &record.session_id)
+                .await
+                .unwrap_or_default();
+            send_notification(
+                outbound,
+                state,
+                codex::ServerNotification::ThreadTokenUsageUpdated(
+                    codex::ThreadTokenUsageUpdatedNotification {
+                        thread_id: record.session_id.clone(),
+                        turn_id: String::new(),
+                        token_usage: thread_token_usage(total_usage, total_usage),
+                    },
+                ),
             )
             .await
         }
@@ -105,11 +123,9 @@ pub(super) async fn handle_thread_request(
                         .unwrap_or_else(|| codex_thread_json(&record, false)),
                 )
                 .context("validating forked thread notification")?;
-                connection
-                    .thread_cwds
-                    .lock()
-                    .await
-                    .insert(record.session_id.clone(), record.cwd.clone());
+                state
+                    .set_thread_cwd(&record.session_id, record.cwd.clone())
+                    .await;
                 send_typed_json_result::<codex::ThreadForkResponse>(outbound, request_id, response)
                     .await?;
                 send_notification(
@@ -249,7 +265,15 @@ pub(super) async fn handle_thread_request(
             request_id, params, ..
         } => {
             set_codex_thread_archived(state, &params.thread_id, false).await?;
-            let record = resume_codex_thread(state, &params.thread_id, None).await?;
+            let Some(record) = resume_codex_thread(state, &params.thread_id, None).await? else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
             send_typed_json_result::<codex::ThreadUnarchiveResponse>(
                 outbound,
                 request_id,
@@ -260,8 +284,17 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadSetName {
             request_id, params, ..
         } => {
-            set_codex_thread_name(state, &params.thread_id, &params.name).await?;
-            send_result(outbound, request_id, codex::ThreadSetNameResponse {}).await
+            if set_codex_thread_name(state, &params.thread_id, &params.name).await? {
+                send_result(outbound, request_id, codex::ThreadSetNameResponse {}).await
+            } else {
+                send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await
+            }
         }
         codex::ClientRequest::ThreadMemoryModeSet {
             request_id, params, ..
@@ -272,23 +305,26 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadSettingsUpdate {
             request_id, params, ..
         } => {
+            // `set_codex_thread_settings` is the single writer of the per-thread
+            // cwd sidecar entry (it resolves `params.cwd` against `state.cwd`),
+            // so the handler must not re-resolve and re-write it here.
             set_codex_thread_settings(state, &params.thread_id, &params).await?;
-            if let Some(cwd) = params.cwd.as_deref() {
-                let cwd = effective_cwd(state, cwd.to_str());
-                connection
-                    .thread_cwds
-                    .lock()
-                    .await
-                    .insert(params.thread_id.clone(), cwd);
-            }
             send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await
         }
         codex::ClientRequest::ThreadMetadataUpdate {
             request_id, params, ..
         } => {
-            let record = set_codex_thread_git_info(state, &params.thread_id, &params.git_info)
-                .await?
-                .with_context(|| format!("unknown Codex thread `{}`", params.thread_id))?;
+            let Some(record) =
+                set_codex_thread_git_info(state, &params.thread_id, &params.git_info).await?
+            else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
             send_typed_json_result::<codex::ThreadMetadataUpdateResponse>(
                 outbound,
                 request_id,
@@ -299,7 +335,15 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadGoalSet {
             request_id, params, ..
         } => {
-            let goal = set_codex_thread_goal(state, &params).await?;
+            let Some(goal) = set_codex_thread_goal(state, &params).await? else {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    format!("unknown Codex thread `{}`", params.thread_id),
+                )
+                .await;
+            };
             send_result(outbound, request_id, codex::ThreadGoalSetResponse { goal }).await
         }
         codex::ClientRequest::ThreadGoalGet {

@@ -64,7 +64,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
             );
         }
     }
-    if let Some(git_info) = codex_git_info_json(&record.git_info_json) {
+    if let Some(git_info) = record.git_info.clone() {
         object.insert("gitInfo".to_string(), git_info);
     }
     thread
@@ -110,31 +110,12 @@ pub(in crate::commands::codex_shim) fn thread_resume_response_json(
     )
 }
 
-fn codex_git_info_json(raw: &str) -> Option<Value> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    let object = value.as_object()?;
-    if object.is_empty() {
-        return None;
-    }
-    let string_field = |name: &str| {
-        object
-            .get(name)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    };
-    Some(json!({
-        "sha": string_field("sha"),
-        "branch": string_field("branch"),
-        "originUrl": string_field("originUrl").or_else(|| string_field("origin_url")),
-    }))
-}
-
 fn thread_created_at(record: &CodexThreadRecord) -> Option<i64> {
     record
         .conversation
         .as_ref()
         .and_then(|conversation| conversation.created_at.as_deref())
-        .or(record.projection_created_at.as_deref())
+        .or(record.projection_started.as_deref())
         .and_then(parse_timestamp_seconds)
 }
 
@@ -143,14 +124,13 @@ fn thread_updated_at(record: &CodexThreadRecord) -> Option<i64> {
         .conversation
         .as_ref()
         .and_then(|conversation| conversation.updated_at.as_deref())
-        .or(record.projection_updated_at.as_deref())
         .or_else(|| {
             record
                 .conversation
                 .as_ref()
                 .and_then(|conversation| conversation.created_at.as_deref())
         })
-        .or(record.projection_created_at.as_deref())
+        .or(record.projection_started.as_deref())
         .and_then(parse_timestamp_seconds)
 }
 

@@ -50,13 +50,7 @@ pub(super) async fn start_defra_turn(
         .await;
     }
 
-    let cwd = connection
-        .thread_cwds
-        .lock()
-        .await
-        .get(&thread_id)
-        .cloned()
-        .unwrap_or_else(|| state.cwd.clone());
+    let cwd = state.thread_cwd(&thread_id).await;
     let metadata = codex_turn_metadata(&cwd, &selected_skill_ids);
 
     let submitted = match create_agent_request_with_retry(
@@ -166,13 +160,7 @@ pub(super) async fn steer_defra_turn(
         .await;
     }
 
-    let cwd = connection
-        .thread_cwds
-        .lock()
-        .await
-        .get(&params.thread_id)
-        .cloned()
-        .unwrap_or_else(|| state.cwd.clone());
+    let cwd = state.thread_cwd(&params.thread_id).await;
 
     let Some(active_turn) = load_active_codex_turn(state, &params.thread_id).await? else {
         return send_error(

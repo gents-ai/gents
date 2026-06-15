@@ -180,50 +180,46 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
-    let projection_response = graphql_query(
+    let session_response = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    session_id
-                    cwd
-                    archived
-                    loaded
-                }}
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
+                    agent_did
                     behavior_id
                     status
+                    started
                 }}
             }}"#,
-            escape_graphql_string(&thread_id),
             escape_graphql_string(&thread_id),
         ),
     )
     .await?;
-    let projection = first_graphql_row(&projection_response, "CodexThreadProjection")?;
+    let session = first_graphql_row(&session_response, "AgentSession")?;
     assert_eq!(
-        projection.get("session_id").and_then(Value::as_str),
+        session.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
     );
-    let expected_cwd = home_dir.display().to_string();
     assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
     );
-    assert_eq!(
-        projection.get("archived").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        projection.get("loaded").and_then(Value::as_bool),
-        Some(true)
-    );
-    let session = first_graphql_row(&projection_response, "AgentSession")?;
     let expected_behavior_id = format!("{agent_did}:default");
     assert_eq!(
         session.get("behavior_id").and_then(Value::as_str),
         Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        session.get("status").and_then(Value::as_str),
+        Some("active")
+    );
+    assert!(
+        session
+            .get("started")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()),
+        "AgentSession.started should be populated: {session}"
     );
 
     send_client_request(
@@ -383,6 +379,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         Some(&thread_id)
     );
 
+    let expected_git_sha = init_test_git_repo(&home_dir, "main")?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadMetadataUpdate {
@@ -408,7 +405,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             .git_info
             .as_ref()
             .and_then(|git| git.sha.as_deref()),
-        Some("abc123")
+        Some(expected_git_sha.as_str())
     );
 
     send_client_request(
@@ -516,11 +513,58 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let turn_start: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(4)).await?;
     assert_eq!(turn_start.turn.status, codex::TurnStatus::InProgress);
 
-    let (final_text, completed_turn) = read_turn_to_completion(&mut ws).await?;
-    assert_eq!(completed_turn.status, codex::TurnStatus::Completed);
+    let turn_capture = read_turn_capture(&mut ws).await?;
+    let final_text = turn_capture.text.clone();
+    let completed_turn = turn_capture.turn.clone();
+    assert_eq!(
+        completed_turn.status,
+        codex::TurnStatus::Completed,
+        "completed_turn={completed_turn:?}; final_text={final_text}"
+    );
     assert!(
         final_text.contains(&expected_reply),
         "expected streamed Codex text to contain {expected_reply}, got:\n{final_text}"
+    );
+
+    // Token-usage visibility (#494): turn completion must emit
+    // ThreadTokenUsageUpdated with real (non-zero) usage for this turn and the
+    // session cumulative total.
+    let turn_usage = turn_capture
+        .token_usage
+        .as_ref()
+        .expect("turn completion should emit a ThreadTokenUsageUpdated notification");
+    assert!(
+        turn_usage.total.total_tokens > 0,
+        "expected non-zero cumulative token usage on turn completion, got {turn_usage:?}"
+    );
+    assert!(
+        turn_usage.last.total_tokens > 0,
+        "expected non-zero last-turn token usage on turn completion, got {turn_usage:?}"
+    );
+
+    // The thread goal's tokens_used is derived from real session usage, so it
+    // must be non-zero now that a turn has run.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(50),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let goal_after_turn: codex::ThreadGoalGetResponse =
+        read_typed_response(&mut ws, request_id(50))
+            .await
+            .context("reading post-turn thread/goal/get response")?;
+    let goal_after_turn = goal_after_turn
+        .goal
+        .expect("goal should still exist after the turn");
+    assert!(
+        goal_after_turn.tokens_used > 0,
+        "goal.tokens_used should reflect real session usage after a turn, got {}",
+        goal_after_turn.tokens_used
     );
 
     let (_request_id, session_id, _behavior_id) =
@@ -579,6 +623,16 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(resumed_turn.status, codex::TurnStatus::Completed);
     assert_turn_has_user_text(resumed_turn, &prompt);
     assert_turn_has_agent_text(resumed_turn, &expected_reply);
+
+    // Resuming a thread with prior turns replays the session token usage so the
+    // counter is not dark on a resumed historical thread (#494).
+    let replay_usage = read_token_usage_notification(&mut ws)
+        .await
+        .context("reading token-usage replay after thread/resume")?;
+    assert!(
+        replay_usage.total.total_tokens > 0,
+        "thread/resume should replay non-zero session token usage, got {replay_usage:?}"
+    );
 
     send_client_request(
         &mut ws,
@@ -657,6 +711,339 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         read_typed_response(&mut ws, request_id(45)).await?;
     assert_eq!(summary.summary.conversation_id.to_string(), thread_id);
     assert_eq!(summary.summary.model_provider, "defra");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
+    // Regression guards for #494: git metadata is DERIVED from the thread cwd at
+    // read time (no ThreadMetadataUpdate round-trip), a non-git cwd yields no
+    // gitInfo without erroring, and a rename BEFORE the first turn persists via
+    // the create-if-absent AgentConversation upsert.
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    // A thread whose cwd is a real git repo: git metadata is derived from cwd at
+    // ThreadStart, with no ThreadMetadataUpdate call.
+    let git_dir = tempdir.path().join("repo");
+    fs::create_dir_all(&git_dir)?;
+    let expected_sha = init_test_git_repo(&git_dir, "main")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(git_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let git_thread: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    assert_eq!(
+        git_thread
+            .thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.sha.as_deref()),
+        Some(expected_sha.as_str()),
+        "git sha should be derived from the thread cwd at ThreadStart: {:?}",
+        git_thread.thread.git_info
+    );
+    assert_eq!(
+        git_thread
+            .thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.branch.as_deref()),
+        Some("main"),
+        "git branch should be derived from the thread cwd"
+    );
+
+    // Renaming before any turn must persist (create-if-absent AgentConversation).
+    let git_thread_id = git_thread.thread.id.clone();
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadSetName {
+            request_id: request_id(3),
+            params: codex::ThreadSetNameParams {
+                thread_id: git_thread_id.clone(),
+                name: "Named before first turn".to_string(),
+            },
+        },
+    )
+    .await?;
+    let _: codex::ThreadSetNameResponse = read_typed_response(&mut ws, request_id(3))
+        .await
+        .context("reading early thread/name/set response")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(4),
+            params: codex::ThreadReadParams {
+                thread_id: git_thread_id.clone(),
+                include_turns: false,
+            },
+        },
+    )
+    .await?;
+    let renamed: codex::ThreadReadResponse = read_typed_response(&mut ws, request_id(4))
+        .await
+        .context("reading thread/read after early rename")?;
+    assert_eq!(
+        renamed.thread.name.as_deref(),
+        Some("Named before first turn"),
+        "rename before the first turn should persist to the conversation title"
+    );
+
+    // A thread whose cwd is not a git repo yields no gitInfo and no error.
+    let plain_dir = tempdir.path().join("plain");
+    fs::create_dir_all(&plain_dir)?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(5),
+            params: codex::ThreadStartParams {
+                cwd: Some(plain_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let plain_thread: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(5)).await?;
+    assert!(
+        plain_thread.thread.git_info.is_none(),
+        "non-git cwd should yield no gitInfo, got {:?}",
+        plain_thread.thread.git_info
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
+    // Regression guard for #494: ordinary CLI/chat/runtime sessions share the
+    // shim's (agent_did, behavior_id) and create AgentSession rows, but they are
+    // NOT Codex threads (no codex_shim request, not shim-created) and must not
+    // appear in thread/list.
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let behavior_id = format!("{agent_did}:default");
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Seed a NON-Codex session + request for the bound identity, directly in the
+    // database (as the runtime/CLI would), with no codex_shim metadata.
+    let foreign_session_id = Uuid::new_v4().to_string();
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentSession(input: {{
+                    session_id: "{session}",
+                    agent_name: "{agent_name}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    started: "2026-01-01T00:00:00Z",
+                    status: "active"
+                }}) {{ _docID }}
+            }}"#,
+            session = escape_graphql_string(&foreign_session_id),
+            agent_name = escape_graphql_string(&agent_name),
+            agent_did = escape_graphql_string(&agent_did),
+            behavior_id = escape_graphql_string(&behavior_id),
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session}",
+                    metadata: "{{}}",
+                    execution_origin: "cli",
+                    created_at: "2026-01-01T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            request = escape_graphql_string(&Uuid::new_v4().to_string()),
+            agent_did = escape_graphql_string(&agent_did),
+            behavior_id = escape_graphql_string(&behavior_id),
+            session = escape_graphql_string(&foreign_session_id),
+        ),
+    )
+    .await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
+    send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+
+    // A genuine Codex thread (created by the shim) must be listed.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(home_dir.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let codex_thread: codex::ThreadStartResponse =
+        read_typed_response(&mut ws, request_id(2)).await?;
+    let codex_thread_id = codex_thread.thread.id.clone();
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(3),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let listed: codex::ThreadListResponse = read_typed_response(&mut ws, request_id(3)).await?;
+    assert!(
+        listed
+            .data
+            .iter()
+            .any(|thread| thread.id == codex_thread_id),
+        "the shim-created Codex thread should be listed: {listed:?}"
+    );
+    assert!(
+        !listed
+            .data
+            .iter()
+            .any(|thread| thread.id == foreign_session_id),
+        "a non-Codex session sharing the bound identity must not be listed as a Codex thread: {listed:?}"
+    );
 
     Ok(())
 }
@@ -1691,7 +2078,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     let prompt_token = "PROJLIVE";
     let thread_name = format!("DEFRA live projection {}", Uuid::new_v4().simple());
     let goal_objective = format!("exercise live projection {}", Uuid::new_v4().simple());
-    let git_sha = format!("live{}", Uuid::new_v4().simple());
     let git_branch = "codex-shim-live-projection".to_string();
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
@@ -1700,8 +2086,6 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
-    let expected_cwd = smoke.home_dir.display().to_string();
-
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadSetName {
@@ -1763,6 +2147,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     assert_eq!(goal_set.goal.objective, goal_objective);
     assert_eq!(goal_set.goal.token_budget, Some(321));
 
+    let expected_git_sha = init_test_git_repo(&smoke.home_dir, &git_branch)?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadMetadataUpdate {
@@ -1770,8 +2155,8 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             params: codex::ThreadMetadataUpdateParams {
                 thread_id: thread_id.clone(),
                 git_info: Some(codex::ThreadMetadataGitInfoUpdateParams {
-                    sha: Some(Some(git_sha.clone())),
-                    branch: Some(Some(git_branch.clone())),
+                    sha: Some(Some(format!("ignored-{}", Uuid::new_v4().simple()))),
+                    branch: Some(Some("ignored-client-branch".to_string())),
                     origin_url: None,
                 }),
             },
@@ -1790,7 +2175,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
             .git_info
             .as_ref()
             .and_then(|git| git.sha.as_deref()),
-        Some(git_sha.as_str())
+        Some(expected_git_sha.as_str())
     );
 
     let prompt = format!("Reply with exactly this token and no extra words: {prompt_token}");
@@ -1805,25 +2190,23 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         wait_for_request(&smoke.graphql, &smoke.agent_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
-    let projection_response = graphql_query(
+    let durable_response = graphql_query(
         &smoke.graphql,
         &format!(
             r#"{{
-                CodexThreadProjection(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    session_id
-                    cwd
-                    archived
-                    loaded
-                    memory_mode
-                    name
-                    settings_json
-                    goal_json
-                    git_info_json
-                }}
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
+                    agent_did
                     behavior_id
                     status
+                    started
+                }}
+                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    agent_did
+                    behavior_id
+                    title
+                    title_source
                 }}
             }}"#,
             escape_graphql_string(&thread_id),
@@ -1831,77 +2214,51 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         ),
     )
     .await?;
-    let projection = first_graphql_row(&projection_response, "CodexThreadProjection")?;
+    let session = first_graphql_row(&durable_response, "AgentSession")?;
     assert_eq!(
-        projection.get("session_id").and_then(Value::as_str),
+        session.get("session_id").and_then(Value::as_str),
         Some(thread_id.as_str())
     );
     assert_eq!(
-        projection.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(smoke.agent_did.as_str())
     );
-    assert_eq!(
-        projection.get("archived").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        projection.get("loaded").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        projection.get("memory_mode").and_then(Value::as_str),
-        Some("disabled")
-    );
-    assert_eq!(
-        projection.get("name").and_then(Value::as_str),
-        Some(thread_name.as_str())
-    );
-    let settings_json: Value = serde_json::from_str(
-        projection
-            .get("settings_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing settings_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread settings")?;
-    assert_eq!(
-        settings_json.get("cwd").and_then(Value::as_str),
-        Some(expected_cwd.as_str())
-    );
-    let goal_json: Value = serde_json::from_str(
-        projection
-            .get("goal_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing goal_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread goal")?;
-    assert_eq!(
-        goal_json.get("objective").and_then(Value::as_str),
-        Some(goal_objective.as_str())
-    );
-    assert_eq!(
-        goal_json.get("tokenBudget").and_then(Value::as_i64),
-        Some(321)
-    );
-    let git_info_json: Value = serde_json::from_str(
-        projection
-            .get("git_info_json")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("projection missing git_info_json: {projection}"))?,
-    )
-    .context("decoding stored live Codex thread git metadata")?;
-    assert_eq!(
-        git_info_json.get("sha").and_then(Value::as_str),
-        Some(git_sha.as_str())
-    );
-    assert_eq!(
-        git_info_json.get("branch").and_then(Value::as_str),
-        Some(git_branch.as_str())
-    );
-    let session = first_graphql_row(&projection_response, "AgentSession")?;
     let expected_behavior_id = format!("{}:default", smoke.agent_did);
     assert_eq!(
         session.get("behavior_id").and_then(Value::as_str),
         Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        session.get("status").and_then(Value::as_str),
+        Some("active")
+    );
+    assert!(
+        session
+            .get("started")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()),
+        "AgentSession.started should be populated: {session}"
+    );
+    let conversation = first_graphql_row(&durable_response, "AgentConversation")?;
+    assert_eq!(
+        conversation.get("session_id").and_then(Value::as_str),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(
+        conversation.get("agent_did").and_then(Value::as_str),
+        Some(smoke.agent_did.as_str())
+    );
+    assert_eq!(
+        conversation.get("behavior_id").and_then(Value::as_str),
+        Some(expected_behavior_id.as_str())
+    );
+    assert_eq!(
+        conversation.get("title").and_then(Value::as_str),
+        Some(thread_name.as_str())
+    );
+    assert_eq!(
+        conversation.get("title_source").and_then(Value::as_str),
+        Some("user")
     );
 
     send_client_request(
@@ -2758,6 +3115,11 @@ fn require_command(name: &str) -> Result<()> {
 }
 
 fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
+    let _ = run_git_output(cwd, args)?;
+    Ok(())
+}
+
+fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> Result<String> {
     // Disable commit signing so the test is hermetic against the host/CI git
     // config: a runner with `commit.gpgsign=true` but no usable gpg key (headless)
     // would otherwise fail `git commit` with "gpg failed to sign the data".
@@ -2777,7 +3139,31 @@ fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> Result<String> {
+    require_command("git")?;
+    run_git_command(cwd, &["init"])?;
+    run_git_command(cwd, &["checkout", "-B", branch])?;
+    fs::write(cwd.join(".codex-shim-git-fixture"), "base\n")
+        .with_context(|| format!("writing git fixture in {}", cwd.display()))?;
+    run_git_command(cwd, &["add", ".codex-shim-git-fixture"])?;
+    run_git_command(
+        cwd,
+        &[
+            "-c",
+            "user.name=Defra Test",
+            "-c",
+            "user.email=defra-test@example.invalid",
+            "commit",
+            "-m",
+            "base",
+        ],
+    )?;
+    Ok(run_git_output(cwd, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string())
 }
 
 fn gh_is_authenticated() -> bool {
@@ -3219,6 +3605,7 @@ struct TurnCapture {
     completed_tools: Vec<String>,
     turn_completed_tool_ids: Vec<String>,
     event_order: Vec<TurnStreamEvent>,
+    token_usage: Option<codex::ThreadTokenUsage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3239,10 +3626,14 @@ async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapture> {
     let mut completed_tool_ids = Vec::new();
     let mut completed_tools = Vec::new();
     let mut event_order = Vec::new();
+    let mut token_usage = None;
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
                 match server_notification_from_jsonrpc(notification)? {
+                    codex::ServerNotification::ThreadTokenUsageUpdated(update) => {
+                        token_usage = Some(update.token_usage);
+                    }
                     codex::ServerNotification::AgentMessageDelta(delta) => {
                         if !delta.delta.is_empty() {
                             event_order.push(TurnStreamEvent::AgentDelta);
@@ -3283,6 +3674,7 @@ async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapture> {
                             completed_tools,
                             turn_completed_tool_ids,
                             event_order,
+                            token_usage,
                         });
                     }
                     _ => {}
@@ -3456,6 +3848,29 @@ fn server_notification_from_jsonrpc(
 ) -> Result<codex::ServerNotification> {
     serde_json::from_value(serde_json::to_value(notification)?)
         .context("decoding Codex server notification")
+}
+
+/// Read server notifications until a `ThreadTokenUsageUpdated` arrives, skipping
+/// any unrelated notifications. Used to assert the resume token-usage replay.
+async fn read_token_usage_notification(ws: &mut ShimWebSocket) -> Result<codex::ThreadTokenUsage> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::ThreadTokenUsageUpdated(update) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    return Ok(update.token_usage);
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
