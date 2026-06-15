@@ -250,6 +250,33 @@ theorem unsigned_membership_not_materialized {s : NetworkState} {ep : Endpoint}
   rintro ⟨ep', _, ⟨_, _, _, _, m, hm_mem, hm_adm, hm_did⟩, hep'_did⟩
   exact h_none m hm_mem (hm_did.trans hep'_did) hm_adm
 
+/-! ### Endpoint-signature guard (the §4 "H4 fix")
+
+Symmetric to the membership-signature guard above: the §4 `binding_sig` closes
+the H4 "unsigned registry rows" weakness for the *reachability* claim. These
+make that guard an explicit theorem, not a corollary the reader has to spot in
+`endpointMaterializable`'s definition. -/
+
+/-- Leaf fact: a forged (unsigned) endpoint is never materializable — the
+`binding_sig` arm (`memberSignedEndpoint`) rejects it. Mirrors
+`forged_membership_not_admitted`. -/
+theorem forged_endpoint_not_materializable {s : NetworkState} {ep : Endpoint}
+    (h : ep.bindingSigValid = false) : ¬ endpointMaterializable s ep := by
+  rintro ⟨_, hsig, _, _, _⟩
+  unfold memberSignedEndpoint at hsig
+  rw [h] at hsig
+  exact Bool.false_ne_true hsig
+
+/-- State-level: if every endpoint in `s` carrying `d` is unsigned, then `d` is
+**not materialized**. A self-asserted endpoint with no valid `binding_sig` cannot
+put a peer in the desired set. Mirrors `unsigned_membership_not_materialized`. -/
+theorem unsigned_endpoint_not_materialized {s : NetworkState} {d : Did}
+    (h_none : ∀ ep ∈ s.endpoints, ep.did = d → ep.bindingSigValid = false) :
+    d ∉ deriveNetworkDesired s := by
+  rw [mem_deriveNetworkDesired]
+  rintro ⟨ep, hep, hmat, hep_did⟩
+  exact forged_endpoint_not_materializable (h_none ep hep hep_did) hmat
+
 /-! ## (2) Active admin-signed membership + fresh signed endpoint IS materialized -/
 
 /-- If `ep ∈ s.endpoints` is materializable, then `ep.did ∈ deriveNetworkDesired s`. -/
