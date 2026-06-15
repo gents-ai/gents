@@ -1989,7 +1989,11 @@ mod patch_kind_tests {
             }) { _docID } }"#,
         ] {
             let resp = node.execute(mutation).await;
-            assert!(!resp.has_errors(), "seed mutation failed: {:?}", resp.errors);
+            assert!(
+                !resp.has_errors(),
+                "seed mutation failed: {:?}",
+                resp.errors
+            );
         }
 
         // Add the immutable scope key (the Group-1 patch the migration runs
@@ -2057,7 +2061,11 @@ mod patch_kind_tests {
                 r#"query {{ {collection}(filter: {{ {key_field}: {{ _eq: "{key}" }} }}) {{ agent_did }} }}"#
             );
             let resp = node.execute(&q).await;
-            assert!(!resp.has_errors(), "read {collection} failed: {:?}", resp.errors);
+            assert!(
+                !resp.has_errors(),
+                "read {collection} failed: {:?}",
+                resp.errors
+            );
             let did = resp
                 .data
                 .as_ref()

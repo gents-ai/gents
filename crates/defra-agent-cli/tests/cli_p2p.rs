@@ -95,10 +95,7 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
         .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
 
     // Mint exactly ONE invite from A.
-    let invite_a = run_cli_json(
-        &home_a,
-        &["p2p", "pairings", "invite"],
-    )?;
+    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
     let token_a = invite_a
         .get("token")
         .and_then(Value::as_str)
@@ -647,10 +644,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("B readiness JSON missing p2p_peer_id: {readiness_b}"))?;
 
-    let invite_a = run_cli_json(
-        &home_a,
-        &["p2p", "pairings", "invite"],
-    )?;
+    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
     assert_eq!(
         invite_a.get("status").and_then(Value::as_str),
         Some("invite_created")

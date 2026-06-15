@@ -135,14 +135,9 @@ mod tests {
 
     #[test]
     fn p2p_pair_warns() {
-        let warning = deprecation_warning(&argv(&[
-            "defra-agent",
-            "p2p",
-            "pair",
-            "--peer",
-            "peer-1",
-        ]))
-        .expect("expected p2p pair warning");
+        let warning =
+            deprecation_warning(&argv(&["defra-agent", "p2p", "pair", "--peer", "peer-1"]))
+                .expect("expected p2p pair warning");
         assert_eq!(
             warning,
             "warning: `defra-agent p2p pair` is deprecated; use `defra-agent p2p pairings set`"
@@ -151,14 +146,9 @@ mod tests {
 
     #[test]
     fn p2p_unpair_warns() {
-        let warning = deprecation_warning(&argv(&[
-            "defra-agent",
-            "p2p",
-            "unpair",
-            "--peer",
-            "peer-1",
-        ]))
-        .expect("expected p2p unpair warning");
+        let warning =
+            deprecation_warning(&argv(&["defra-agent", "p2p", "unpair", "--peer", "peer-1"]))
+                .expect("expected p2p unpair warning");
         assert_eq!(
             warning,
             "warning: `defra-agent p2p unpair` is deprecated; use `defra-agent p2p pairings rm`"
