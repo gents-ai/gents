@@ -198,13 +198,14 @@ async fn post_status_json_single_backslash_escape_recovers_and_posts() {
 }
 
 /// After the fix: a truncated (`finish_reason == "length"`) `arguments` string
-/// is NOT silently dropped. The truncation cut off the required `findings`
-/// field, so the payload cannot be repaired into the tool's `Args`; instead of
-/// feeding the parse error back as the tool result, the client raises the typed,
-/// retryable `ToolError::UnparseableArgs { kind: Truncated, .. }` so the run
-/// re-attempts the inference.
+/// is NOT silently dropped and is NOT run. The truncated body contains lone
+/// backslashes before the cut, so serde's first error is a syntax error; the
+/// escape-only repair fixes the backslashes but cannot complete the cut-off
+/// value, so the reparse fails with EOF and `ToolDyn::call` returns
+/// `ToolError::UnparseableArgs { kind: Truncated, .. }`. The dispatcher then
+/// renders this into a `JsonError:` notice for the model (not posted as success).
 #[tokio::test]
-async fn post_status_json_truncated_body_raises_retryable_signal() {
+async fn post_status_json_truncated_body_is_rejected_not_posted() {
     // 5_037 bytes lands well inside the multi-KB `body` value, so the trailing
     // string, the `findings` array, and the closing `}` are all missing.
     let args = arguments_truncated_mid_object(5_037);
@@ -212,7 +213,7 @@ async fn post_status_json_truncated_body_raises_retryable_signal() {
 
     let error = ToolDyn::call(&tool, args)
         .await
-        .expect_err("a truncated post_status arguments string must NOT post; it should raise a retryable signal");
+        .expect_err("a truncated post_status arguments string must NOT post; it must be rejected");
 
     match error {
         ToolError::UnparseableArgs { kind, reason } => {
@@ -222,26 +223,19 @@ async fn post_status_json_truncated_body_raises_retryable_signal() {
                 "a mid-object cut is the finish_reason=length shape (serde Category::Eof)"
             );
             assert!(
-                error_is_retryable(&ToolError::UnparseableArgs {
-                    kind,
-                    reason: reason.clone(),
-                }),
-                "unparseable tool args should be retryable so the run re-attempts"
-            );
-            assert!(
                 reason.contains("EOF while parsing"),
                 "diagnostic: expected a serde_json EOF reason (client parser), got: {reason}"
             );
         }
         other => {
-            panic!("expected ToolError::UnparseableArgs (typed retryable signal), got: {other:?}")
+            panic!("expected ToolError::UnparseableArgs {{ Truncated }}, got: {other:?}")
         }
     }
 }
 
 /// Truncating at several offsets inside the `body` value should consistently
-/// produce a retryable, truncation-kinded signal — the helper must not depend on
-/// one hardcoded cut point.
+/// produce a truncation-kinded rejection — the result must not depend on one
+/// hardcoded cut point, and the truncated body is never run.
 #[tokio::test]
 async fn post_status_json_truncation_signal_is_offset_independent() {
     let tool = PostStatusTool;
@@ -260,8 +254,4 @@ async fn post_status_json_truncation_signal_is_offset_independent() {
             other => panic!("cut at {cut_at}: expected UnparseableArgs, got {other:?}"),
         }
     }
-}
-
-fn error_is_retryable(error: &ToolError) -> bool {
-    error.is_retryable()
 }

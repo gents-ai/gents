@@ -1159,24 +1159,21 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     })];
 
     assert_eq!(
-        super::dispatch_tool(&tools, "echo", "{}".to_string())
-            .await
-            .expect("a normal tool call should not raise a retryable signal"),
+        super::dispatch_tool(&tools, "echo", "{}".to_string()).await,
         "ECHOED".to_string()
     );
     assert_eq!(
-        super::dispatch_tool(&tools, "missing", "{}".to_string())
-            .await
-            .expect("an unknown tool is reported as a result, not a retryable signal"),
+        super::dispatch_tool(&tools, "missing", "{}".to_string()).await,
         "error: unknown tool 'missing'".to_string()
     );
 }
 
 #[tokio::test]
-async fn dispatch_tool_escalates_unparseable_args_to_retryable_signal() {
+async fn dispatch_tool_renders_unparseable_args_as_jsonerror_result() {
     use crate::llm::tool::{Tool, ToolDefinition};
 
-    // A tool whose Args require fields the truncated payload never closes.
+    // A tool whose Args require fields the (valid-JSON) call omits, so the real
+    // parse seam raises UnparseableArgs.
     struct StrictArgsTool;
     #[derive(Debug, thiserror::Error)]
     #[error("strict tool error")]
@@ -1185,8 +1182,6 @@ async fn dispatch_tool_escalates_unparseable_args_to_retryable_signal() {
     struct StrictArgs {
         #[allow(dead_code)]
         body: String,
-        // A second required field that the truncated payload never reaches, so a
-        // structural repair cannot produce a deserializable object.
         #[allow(dead_code)]
         findings: Vec<String>,
     }
@@ -1208,33 +1203,32 @@ async fn dispatch_tool_escalates_unparseable_args_to_retryable_signal() {
     }
 
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
-    // Truncated mid-string: repair closes it structurally but the required
-    // `findings` field is absent, so it cannot deserialize — dispatch_tool must
-    // escalate rather than feed the error back as a result.
+    // Truncated mid-string: escape-only repair cannot complete it, so it stays
+    // UnparseableArgs and dispatch renders a `JsonError:` notice for the model
+    // (which on_tool_result maps to failed(ArgumentInvalid)) — not the tool output.
     let result = super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string()).await;
-    let error =
-        result.expect_err("unparseable args must escalate to a StreamingError, not a result");
     assert!(
-        crate::retry::is_retryable_streaming_error(&error),
-        "the escalated client-side unparseable-args signal must be retryable"
+        result.starts_with("JsonError:"),
+        "unparseable args must render a JsonError: notice, got: {result}"
+    );
+    assert!(
+        !result.contains("ran") && result.contains("token limit"),
+        "the truncated notice must replace the tool output and guide the model to shorten, got: {result}"
     );
 }
 
-/// Loop-level fence for the tool-call liveness invariant (Lean
-/// `ToolExecution.live_call_reaches_terminal`, T5): when a tool call's arguments
-/// are unparseable, the owned loop terminalizes the already-persisted (`running`)
-/// `AgentToolCall` as `failed`/`argumentInvalid` BEFORE escalating the retryable
-/// signal — so the started call never dangles in `running`. This complements
-/// `dispatch_tool_escalates_unparseable_args_to_retryable_signal` (which fences
-/// the escalation at the dispatch seam, without a hook) by fencing the
-/// persistence side of the same path through the real hook + node.
+/// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,
+/// (b) surfaces a `JsonError:` notice to the model so it can re-emit corrected
+/// arguments next turn, and (c) terminalizes the started `AgentToolCall` as
+/// `failed`/`argumentInvalid` — via the ordinary `on_tool_result` path, since the
+/// `JsonError:` prefix routes through `classify_runtime_failure`. This preserves
+/// the tool-call liveness invariant (Lean `ToolExecution.live_call_reaches_terminal`,
+/// T5: the started call reaches a terminal state) using the proven `Running → Failed`
+/// edge with the existing `FailureClass::ArgumentInvalid`.
 #[tokio::test]
-async fn unparseable_tool_args_terminalize_the_started_call_as_failed() {
+async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     use crate::llm::tool::{Tool, ToolDefinition};
 
-    // A typed tool whose `Args` require a field the model's (valid-JSON) call
-    // omits, so the real `parse_tool_args` seam raises `UnparseableArgs` and the
-    // dispatcher escalates — exactly the path that must not leave a dangling call.
     struct StrictArgsTool;
     #[derive(Debug, thiserror::Error)]
     #[error("strict tool error")]
@@ -1259,22 +1253,29 @@ async fn unparseable_tool_args_terminalize_the_started_call_as_failed() {
             }
         }
         async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-            Ok("posted".to_string())
+            // Must NOT run: the args never deserialize.
+            panic!("the tool must not run on unparseable arguments");
         }
     }
 
     let (node, hook) = test_hook().await;
     ready_hook_for(&hook).await;
 
-    // Valid JSON, but missing the required `findings` field: a non-Eof (Malformed)
-    // parse failure that no repair can recover into the typed args.
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-            "call-1".to_string(),
-            "post_status".to_string(),
-            serde_json::json!({ "report_type": "steward" }),
-        )),
-        RawStreamingChoice::FinalResponse(()),
+    // Valid JSON, but missing the required `findings` field: a Malformed parse
+    // failure that no repair can recover into the typed args.
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "post_status".to_string(),
+                serde_json::json!({ "report_type": "steward" }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
     ]);
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
 
@@ -1288,25 +1289,30 @@ async fn unparseable_tool_args_terminalize_the_started_call_as_failed() {
     );
     futures::pin_mut!(stream);
 
-    // The loop yields the retryable escalation rather than a tool result.
-    let mut saw_retryable_error = false;
+    // The model is notified via a tool result (no error ends the stream); it sees
+    // the JsonError notice and answers on the next turn.
+    let mut tool_results = Vec::new();
     while let Some(item) = stream.next().await {
-        if let Err(error) = item {
-            assert!(
-                crate::retry::is_retryable_streaming_error(&error),
-                "unparseable tool args must yield a retryable signal, got: {error:?}"
+        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+            tool_result,
+            ..
+        }) = item.expect("loop must not fail; unparseable args are notified, not raised")
+        {
+            tool_results.push(
+                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                    &tool_result.content.first(),
+                ))
+                .to_string(),
             );
-            saw_retryable_error = true;
-            break;
         }
     }
     assert!(
-        saw_retryable_error,
-        "the loop must surface the retryable unparseable-args escalation"
+        tool_results.iter().any(|r| r.contains("JsonError:")),
+        "the model must be notified with a JsonError result, got: {tool_results:?}"
     );
 
-    // T5: the started call reached a terminal state — failed(argumentInvalid) —
-    // instead of dangling in `running`.
+    // T5: the started call terminalized failed(argumentInvalid) — via on_tool_result
+    // recognizing the JsonError: prefix — instead of dangling in `running`.
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
         .await;
@@ -1328,6 +1334,6 @@ async fn unparseable_tool_args_terminalize_the_started_call_as_failed() {
                 && row.get("lifecycle_state").and_then(|v| v.as_str()) == Some("failed")
                 && row.get("tool_failure_class").and_then(|v| v.as_str()) == Some("argumentInvalid")
         }),
-        "the started tool call must be terminalized failed/argumentInvalid, got rows: {rows:?}"
+        "the started tool call must terminalize failed/argumentInvalid, got rows: {rows:?}"
     );
 }

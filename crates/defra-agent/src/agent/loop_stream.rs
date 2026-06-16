@@ -33,7 +33,7 @@ use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
 use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
 
-use crate::llm::tool::{ToolDyn, ToolError};
+use crate::llm::tool::{ToolDyn, ToolError, UnparseableArgsKind};
 use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -298,35 +298,17 @@ where
                                 // Dispatch the unwrapped tool inside our own
                                 // deadline/cancellation envelope, then bound the
                                 // model-facing result natively (#401) before
-                                // threading.
-                                let full_result = match dispatch_tool(
+                                // threading. An unparseable-args failure is rendered
+                                // by dispatch_tool into a `JsonError:` result, which
+                                // on_tool_result terminalizes failed(ArgumentInvalid)
+                                // and surfaces to the model so it re-emits corrected
+                                // arguments next turn.
+                                let full_result = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
                                     tool_args.clone(),
                                 )
-                                .await
-                                {
-                                    Ok(result) => result,
-                                    // `dispatch_tool` returns Err only for an
-                                    // unparseable-args escalation. Terminalize the
-                                    // already-persisted (`running`) tool call as
-                                    // failed(ArgumentInvalid) BEFORE raising the
-                                    // retryable signal, so the started call reaches
-                                    // a terminal state (T5) instead of dangling in
-                                    // `running` until the next startup recovery.
-                                    Err(stream_error) => {
-                                        if let Some(hook) = hook.as_ref() {
-                                            hook.on_tool_call_unparseable_args(
-                                                &tool_name,
-                                                &internal_call_id,
-                                                &stream_error.to_string(),
-                                            )
-                                            .await;
-                                        }
-                                        Err(stream_error)?;
-                                        unreachable!("Err(..)? above ends the stream");
-                                    }
-                                };
+                                .await;
                                 let (bounded, _, _) = truncate_text(
                                     &full_result,
                                     tool_result_truncation_mode(&tool_name),
@@ -559,31 +541,22 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
 /// Dispatch one tool call by name, applying the active request's
 /// deadline/cancellation envelope (when a tool runtime scope is in effect).
 ///
-/// `Ok(result)` is the tool's full (unbounded) output, or a managed-terminal
-/// marker string that `on_tool_result` classifies into a timed-out/cancelled
-/// outcome. A tool's own error is rendered into that result string (the model
-/// can react to it), as before.
-///
-/// `Err(streaming_error)` is reserved for a [`ToolError::UnparseableArgs`]: the
-/// model's tool-call `arguments` could not be parsed even after a tolerant
-/// repair. That is NOT fed back to the model as a result (which would only make
-/// it re-emit the same broken payload until the budget dies and nothing posts);
-/// it is raised as a retryable signal so the run re-attempts the inference.
-async fn dispatch_tool(
-    tools: &[Box<dyn ToolDyn>],
-    name: &str,
-    args: String,
-) -> Result<String, StreamingError> {
+/// Returns the tool's full (unbounded) output, a managed-terminal marker string
+/// that `on_tool_result` classifies into a timed-out/cancelled outcome, or — for
+/// a [`ToolError::UnparseableArgs`] — a `JsonError:`-prefixed message (see
+/// [`tool_outcome_to_result`]). A tool's own error is rendered into the result
+/// string so the model can react to it, as before.
+async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> String {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        return Ok(format!("error: unknown tool '{name}'"));
+        return format!("error: unknown tool '{name}'");
     };
 
     let Some(scope) = current_tool_runtime_context() else {
-        return tool_result_or_retry(name, tool.call(args).await);
+        return tool_outcome_to_result(name, tool.call(args).await);
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-        return Ok(timeout_result(scope.deadline_at));
+        return timeout_result(scope.deadline_at);
     }
 
     let deadline_at = scope.deadline_at;
@@ -594,43 +567,44 @@ async fn dispatch_tool(
         }
     });
 
-    let outcome = tokio::select! {
+    tokio::select! {
         biased;
-        _ = scope.cancellation_token.cancelled() => return Ok(cancelled_result()),
-        _ = &mut deadline => return Ok(timeout_result(scope.deadline_at)),
-        result = tool.call(args) => result,
-    };
-    tool_result_or_retry(name, outcome)
+        _ = scope.cancellation_token.cancelled() => cancelled_result(),
+        _ = &mut deadline => timeout_result(scope.deadline_at),
+        result = tool.call(args) => tool_outcome_to_result(name, result),
+    }
 }
 
-/// Render a tool dispatch outcome into the model-facing result string, except a
-/// [`ToolError::UnparseableArgs`] — which is escalated to a retryable
-/// [`StreamingError`] (see [`dispatch_tool`]). Every other error (the tool's own
-/// failure, an output-serialization bug) keeps the existing behavior of being
-/// surfaced to the model as the tool result.
-fn tool_result_or_retry(
-    name: &str,
-    outcome: Result<String, ToolError>,
-) -> Result<String, StreamingError> {
+/// Render a tool dispatch outcome into the model-facing result string. A
+/// [`ToolError::UnparseableArgs`] becomes a `JsonError:`-prefixed message: the
+/// prefix routes it through `classify_runtime_failure` so the call terminalizes
+/// `failed(ArgumentInvalid)`, and the body tells the model whether its arguments
+/// were truncated (it hit the token cap) or malformed, so it re-emits a corrected
+/// tool call on its next turn instead of blindly repeating the broken payload.
+/// Every other error keeps the existing behavior of being surfaced as the result.
+fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
     match outcome {
-        Ok(result) => Ok(result),
-        Err(error @ ToolError::UnparseableArgs { .. }) => {
+        Ok(result) => result,
+        Err(ToolError::UnparseableArgs { kind, reason }) => {
             tracing::warn!(
                 tool = name,
-                error = %error,
-                "tool-call arguments unparseable after repair; re-running inference"
+                %kind,
+                %reason,
+                "tool-call arguments unparseable after repair; notifying model"
             );
-            // Carry the client-side marker so `classify_completion_error` routes
-            // this through the same transient/retry path as vLLM's server-side
-            // tool-parse 400 (Variant A).
-            Err(StreamingError::Completion(
-                rig::completion::CompletionError::ProviderError(format!(
-                    "{}: tool '{name}': {error}",
-                    crate::error::CLIENT_TOOL_ARGS_UNPARSEABLE_MARKER
-                )),
-            ))
+            let guidance = match kind {
+                UnparseableArgsKind::Truncated => {
+                    "the arguments were cut off — your response hit the token limit before the \
+                     JSON was complete; re-call the tool with a shorter, complete arguments object"
+                }
+                UnparseableArgsKind::Malformed => {
+                    "the arguments were not valid JSON; re-call the tool with valid JSON \
+                     (escape any backslash as \\\\)"
+                }
+            };
+            format!("JsonError: tool '{name}' arguments could not be parsed: {guidance}.")
         }
-        Err(error) => Ok(error.to_string()),
+        Err(error) => error.to_string(),
     }
 }
 
