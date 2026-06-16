@@ -1820,6 +1820,12 @@ pub(crate) enum P2pNetworkCommand {
         aliases = ["deregister", "remove"]
     )]
     Rm(P2pAccessArgs),
+    #[command(about = "Create the local singleton AgentNetwork control-plane root")]
+    Create(P2pNetworkCreateArgs),
+    #[command(about = "Grant active network membership to a member DID")]
+    Grant(P2pNetworkGrantArgs),
+    #[command(about = "Revoke network membership with a retained tombstone")]
+    Revoke(P2pNetworkRevokeArgs),
 }
 
 #[derive(clap::Args)]
@@ -1849,6 +1855,43 @@ pub(crate) struct P2pNetworkListArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkCreateArgs {
+    /// Human-readable network name; network_id is derived from (admin_did, name).
+    #[arg(long)]
+    pub(crate) name: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkGrantArgs {
+    /// The member DID to admit.
+    pub(crate) member_did: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkRevokeArgs {
+    /// The member DID to revoke.
+    pub(crate) member_did: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
 }
 

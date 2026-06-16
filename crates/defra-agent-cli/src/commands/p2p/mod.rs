@@ -5,6 +5,7 @@ mod documents;
 mod invite;
 mod join;
 mod network;
+mod network_admin;
 mod output;
 mod pairings;
 mod replicators;
@@ -36,6 +37,9 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pNetworkCommand::Register(args) => network::p2p_network_register(args).await,
             P2pNetworkCommand::List(args) => network::p2p_network_list(args).await,
             P2pNetworkCommand::Rm(args) => network::p2p_network_rm(args).await,
+            P2pNetworkCommand::Create(args) => network_admin::p2p_network_create(args).await,
+            P2pNetworkCommand::Grant(args) => network_admin::p2p_network_grant(args).await,
+            P2pNetworkCommand::Revoke(args) => network_admin::p2p_network_revoke(args).await,
         },
         P2pCommand::Templates { command } => match command {
             P2pTemplatesCommand::List(args) => templates::p2p_templates_list(args).await,

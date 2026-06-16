@@ -25,14 +25,23 @@ use serde::{Deserialize, Serialize};
 /// `network_id` is itself a signed `AgentNetwork` field, so it cannot depend on
 /// DefraDB's `_docID` or any other storage detail created after insertion.
 pub fn derive_network_id(admin_did: &str, name: &str) -> String {
+    format!("net-{}", digest16_base58(admin_did, name))
+}
+
+/// Deterministic composite key for `NetworkMembership(network_id, member_did)`.
+pub fn derive_membership_key(network_id: &str, member_did: &str) -> String {
+    format!("mem-{}", digest16_base58(network_id, member_did))
+}
+
+fn digest16_base58(left: &str, right: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let mut h = Sha256::new();
-    h.update(admin_did.as_bytes());
+    h.update(left.as_bytes());
     h.update(b"\x1f");
-    h.update(name.as_bytes());
+    h.update(right.as_bytes());
     let digest = h.finalize();
-    format!("net-{}", bs58::encode(&digest[..16]).into_string())
+    bs58::encode(&digest[..16]).into_string()
 }
 
 /// Canonical signing form of an `AgentNetwork` row. `sig` is the admin DID's
@@ -204,6 +213,19 @@ mod tests {
         assert_ne!(a, other_admin, "admin-bound");
         assert_ne!(a, other_name, "name-bound");
         assert!(a.starts_with("net-"), "stable, recognizable prefix");
+    }
+
+    #[test]
+    fn membership_key_is_deterministic_and_composite_bound() {
+        let a = derive_membership_key("net-a", "did:key:zMember");
+        let b = derive_membership_key("net-a", "did:key:zMember");
+        let other_network = derive_membership_key("net-b", "did:key:zMember");
+        let other_member = derive_membership_key("net-a", "did:key:zOther");
+
+        assert_eq!(a, b, "deterministic");
+        assert_ne!(a, other_network, "network-bound");
+        assert_ne!(a, other_member, "member-bound");
+        assert!(a.starts_with("mem-"), "stable, recognizable prefix");
     }
 
     // --- Record signing payloads ----------------------------------------

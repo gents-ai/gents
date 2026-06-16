@@ -161,6 +161,258 @@ fn join(node: &Node, token: &str) -> Result<Value> {
     Ok(out)
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn network_create_is_singleton_and_writes_admin_membership() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let model_name = format!("mock-net-create-{}", Uuid::new_v4().simple());
+    let mock = MockModelEndpoint::start(&model_name)?;
+    let admin = boot_node(tempdir.path(), "admin", &model_name, mock.endpoint(), false).await?;
+
+    let created = run_cli_json(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
+        ],
+    )?;
+    let network_id = created
+        .get("network_id")
+        .and_then(Value::as_str)
+        .context("network create output missing network_id")?;
+    assert!(network_id.starts_with("net-"), "output: {created}");
+    assert_eq!(
+        created.get("admin_did").and_then(Value::as_str),
+        Some(admin.agent_did.as_str()),
+        "network create output: {created}"
+    );
+    assert!(
+        created
+            .get("pointer")
+            .and_then(Value::as_str)
+            .is_some_and(|token| token.starts_with("danet1-")),
+        "network create must emit a danet1 pointer: {created}"
+    );
+
+    let network = graphql_query(
+        &admin.graphql,
+        r#"{ AgentNetwork { network_id admin_did display_name default_template admin_sig } }"#,
+    )
+    .await?;
+    let networks = network
+        .pointer("/data/AgentNetwork")
+        .and_then(Value::as_array)
+        .context("AgentNetwork query missing rows")?;
+    assert_eq!(networks.len(), 1, "AgentNetwork rows: {network}");
+    assert_eq!(networks[0]["network_id"], json!(network_id));
+    assert_eq!(networks[0]["admin_did"], json!(admin.agent_did));
+    assert_eq!(networks[0]["display_name"], json!("Fleet One"));
+    assert_eq!(networks[0]["default_template"], json!("network-control"));
+    assert!(
+        networks[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "AgentNetwork must carry admin_sig: {network}"
+    );
+
+    let memberships = graphql_query(
+        &admin.graphql,
+        r#"{ NetworkMembership { network_id member_did status admin_sig } }"#,
+    )
+    .await?;
+    let membership_rows = memberships
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows")?;
+    assert!(
+        membership_rows.iter().any(|row| {
+            row.get("network_id") == Some(&json!(network_id))
+                && row.get("member_did") == Some(&json!(admin.agent_did))
+                && row.get("status") == Some(&json!("active"))
+                && row
+                    .get("admin_sig")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sig| !sig.is_empty())
+        }),
+        "admin self-membership missing: {memberships}"
+    );
+
+    let endpoints = graphql_query(
+        &admin.graphql,
+        r#"{ PeerEndpoint { did node_id address binding_sig } }"#,
+    )
+    .await?;
+    let endpoint_rows = endpoints
+        .pointer("/data/PeerEndpoint")
+        .and_then(Value::as_array)
+        .context("PeerEndpoint query missing rows")?;
+    assert!(
+        endpoint_rows.iter().any(|row| {
+            row.get("did") == Some(&json!(admin.agent_did))
+                && row.get("node_id") == Some(&json!(admin.peer_id))
+                && row
+                    .get("address")
+                    .and_then(Value::as_str)
+                    .is_some_and(|addr| !addr.is_empty())
+                && row
+                    .get("binding_sig")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sig| !sig.is_empty())
+        }),
+        "PeerEndpoint row missing: {endpoints}"
+    );
+
+    let second = run_cli_failure_stderr(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet Two",
+            "--output",
+            "json",
+        ],
+    )?;
+    assert!(
+        second.contains("already exists") && second.contains("singleton"),
+        "second create should fail singleton guard, got: {second}"
+    );
+
+    drop((admin, mock));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grant_then_revoke_writes_active_then_tombstone() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let model_name = format!("mock-net-grant-{}", Uuid::new_v4().simple());
+    let mock = MockModelEndpoint::start(&model_name)?;
+    let admin = boot_node(tempdir.path(), "admin", &model_name, mock.endpoint(), false).await?;
+
+    let created = run_cli_json(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
+        ],
+    )?;
+    let network_id = created
+        .get("network_id")
+        .and_then(Value::as_str)
+        .context("network create output missing network_id")?
+        .to_string();
+    let member = format!("did:key:zMember{}", Uuid::new_v4().simple());
+
+    let grant = run_cli_json(
+        &admin.home,
+        &["p2p", "network", "grant", &member, "--output", "json"],
+    )?;
+    assert_eq!(
+        grant.get("status").and_then(Value::as_str),
+        Some("membership_granted"),
+        "grant output: {grant}"
+    );
+    let member_escaped = escape_graphql_string(&member);
+    let after_grant = graphql_query(
+        &admin.graphql,
+        &format!(
+            r#"{{
+                NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{
+                    network_id
+                    member_did
+                    status
+                    granted_at
+                    revoked_at
+                    admin_sig
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let rows = after_grant
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows after grant")?;
+    assert_eq!(rows.len(), 1, "grant rows: {after_grant}");
+    assert_eq!(rows[0]["network_id"], json!(network_id));
+    assert_eq!(rows[0]["member_did"], json!(member));
+    assert_eq!(rows[0]["status"], json!("active"));
+    assert_eq!(rows[0]["revoked_at"], json!(""));
+    assert!(
+        rows[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "grant must carry admin_sig: {after_grant}"
+    );
+
+    let revoke = run_cli_json(
+        &admin.home,
+        &["p2p", "network", "revoke", &member, "--output", "json"],
+    )?;
+    assert_eq!(
+        revoke.get("status").and_then(Value::as_str),
+        Some("membership_revoked"),
+        "revoke output: {revoke}"
+    );
+    let after_revoke = graphql_query(
+        &admin.graphql,
+        &format!(
+            r#"{{
+                NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{
+                    network_id
+                    member_did
+                    status
+                    granted_at
+                    revoked_at
+                    admin_sig
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let rows = after_revoke
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows after revoke")?;
+    assert_eq!(
+        rows.len(),
+        1,
+        "revoke must retain one tombstone row: {after_revoke}"
+    );
+    assert_eq!(rows[0]["network_id"], json!(network_id));
+    assert_eq!(rows[0]["member_did"], json!(member));
+    assert_eq!(rows[0]["status"], json!("revoked"));
+    assert!(
+        rows[0]
+            .get("revoked_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "revoke tombstone must keep revoked_at: {after_revoke}"
+    );
+    assert!(
+        rows[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "revoke tombstone must carry admin_sig: {after_revoke}"
+    );
+
+    drop((admin, mock));
+    Ok(())
+}
+
 /// Close the pairing loop with the proven invite/join flow: the joiner accepts
 /// the seed's *signed* invite (the gated path under test), then the seed pairs
 /// back by joining the reciprocal token. The reciprocal leg carries

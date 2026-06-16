@@ -567,6 +567,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn p2p_network_create_parses() {
+        let cli = Cli::try_parse_from([
+            "defra-agent",
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
+        ])
+        .expect("p2p network create should parse");
+        match cli.command {
+            crate::cli::args::Command::P2p {
+                command: crate::cli::args::P2pCommand::Network { command },
+            } => match command {
+                crate::cli::args::P2pNetworkCommand::Create(args) => {
+                    assert_eq!(args.name, "Fleet One");
+                    assert_eq!(args.output, OutputFormat::Json);
+                }
+                _ => panic!("expected network create"),
+            },
+            _ => panic!("expected p2p network"),
+        }
+    }
+
+    #[test]
+    fn p2p_network_grant_revoke_parse_member_did_and_output() {
+        for (subcommand, expected_json) in [("grant", false), ("revoke", true)] {
+            let mut argv = vec![
+                "defra-agent",
+                "p2p",
+                "network",
+                subcommand,
+                "did:key:zMember",
+            ];
+            if expected_json {
+                argv.extend(["--output", "json"]);
+            }
+            let cli = Cli::try_parse_from(argv).expect("p2p network grant/revoke should parse");
+            match cli.command {
+                crate::cli::args::Command::P2p {
+                    command: crate::cli::args::P2pCommand::Network { command },
+                } => match command {
+                    crate::cli::args::P2pNetworkCommand::Grant(args) => {
+                        assert_eq!(subcommand, "grant");
+                        assert_eq!(args.member_did, "did:key:zMember");
+                        assert_eq!(args.output, OutputFormat::Text);
+                    }
+                    crate::cli::args::P2pNetworkCommand::Revoke(args) => {
+                        assert_eq!(subcommand, "revoke");
+                        assert_eq!(args.member_did, "did:key:zMember");
+                        assert_eq!(args.output, OutputFormat::Json);
+                    }
+                    _ => panic!("expected network grant/revoke"),
+                },
+                _ => panic!("expected p2p network"),
+            }
+        }
+    }
+
     // ---- row parsing / liveness tests ----
 
     fn make_row(
