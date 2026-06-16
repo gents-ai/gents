@@ -273,16 +273,24 @@ fn normalize_arguments(
 }
 
 /// Parse a stringified `call_tool.arguments` JSON value, applying one tolerant
-/// [`repair_tool_arguments`] pass (lone-backslash escapes / trailing truncation)
-/// when the raw string fails to parse. Mirrors the native tool seam in
+/// [`repair_tool_arguments`] pass (lone-backslash escapes) when the raw string
+/// fails to parse. Mirrors the native tool seam in
 /// [`crate::llm::tool::parse_tool_args`] so MCP-routed tools recover from the
-/// same model output corruptions.
+/// same model output corruptions — including the same guard: a truncated
+/// (`Category::Eof`) payload is never repaired-and-run, only escalated.
 fn parse_stringified_object(raw: &str) -> Result<Value, serde_json::Error> {
     match serde_json::from_str::<Value>(raw) {
         Ok(value) => Ok(value),
-        Err(first_error) => crate::llm::tool::repair_tool_arguments(raw)
-            .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
-            .ok_or(first_error),
+        // Only repair-and-accept a structurally-malformed payload, never a
+        // truncated one: a `Category::Eof` cut (`finish_reason == "length"`) is
+        // incomplete by definition, so closing it would smuggle partial content
+        // through as if it were whole.
+        Err(first_error) if first_error.classify() != serde_json::error::Category::Eof => {
+            crate::llm::tool::repair_tool_arguments(raw)
+                .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
+                .ok_or(first_error)
+        }
+        Err(first_error) => Err(first_error),
     }
 }
 

@@ -1219,3 +1219,115 @@ async fn dispatch_tool_escalates_unparseable_args_to_retryable_signal() {
         "the escalated client-side unparseable-args signal must be retryable"
     );
 }
+
+/// Loop-level fence for the tool-call liveness invariant (Lean
+/// `ToolExecution.live_call_reaches_terminal`, T5): when a tool call's arguments
+/// are unparseable, the owned loop terminalizes the already-persisted (`running`)
+/// `AgentToolCall` as `failed`/`argumentInvalid` BEFORE escalating the retryable
+/// signal — so the started call never dangles in `running`. This complements
+/// `dispatch_tool_escalates_unparseable_args_to_retryable_signal` (which fences
+/// the escalation at the dispatch seam, without a hook) by fencing the
+/// persistence side of the same path through the real hook + node.
+#[tokio::test]
+async fn unparseable_tool_args_terminalize_the_started_call_as_failed() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    // A typed tool whose `Args` require a field the model's (valid-JSON) call
+    // omits, so the real `parse_tool_args` seam raises `UnparseableArgs` and the
+    // dispatcher escalates — exactly the path that must not leave a dangling call.
+    struct StrictArgsTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        report_type: String,
+        #[allow(dead_code)]
+        findings: Vec<String>,
+    }
+    impl Tool for StrictArgsTool {
+        const NAME: &'static str = "post_status";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            Ok("posted".to_string())
+        }
+    }
+
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    // Valid JSON, but missing the required `findings` field: a non-Eof (Malformed)
+    // parse failure that no repair can recover into the typed args.
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+            "call-1".to_string(),
+            "post_status".to_string(),
+            serde_json::json!({ "report_type": "steward" }),
+        )),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        Message::user("post a status report"),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+
+    // The loop yields the retryable escalation rather than a tool result.
+    let mut saw_retryable_error = false;
+    while let Some(item) = stream.next().await {
+        if let Err(error) = item {
+            assert!(
+                crate::retry::is_retryable_streaming_error(&error),
+                "unparseable tool args must yield a retryable signal, got: {error:?}"
+            );
+            saw_retryable_error = true;
+            break;
+        }
+    }
+    assert!(
+        saw_retryable_error,
+        "the loop must surface the retryable unparseable-args escalation"
+    );
+
+    // T5: the started call reached a terminal state — failed(argumentInvalid) —
+    // instead of dangling in `running`.
+    let resp = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "AgentToolCall query failed: {:?}",
+        resp.errors
+    );
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        rows.iter().any(|row| {
+            row.get("tool_name").and_then(|v| v.as_str()) == Some("post_status")
+                && row.get("lifecycle_state").and_then(|v| v.as_str()) == Some("failed")
+                && row.get("tool_failure_class").and_then(|v| v.as_str()) == Some("argumentInvalid")
+        }),
+        "the started tool call must be terminalized failed/argumentInvalid, got rows: {rows:?}"
+    );
+}

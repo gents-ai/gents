@@ -299,12 +299,34 @@ where
                                 // deadline/cancellation envelope, then bound the
                                 // model-facing result natively (#401) before
                                 // threading.
-                                let full_result = dispatch_tool(
+                                let full_result = match dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
                                     tool_args.clone(),
                                 )
-                                .await?;
+                                .await
+                                {
+                                    Ok(result) => result,
+                                    // `dispatch_tool` returns Err only for an
+                                    // unparseable-args escalation. Terminalize the
+                                    // already-persisted (`running`) tool call as
+                                    // failed(ArgumentInvalid) BEFORE raising the
+                                    // retryable signal, so the started call reaches
+                                    // a terminal state (T5) instead of dangling in
+                                    // `running` until the next startup recovery.
+                                    Err(stream_error) => {
+                                        if let Some(hook) = hook.as_ref() {
+                                            hook.on_tool_call_unparseable_args(
+                                                &tool_name,
+                                                &internal_call_id,
+                                                &stream_error.to_string(),
+                                            )
+                                            .await;
+                                        }
+                                        Err(stream_error)?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
+                                };
                                 let (bounded, _, _) = truncate_text(
                                     &full_result,
                                     tool_result_truncation_mode(&tool_name),

@@ -430,4 +430,45 @@ impl DefraSessionHook {
             Err(e) => self.on_persistence_error("persist tool result", &e),
         }
     }
+
+    /// Terminalize an in-flight tool call as `failed(ArgumentInvalid)` when the
+    /// model's tool-call `arguments` could not be parsed even after a tolerant
+    /// repair (see [`crate::llm::tool::ToolError::UnparseableArgs`]).
+    ///
+    /// The owned loop calls this BEFORE escalating the retryable signal so the
+    /// already-persisted (`running`) `AgentToolCall` reaches a terminal state
+    /// instead of being left dangling until the next startup recovery sweep. This
+    /// is what preserves the tool-call liveness invariant (Lean
+    /// `ToolExecution.live_call_reaches_terminal`, T5): `on_tool_result` never
+    /// fires on this path, so without an explicit fail the started call would sit
+    /// in `running` mid-session. It maps to the proven `Running → Failed`
+    /// transition with `FailureClass::ArgumentInvalid` — no new Lean obligation.
+    pub async fn on_tool_call_unparseable_args(
+        &self,
+        tool_name: &str,
+        internal_call_id: &str,
+        reason: &str,
+    ) {
+        let lifecycle = self
+            .in_flight_lifecycles
+            .lock()
+            .await
+            .remove(internal_call_id);
+        let Some(mut lc) = lifecycle else {
+            // Already swept (e.g. a concurrent deadline/interrupt terminalized it);
+            // the liveness invariant is satisfied by that terminal state.
+            tracing::debug!(
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+                "unparseable-args terminalize: lifecycle already swept"
+            );
+            return;
+        };
+        match lc.fail(reason, FailureClass::ArgumentInvalid).await {
+            Ok(()) => self.record_success(),
+            Err(error) => {
+                self.on_persistence_error("terminalize unparseable tool call", &error);
+            }
+        }
+    }
 }
