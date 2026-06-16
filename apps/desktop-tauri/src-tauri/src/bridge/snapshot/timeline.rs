@@ -200,6 +200,7 @@ pub(super) fn build_rendered_timeline(
             item_key: format!("pending-{}", pending_turn.request_id),
             request_id: pending_turn.request_id.clone(),
             content: pending_turn.content.clone(),
+            selected_skill_ids: pending_turn.selected_skill_ids.clone(),
             lifecycle_state: pending_turn.lifecycle_state.clone(),
             created_at: pending_turn.created_at.clone(),
         });

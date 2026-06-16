@@ -52,6 +52,7 @@ export type ResponseView = {
 export type PendingTurnView = {
   requestId: string;
   content: string;
+  selectedSkillIds: string[];
   lifecycleState?: string | null;
   createdAt?: string | null;
 };
@@ -81,6 +82,7 @@ export type RenderedTimelineItem =
       itemKey: string;
       requestId: string;
       content: string;
+      selectedSkillIds: string[];
       lifecycleState?: string | null;
       createdAt?: string | null;
     }
