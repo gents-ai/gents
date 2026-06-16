@@ -284,12 +284,11 @@ fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSort
     match sort_key {
         codex::ThreadSortKey::CreatedAt => conversation
             .and_then(|conversation| conversation.created_at.clone())
-            .or_else(|| record.projection_created_at.clone()),
+            .or_else(|| record.projection_started.clone()),
         codex::ThreadSortKey::UpdatedAt => conversation
             .and_then(|conversation| conversation.updated_at.clone())
-            .or_else(|| record.projection_updated_at.clone())
             .or_else(|| conversation.and_then(|conversation| conversation.created_at.clone()))
-            .or_else(|| record.projection_created_at.clone()),
+            .or_else(|| record.projection_started.clone()),
     }
     .unwrap_or_default()
 }

@@ -43,6 +43,7 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
             description: None,
             summary: None,
             system_prompt: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: Some("r4-parent-tools".to_string()),

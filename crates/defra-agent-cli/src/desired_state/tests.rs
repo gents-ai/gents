@@ -41,6 +41,7 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
         description: None,
         summary: None,
         system_prompt: None,
+        request_context_template: None,
         backend_id: None,
         model_name: None,
         tool_selection_id: None,
@@ -62,6 +63,7 @@ fn behavior_with(id: &str, backend_id: Option<&str>) -> DesiredAgentBehavior {
         description: None,
         summary: None,
         system_prompt: None,
+        request_context_template: None,
         backend_id: backend_id.map(|s| s.to_string()),
         model_name: None,
         tool_selection_id: None,
@@ -621,17 +623,27 @@ mod load_manifest_root {
                 "behavior_id": "default",
                 "agent_did": "did:key:example",
                 "system_prompt": "./system_prompt.md",
+                "request_context_template": "./request_context_template.md",
                 "enabled": true,
             }))
             .unwrap(),
         )
         .unwrap();
         fs::write(behavior_dir.join("system_prompt.md"), "You are helpful.").unwrap();
+        fs::write(
+            behavior_dir.join("request_context_template.md"),
+            "Context {{ ctx.now }}",
+        )
+        .unwrap();
 
         let (manifest, report) = load_manifest_root(tmp.path());
         assert!(report.ok, "errors: {:?}", report.errors);
         let behavior = &manifest.unwrap().agent_behaviors[0];
         assert_eq!(behavior.system_prompt.as_deref(), Some("You are helpful."));
+        assert_eq!(
+            behavior.request_context_template.as_deref(),
+            Some("Context {{ ctx.now }}")
+        );
     }
 
     #[test]
@@ -2360,6 +2372,7 @@ pub(super) mod write_manifest_root {
                 description: None,
                 summary: None,
                 system_prompt: Some("You are helpful.".to_string()),
+                request_context_template: None,
                 backend_id: None,
                 model_name: None,
                 tool_selection_id: None,
@@ -2393,7 +2406,10 @@ pub(super) mod write_manifest_root {
     #[test]
     fn writes_principal_and_per_doc_dirs_with_sidecars() {
         let tmp = tempdir().unwrap();
-        write_manifest_root(tmp.path(), &minimal_manifest(), false).unwrap();
+        let mut manifest = minimal_manifest();
+        manifest.agent_behaviors[0].request_context_template =
+            Some("Context {{ ctx.now }}".to_string());
+        write_manifest_root(tmp.path(), &manifest, false).unwrap();
 
         assert!(tmp.path().join("agent-principal.json").is_file());
 
@@ -2410,6 +2426,20 @@ pub(super) mod write_manifest_root {
         assert_eq!(
             behavior_body.get("system_prompt").and_then(|v| v.as_str()),
             Some("./system_prompt.md")
+        );
+        let context_sidecar = tmp
+            .path()
+            .join("agent-behaviors/default/request_context_template.md");
+        assert!(context_sidecar.is_file());
+        assert_eq!(
+            fs::read_to_string(&context_sidecar).unwrap(),
+            "Context {{ ctx.now }}"
+        );
+        assert_eq!(
+            behavior_body
+                .get("request_context_template")
+                .and_then(|v| v.as_str()),
+            Some("./request_context_template.md")
         );
 
         let task_object = tmp.path().join("tasks/seed-health/object.json");
@@ -2501,6 +2531,7 @@ pub(super) mod write_manifest_root {
             description: None,
             summary: None,
             system_prompt: None,
+            request_context_template: None,
             backend_id: None,
             model_name: None,
             tool_selection_id: None,

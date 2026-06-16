@@ -37,6 +37,7 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     for behavior in &mut manifest.agent_behaviors {
         normalize_optional_string(&mut behavior.display_name);
         normalize_optional_string(&mut behavior.system_prompt);
+        normalize_optional_string(&mut behavior.request_context_template);
         normalize_optional_string(&mut behavior.backend_id);
         normalize_optional_string(&mut behavior.model_name);
         normalize_optional_string(&mut behavior.tool_selection_id);

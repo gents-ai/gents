@@ -239,6 +239,7 @@ fn tool_result_text(content: &ToolResultContent) -> &str {
 fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
         preamble: None,
+        context_message: None,
         temperature: None,
         max_tokens: None,
         additional_params: None,
@@ -350,6 +351,37 @@ async fn rendered_request_sink_runs_before_provider_stream() {
         model.seen_histories().await.is_empty(),
         "provider stream must not start after capture failure"
     );
+}
+
+#[tokio::test]
+async fn context_message_is_sent_before_prompt() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("ok".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let mut cfg = config(0);
+    cfg.context_message = Some(Message::user(
+        "<context>\nnow=2026-06-15T00:00:00Z\n</context>",
+    ));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("actual prompt"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        cfg,
+    );
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 1);
+    assert!(matches!(
+        &histories[0][0],
+        Message::User { content }
+            if matches!(first_content(&content), UserContent::Text(text) if text.text.starts_with("<context>"))
+    ));
 }
 
 #[tokio::test]
@@ -1130,6 +1162,39 @@ fn deadline_remaining_is_zero_when_past() {
         Some(std::time::Duration::ZERO)
     );
     assert_eq!(super::deadline_remaining(None), None);
+}
+
+#[test]
+fn assembles_context_immediately_before_prompt() {
+    // Fences Lean `PromptAssembly.Template.assembleWithContext_tail`: when a
+    // per-request context message is present, the assembly ends with exactly
+    // [contextPreamble, prompt] — context immediately precedes the prompt.
+    let context = Message::user("<context>\nseat: x\n</context>");
+    let prompt = Message::user("hello");
+
+    let with_context = super::assemble_new_messages(Some(context.clone()), prompt.clone());
+    assert_eq!(with_context.len(), 2);
+    assert!(super::is_request_context_message(&with_context[0]));
+    assert_eq!(with_context[1], prompt);
+    // Context is the immediately-preceding entry before the prompt.
+    assert_eq!(&with_context[with_context.len() - 2], &context);
+
+    // Without a context message, the prompt is the sole (last) entry.
+    let without = super::assemble_new_messages(None, prompt.clone());
+    assert_eq!(without, vec![prompt]);
+}
+
+#[test]
+fn is_request_context_message_only_matches_context_user_text() {
+    assert!(super::is_request_context_message(&Message::user(
+        "<context>\nx\n</context>"
+    )));
+    assert!(!super::is_request_context_message(&Message::user(
+        "an ordinary prompt"
+    )));
+    assert!(!super::is_request_context_message(&Message::assistant(
+        "hi"
+    )));
 }
 
 #[tokio::test]

@@ -16,7 +16,7 @@
 
 use anyhow::{anyhow, Result};
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::template::{render_template, TemplateScope};
+use defra_agent::template::{render_template, task_node_ctx, TemplateScope};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -171,6 +171,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     // 5. Render the prompt template. Matches the `TemplateScope` shape used
     //    by `write_manual_agent_request`.
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let (node_scope, ctx_scope) = task_node_ctx(&agent_did, &behavior_id, &now);
     let scope = TemplateScope {
         event: serde_json::json!({
             "fired_at": now,
@@ -179,6 +180,8 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         }),
         doc: None,
         args: Some(args_value),
+        node: node_scope,
+        ctx: ctx_scope,
     };
     let content = render_template(&prompt_template, &scope)
         .map_err(|e| anyhow!("render manual template for task {}: {e}", task_id))?;

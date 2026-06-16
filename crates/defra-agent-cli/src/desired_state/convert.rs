@@ -86,6 +86,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "description",
                         "summary",
                         "system_prompt",
+                        "request_context_template",
                         "backend_id",
                         "model_name",
                         "tool_selection_id",

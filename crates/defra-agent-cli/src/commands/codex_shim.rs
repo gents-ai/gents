@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -54,15 +54,45 @@ struct ShimState {
     id_counter: Arc<AtomicU64>,
     timeout: Duration,
     poll_interval: Duration,
+    sidecar: Arc<Mutex<CodexSidecar>>,
 }
 
 type Outbound = mpsc::UnboundedSender<String>;
+
+/// Codex threads default to memory disabled: this shim does not wire the Codex
+/// memory feature, so reporting it as enabled would be dishonest (#494).
+pub(crate) const DEFAULT_MEMORY_MODE: &str = "disabled";
+
+#[derive(Default)]
+pub(crate) struct CodexSidecar {
+    /// Threads this shim process created via ThreadStart/ThreadFork. Used as a
+    /// Codex-ownership signal for zero-turn threads that carry no durable
+    /// `codex_shim`-marked request yet. Populated only by thread creation, never
+    /// by resume/settings, so it cannot be used to adopt a foreign session.
+    pub(crate) created: BTreeSet<String>,
+    pub(crate) cwd: BTreeMap<String, PathBuf>,
+    pub(crate) loaded: BTreeSet<String>,
+    pub(crate) archived: BTreeSet<String>,
+    pub(crate) memory_mode: BTreeMap<String, String>,
+    pub(crate) settings: BTreeMap<String, String>,
+    pub(crate) goal: BTreeMap<String, crate::commands::codex_shim::thread_projection::StoredGoal>,
+}
+
+impl CodexSidecar {
+    /// The thread's memory mode, falling back to [`DEFAULT_MEMORY_MODE`] when the
+    /// thread has no explicit `ThreadMemoryModeSet` override.
+    pub(crate) fn memory_mode_or_default(&self, thread_id: &str) -> String {
+        self.memory_mode
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_MEMORY_MODE.to_string())
+    }
+}
 
 #[derive(Clone)]
 struct ConnectionState {
     outbound: Outbound,
     turn_streams: Arc<Mutex<BTreeMap<String, TurnStreamControl>>>,
-    thread_cwds: Arc<Mutex<BTreeMap<String, PathBuf>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
     pending_steering_inputs: Arc<Mutex<BTreeMap<String, Vec<codex::UserInput>>>>,
 }
@@ -155,6 +185,7 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
+        sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
     };
 
     let app = Router::new()
@@ -193,7 +224,6 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
     let connection = ConnectionState {
         outbound,
         turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
-        thread_cwds: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
     };
@@ -249,6 +279,130 @@ impl ShimState {
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}-{id}")
     }
+
+    async fn thread_cwd(&self, thread_id: &str) -> PathBuf {
+        self.sidecar
+            .lock()
+            .await
+            .cwd
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| self.cwd.clone())
+    }
+
+    async fn thread_cwd_override(&self, thread_id: &str) -> Option<PathBuf> {
+        self.sidecar.lock().await.cwd.get(thread_id).cloned()
+    }
+
+    async fn set_thread_cwd(&self, thread_id: &str, cwd: PathBuf) {
+        self.sidecar
+            .lock()
+            .await
+            .cwd
+            .insert(thread_id.to_string(), cwd);
+    }
+
+    async fn is_thread_loaded(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.loaded.contains(thread_id)
+    }
+
+    async fn set_thread_loaded(&self, thread_id: &str, loaded: bool) {
+        let mut guard = self.sidecar.lock().await;
+        if loaded {
+            guard.loaded.insert(thread_id.to_string());
+        } else {
+            guard.loaded.remove(thread_id);
+        }
+    }
+
+    async fn loaded_thread_ids(&self) -> Vec<String> {
+        let guard = self.sidecar.lock().await;
+        guard
+            .loaded
+            .iter()
+            .filter(|thread_id| !guard.archived.contains(*thread_id))
+            .cloned()
+            .collect()
+    }
+
+    async fn is_thread_archived(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.archived.contains(thread_id)
+    }
+
+    async fn set_thread_archived(&self, thread_id: &str, archived: bool) {
+        let mut guard = self.sidecar.lock().await;
+        if archived {
+            guard.archived.insert(thread_id.to_string());
+            guard.loaded.remove(thread_id);
+        } else {
+            guard.archived.remove(thread_id);
+        }
+    }
+
+    async fn mark_thread_created(&self, thread_id: &str) {
+        self.sidecar
+            .lock()
+            .await
+            .created
+            .insert(thread_id.to_string());
+    }
+
+    async fn is_thread_created(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.created.contains(thread_id)
+    }
+
+    async fn thread_memory_mode(&self, thread_id: &str) -> String {
+        self.sidecar.lock().await.memory_mode_or_default(thread_id)
+    }
+
+    async fn set_thread_memory_mode(&self, thread_id: &str, mode: &str) {
+        self.sidecar
+            .lock()
+            .await
+            .memory_mode
+            .insert(thread_id.to_string(), mode.to_string());
+    }
+
+    async fn thread_settings(&self, thread_id: &str) -> String {
+        self.sidecar
+            .lock()
+            .await
+            .settings
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string())
+    }
+
+    async fn set_thread_settings(&self, thread_id: &str, settings_json: &str) {
+        self.sidecar
+            .lock()
+            .await
+            .settings
+            .insert(thread_id.to_string(), settings_json.to_string());
+    }
+
+    async fn thread_goal(
+        &self,
+        thread_id: &str,
+    ) -> Option<crate::commands::codex_shim::thread_projection::StoredGoal> {
+        self.sidecar.lock().await.goal.get(thread_id).cloned()
+    }
+
+    async fn set_thread_goal(
+        &self,
+        thread_id: &str,
+        goal: crate::commands::codex_shim::thread_projection::StoredGoal,
+    ) {
+        self.sidecar
+            .lock()
+            .await
+            .goal
+            .insert(thread_id.to_string(), goal);
+    }
+
+    async fn clear_thread_goal(&self, thread_id: &str) -> bool {
+        self.sidecar.lock().await.goal.remove(thread_id).is_some()
+    }
 }
 
 impl ConnectionState {
@@ -261,5 +415,27 @@ impl ConnectionState {
 
     async fn take_steering_input(&self, request_id: &str) -> Option<Vec<codex::UserInput>> {
         self.pending_steering_inputs.lock().await.remove(request_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CodexSidecar, DEFAULT_MEMORY_MODE};
+
+    #[test]
+    fn memory_mode_defaults_to_disabled_for_unknown_thread() {
+        let sidecar = CodexSidecar::default();
+        assert_eq!(sidecar.memory_mode_or_default("never-set"), "disabled");
+        assert_eq!(DEFAULT_MEMORY_MODE, "disabled");
+    }
+
+    #[test]
+    fn memory_mode_returns_explicit_override_when_set() {
+        let mut sidecar = CodexSidecar::default();
+        sidecar
+            .memory_mode
+            .insert("t1".to_string(), "enabled".to_string());
+        assert_eq!(sidecar.memory_mode_or_default("t1"), "enabled");
+        assert_eq!(sidecar.memory_mode_or_default("t2"), "disabled");
     }
 }

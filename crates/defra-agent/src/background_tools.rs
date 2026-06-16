@@ -1076,6 +1076,7 @@ pub(crate) async fn append_steering_request(
         "user",
         message,
         None,
+        None,
     )
     .await?;
     if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {

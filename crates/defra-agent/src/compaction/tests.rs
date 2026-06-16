@@ -587,6 +587,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     );
     let config = crate::agent::loop_stream::LoopConfig {
         preamble: Some("You are a helpful coding agent.".to_string()),
+        context_message: None,
         temperature: None,
         max_tokens: None,
         additional_params: None,
