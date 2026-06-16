@@ -5,6 +5,7 @@
 pub mod client_protocol;
 pub mod graphql;
 pub mod message;
+pub mod network_token;
 pub mod pairing_token;
 pub mod row;
 pub mod schemas;
