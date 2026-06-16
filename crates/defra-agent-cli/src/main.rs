@@ -352,7 +352,6 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentConversation", "session_id"),
     ("AgentRequest", "request_id"),
     ("AgentResponse", "request_id"),
-    ("AgentRenderedRequest", "rendered_request_key"),
     ("AgentToolResult", "agent_did"),
     ("AgentSession", "session_id"),
     ("AgentMessage", "message_key"),

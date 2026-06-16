@@ -85,7 +85,6 @@ pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
-    "AgentRenderedRequest",
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
@@ -196,13 +195,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_is_scoped_push_with_nine_collections() {
+    fn conversation_is_scoped_push_with_eight_collections() {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PeerDid { field } if field == "agent_did"));
-        assert_eq!(t.collections.len(), 9);
+        assert_eq!(t.collections.len(), 8);
         assert!(t.collections.contains(&"AgentRequest"));
-        assert!(t.collections.contains(&"AgentRenderedRequest"));
     }
 
     #[test]
@@ -225,11 +223,10 @@ mod tests {
     fn scope_filter_builds_per_collection_agent_did_equality() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob");
-        assert_eq!(f.len(), 9);
+        assert_eq!(f.len(), 8);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(p.field, "agent_did");
         assert_eq!(p.value, "did:key:bob");
-        assert!(f.contains_key("AgentRenderedRequest"));
     }
 
     #[test]

@@ -288,41 +288,6 @@ pub struct AgentResponseRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRenderedRequestRow {
-    pub rendered_request_key: String,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub turn_index: Option<i64>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub request_json: Option<String>,
-    #[serde(default)]
-    pub messages_json: Option<String>,
-    #[serde(default)]
-    pub tools_json: Option<String>,
-    #[serde(default)]
-    pub tool_choice_json: Option<String>,
-    #[serde(default)]
-    pub sampling_json: Option<String>,
-    #[serde(default)]
-    pub prompt_hash: Option<String>,
-    #[serde(default)]
-    pub tools_hash: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentMessageRow {
     pub message_key: String,
     #[serde(default)]

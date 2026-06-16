@@ -343,7 +343,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
         .expect("stream should yield the sink error");
     let error = item.expect_err("capture failure should abort the provider call");
     assert!(
-        format!("{error:?}").contains("persisting rendered completion request failed"),
+        format!("{error:?}").contains("capturing rendered completion request failed"),
         "unexpected error: {error:?}"
     );
     assert_eq!(captures.lock().await.as_slice(), &[(0, 1)]);

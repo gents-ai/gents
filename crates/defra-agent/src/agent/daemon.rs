@@ -42,6 +42,8 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     compaction_options: CompactionOptions,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
+    rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     startup_barrier: Arc<StartupBarrier>,
@@ -63,6 +65,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
+        rendered_request_capture_factory: Option<
+            crate::rendered_request::RenderedRequestCaptureFactory,
+        >,
         background_tool_registry: crate::hook::BackgroundToolRegistry,
         background_execution_registry: crate::hook::BackgroundExecutionRegistry,
         startup_barrier: Arc<StartupBarrier>,
@@ -95,6 +100,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             compaction_options,
             retry_policy,
             hook_failure_policy,
+            rendered_request_capture_factory,
             background_tool_registry,
             background_execution_registry,
             startup_barrier,

@@ -23,6 +23,8 @@
 //! threaded into the conversation by construction, the in-loop truncation gap
 //! (#401) is closed natively without the recorder shim.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
@@ -49,6 +51,12 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 #[cfg(test)]
 mod tests;
 
+pub(crate) type RenderedRequestSink = Arc<
+    dyn Fn(usize, CompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
 #[derive(Clone)]
@@ -59,7 +67,7 @@ pub(crate) struct LoopConfig {
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
-    pub(crate) on_rendered_request: Option<crate::rendered_request::RenderedRequestSink>,
+    pub(crate) on_rendered_request: Option<RenderedRequestSink>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
@@ -213,7 +221,7 @@ where
                     .await
                     .map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "persisting rendered completion request failed: {error:#}"
+                            "capturing rendered completion request failed: {error:#}"
                         )))
                     })?;
             }

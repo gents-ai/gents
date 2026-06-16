@@ -18,9 +18,6 @@ pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
 pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
 pub const AGENT_RESPONSE: &str = include_str!("../schemas/agent/agent_response.graphql");
-pub const AGENT_RENDERED_REQUEST_NAME: &str = "AgentRenderedRequest";
-pub const AGENT_RENDERED_REQUEST: &str =
-    include_str!("../schemas/agent/agent_rendered_request.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -76,7 +73,6 @@ pub const ALL: &[&str] = &[
     AGENT_CONVERSATION,
     AGENT_REQUEST,
     AGENT_RESPONSE,
-    AGENT_RENDERED_REQUEST,
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
     AGENT_MESSAGE,
@@ -107,7 +103,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
-    AGENT_RENDERED_REQUEST_NAME,
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     AGENT_MESSAGE_NAME,
@@ -134,7 +129,6 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
-    AGENT_RENDERED_REQUEST_NAME,
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     AGENT_MESSAGE_NAME,
@@ -153,7 +147,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 27);
+        assert_eq!(ALL.len(), 26);
     }
 
     #[test]

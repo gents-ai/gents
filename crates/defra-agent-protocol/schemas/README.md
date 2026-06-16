@@ -75,7 +75,6 @@ These documents record user requests, assistant output, and conversation history
 |------------|------------|------------|------------|---------|
 | `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason`, `interrupt_requested_at`, `valid_until` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
 | `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
-| `AgentRenderedRequest` | `rendered_request_key`, `request_id`, `turn_index`, `source`, prompt/tool hashes, provider JSON payloads | exact provider request rendered for one model turn | owned completion loop before provider stream | training capture, skew detection, debugging |
 | `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence`, `interrupted_at` | latest response for a request; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |
@@ -139,7 +138,7 @@ The normal CLI path is:
 
 1. `chat` or `request submit` writes `AgentRequest`
 2. runtime claims and executes the request
-3. the owned loop writes `AgentRenderedRequest` rows for each rendered provider turn
+3. an explicitly configured rendered-request capture sink may observe each provider-bound request in memory before streaming starts
 4. streaming writes `AgentResponse`
 5. transcript/session layers write `AgentSession`, `AgentConversation`, `AgentMessage`
 6. once the final assistant message is committed, `AgentResponse.materialized_message_sequence`

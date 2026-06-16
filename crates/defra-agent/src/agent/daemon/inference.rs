@@ -246,15 +246,31 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     request,
                     self.loop_tools.len(),
                 );
-                loop_config.on_rendered_request =
-                    Some(crate::rendered_request::persisted_rendered_request_sink(
-                        self.node.clone(),
+                if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
+                    let context = crate::rendered_request::RenderedRequestContext::for_request(
                         request,
                         self.behavior.model_name.clone(),
                         crate::rendered_request::RenderedRequestSource::for_behavior_provider(
                             self.behavior.backend_provider_kind,
                         ),
+                    );
+                    let sink = factory(context.clone());
+                    loop_config.on_rendered_request = Some(std::sync::Arc::new(
+                        move |turn_index, completion_request| {
+                            let context = context.clone();
+                            let sink = sink.clone();
+                            Box::pin(async move {
+                                let rendered =
+                                    crate::llm::rig_compat::rendered_completion_request(
+                                        &context,
+                                        turn_index,
+                                        &completion_request,
+                                    )?;
+                                sink(rendered).await
+                            })
+                        },
                     ));
+                }
                 loop_config.context_message = request_context_message.clone();
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
