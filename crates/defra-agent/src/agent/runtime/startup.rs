@@ -275,10 +275,16 @@ pub(in crate::agent) async fn run_agent(
     });
 
     let pairing_node = agent.node.clone();
+    let pairing_identity = agent.principal_arc().identity.clone();
     let pairing_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PairingReconcile(
-            crate::agent::p2p_reconcile::run_pairing_reconciler(pairing_node, pairing_cancel).await,
+            crate::agent::p2p_reconcile::run_pairing_reconciler(
+                pairing_node,
+                pairing_identity,
+                pairing_cancel,
+            )
+            .await,
         )
     });
 

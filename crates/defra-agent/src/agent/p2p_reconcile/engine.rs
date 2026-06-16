@@ -11,7 +11,9 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
+use crate::identity::AgentIdentity;
 
+use super::network::{GraphqlNetworkStore, NetworkStore};
 use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters, Scope};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
@@ -103,6 +105,7 @@ pub async fn reconcile_peer_tick(
 
 pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
     if node.p2p_arc().is_none() {
@@ -112,7 +115,7 @@ pub async fn run_pairing_reconciler(
     }
 
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let store = GraphqlPairingStateStore::new(node.clone());
+    let store = GraphqlPairingStateStore::new(node.clone(), identity);
     let mut subscription = node.subscribe(&[EventName::Update]);
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -347,17 +350,28 @@ async fn persist_applied(
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
 }
 
 impl GraphqlPairingStateStore {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
+        Self { node, identity }
+    }
+
+    async fn data_plane_peer_is_materializable(&self, peer_id: &str) -> Result<bool> {
+        let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
+        Ok(network
+            .load_materializable_entries()
+            .await?
+            .into_iter()
+            .any(|entry| entry.peer_id == peer_id && entry.agent_did != self.identity.did()))
     }
 }
 
 #[async_trait]
 impl PairingStateStore for GraphqlPairingStateStore {
     async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>> {
+        let raw_peer_id = peer_id.to_string();
         let peer_id = escape_graphql_string(peer_id);
         let query = format!(
             r#"{{
@@ -366,13 +380,30 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     replicator_addresses
                     template
                 }}
+                DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    agent_did
+                    replicator_addresses
+                    template
+                }}
             }}"#
         );
         let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query PeerPairingDesired")?;
-        first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
+        ensure_no_errors(&response, "query pairing desired state")?;
+        let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
             .map(desired_from_pairing_row)
-            .transpose()
+            .transpose()?;
+        let data_plane = if self
+            .data_plane_peer_is_materializable(&raw_peer_id)
+            .await
+            .with_context(|| format!("checking network membership gate for {raw_peer_id}"))?
+        {
+            first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
+                .map(desired_from_pairing_row)
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(merge_desired(base, data_plane))
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
@@ -452,12 +483,18 @@ impl PairingStateStore for GraphqlPairingStateStore {
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
         let query = r#"{
             PeerPairingDesired { peer_id }
+            DataPlanePairingDesired { peer_id }
             PeerPairingApplied { peer_id }
         }"#;
         let response = self.node.execute(query).await;
         ensure_no_errors(&response, "query pairing peer ids")?;
         let mut ids = BTreeSet::new();
         for row in rows::<PeerIdRow>(&response, "PeerPairingDesired")? {
+            if !row.peer_id.trim().is_empty() {
+                ids.insert(row.peer_id);
+            }
+        }
+        for row in rows::<PeerIdRow>(&response, "DataPlanePairingDesired")? {
             if !row.peer_id.trim().is_empty() {
                 ids.insert(row.peer_id);
             }
@@ -555,6 +592,24 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
     })
 }
 
+fn merge_desired(
+    base: Option<PairingDesired>,
+    data_plane: Option<PairingDesired>,
+) -> Option<PairingDesired> {
+    match (base, data_plane) {
+        (None, None) => None,
+        (Some(desired), None) | (None, Some(desired)) => Some(desired),
+        (Some(mut left), Some(right)) => {
+            left.collections.extend(right.collections);
+            left.replicator_addresses.extend(right.replicator_addresses);
+            left.replicator_collections
+                .extend(right.replicator_collections);
+            left.replicator_filter.extend(right.replicator_filter);
+            Some(left)
+        }
+    }
+}
+
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
@@ -630,6 +685,51 @@ mod tests {
 
     fn set(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
+        let mut filters = PairingFilters::new();
+        filters.insert(
+            collection.to_string(),
+            crate::agent::p2p_reconcile::FilterPredicate {
+                field: field.to_string(),
+                value: value.to_string(),
+            },
+        );
+        filters
+    }
+
+    #[test]
+    fn merge_desired_unions_control_and_data_plane_state() {
+        let control = PairingDesired {
+            collections: set(&["AgentNetwork", "NetworkMembership"]),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+            replicator_filter: PairingFilters::new(),
+        };
+        let data = PairingDesired {
+            collections: BTreeSet::new(),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        };
+
+        let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
+        assert_eq!(
+            merged.replicator_collections,
+            set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
+        );
+        assert_eq!(
+            merged.replicator_addresses,
+            set(&["/ip4/1/tcp/1/p2p/peer-a"])
+        );
+        assert_eq!(
+            merged
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:a"))
+        );
     }
 
     /// Deterministic name → collection-id transform used by `MockAdmin`.

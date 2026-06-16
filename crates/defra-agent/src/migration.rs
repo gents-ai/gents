@@ -742,6 +742,28 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
     Ok(())
 }
 
+/// Idempotent migration ensuring the separate data-plane desired collection
+/// exists. Fresh stores get it from `schemas::ALL`; upgraded stores add it at
+/// startup before the pairing reconciler reads desired state.
+pub async fn ensure_data_plane_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("DataPlanePairingDesired")
+        .context("get DataPlanePairingDesired collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::DATA_PLANE_PAIRING_DESIRED)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add DataPlanePairingDesired schema"),
+    }
+}
+
 /// Fill any `PeerPairingDesired` row still missing `source` or `template` with
 /// the operator-partition / `conversation` defaults. Idempotent and convergent:
 /// once every row carries both fields it updates nothing, so it is safe to run on
@@ -1535,6 +1557,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_peer_pairing_desired_migrations(node.clone())
         .await
         .context("ensure PeerPairingDesired migrations")?;
+    ensure_data_plane_pairing_desired_migrations(node.clone())
+        .await
+        .context("ensure DataPlanePairingDesired migrations")?;
     ensure_peer_registry_migrations(node.clone())
         .await
         .context("ensure PeerRegistry migrations")?;
