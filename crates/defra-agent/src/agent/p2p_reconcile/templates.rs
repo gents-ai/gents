@@ -121,6 +121,19 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "Skill",
 ];
 
+/// Narrow network-control collections: the signed network-membership substrate
+/// only. Layer-1 network-derived mesh edges use this instead of the broader
+/// `discovery` bootstrap template so agent config is not re-replicated
+/// fleet-wide.
+pub const NETWORK_CONTROL_COLLECTIONS: &[&str] = &[
+    "AgentNetwork",
+    "NetworkMembership",
+    "PeerEndpoint",
+    "NetworkJoinRequest",
+];
+
+pub const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
+
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "conversation",
@@ -143,6 +156,12 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "discovery",
         collections: DISCOVERY_COLLECTIONS,
+        scope: Scope::Unscoped,
+        delivery: Delivery::Replicate,
+    },
+    ScopeTemplate {
+        id: NETWORK_CONTROL_TEMPLATE,
+        collections: NETWORK_CONTROL_COLLECTIONS,
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
     },
@@ -254,7 +273,17 @@ mod tests {
 
     #[test]
     fn builtin_template_count_is_four() {
-        assert_eq!(builtin_templates().len(), 4);
+        assert_eq!(builtin_templates().len(), 5);
+    }
+
+    #[test]
+    fn network_control_is_narrow_unscoped_control_plane() {
+        let t = resolve_template(NETWORK_CONTROL_TEMPLATE).unwrap();
+        assert_eq!(t.delivery, Delivery::Replicate);
+        assert!(matches!(t.scope, Scope::Unscoped));
+        assert_eq!(t.collections, NETWORK_CONTROL_COLLECTIONS);
+        assert!(t.collections.contains(&"AgentNetwork"));
+        assert!(!t.collections.contains(&"AgentBehavior"));
     }
 
     #[test]

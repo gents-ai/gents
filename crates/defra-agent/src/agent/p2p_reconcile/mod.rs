@@ -3,9 +3,11 @@
 pub mod diff;
 pub mod discovery;
 pub mod embedded_impl;
+pub mod endpoint;
 pub mod engine;
 pub mod error_class;
 pub mod intervals;
+pub mod network;
 pub mod profiles;
 pub mod registry;
 pub mod templates;
@@ -22,11 +24,16 @@ pub use discovery::{
     SOURCE_REGISTRY,
 };
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
+pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     reconcile_peer_tick, run_pairing_reconciler, update_applied_after_success,
     GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome, PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
+pub use network::{
+    derive_network_desired, endpoint_is_fresh, reconcile_network_tick, run_network_reconciler,
+    GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore, NetworkTickOutcome, SOURCE_NETWORK,
+};
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 pub use registry::{
     registry_upsert_mutation, resolve_network_id, run_registry_heartbeat, RegistryEntry,

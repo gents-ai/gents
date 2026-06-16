@@ -6706,6 +6706,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
+ "bs58",
  "bytes",
  "chrono",
  "chrono-tz",
