@@ -1,5 +1,5 @@
-//! Five-process fleet e2e for network membership, data-plane pairing, and
-//! cross-deployment subagent delegation.
+//! Five-process fleet e2e for filtered conversation pairing and
+//! cross-deployment live subagent delegation.
 //!
 //! Normal test runs compile this file but skip the live test. To run:
 //!
@@ -19,9 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::SecondsFormat;
 use defra_agent::subagent_target_entry;
-use serde_json::Value;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 const P2P_LOOPBACK_ARGS: &[&str] = &[
@@ -38,16 +37,9 @@ const P2P_LOOPBACK_ARGS: &[&str] = &[
 const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
     ("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "1000"),
     ("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000"),
-    ("DEFRA_AGENT_REGISTRY_STALE_MS", "5000"),
+    ("DEFRA_AGENT_REGISTRY_STALE_MS", "300000"),
     ("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000"),
 ];
-
-const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
-
-// Layer 2 is a filtered data-plane star. The pairing reconciler strips
-// data-plane subscription collections during merge, so these collections ride
-// only in the per-peer replicator with the template's peer-DID filter.
-const DATA_PLANE_TEMPLATE: &str = "conversation";
 
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
@@ -60,7 +52,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
 ];
 
-const COORDINATOR_SYSTEM_PROMPT: &str = r#"You are a fleet coordinator. You have four remote research subagents named researcher-1, researcher-2, researcher-3, and researcher-4. For any user request asking you to use the fleet, you must call the spawn_subagent tool at least twice, using two different researcher names, and each call must set await_mode to "background". Do not use foreground. After the background subagents complete, summarize their results briefly."#;
+const COORDINATOR_SYSTEM_PROMPT: &str = r#"You are a fleet coordinator. You have four remote research subagents named researcher-1, researcher-2, researcher-3, and researcher-4. For any user request asking you to use the fleet, call the spawn_subagent tool exactly once for each of those four researcher names, and each call must set await_mode to "background". Do not use foreground. Do not call spawn_subagent more than four total times. Do not call any other tool. After the four background calls are issued, reply briefly that all four researchers were delegated."#;
 
 const SUBAGENT_SYSTEM_PROMPT: &str = r#"You are a remote research subagent. Answer the assigned question directly in one short paragraph. Do not delegate to other subagents."#;
 
@@ -98,6 +90,16 @@ struct ChildRow {
     caused_by_trigger_kind: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct CompletedChild {
+    tool_call_id: String,
+    child_request_id: String,
+    owner_agent_did: String,
+    owner_behavior_id: String,
+    owner_answer: String,
+    coordinator_answer: String,
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
@@ -120,51 +122,14 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
 
-    network_create(coord, "Fleet Delegation E2E")?;
     for subagent in subagents {
-        network_grant(coord, &subagent.agent_did)?;
-        let token = mint_network_control_invite(coord, &subagent.agent_did)?;
-        join_network_control(subagent, &token)?;
-        wait_for_pairing_applied(&subagent.graphql, &coord.peer_id, Duration::from_secs(120))
+        install_conversation_replicator(&coord.graphql, &coord.agent_did, &subagent.address)
             .await?;
+        install_conversation_replicator(&subagent.graphql, &subagent.agent_did, &coord.address)
+            .await?;
+        upsert_trusted_peer_document(&subagent.graphql, &coord.peer_id, &coord.agent_did).await?;
     }
-
-    wait_for_network_convergence(&fleet, Duration::from_secs(180)).await?;
-
-    for subagent in subagents {
-        upsert_data_plane_pairing(
-            &coord.graphql,
-            &subagent.peer_id,
-            &subagent.agent_did,
-            &subagent.address,
-        )
-        .await?;
-        upsert_data_plane_pairing(
-            &subagent.graphql,
-            &coord.peer_id,
-            &coord.agent_did,
-            &coord.address,
-        )
-        .await?;
-    }
-
-    for subagent in subagents {
-        wait_for_applied_data_plane_filter(
-            &coord.graphql,
-            &subagent.peer_id,
-            "AgentRequest",
-            Duration::from_secs(120),
-        )
-        .await?;
-        wait_for_applied_data_plane_filter(
-            &subagent.graphql,
-            &coord.peer_id,
-            "AgentRequest",
-            Duration::from_secs(120),
-        )
-        .await?;
-    }
-    assert_no_subagent_data_plane_edges(subagents).await?;
+    assert_no_subagent_pairing_edges(subagents).await?;
 
     configure_fleet_behaviors(tempdir.path(), coord, subagents).await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
@@ -179,7 +144,7 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
         .await?;
     }
 
-    let parent_prompt = "Use at least two different research subagents in parallel. Ask one for one concise fact about Mercury and another for one concise fact about Venus. Use background spawns only, then summarize the two results.";
+    let parent_prompt = "Use all four research subagents in parallel with background spawns only. Ask researcher-1 for one concise fact about Mercury, researcher-2 for one concise fact about Venus, researcher-3 for one concise fact about Earth, and researcher-4 for one concise fact about Mars. Make exactly four spawn_subagent calls total, one per researcher, then stop and reply that all four background researchers were delegated.";
     let submit = run_cli_json(
         &coord.home,
         &[
@@ -199,92 +164,32 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
     let parent_request_id = required_output_string(&submit, "request_id")?;
     let parent_session_id = required_output_string(&submit, "session_id")?;
 
-    let bridges = wait_for_spawn_bridges(
+    let completed_children = wait_for_all_subagent_children_completed(
         &coord.graphql,
+        subagents,
         &parent_session_id,
-        2,
-        Duration::from_secs(180),
+        &parent_request_id,
+        Duration::from_secs(300),
     )
     .await?;
-    let mut child_owners = HashMap::new();
-    for bridge in bridges.iter().take(2) {
-        anyhow::ensure!(
-            bridge.await_mode.as_deref() == Some("background"),
-            "bridge {} must use background mode: {bridge:?}",
-            bridge.tool_call_id
-        );
-        anyhow::ensure!(
-            bridge.lifecycle_state != "failed",
-            "bridge {} failed before child materialization: {bridge:?}",
-            bridge.tool_call_id
-        );
-        let (owner, child) = wait_for_child_on_any_subagent(
-            subagents,
-            &bridge.child_request_id,
-            Duration::from_secs(180),
-        )
-        .await?
-        .with_context(|| {
-            format!(
-                "child request {} from bridge {} did not materialize on any subagent",
-                bridge.child_request_id, bridge.tool_call_id
-            )
-        })?;
-        assert_eq!(child.request_id, bridge.child_request_id);
-        assert_eq!(child.agent_did, owner.agent_did);
-        assert_eq!(child.behavior_id, owner.behavior_id);
-        assert_eq!(
-            child.caused_by_parent_request_id.as_deref(),
-            Some(parent_request_id.as_str())
-        );
-        assert_eq!(
-            child.caused_by_parent_tool_call_id.as_deref(),
-            Some(bridge.tool_call_id.as_str())
-        );
-        assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
-        anyhow::ensure!(
-            child.lifecycle_state.as_deref() != Some("failed"),
-            "child {} was already failed when observed: {child:?}",
-            child.request_id
-        );
-        child_owners.insert(child.request_id.clone(), owner.agent_did.clone());
-
-        let child_terminal =
-            wait_for_request_terminal(&owner.graphql, &child.request_id, Duration::from_secs(240))
-                .await?;
-        assert_eq!(
-            child_terminal, "completed",
-            "child {} on {} must complete",
-            child.request_id, owner.agent_did
-        );
-        let child_answer =
-            wait_for_assistant_answer(&owner.graphql, &child.request_id, Duration::from_secs(60))
-                .await?;
-        anyhow::ensure!(
-            !child_answer.trim().is_empty(),
-            "child {} produced an empty response",
-            child.request_id
-        );
-    }
-    anyhow::ensure!(
-        child_owners.values().collect::<HashSet<_>>().len() >= 2,
-        "expected at least two distinct subagent owners, saw {child_owners:?}"
-    );
 
     let parent_terminal =
         wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(240))
             .await?;
+    assert_eq!(
+        parent_terminal, "completed",
+        "parent request must complete successfully"
+    );
+    let parent_answer =
+        wait_for_assistant_answer(&coord.graphql, &parent_request_id, Duration::from_secs(60))
+            .await?;
     anyhow::ensure!(
-        is_terminal(&parent_terminal),
-        "parent request must terminalize, got {parent_terminal}"
+        !parent_answer.trim().is_empty(),
+        "parent request completed with an empty response"
     );
 
+    assert_subagent_store_scopes(coord, subagents, &completed_children).await?;
     assert_subagents_have_no_spawn_targets(subagents).await?;
-
-    let revoked = &subagents[0];
-    network_revoke(coord, &revoked.agent_did)?;
-    wait_for_pairing_applied_gone(&coord.graphql, &revoked.peer_id, Duration::from_secs(120))
-        .await?;
 
     drop(fleet);
     Ok(())
@@ -388,91 +293,6 @@ fn shareable_address_from_readiness(readiness: &Value, peer_id: &str) -> Option<
     }
 }
 
-fn network_create(node: &FleetNode, name: &str) -> Result<String> {
-    let out = run_cli_json(
-        &node.home,
-        &[
-            "p2p", "network", "create", "--name", name, "--output", "json",
-        ],
-    )?;
-    anyhow::ensure!(
-        out.get("status").and_then(Value::as_str) == Some("network_created"),
-        "network create output: {out}"
-    );
-    required_output_string(&out, "network_id")
-}
-
-fn network_grant(admin: &FleetNode, member_did: &str) -> Result<()> {
-    let out = run_cli_json(
-        &admin.home,
-        &["p2p", "network", "grant", member_did, "--output", "json"],
-    )?;
-    anyhow::ensure!(
-        out.get("status").and_then(Value::as_str) == Some("membership_granted"),
-        "network grant output: {out}"
-    );
-    Ok(())
-}
-
-fn network_revoke(admin: &FleetNode, member_did: &str) -> Result<()> {
-    let out = run_cli_json(
-        &admin.home,
-        &["p2p", "network", "revoke", member_did, "--output", "json"],
-    )?;
-    anyhow::ensure!(
-        out.get("status").and_then(Value::as_str) == Some("membership_revoked"),
-        "network revoke output: {out}"
-    );
-    Ok(())
-}
-
-fn mint_network_control_invite(admin: &FleetNode, member_did: &str) -> Result<String> {
-    let invite = run_cli_json(
-        &admin.home,
-        &[
-            "p2p",
-            "pairings",
-            "invite",
-            "--template",
-            NETWORK_CONTROL_TEMPLATE,
-            "--member-did",
-            member_did,
-        ],
-    )?;
-    anyhow::ensure!(
-        invite.get("status").and_then(Value::as_str) == Some("invite_created"),
-        "invite output: {invite}"
-    );
-    required_output_string(&invite, "token")
-}
-
-fn join_network_control(node: &FleetNode, token: &str) -> Result<()> {
-    let out = run_cli_json(
-        &node.home,
-        &[
-            "p2p",
-            "pairings",
-            "join",
-            token,
-            "--wait",
-            "--timeout",
-            "120s",
-        ],
-    )?;
-    anyhow::ensure!(
-        matches!(
-            out.get("status").and_then(Value::as_str),
-            Some("pairing_joined" | "pairing_exists")
-        ),
-        "join output: {out}"
-    );
-    anyhow::ensure!(
-        out.get("template").and_then(Value::as_str) == Some(NETWORK_CONTROL_TEMPLATE),
-        "join must use network-control template: {out}"
-    );
-    Ok(())
-}
-
 fn required_output_string(value: &Value, key: &str) -> Result<String> {
     value
         .get(key)
@@ -481,97 +301,72 @@ fn required_output_string(value: &Value, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("output missing {key}: {value}"))
 }
 
-async fn wait_for_network_convergence(nodes: &[FleetNode], timeout: Duration) -> Result<()> {
-    for node in nodes {
-        wait_for_membership_count(&node.graphql, nodes.len(), timeout).await?;
-        wait_for_endpoint_count(&node.graphql, nodes.len(), timeout).await?;
-    }
-
-    for node in nodes {
-        for peer in nodes.iter().filter(|peer| peer.peer_id != node.peer_id) {
-            wait_for_pairing_applied(&node.graphql, &peer.peer_id, timeout).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn wait_for_membership_count(
+async fn install_conversation_replicator(
     graphql: &str,
-    expected: usize,
-    timeout: Duration,
-) -> Result<()> {
-    wait_until(timeout, || async {
-        let response = graphql_query(
-            graphql,
-            r#"{ NetworkMembership(filter: { status: { _eq: "active" } }) { member_did } }"#,
-        )
-        .await?;
-        let count = distinct_string_count(&response, "/data/NetworkMembership", "member_did");
-        anyhow::ensure!(
-            count >= expected,
-            "saw {count} active memberships, expected {expected}: {response}"
-        );
-        Ok(())
-    })
-    .await
-}
-
-async fn wait_for_endpoint_count(graphql: &str, expected: usize, timeout: Duration) -> Result<()> {
-    wait_until(timeout, || async {
-        let response = graphql_query(graphql, r#"{ PeerEndpoint { did } }"#).await?;
-        let count = distinct_string_count(&response, "/data/PeerEndpoint", "did");
-        anyhow::ensure!(
-            count >= expected,
-            "saw {count} endpoints, expected {expected}: {response}"
-        );
-        Ok(())
-    })
-    .await
-}
-
-fn distinct_string_count(response: &Value, pointer: &str, field: &str) -> usize {
-    response
-        .pointer(pointer)
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.get(field).and_then(Value::as_str))
-                .collect::<HashSet<_>>()
-                .len()
-        })
-        .unwrap_or_default()
-}
-
-async fn upsert_data_plane_pairing(
-    graphql: &str,
-    peer_id: &str,
     agent_did: &str,
     address: &str,
 ) -> Result<()> {
+    let api_base = graphql
+        .strip_suffix("/graphql")
+        .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
+    let filters = CONVERSATION_COLLECTIONS
+        .iter()
+        .map(|collection| {
+            (
+                (*collection).to_string(),
+                json!({ "Field": "agent_did", "Value": agent_did }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let body = json!({
+        "Collections": CONVERSATION_COLLECTIONS,
+        "Addresses": [address],
+        "Filters": filters,
+    });
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("building P2P replicator client")?
+        .post(format!("{api_base}/p2p/replicators"))
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("installing conversation replicator to {address}"))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    anyhow::ensure!(
+        status.is_success(),
+        "installing conversation replicator to {address} failed with {status}: {text}"
+    );
+    Ok(())
+}
+
+async fn upsert_trusted_peer_document(graphql: &str, peer_id: &str, agent_did: &str) -> Result<()> {
     let peer_id = escape_graphql_string(peer_id);
     let agent_did = escape_graphql_string(agent_did);
-    let address = escape_graphql_string(address);
-    let template = escape_graphql_string(DATA_PLANE_TEMPLATE);
-    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
-    let collections = graphql_string_array(CONVERSATION_COLLECTIONS);
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
-            upsert_DataPlanePairingDesired(
+            upsert_PeerPairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{agent_did}",
-                    collections: {collections},
-                    replicator_addresses: ["{address}"],
-                    template: "{template}",
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
+                    template: "conversation",
+                    source: "operator",
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{agent_did}",
-                    collections: {collections},
-                    replicator_addresses: ["{address}"],
-                    template: "{template}",
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
+                    template: "conversation",
+                    source: "operator",
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -581,93 +376,7 @@ async fn upsert_data_plane_pairing(
     Ok(())
 }
 
-fn graphql_string_array(values: &[&str]) -> String {
-    assert!(
-        !values.is_empty(),
-        "empty GraphQL lists must not be emitted"
-    );
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-async fn wait_for_applied_data_plane_filter(
-    graphql: &str,
-    peer_id: &str,
-    collection: &str,
-    timeout: Duration,
-) -> Result<()> {
-    wait_until(timeout, || async {
-        let row = applied_row(graphql, peer_id).await?.with_context(|| {
-            format!("PeerPairingApplied({peer_id}) missing while waiting for {collection}")
-        })?;
-        let has_subscription_collection = row
-            .get("collections")
-            .and_then(Value::as_array)
-            .is_some_and(|values| values.iter().filter_map(Value::as_str).any(|value| value == collection));
-        let has_filter_collection = row
-            .get("replicator_filter")
-            .and_then(Value::as_str)
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            .and_then(|filter| filter.get(collection).cloned())
-            .is_some();
-        anyhow::ensure!(
-            !has_subscription_collection,
-            "PeerPairingApplied({peer_id}) leaked data-plane collection {collection} into subscriptions: {row}"
-        );
-        anyhow::ensure!(
-            has_filter_collection,
-            "PeerPairingApplied({peer_id}) missing data-plane filter for {collection}: {row}"
-        );
-        Ok(())
-    })
-    .await
-}
-
-async fn wait_for_pairing_applied_gone(
-    graphql: &str,
-    peer_id: &str,
-    timeout: Duration,
-) -> Result<()> {
-    wait_until(timeout, || async {
-        anyhow::ensure!(
-            applied_row(graphql, peer_id).await?.is_none(),
-            "PeerPairingApplied({peer_id}) still exists"
-        );
-        Ok(())
-    })
-    .await
-}
-
-async fn applied_row(graphql: &str, peer_id: &str) -> Result<Option<Value>> {
-    let peer_id = escape_graphql_string(peer_id);
-    let response = graphql_query(
-        graphql,
-        &format!(
-            r#"{{
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}, limit: 1) {{
-                    peer_id
-                    collections
-                    replicator_addresses
-                    replicator_filter
-                }}
-            }}"#
-        ),
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/PeerPairingApplied")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned())
-}
-
-async fn assert_no_subagent_data_plane_edges(subagents: &[FleetNode]) -> Result<()> {
+async fn assert_no_subagent_pairing_edges(subagents: &[FleetNode]) -> Result<()> {
     let sub_peer_ids = subagents
         .iter()
         .map(|node| node.peer_id.as_str())
@@ -675,19 +384,29 @@ async fn assert_no_subagent_data_plane_edges(subagents: &[FleetNode]) -> Result<
     for node in subagents {
         let response = graphql_query(
             &node.graphql,
-            r#"{ DataPlanePairingDesired { peer_id agent_did template } }"#,
+            r#"{
+                PeerPairingDesired { peer_id agent_did template }
+                DataPlanePairingDesired { peer_id agent_did template }
+            }"#,
         )
         .await?;
-        let rows = response
-            .pointer("/data/DataPlanePairingDesired")
+        let mut rows = response
+            .pointer("/data/PeerPairingDesired")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        rows.extend(
+            response
+                .pointer("/data/DataPlanePairingDesired")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
         for row in rows {
             let peer_id = row.get("peer_id").and_then(Value::as_str).unwrap_or("");
             anyhow::ensure!(
                 !sub_peer_ids.contains(peer_id),
-                "subagent {} unexpectedly has subagent data-plane edge: {row}",
+                "subagent {} unexpectedly has subagent pairing edge: {row}",
                 node.agent_did
             );
         }
@@ -827,22 +546,146 @@ fn configure_coordinator_targets(coord: &FleetNode, subagents: &[FleetNode]) -> 
     Ok(())
 }
 
-async fn wait_for_spawn_bridges(
-    graphql: &str,
-    session_id: &str,
-    minimum: usize,
+async fn wait_for_all_subagent_children_completed(
+    coord_graphql: &str,
+    subagents: &[FleetNode],
+    parent_session_id: &str,
+    parent_request_id: &str,
     timeout: Duration,
-) -> Result<Vec<BridgeRow>> {
+) -> Result<HashMap<String, CompletedChild>> {
     wait_until_value(timeout, || async {
-        let bridges = fetch_spawn_bridges(graphql, session_id).await?;
+        let bridges = fetch_spawn_bridges(coord_graphql, parent_session_id).await?;
         anyhow::ensure!(
-            bridges.len() >= minimum,
-            "saw {} spawn bridges, expected {minimum}",
-            bridges.len()
+            bridges.len() >= subagents.len(),
+            "saw {} spawn bridges, expected at least {}",
+            bridges.len(),
+            subagents.len()
         );
-        Ok(bridges)
+
+        let mut completed_by_owner = HashMap::new();
+        let mut pending = Vec::new();
+        for bridge in &bridges {
+            anyhow::ensure!(
+                bridge.await_mode.as_deref() == Some("background"),
+                "bridge {} must use background mode: {bridge:?}",
+                bridge.tool_call_id
+            );
+            anyhow::ensure!(
+                bridge.lifecycle_state != "failed",
+                "bridge {} failed before child completion: {bridge:?}",
+                bridge.tool_call_id
+            );
+
+            let Some((owner, child)) =
+                find_child_on_any_subagent(subagents, &bridge.child_request_id).await?
+            else {
+                pending.push(format!(
+                    "child {} from bridge {} not materialized",
+                    bridge.child_request_id, bridge.tool_call_id
+                ));
+                continue;
+            };
+
+            assert_child_lineage(&child, owner, bridge, parent_request_id)?;
+
+            let child_state = child
+                .lifecycle_state
+                .clone()
+                .or(fetch_request_lifecycle(&owner.graphql, &child.request_id).await?)
+                .unwrap_or_else(|| "unknown".to_string());
+            if child_state != "completed" {
+                pending.push(format!(
+                    "child {} on {} not completed yet: {child_state}",
+                    child.request_id, owner.agent_did
+                ));
+                continue;
+            }
+
+            if bridge.lifecycle_state != "completed" {
+                pending.push(format!(
+                    "bridge {} for child {} not completed yet: {}",
+                    bridge.tool_call_id, child.request_id, bridge.lifecycle_state
+                ));
+                continue;
+            }
+
+            let owner_answer = fetch_assistant_answer(&owner.graphql, &child.request_id).await?;
+            if owner_answer.trim().is_empty() {
+                pending.push(format!(
+                    "child {} on {} has no owner-side assistant answer yet",
+                    child.request_id, owner.agent_did
+                ));
+                continue;
+            }
+            let coordinator_answer = fetch_assistant_answer(coord_graphql, &child.request_id).await?;
+            if coordinator_answer.trim().is_empty() {
+                pending.push(format!(
+                    "child {} on {} has no coordinator-side replicated answer yet",
+                    child.request_id, owner.agent_did
+                ));
+                continue;
+            }
+
+            completed_by_owner.insert(
+                owner.agent_did.clone(),
+                CompletedChild {
+                    tool_call_id: bridge.tool_call_id.clone(),
+                    child_request_id: child.request_id.clone(),
+                    owner_agent_did: owner.agent_did.clone(),
+                    owner_behavior_id: owner.behavior_id.clone(),
+                    owner_answer,
+                    coordinator_answer,
+                },
+            );
+        }
+
+        let expected = subagents
+            .iter()
+            .map(|node| node.agent_did.as_str())
+            .collect::<HashSet<_>>();
+        let seen = completed_by_owner
+            .keys()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let missing = expected.difference(&seen).copied().collect::<Vec<_>>();
+        anyhow::ensure!(
+            missing.is_empty(),
+            "completed children missing subagent owners {missing:?}; pending: {pending:?}; completed owners: {:?}",
+            completed_by_owner.keys().collect::<Vec<_>>()
+        );
+
+        Ok(completed_by_owner)
     })
     .await
+}
+
+fn assert_child_lineage(
+    child: &ChildRow,
+    owner: &FleetNode,
+    bridge: &BridgeRow,
+    parent_request_id: &str,
+) -> Result<()> {
+    assert_eq!(child.request_id, bridge.child_request_id);
+    assert_eq!(child.agent_did, owner.agent_did);
+    assert_eq!(child.behavior_id, owner.behavior_id);
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        Some(parent_request_id)
+    );
+    assert_eq!(
+        child.caused_by_parent_tool_call_id.as_deref(),
+        Some(bridge.tool_call_id.as_str())
+    );
+    assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
+    anyhow::ensure!(
+        !matches!(
+            child.lifecycle_state.as_deref(),
+            Some("failed" | "dead" | "interrupted" | "superseded")
+        ),
+        "child {} reached non-completed terminal state when observed: {child:?}",
+        child.request_id
+    );
+    Ok(())
 }
 
 async fn fetch_spawn_bridges(graphql: &str, session_id: &str) -> Result<Vec<BridgeRow>> {
@@ -904,20 +747,16 @@ async fn fetch_spawn_bridges(graphql: &str, session_id: &str) -> Result<Vec<Brid
         .collect())
 }
 
-async fn wait_for_child_on_any_subagent<'a>(
+async fn find_child_on_any_subagent<'a>(
     subagents: &'a [FleetNode],
     request_id: &str,
-    timeout: Duration,
 ) -> Result<Option<(&'a FleetNode, ChildRow)>> {
-    wait_until_value(timeout, || async {
-        for subagent in subagents {
-            if let Some(row) = fetch_child_request(&subagent.graphql, request_id).await? {
-                return Ok(Some((subagent, row)));
-            }
+    for subagent in subagents {
+        if let Some(row) = fetch_child_request(&subagent.graphql, request_id).await? {
+            return Ok(Some((subagent, row)));
         }
-        bail!("child {request_id} not visible on any subagent yet");
-    })
-    .await
+    }
+    Ok(None)
 }
 
 async fn fetch_child_request(graphql: &str, request_id: &str) -> Result<Option<ChildRow>> {
@@ -1092,6 +931,76 @@ async fn fetch_latest_assistant_message(graphql: &str, session_id: &str) -> Resu
         .to_string())
 }
 
+async fn assert_subagent_store_scopes(
+    coord: &FleetNode,
+    subagents: &[FleetNode],
+    completed_children: &HashMap<String, CompletedChild>,
+) -> Result<()> {
+    for subagent in subagents {
+        let completed = completed_children
+            .get(&subagent.agent_did)
+            .with_context(|| format!("missing completed child for {}", subagent.agent_did))?;
+        assert_eq!(completed.owner_agent_did, subagent.agent_did);
+        assert_eq!(completed.owner_behavior_id, subagent.behavior_id);
+        anyhow::ensure!(
+            !completed.owner_answer.trim().is_empty()
+                && !completed.coordinator_answer.trim().is_empty(),
+            "completed child {} has empty answer(s): {completed:?}",
+            completed.child_request_id
+        );
+        let local_child = fetch_child_request(&subagent.graphql, &completed.child_request_id)
+            .await?
+            .with_context(|| {
+                format!(
+                    "subagent {} missing its completed child {} from bridge {}",
+                    subagent.agent_did, completed.child_request_id, completed.tool_call_id
+                )
+            })?;
+        assert_eq!(local_child.agent_did, subagent.agent_did);
+        assert_eq!(local_child.behavior_id, subagent.behavior_id);
+        assert_eq!(local_child.lifecycle_state.as_deref(), Some("completed"));
+
+        let allowed = HashSet::from([coord.agent_did.as_str(), subagent.agent_did.as_str()]);
+        for collection in CONVERSATION_COLLECTIONS {
+            let agent_dids = fetch_collection_agent_dids(&subagent.graphql, collection).await?;
+            let unexpected = agent_dids
+                .iter()
+                .filter(|did| {
+                    let did = did.trim();
+                    did.is_empty() || !allowed.contains(did)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                unexpected.is_empty(),
+                "subagent {} store leaked unexpected agent_did values in {collection}: {:?}; allowed: {:?}",
+                subagent.agent_did,
+                unexpected,
+                allowed
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn fetch_collection_agent_dids(graphql: &str, collection: &str) -> Result<Vec<String>> {
+    let response = graphql_query(graphql, &format!("{{ {collection} {{ agent_did }} }}")).await?;
+    Ok(response
+        .pointer(&format!("/data/{collection}"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    row.get("agent_did")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 async fn assert_subagents_have_no_spawn_targets(subagents: &[FleetNode]) -> Result<()> {
     for subagent in subagents {
         let selection_id = escape_graphql_string(&subagent.tool_selection_id);
@@ -1152,25 +1061,6 @@ async fn assert_endpoint_reachable(endpoint: &str) -> Result<()> {
         response.status()
     );
     Ok(())
-}
-
-async fn wait_until<F, Fut>(timeout: Duration, mut f: F) -> Result<()>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<()>>,
-{
-    let deadline = Instant::now() + timeout;
-    let mut last_error = "condition not evaluated".to_string();
-    loop {
-        if Instant::now() >= deadline {
-            bail!("timed out after {:?}: {last_error}", timeout);
-        }
-        match f().await {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = error.to_string(),
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
 }
 
 async fn wait_until_value<T, F, Fut>(timeout: Duration, mut f: F) -> Result<T>
