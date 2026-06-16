@@ -9,6 +9,8 @@ mod support;
 mod backend_auth_live;
 #[path = "e2e_live/interrupt_live.rs"]
 mod interrupt_live;
+#[path = "e2e_live/post_status_json_live.rs"]
+mod post_status_json_live;
 #[path = "e2e_live/steward_loop_live.rs"]
 mod steward_loop_live;
 #[path = "e2e_live/subagent_delegation_live.rs"]

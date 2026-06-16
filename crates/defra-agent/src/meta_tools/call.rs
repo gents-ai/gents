@@ -240,7 +240,7 @@ fn normalize_arguments(
 ) -> Result<Value, StructuredToolError> {
     match arguments {
         Value::Object(_) => Ok(arguments.clone()),
-        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+        Value::String(raw) => match parse_stringified_object(raw) {
             Ok(Value::Object(map)) => Ok(Value::Object(map)),
             Ok(other) => Err(StructuredToolError::invalid_tool_arguments(
                 service_id,
@@ -269,6 +269,20 @@ fn normalize_arguments(
                 json_type_name(other)
             ),
         )),
+    }
+}
+
+/// Parse a stringified `call_tool.arguments` JSON value, applying one tolerant
+/// [`repair_tool_arguments`] pass (lone-backslash escapes / trailing truncation)
+/// when the raw string fails to parse. Mirrors the native tool seam in
+/// [`crate::llm::tool::parse_tool_args`] so MCP-routed tools recover from the
+/// same model output corruptions.
+fn parse_stringified_object(raw: &str) -> Result<Value, serde_json::Error> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(value) => Ok(value),
+        Err(first_error) => crate::llm::tool::repair_tool_arguments(raw)
+            .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
+            .ok_or(first_error),
     }
 }
 

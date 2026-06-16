@@ -277,3 +277,29 @@ fn error_display_messages() {
     };
     assert!(err.to_string().contains("doc-1"));
 }
+
+#[test]
+fn client_tool_args_unparseable_signal_is_retryable() {
+    // The completion loop synthesizes this provider-error message when a tool's
+    // `arguments` string is unparseable even after a tolerant repair (a raw
+    // lone-backslash escape, or a payload truncated by finish_reason=length).
+    // It is the client-side analogue of vLLM's server-side tool-parse 400 and
+    // must classify as a transient/retryable failure so the run re-attempts.
+    let error = rig::agent::StreamingError::Completion(
+        rig::completion::CompletionError::ProviderError(format!(
+            "{}: tool 'post_status': tool args unparseable (truncated): EOF while parsing a string",
+            CLIENT_TOOL_ARGS_UNPARSEABLE_MARKER
+        )),
+    );
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(
+        classified.is_retryable(),
+        "client-side unparseable tool args should retry on a fresh generation"
+    );
+}

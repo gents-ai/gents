@@ -122,8 +122,32 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
+/// Marker prefix on the provider-error message we synthesize when a tool's
+/// `arguments` string is unparseable even after a tolerant repair pass (the
+/// client-side analogue of vLLM's server-side tool-parse 400). The loop raises
+/// this so the run re-attempts the inference instead of feeding the parse error
+/// back to the model as the tool result. Keyed off this marker by
+/// [`message_is_client_tool_args_unparseable`], it classifies as a transient,
+/// retryable failure — the same disposition as the server-side Variant A.
+pub const CLIENT_TOOL_ARGS_UNPARSEABLE_MARKER: &str = "client tool-call arguments unparseable";
+
+/// Whether a provider-error message is the client-side unparseable-tool-args
+/// signal synthesized by the completion loop (see
+/// [`CLIENT_TOOL_ARGS_UNPARSEABLE_MARKER`]).
+fn message_is_client_tool_args_unparseable(message: &str) -> bool {
+    message.contains(CLIENT_TOOL_ARGS_UNPARSEABLE_MARKER)
+}
+
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
     let msg = error.to_string();
+
+    if message_is_client_tool_args_unparseable(&msg) {
+        // A tool-call `arguments` string the client could not parse even after a
+        // tolerant repair (a raw lone-backslash escape, or a payload truncated by
+        // `finish_reason == "length"`). Intermittent and sampling-dependent, so
+        // retry on a fresh generation rather than dropping the report.
+        return InferenceError::TransientFailure { reason: msg };
+    }
 
     if msg.contains("context_length_exceeded") || msg.contains("maximum context length") {
         return InferenceError::ContextLengthExceeded { reason: msg };

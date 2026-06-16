@@ -1159,11 +1159,63 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     })];
 
     assert_eq!(
-        super::dispatch_tool(&tools, "echo", "{}".to_string()).await,
+        super::dispatch_tool(&tools, "echo", "{}".to_string())
+            .await
+            .expect("a normal tool call should not raise a retryable signal"),
         "ECHOED".to_string()
     );
     assert_eq!(
-        super::dispatch_tool(&tools, "missing", "{}".to_string()).await,
+        super::dispatch_tool(&tools, "missing", "{}".to_string())
+            .await
+            .expect("an unknown tool is reported as a result, not a retryable signal"),
         "error: unknown tool 'missing'".to_string()
+    );
+}
+
+#[tokio::test]
+async fn dispatch_tool_escalates_unparseable_args_to_retryable_signal() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    // A tool whose Args require fields the truncated payload never closes.
+    struct StrictArgsTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        body: String,
+        // A second required field that the truncated payload never reaches, so a
+        // structural repair cannot produce a deserializable object.
+        #[allow(dead_code)]
+        findings: Vec<String>,
+    }
+    impl Tool for StrictArgsTool {
+        const NAME: &'static str = "strict";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            Ok("ran".to_string())
+        }
+    }
+
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+    // Truncated mid-string: repair closes it structurally but the required
+    // `findings` field is absent, so it cannot deserialize — dispatch_tool must
+    // escalate rather than feed the error back as a result.
+    let result = super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string()).await;
+    let error =
+        result.expect_err("unparseable args must escalate to a StreamingError, not a result");
+    assert!(
+        crate::retry::is_retryable_streaming_error(&error),
+        "the escalated client-side unparseable-args signal must be retryable"
     );
 }
