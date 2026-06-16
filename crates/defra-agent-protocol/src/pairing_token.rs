@@ -1,4 +1,4 @@
-//! Signed pairing-invite token (current version: v4).
+//! Signed pairing-invite token (current version: v5).
 //!
 //! The token carries everything the joining peer needs to connect plus a
 //! signature over that payload by the issuer's DID key.  The join command
@@ -8,8 +8,8 @@
 //!
 //! Signing payload: CBOR of a copy of the token with `sig = []`.  This means
 //! the signature covers `v`, `issuer_did`, `peer_id`, `ticket`, `nonce`,
-//! `network_id`, `issued_at`, and `template` — every field that matters for
-//! correctness — while remaining stable across sig values.
+//! `network_id`, `issued_at`, `template`, `grant`, and `network` — every field
+//! that matters for correctness — while remaining stable across sig values.
 //!
 //! Version history:
 //!   v2 — original release (profiles, no template)
@@ -17,6 +17,8 @@
 //!   v4 — drops the now-dead `profiles` field (scope comes solely from
 //!        `template`) and adds a single-use `nonce: String`; older tokens
 //!        rejected with a re-issue hint
+//!   v5 — carries admin-signed `NetworkRecord` + `MembershipRecord` so join
+//!        admission can be membership-gated before control-plane replication
 
 use std::io::Cursor;
 
@@ -24,11 +26,12 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::network_token::{MembershipRecord, NetworkRecord};
+
 /// Versioned pairing-invite envelope.  CBOR-encoded, bs58-encoded, prefixed.
 ///
-/// Current version: v4.  The `nonce` field was added (and the dead `profiles`
-/// field dropped) in v4; v3 and earlier tokens are rejected on decode with a
-/// re-issue hint.
+/// Current version: v5.  The `grant` and `network` records were added in v5;
+/// v4 and earlier tokens are rejected on decode with a re-issue hint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteToken {
     pub v: u8,
@@ -46,6 +49,10 @@ pub struct InviteToken {
     /// Added in v3; the `join` command writes this as the desired row's template
     /// and (since v4) is the sole source of the pairing's collection scope.
     pub template: String,
+    /// Admin-signed active grant for the intended joiner.
+    pub grant: MembershipRecord,
+    /// Admin-signed network root record for the grant.
+    pub network: NetworkRecord,
     /// Ed25519 (or other) signature over `signing_payload(self)`.
     /// Empty when computing the payload itself (circular-dependency break).
     pub sig: Vec<u8>,
@@ -67,9 +74,8 @@ pub fn encode(token: &InviteToken) -> Result<String> {
 /// Decode a `TOKEN_PREFIX`-prefixed invite token string.
 ///
 /// Returns an error (mentioning "re-issue with a newer defra-agent") for any
-/// token whose `v` field is not `4`.  v3 and earlier tokens (from before the
-/// `nonce` field was added / the `profiles` field dropped) are rejected so the
-/// issuer must re-mint with a current `defra-agent` binary.
+/// token whose `v` field is not `5`.  Older tokens are rejected so the issuer
+/// must re-mint with a current `defra-agent` binary.
 pub fn decode(raw: &str) -> Result<InviteToken> {
     let encoded = raw
         .trim()
@@ -81,7 +87,7 @@ pub fn decode(raw: &str) -> Result<InviteToken> {
     let token: InviteToken =
         ciborium::de::from_reader(Cursor::new(bytes)).context("parsing pairing invite token")?;
     match token.v {
-        4 => Ok(token),
+        5 => Ok(token),
         version => anyhow::bail!(
             "pairing invite token version {version} is not supported; \
              re-issue with a newer defra-agent"
@@ -154,6 +160,28 @@ fn humantime_max_age(max_age: Duration) -> String {
 mod tests {
     use super::*;
 
+    fn sample_network() -> NetworkRecord {
+        NetworkRecord {
+            network_id: "default".into(),
+            admin_did: "did:key:admin".into(),
+            display_name: "Default".into(),
+            default_template: "network-control".into(),
+            created_at: "2026-06-13T00:00:00Z".into(),
+            sig: vec![4, 5, 6],
+        }
+    }
+
+    fn sample_grant() -> MembershipRecord {
+        MembershipRecord {
+            network_id: "default".into(),
+            member_did: "did:key:member".into(),
+            status: "active".into(),
+            granted_at: "2026-06-13T00:00:00Z".into(),
+            revoked_at: String::new(),
+            sig: vec![7, 8, 9],
+        }
+    }
+
     fn sample_token(v: u8) -> InviteToken {
         InviteToken {
             v,
@@ -164,14 +192,16 @@ mod tests {
             network_id: "default".into(),
             issued_at: "2026-06-13T00:00:00Z".into(),
             template: "conversation".into(),
+            grant: sample_grant(),
+            network: sample_network(),
             sig: vec![1, 2, 3],
         }
     }
 
     #[test]
-    fn token_v4_round_trips_and_signing_payload_ignores_sig() {
+    fn token_v5_round_trips_and_signing_payload_ignores_sig() {
         let t = InviteToken {
-            v: 4,
+            v: 5,
             issuer_did: "did:key:a".into(),
             peer_id: "p".into(),
             ticket: "/ip4/1".into(),
@@ -179,6 +209,8 @@ mod tests {
             network_id: "default".into(),
             issued_at: "2026-06-13T00:00:00Z".into(),
             template: "conversation".into(),
+            grant: sample_grant(),
+            network: sample_network(),
             sig: vec![1, 2, 3],
         };
         let enc = encode(&t).unwrap();
@@ -190,12 +222,12 @@ mod tests {
     }
 
     #[test]
-    fn token_v4_signing_payload_covers_nonce() {
+    fn token_v5_signing_payload_covers_nonce() {
         // Two tokens identical except nonce → different signing payloads.
-        let mut a = sample_token(4);
+        let mut a = sample_token(5);
         a.nonce = "nonce-a".into();
         a.sig = vec![];
-        let mut b = sample_token(4);
+        let mut b = sample_token(5);
         b.nonce = "nonce-b".into();
         b.sig = vec![];
         assert_ne!(
@@ -206,12 +238,12 @@ mod tests {
     }
 
     #[test]
-    fn token_v4_signing_payload_covers_network_id() {
+    fn token_v5_signing_payload_covers_network_id() {
         // Two tokens identical except network_id → different signing payloads.
-        let mut a = sample_token(4);
+        let mut a = sample_token(5);
         a.network_id = "default".into();
         a.sig = vec![];
-        let mut b = sample_token(4);
+        let mut b = sample_token(5);
         b.network_id = "staging".into();
         b.sig = vec![];
         assert_ne!(
@@ -223,7 +255,7 @@ mod tests {
 
     #[test]
     fn check_freshness_accepts_recent_and_rejects_stale_or_future() {
-        let mut t = sample_token(4);
+        let mut t = sample_token(5);
         let now = DateTime::parse_from_rfc3339("2026-06-13T01:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -249,12 +281,12 @@ mod tests {
     }
 
     #[test]
-    fn token_v4_signing_payload_covers_template() {
+    fn token_v5_signing_payload_covers_template() {
         // Two tokens identical except template → different signing payloads.
-        let mut a = sample_token(4);
+        let mut a = sample_token(5);
         a.template = "conversation".into();
         a.sig = vec![];
-        let mut b = sample_token(4);
+        let mut b = sample_token(5);
         b.template = "backup".into();
         b.sig = vec![];
         assert_ne!(
@@ -265,7 +297,20 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_non_v4() {
+    fn token_v5_signing_payload_covers_grant_and_network() {
+        let mut a = sample_token(5);
+        let mut b = sample_token(5);
+        b.grant.member_did = "did:key:other".into();
+        assert_ne!(signing_payload(&a), signing_payload(&b));
+
+        a = sample_token(5);
+        b = sample_token(5);
+        b.network.admin_did = "did:key:other-admin".into();
+        assert_ne!(signing_payload(&a), signing_payload(&b));
+    }
+
+    #[test]
+    fn decode_rejects_non_v5() {
         // v=1 (old schema): the decode gate is on the version number, so encode
         // v=1 with the current struct and verify we get a re-issue error.
         let mut t = sample_token(1);
@@ -279,16 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_v3() {
-        // v3 tokens (with the now-dead profiles field, no nonce) must be rejected
-        // so the issuer re-mints with a current binary.
-        let mut t = sample_token(3);
+    fn decode_rejects_v4() {
+        // v4 tokens have no grant/network in the historic schema. This current
+        // struct with v=4 still exercises the version gate: issuers must re-mint
+        // with a current binary.
+        let mut t = sample_token(4);
         t.sig = vec![];
         let enc = encode(&t).unwrap();
         let err = decode(&enc).unwrap_err().to_string();
         assert!(
             err.contains("re-issue") || err.contains("newer"),
-            "expected re-issue/newer in error for v3, got: {err}"
+            "expected re-issue/newer in error for v4, got: {err}"
         );
     }
 
@@ -300,7 +346,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_truncated_base58() {
-        let enc = encode(&sample_token(4)).unwrap();
+        let enc = encode(&sample_token(5)).unwrap();
         let truncated = &enc[..enc.len() - 4];
         let err = decode(truncated).unwrap_err().to_string();
         assert!(
@@ -312,9 +358,9 @@ mod tests {
 
     #[test]
     fn signing_payload_is_stable_across_sig_changes() {
-        let mut a = sample_token(4);
+        let mut a = sample_token(5);
         a.sig = vec![0xAA; 64];
-        let mut b = sample_token(4);
+        let mut b = sample_token(5);
         b.sig = vec![0xBB; 64];
         assert_eq!(signing_payload(&a), signing_payload(&b));
     }

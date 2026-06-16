@@ -102,7 +102,7 @@ pub(super) async fn p2p_network_grant(args: P2pNetworkGrantArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for network grant")?;
-    let network = load_single_network(&access).await?;
+    let network = load_single_network_record(&access).await?;
     ensure_local_admin(identity.as_ref(), &network)?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -138,19 +138,14 @@ pub(super) async fn p2p_network_revoke(args: P2pNetworkRevokeArgs) -> Result<()>
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for network revoke")?;
-    let network = load_single_network(&access).await?;
+    let network = load_single_network_record(&access).await?;
     ensure_local_admin(identity.as_ref(), &network)?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let existing = load_membership(&access, &network.network_id, &args.member_did).await?;
+    let existing = load_membership_record(&access, &network.network_id, &args.member_did).await?;
     let granted_at = existing
-        .and_then(|row| {
-            row.get("granted_at")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
+        .map(|row| row.granted_at)
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| now.clone());
     let mut membership = MembershipRecord {
         network_id: network.network_id.clone(),
@@ -180,20 +175,27 @@ pub(super) async fn p2p_network_revoke(args: P2pNetworkRevokeArgs) -> Result<()>
     )
 }
 
-#[derive(Debug, Clone)]
-struct LocalNetwork {
-    network_id: String,
-    admin_did: String,
+pub(super) async fn load_single_network_record(access: &ConfigAccess) -> Result<NetworkRecord> {
+    match load_optional_network_record(access).await? {
+        Some(record) => Ok(record),
+        None => bail!("no AgentNetwork exists on this node; run `p2p network create` first"),
+    }
 }
 
-async fn load_single_network(access: &ConfigAccess) -> Result<LocalNetwork> {
+pub(super) async fn load_optional_network_record(
+    access: &ConfigAccess,
+) -> Result<Option<NetworkRecord>> {
     let rows = agent_network_rows(access).await?;
     match rows.as_slice() {
-        [] => bail!("no AgentNetwork exists on this node; run `p2p network create` first"),
-        [row] => Ok(LocalNetwork {
+        [] => Ok(None),
+        [row] => Ok(Some(NetworkRecord {
             network_id: required_string(row, "network_id")?,
             admin_did: required_string(row, "admin_did")?,
-        }),
+            display_name: required_string(row, "display_name")?,
+            default_template: required_string(row, "default_template")?,
+            created_at: required_string(row, "created_at")?,
+            sig: decode_sig(&required_string(row, "admin_sig")?)?,
+        })),
         _ => bail!(
             "expected a singleton AgentNetwork on this node, found {} rows",
             rows.len()
@@ -220,7 +222,7 @@ async fn agent_network_rows(access: &ConfigAccess) -> Result<Vec<Value>> {
     .context("loading AgentNetwork rows")
 }
 
-fn ensure_local_admin(identity: &dyn AgentIdentity, network: &LocalNetwork) -> Result<()> {
+fn ensure_local_admin(identity: &dyn AgentIdentity, network: &NetworkRecord) -> Result<()> {
     if identity.did() != network.admin_did {
         bail!(
             "local DID {} is not the network admin {}; refusing admin write",
@@ -231,7 +233,10 @@ fn ensure_local_admin(identity: &dyn AgentIdentity, network: &LocalNetwork) -> R
     Ok(())
 }
 
-async fn write_agent_network(access: &ConfigAccess, record: &NetworkRecord) -> Result<()> {
+pub(super) async fn write_agent_network(
+    access: &ConfigAccess,
+    record: &NetworkRecord,
+) -> Result<()> {
     let network_id = escaped(&record.network_id);
     let admin_did = escaped(&record.admin_did);
     let display_name = escaped(&record.display_name);
@@ -267,7 +272,10 @@ async fn write_agent_network(access: &ConfigAccess, record: &NetworkRecord) -> R
     Ok(())
 }
 
-async fn write_membership(access: &ConfigAccess, record: &MembershipRecord) -> Result<()> {
+pub(super) async fn write_membership(
+    access: &ConfigAccess,
+    record: &MembershipRecord,
+) -> Result<()> {
     let membership_key = escaped(&derive_membership_key(
         &record.network_id,
         &record.member_did,
@@ -309,11 +317,11 @@ async fn write_membership(access: &ConfigAccess, record: &MembershipRecord) -> R
     Ok(())
 }
 
-async fn load_membership(
+pub(super) async fn load_membership_record(
     access: &ConfigAccess,
     network_id: &str,
     member_did: &str,
-) -> Result<Option<Value>> {
+) -> Result<Option<MembershipRecord>> {
     let membership_key = escaped(&derive_membership_key(network_id, member_did));
     let query = format!(
         r#"query {{
@@ -328,11 +336,26 @@ async fn load_membership(
             }}
         }}"#
     );
-    Ok(graphql_rows(access, "NetworkMembership", &query)
+    graphql_rows(access, "NetworkMembership", &query)
         .await
         .context("loading NetworkMembership row")?
         .into_iter()
-        .next())
+        .next()
+        .map(|row| {
+            Ok(MembershipRecord {
+                network_id: required_string(&row, "network_id")?,
+                member_did: required_string(&row, "member_did")?,
+                status: required_string(&row, "status")?,
+                granted_at: required_string(&row, "granted_at")?,
+                revoked_at: row
+                    .get("revoked_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                sig: decode_sig(&required_string(&row, "admin_sig")?)?,
+            })
+        })
+        .transpose()
 }
 
 async fn publish_self_endpoint(
@@ -451,6 +474,12 @@ fn required_string(row: &Value, field: &str) -> Result<String> {
 
 fn encode_sig(sig: &[u8]) -> String {
     bs58::encode(sig).into_string()
+}
+
+fn decode_sig(sig: &str) -> Result<Vec<u8>> {
+    bs58::decode(sig)
+        .into_vec()
+        .with_context(|| "decoding base58 signature")
 }
 
 fn escaped(value: &str) -> String {
