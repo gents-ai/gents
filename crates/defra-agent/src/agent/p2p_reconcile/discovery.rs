@@ -34,7 +34,6 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use super::engine::PAIRING_SWEEP_INTERVAL;
 use super::registry::REGISTRY_HEARTBEAT_INTERVAL;
 use super::templates::{resolve_template, ScopeTemplate};
 
@@ -185,7 +184,7 @@ impl DiscoveredEntry {
         let fresh = updated_at
             .and_then(|raw| DateTime::parse_from_rfc3339(raw.trim()).ok())
             .map(|ts| ts.with_timezone(&Utc))
-            .map(|ts| heartbeat_is_fresh(ts, now, REGISTRY_STALE_AFTER))
+            .map(|ts| heartbeat_is_fresh(ts, now, super::intervals::stale_after()))
             .unwrap_or(false);
         Self {
             peer_id,
@@ -452,7 +451,7 @@ pub async fn run_discovery_reconciler(
 
     let store = GraphqlDiscoveryStore::new(node.clone(), self_peer_id);
     let mut subscription = node.subscribe(&[EventName::Update]);
-    let mut interval = tokio::time::interval(PAIRING_SWEEP_INTERVAL);
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     sweep_discovery(&store).await;

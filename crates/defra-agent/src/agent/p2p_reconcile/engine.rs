@@ -114,7 +114,7 @@ pub async fn run_pairing_reconciler(
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store = GraphqlPairingStateStore::new(node.clone());
     let mut subscription = node.subscribe(&[EventName::Update]);
-    let mut interval = tokio::time::interval(PAIRING_SWEEP_INTERVAL);
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     sweep_pairings(&admin, &store).await?;
