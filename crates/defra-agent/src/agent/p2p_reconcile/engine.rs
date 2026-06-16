@@ -403,7 +403,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         } else {
             None
         };
-        Ok(merge_desired(base, data_plane))
+        Ok(merge_layered_desired(base, data_plane))
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
@@ -592,7 +592,13 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
     })
 }
 
-fn merge_desired(
+/// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
+/// desired state for the same peer.
+///
+/// Data-plane templates are delivered by filtered push replicators, so their
+/// collections extend only the per-peer replicator set. They must not extend the
+/// subscription set, otherwise conversation documents could gossip unfiltered.
+pub fn merge_layered_desired(
     base: Option<PairingDesired>,
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
@@ -722,7 +728,7 @@ mod tests {
             replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
         };
 
-        let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
+        let merged = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
         assert_eq!(
             merged.replicator_collections,
             set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
@@ -755,7 +761,7 @@ mod tests {
             replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
         };
 
-        let merged = merge_desired(None, Some(data)).expect("data-plane desired");
+        let merged = merge_layered_desired(None, Some(data)).expect("data-plane desired");
         assert!(
             merged.collections.is_empty(),
             "data-plane-only desired must not subscribe to conversation collections"

@@ -106,6 +106,18 @@ def scopeFilter : Scope → Did → Option ScopeFilterKey
   | .peerDid f, did => some ⟨f, did⟩
   | .unscoped, _ => none
 
+/-- Resolve a scope and collection set against a concrete peer DID into
+per-collection filter entries. This is the model shape corresponding to Rust
+`PairingFilters`: a `PeerDid` scope filters every collection on the peer DID,
+while `Unscoped` yields the empty filter map. -/
+noncomputable def scopeFilters (s : Scope) (collections : Finset String) (did : Did) :
+    Finset CollectionScopeFilter :=
+  match s with
+  | .peerDid f =>
+      (collections.toList.map
+        (fun c => ({ collection := c, field := f, value := did } : CollectionScopeFilter))).toFinset
+  | .unscoped => ∅
+
 /-- `scopeFilter` is the spec's case-split, proven by `cases` over `Scope`. -/
 theorem scopeFilter_spec (s : Scope) (did : Did) :
     scopeFilter s did =
@@ -121,6 +133,25 @@ theorem scopeFilter_peerDid (f : String) (did : Did) :
 /-- An `Unscoped` scope never yields a filter (whole-collection replication). -/
 theorem scopeFilter_unscoped (did : Did) :
     scopeFilter .unscoped did = none := rfl
+
+/-- Per-collection form: a `PeerDid` scope creates exactly one filter entry for
+each carried collection. -/
+theorem scopeFilters_peerDid_mem_iff
+    (f : String) (collections : Finset String) (did : Did) (k : CollectionScopeFilter) :
+    k ∈ scopeFilters (.peerDid f) collections did ↔
+      ∃ c ∈ collections, k = ⟨c, f, did⟩ := by
+  simp [scopeFilters]
+  constructor
+  · intro h
+    rcases h with ⟨c, hc, hk⟩
+    exact ⟨c, hc, hk.symm⟩
+  · intro h
+    rcases h with ⟨c, hc, hk⟩
+    exact ⟨c, hc, hk.symm⟩
+
+/-- Per-collection form: an `Unscoped` scope yields no filters. -/
+theorem scopeFilters_unscoped (collections : Finset String) (did : Did) :
+    scopeFilters .unscoped collections did = ∅ := rfl
 
 /-- A scope yields a filter iff it is scoped to a peer DID. Exact, by `cases`. -/
 theorem scopeFilter_isSome_iff (s : Scope) (did : Did) :
@@ -154,5 +185,20 @@ theorem push_template_has_filter {t : Template} (h : scopeCoherent t)
   obtain ⟨f, hf⟩ := h hpush
   rw [hf]
   rfl
+
+/-- Per-collection version of `push_template_has_filter`: under a scope-coherent
+`Push` template, every template collection has a concrete peer-DID filter entry.
+This is the Lean fence for Rust's merged Layer-1/Layer-2 install, where one
+replicator can carry unfiltered control collections plus filtered conversation
+collections in the same per-collection filter map. -/
+theorem push_template_filters_every_collection {t : Template} (h : scopeCoherent t)
+    (hpush : t.delivery = .push) (did : Did) {c : String}
+    (hc : c ∈ t.collections) :
+    ∃ k ∈ scopeFilters t.scope t.collections did,
+      k.collection = c ∧ k.value = did := by
+  obtain ⟨f, hf⟩ := h hpush
+  rw [hf]
+  refine ⟨⟨c, f, did⟩, ?_, rfl, rfl⟩
+  simp [scopeFilters, hc]
 
 end ScopeTemplates

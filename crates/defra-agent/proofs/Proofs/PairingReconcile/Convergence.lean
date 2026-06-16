@@ -164,22 +164,27 @@ old `(a, f1)`:
   - applying teardown-then-install drives that address's actual replicator from
     `(a, f1)` to `(a, f2)`.
 
-The hypothesis `f1 ≠ f2` is satisfiable (e.g. `some k` vs `none`, or two distinct
-keys), and is what makes `(a, f1) ≠ (a, f2)` — the two identities distinct. -/
+The hypothesis `f1 ≠ f2` is satisfiable (e.g. `∅` vs a singleton
+per-collection filter, or two distinct filter maps), and is what makes
+`(a, f1) ≠ (a, f2)` — the two identities distinct. -/
 
 /-- `f1 ≠ f2` makes the two replicator identities on the same address distinct.
 Sanity that the central hypothesis has teeth. -/
 theorem filter_change_distinct_identity
-    {a : String} {f1 f2 : Option ScopeFilterKey} (hf : f1 ≠ f2) :
+    {a : String} {f1 f2 : ReplicatorFilter} (hf : f1 ≠ f2) :
     ((a, f1) : ReplicatorId) ≠ (a, f2) := by
   intro h
   exact hf (by injection h)
 
 /-- A concrete witness that the `f1 ≠ f2` hypothesis is satisfiable: an
 unfiltered replicator and a filtered one on the same address are distinct. -/
-theorem filter_change_hypothesis_satisfiable (a : String) (k : ScopeFilterKey) :
-    ((a, none) : ReplicatorId) ≠ (a, some k) :=
-  filter_change_distinct_identity (by simp)
+theorem filter_change_hypothesis_satisfiable (a : String) (k : CollectionFilterKey) :
+    ((a, (∅ : ReplicatorFilter)) : ReplicatorId) ≠ (a, ({k} : ReplicatorFilter)) := by
+  apply filter_change_distinct_identity
+  intro h
+  have hk : k ∈ ({k} : ReplicatorFilter) := Finset.mem_singleton_self k
+  rw [← h] at hk
+  exact Finset.not_mem_empty k hk
 
 /-- **Filter change forces reinstall.** When desired carries `(a, f2)` and actual
 still carries the managed old identity `(a, f1)` with `f1 ≠ f2`, the diff is
@@ -191,7 +196,7 @@ Every conjunct is quantified over the real transition relation: the two
 guards from the hypotheses, so this is not a vacuous restatement of the goal. -/
 theorem filter_change_forces_reinstall
     {s : ReconcileState} {desired : PairingDesired}
-    {a : String} {f1 f2 : Option ScopeFilterKey}
+    {a : String} {f1 f2 : ReplicatorFilter}
     (h_desired : s.desired = some desired)
     (hf : f1 ≠ f2)
     (h_new_desired : ((a, f2) : ReplicatorId) ∈ desired.replicators)

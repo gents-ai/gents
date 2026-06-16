@@ -17,6 +17,9 @@ use defra_agent::agent::p2p_reconcile::discovery::{
     decide_join_admission, derive_registry_desired, reconcile_discovery_tick, DiscoveredEntry,
     DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
+use defra_agent::agent::p2p_reconcile::network::{
+    derive_network_desired, reconcile_network_tick, NetworkEndpointEntry, NetworkStore,
+};
 
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     DiscoveredEntry {
@@ -179,6 +182,144 @@ fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow
         status: status.to_string(),
         updated_at: Some(Utc::now() - age),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Signed network-membership materialization (Lean §9
+// `deriveNetworkDesired` / `decideMaterializable`).
+//
+// The Rust materializer receives only entries that already passed the
+// admin-signed-network, active-admin-signed-membership, fresh-member-signed
+// endpoint gate. These tests fence the executable derivation/reconciliation
+// layer against that model surface.
+// ---------------------------------------------------------------------------
+
+fn network_entry(peer: &str, did: &str) -> NetworkEndpointEntry {
+    NetworkEndpointEntry {
+        peer_id: peer.to_string(),
+        agent_did: did.to_string(),
+        address: format!("/ip4/1/tcp/1/p2p/{peer}"),
+    }
+}
+
+/// Mirrors Lean `mem_deriveNetworkDesired` plus the implementation's peer-id
+/// materialization boundary: every materializable non-self endpoint with a
+/// non-empty peer id becomes a network-owned desired peer id.
+#[test]
+fn derive_network_desired_matches_materializable_non_self_entries() {
+    let entries = vec![
+        network_entry("peer-self", "did:key:self"),
+        network_entry("peer-a", "did:key:a"),
+        network_entry("", "did:key:blank-peer"),
+        network_entry("peer-b", "did:key:b"),
+    ];
+
+    let desired = derive_network_desired("did:key:self", &entries);
+
+    assert_eq!(
+        desired,
+        BTreeSet::from(["peer-a".to_string(), "peer-b".to_string()])
+    );
+}
+
+struct NetworkPartitionStore {
+    self_did: String,
+    entries: Vec<NetworkEndpointEntry>,
+    network_owned: Mutex<BTreeSet<String>>,
+    non_network_owned: BTreeSet<String>,
+    deletes: Mutex<Vec<String>>,
+    upserts: Mutex<Vec<String>>,
+}
+
+impl NetworkPartitionStore {
+    fn new(
+        self_did: &str,
+        entries: Vec<NetworkEndpointEntry>,
+        network_owned: &[&str],
+        non_network_owned: &[&str],
+    ) -> Self {
+        Self {
+            self_did: self_did.to_string(),
+            entries,
+            network_owned: Mutex::new(network_owned.iter().map(|s| s.to_string()).collect()),
+            non_network_owned: non_network_owned.iter().map(|s| s.to_string()).collect(),
+            deletes: Mutex::new(Vec::new()),
+            upserts: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl NetworkStore for NetworkPartitionStore {
+    async fn self_did(&self) -> Result<String> {
+        Ok(self.self_did.clone())
+    }
+
+    async fn load_materializable_entries(&self) -> Result<Vec<NetworkEndpointEntry>> {
+        Ok(self.entries.clone())
+    }
+
+    async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
+        Ok(self.network_owned.lock().unwrap().clone())
+    }
+
+    async fn list_non_network_owned_peers(&self) -> Result<BTreeSet<String>> {
+        Ok(self.non_network_owned.clone())
+    }
+
+    async fn upsert_network_desired(&self, entry: &NetworkEndpointEntry) -> Result<()> {
+        self.network_owned
+            .lock()
+            .unwrap()
+            .insert(entry.peer_id.clone());
+        self.upserts.lock().unwrap().push(entry.peer_id.clone());
+        Ok(())
+    }
+
+    async fn delete_network_desired(&self, peer_id: &str) -> Result<()> {
+        self.network_owned.lock().unwrap().remove(peer_id);
+        self.deletes.lock().unwrap().push(peer_id.to_string());
+        Ok(())
+    }
+}
+
+/// Mirrors Lean `materializable_is_derived`, `materializable_witness`, and the
+/// ownership partition used by the Rust reconciler: materializable network
+/// peers are upserted, stale network-owned peers are retracted, and non-network
+/// operator/data-plane intent blocks network ownership for the same peer.
+#[tokio::test]
+async fn network_reconcile_materializes_only_unblocked_network_peers() {
+    let store = NetworkPartitionStore::new(
+        "did:key:self",
+        vec![
+            network_entry("peer-self", "did:key:self"),
+            network_entry("peer-a", "did:key:a"),
+            network_entry("peer-b", "did:key:b"),
+        ],
+        &["peer-stale"],
+        &["peer-a"],
+    );
+
+    let outcome = reconcile_network_tick(&store).await.expect("network tick");
+
+    assert_eq!(outcome.upserted, BTreeSet::from(["peer-b".to_string()]));
+    assert_eq!(
+        outcome.retracted,
+        BTreeSet::from(["peer-stale".to_string()])
+    );
+    assert_eq!(*store.upserts.lock().unwrap(), vec!["peer-b".to_string()]);
+    assert_eq!(
+        *store.deletes.lock().unwrap(),
+        vec!["peer-stale".to_string()]
+    );
+    assert!(
+        !store
+            .upserts
+            .lock()
+            .unwrap()
+            .contains(&"peer-a".to_string()),
+        "non-network-owned peer-a must block network materialization"
+    );
 }
 
 const STALE_AFTER: Duration = Duration::from_secs(90);

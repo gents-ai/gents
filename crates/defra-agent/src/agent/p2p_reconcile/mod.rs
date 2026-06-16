@@ -26,8 +26,9 @@ pub use discovery::{
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
-    reconcile_peer_tick, run_pairing_reconciler, update_applied_after_success,
-    GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome, PAIRING_SWEEP_INTERVAL,
+    merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
+    update_applied_after_success, GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome,
+    PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{

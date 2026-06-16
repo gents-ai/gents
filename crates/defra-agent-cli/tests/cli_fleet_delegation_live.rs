@@ -102,7 +102,7 @@ struct CompletedChild {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
-async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
+async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
         tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet live e2e");
         return Ok(());

@@ -10,10 +10,11 @@ use super::templates::PairingFilters;
 ///
 /// `replicator_filter` is the per-pairing scope filter resolved from the
 /// pairing's scope template (empty == unfiltered). It is part of the
-/// *replicator identity*: every replicator in this pairing carries this filter,
-/// so a changed filter makes the `(address, filter)` identity distinct and
-/// forces a teardown+install — mirroring the Lean `PairingReconcile.ReplicatorId
-/// = (address, Option filter)` and `filter_change_forces_reinstall`.
+/// *replicator identity*: every replicator in this pairing carries this
+/// per-collection filter map, so a changed map makes the `(address, filters)`
+/// identity distinct and forces a teardown+install — mirroring the Lean
+/// `PairingReconcile.ReplicatorId = (address, ReplicatorFilter)` and
+/// `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
     /// Collections to subscribe to (gossip). Empty for `Push` templates, which
@@ -39,14 +40,15 @@ impl PairingDesired {
 /// Actual pairing state read from the remote.
 ///
 /// BOUNDARY (Lean `PairingReconcile.PairingActual`): the model keys actual
-/// replicators on the full `ReplicatorId = (address, Option filter)`, but the
-/// remote read here observes the transport *address only* — the installed scope
-/// filter is not recoverable from the peer. The `(address, filter)` identity is
-/// therefore fenced on the reconciler-owned side: `PairingApplied.replicator_filter`
-/// records the filter last installed, and `compute_owned_pairing_diff` compares
-/// desired-vs-applied filter to force a reinstall on change (Lean
-/// `filter_change_forces_reinstall`). Actual carries no `replicator_filter` by
-/// design; do not add one expecting to read it back from the remote.
+/// replicators on the full `ReplicatorId = (address, ReplicatorFilter)`, but
+/// the remote read here observes the transport *address only* — the installed
+/// scope filters are not recoverable from the peer. The `(address, filters)`
+/// identity is therefore fenced on the reconciler-owned side:
+/// `PairingApplied.replicator_filter` records the filter map last installed,
+/// and `compute_owned_pairing_diff` compares desired-vs-applied filters to
+/// force a reinstall on change (Lean `filter_change_forces_reinstall`). Actual
+/// carries no `replicator_filter` by design; do not add one expecting to read it
+/// back from the remote.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingActual {
     pub collections: BTreeSet<String>,
