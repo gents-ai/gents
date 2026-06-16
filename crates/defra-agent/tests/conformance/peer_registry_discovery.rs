@@ -18,8 +18,12 @@ use defra_agent::agent::p2p_reconcile::discovery::{
     DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
 use defra_agent::agent::p2p_reconcile::network::{
-    derive_network_desired, reconcile_network_tick, NetworkEndpointEntry, NetworkStore,
+    decide_v5_admission, derive_network_desired, reconcile_network_tick,
+    select_materializable_entries, NetworkEndpointEntry, NetworkStore, V5AdmissionClaim,
+    V5Rejection,
 };
+use defra_agent::identity::{AgentIdentity, KeyIdentity};
+use defra_agent_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     DiscoveredEntry {
@@ -66,6 +70,7 @@ struct PartitionStore {
     registry: Vec<DiscoveredEntry>,
     registry_owned: Mutex<BTreeSet<String>>,
     operator_owned: BTreeSet<String>,
+    network_owned: BTreeSet<String>,
     deletes: Mutex<Vec<String>>,
     upserts: Mutex<Vec<String>>,
 }
@@ -82,6 +87,7 @@ impl PartitionStore {
             registry,
             registry_owned: Mutex::new(registry_owned.iter().map(|s| s.to_string()).collect()),
             operator_owned: operator_owned.iter().map(|s| s.to_string()).collect(),
+            network_owned: BTreeSet::new(),
             deletes: Mutex::new(Vec::new()),
             upserts: Mutex::new(Vec::new()),
         }
@@ -101,6 +107,9 @@ impl DiscoveryStore for PartitionStore {
     }
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>> {
         Ok(self.operator_owned.clone())
+    }
+    async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
+        Ok(self.network_owned.clone())
     }
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
         self.registry_owned
@@ -168,12 +177,14 @@ async fn retraction_sound_removes_only_staled_registry_row() {
 }
 
 // ---------------------------------------------------------------------------
-// Signed-invite membership gate (Lean `signedByMember` / `isMember`).
+// v4 registry/TOFU admission arm (Lean `signedByMember` / `isMember`).
 //
-// These fence the registry-membership half of the join authorization gate via
-// the real `decide_join_admission` engine fn — the same predicate the CLI join
-// path calls. Token signature validity (`sigValid`) is checked separately at
-// token decode (defra-agent-protocol::pairing_token) and is out of this fence.
+// `decide_join_admission` is the registry-liveness arm modeled by `signedByMember`
+// in `PeerRegistryDiscovery/Transition.lean`. NOTE: the v5 CLI join path
+// (`enforce_v5_membership`) does NOT call this — v5 admission authority is the
+// admin-signed membership grant, fenced by `decide_v5_admission` / Lean
+// `admitsV5Join` (see the v5 section below). This arm survives only as the
+// transitional bootstrap; these tests fence it for that role.
 // ---------------------------------------------------------------------------
 
 fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow {
@@ -325,6 +336,289 @@ async fn network_reconcile_materializes_only_unblocked_network_peers() {
 const STALE_AFTER: Duration = Duration::from_secs(90);
 const FRESH: ChronoDuration = ChronoDuration::seconds(10);
 const STALE: ChronoDuration = ChronoDuration::seconds(200);
+
+// ---------------------------------------------------------------------------
+// The materialization GATE itself (Lean `admittedMember` / `memberSignedEndpoint`
+// / `revoke_drops_member` / `unsigned_membership_not_materialized` /
+// `forged_endpoint_not_materializable`).
+//
+// The `NetworkPartitionStore` above feeds the reconciler entries that have
+// *already* passed the gate, so it cannot fence the gate. These tests drive the
+// real `select_materializable_entries` — the executable embodiment of the gate,
+// factored out of `GraphqlNetworkStore::load_materializable_entries` — with
+// genuinely signed records, so a regression that dropped the `status=="active"`
+// filter or stubbed a signature check would fail here.
+// ---------------------------------------------------------------------------
+
+/// A fresh random signing identity. Loading registers the public key in the
+/// process-local registry, so any other identity can later `verify` its
+/// signatures by DID (the temp key file is no longer needed once loaded).
+fn gate_identity(label: &str) -> KeyIdentity {
+    let dir = tempfile::tempdir().expect("tempdir for gate key");
+    KeyIdentity::load_or_create(dir.path().join(format!("{label}.key")), None)
+        .expect("create gate identity")
+}
+
+async fn signed_network(admin: &KeyIdentity) -> NetworkRecord {
+    let mut rec = NetworkRecord {
+        network_id: "net-gate".to_string(),
+        admin_did: admin.did().to_string(),
+        display_name: "Gate Net".to_string(),
+        default_template: "network-control".to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        sig: Vec::new(),
+    };
+    rec.sig = admin
+        .sign(&rec.signing_payload())
+        .await
+        .expect("sign network");
+    rec
+}
+
+async fn signed_membership(
+    admin: &KeyIdentity,
+    network_id: &str,
+    member_did: &str,
+    status: &str,
+) -> MembershipRecord {
+    let mut rec = MembershipRecord {
+        network_id: network_id.to_string(),
+        member_did: member_did.to_string(),
+        status: status.to_string(),
+        granted_at: Utc::now().to_rfc3339(),
+        revoked_at: String::new(),
+        sig: Vec::new(),
+    };
+    rec.sig = admin
+        .sign(&rec.signing_payload())
+        .await
+        .expect("sign membership");
+    rec
+}
+
+async fn signed_endpoint(member: &KeyIdentity, age: ChronoDuration) -> EndpointRecord {
+    let mut rec = EndpointRecord {
+        did: member.did().to_string(),
+        node_id: "peer-node-id".to_string(),
+        address: "/ip4/1/tcp/1/p2p/peer-node-id".to_string(),
+        updated_at: (Utc::now() - age).to_rfc3339(),
+        sig: Vec::new(),
+    };
+    rec.sig = member
+        .sign(&rec.signing_payload())
+        .await
+        .expect("sign endpoint");
+    rec
+}
+
+/// Baseline: an active admin-signed membership whose member has a fresh
+/// member-signed endpoint IS materializable (`admittedMember` ∧
+/// `memberSignedEndpoint`). Without this the negative tests below could pass
+/// vacuously.
+#[tokio::test]
+async fn gate_admits_active_signed_member_with_fresh_endpoint() {
+    let admin = gate_identity("gate-admit-admin");
+    let member = gate_identity("gate-admit-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert_eq!(out.len(), 1, "valid active member must materialize");
+    assert_eq!(out[0].agent_did, member.did());
+    assert_eq!(out[0].peer_id, "peer-node-id");
+}
+
+/// Mirrors `revoke_drops_member`: a `status != "active"` (revoked) membership
+/// does not materialize even with a perfectly fresh signed endpoint.
+#[tokio::test]
+async fn gate_excludes_revoked_member() {
+    let admin = gate_identity("gate-revoke-admin");
+    let member = gate_identity("gate-revoke-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "revoked").await;
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert!(
+        out.is_empty(),
+        "revoked membership must not materialize (Lean revoke_drops_member)"
+    );
+}
+
+/// Mirrors `unsigned_membership_not_materialized`: a membership whose admin
+/// signature does not verify is dropped, even if active with a fresh endpoint.
+#[tokio::test]
+async fn gate_excludes_forged_membership_signature() {
+    let admin = gate_identity("gate-forgemem-admin");
+    let member = gate_identity("gate-forgemem-member");
+    let net = signed_network(&admin).await;
+    let mut mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    mem.sig = vec![0u8; 64]; // tamper: no longer a valid admin signature
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert!(
+        out.is_empty(),
+        "membership with invalid admin signature must not materialize"
+    );
+}
+
+/// Mirrors `forged_endpoint_not_materializable`: a valid active membership whose
+/// endpoint binding signature does not verify is dropped.
+#[tokio::test]
+async fn gate_excludes_forged_endpoint_signature() {
+    let admin = gate_identity("gate-forgeep-admin");
+    let member = gate_identity("gate-forgeep-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    let mut ep = signed_endpoint(&member, FRESH).await;
+    ep.sig = vec![0u8; 64]; // tamper: no longer a valid member binding signature
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert!(
+        out.is_empty(),
+        "endpoint with invalid member signature must not materialize"
+    );
+}
+
+/// A stale endpoint (heartbeat lapsed) is not materializable even for an active
+/// signed member — the freshness arm of `memberSignedEndpoint`.
+#[tokio::test]
+async fn gate_excludes_stale_endpoint() {
+    let admin = gate_identity("gate-stale-admin");
+    let member = gate_identity("gate-stale-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    let ep = signed_endpoint(&member, STALE).await;
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert!(out.is_empty(), "stale endpoint must not materialize");
+}
+
+/// A network root whose admin signature does not verify materializes NOTHING —
+/// the `validNetwork` precondition of `admittedMember`.
+#[tokio::test]
+async fn gate_returns_empty_for_invalid_network_signature() {
+    let admin = gate_identity("gate-forgenet-admin");
+    let member = gate_identity("gate-forgenet-member");
+    let mut net = signed_network(&admin).await;
+    net.sig = vec![0u8; 64]; // tamper the network root signature
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+        .await
+        .expect("gate");
+
+    assert!(
+        out.is_empty(),
+        "invalid network signature must materialize nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// v5 signed-invite join admission (Lean §13 `admitsV5Join`).
+//
+// `decide_v5_admission` is the structural + signature + grantee authority the
+// CLI join path (`enforce_v5_membership`) actually enforces for a v5 invite —
+// the executable mirror of `admitsV5Join`. These tests fence each negative arm
+// of the Lean predicate. (Replay / single-use of the nonce is the separate
+// `replay_rejected` arm, exercised end-to-end in `cli_p2p.rs`.)
+// ---------------------------------------------------------------------------
+
+/// A fully valid admin-issued claim for an active admin-signed grant naming the
+/// joiner. The non-vacuity baseline (Lean `v5_admits_witness`).
+fn valid_v5_claim<'a>() -> V5AdmissionClaim<'a> {
+    V5AdmissionClaim {
+        issuer_did: "did:key:admin",
+        joiner_did: "did:key:member",
+        network_admin_did: "did:key:admin",
+        network_sig_valid: true,
+        network_id_consistent: true,
+        grant_member_did: "did:key:member",
+        grant_status: "active",
+        grant_sig_valid: true,
+    }
+}
+
+#[test]
+fn v5_admits_valid_admin_issued_grant() {
+    assert_eq!(decide_v5_admission(&valid_v5_claim()), Ok(()));
+}
+
+/// Mirrors `v5_non_admin_issuer_rejected`: only admin-issued v5 invites admit.
+#[test]
+fn v5_rejects_non_admin_issuer() {
+    let mut c = valid_v5_claim();
+    c.issuer_did = "did:key:not-the-admin";
+    assert_eq!(decide_v5_admission(&c), Err(V5Rejection::IssuerNotAdmin));
+}
+
+/// Mirrors `v5_invalid_network_sig_rejected`.
+#[test]
+fn v5_rejects_invalid_network_signature() {
+    let mut c = valid_v5_claim();
+    c.network_sig_valid = false;
+    assert_eq!(
+        decide_v5_admission(&c),
+        Err(V5Rejection::InvalidNetworkSignature)
+    );
+}
+
+/// The deterministic-id / token-network-grant agreement arm.
+#[test]
+fn v5_rejects_inconsistent_network_id() {
+    let mut c = valid_v5_claim();
+    c.network_id_consistent = false;
+    assert_eq!(
+        decide_v5_admission(&c),
+        Err(V5Rejection::InconsistentNetworkId)
+    );
+}
+
+/// Mirrors the `active` arm of `admittedMember` (revoke ⇒ not admitted).
+#[test]
+fn v5_rejects_revoked_grant() {
+    let mut c = valid_v5_claim();
+    c.grant_status = "revoked";
+    assert_eq!(decide_v5_admission(&c), Err(V5Rejection::GrantNotActive));
+}
+
+/// Mirrors `v5_forged_grant_rejected`: an unsigned/forged grant is not an
+/// `admittedMember`.
+#[test]
+fn v5_rejects_invalid_grant_signature() {
+    let mut c = valid_v5_claim();
+    c.grant_sig_valid = false;
+    assert_eq!(
+        decide_v5_admission(&c),
+        Err(V5Rejection::InvalidGrantSignature)
+    );
+}
+
+/// Mirrors `v5_wrong_grantee_rejected`: the grant must name the joining node.
+#[test]
+fn v5_rejects_wrong_grantee() {
+    let mut c = valid_v5_claim();
+    c.grant_member_did = "did:key:someone-else";
+    assert_eq!(decide_v5_admission(&c), Err(V5Rejection::WrongGrantee));
+}
 
 /// Mirrors the TOFU bootstrap arm: an empty registry (or one holding only our
 /// own self-registration row) admits any signed invite.

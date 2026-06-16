@@ -517,4 +517,79 @@ theorem decideMaterializable_agrees (s : NetworkState) (ep : Endpoint) :
   unfold decideMaterializable
   exact decide_eq_true_iff
 
+/-! ## §13 v5 signed-invite join admission
+
+The runtime join gate (`enforce_v5_membership`, which delegates to the fenced
+`decide_v5_admission` in `agent/p2p_reconcile/network.rs`) authorizes a join from
+a v5 `InviteToken`. The admission authority is the admin-signed `Membership`
+grant carried IN the token (design spec §4/§13: `Membership` is the SOLE
+admission authority) — NOT the v4 registry/TOFU arm modeled by `signedByMember`
+in `PeerRegistryDiscovery/Transition.lean`. That arm survives only as the
+transitional bootstrap; the v5 gate the runtime enforces is THIS predicate, so it
+must be the one fenced.
+
+A v5 admission claim. `networkSigValid` folds the token's signed-network-root
+verification and the grant's `adminSigValid` folds its admin-signature
+verification; `networkIdConsistent` folds the deterministic-id recompute plus the
+token/network/grant `network_id` agreement performed by the runtime. -/
+structure V5JoinClaim where
+  issuerDid : Did
+  joinerDid : Did
+  networkSigValid : Bool
+  networkIdConsistent : Bool
+  grant : Membership
+  deriving DecidableEq, Repr
+
+/-- v5 join is admitted iff: the issuer IS the network admin (admin-issued only,
+v1); the signed network root verifies; the network id is consistent; the carried
+grant makes the holder an `admittedMember` (active, admin-signed, in a valid
+network); and the grant names the joiner as its member. Replay / single-use of
+the invite nonce is enforced separately (Rust `consume_invite_nonce`; modeled by
+`admitsJoin`'s `replay_rejected` over the nonce ledger) — this predicate is the
+structural + signature + grantee authority. -/
+def admitsV5Join (n : Network) (c : V5JoinClaim) : Prop :=
+  c.issuerDid = n.adminDid ∧
+    c.networkSigValid = true ∧
+    c.networkIdConsistent = true ∧
+    admittedMember n c.grant ∧
+    c.grant.memberDid = c.joinerDid
+
+instance (n : Network) (c : V5JoinClaim) : Decidable (admitsV5Join n c) := by
+  unfold admitsV5Join; infer_instance
+
+/-- A non-admin issuer is rejected: only admin-issued v5 invites admit (the v1
+issuer policy). The token proves the grantee; this fences the issuer. -/
+theorem v5_non_admin_issuer_rejected (n : Network) (c : V5JoinClaim)
+    (h : c.issuerDid ≠ n.adminDid) : ¬ admitsV5Join n c := fun hc => h hc.1
+
+/-- A forged/unsigned grant — one that is not an `admittedMember` (invalid
+network, wrong-network or unsigned membership, or revoked) — is rejected. -/
+theorem v5_forged_grant_rejected (n : Network) (c : V5JoinClaim)
+    (h : ¬ admittedMember n c.grant) : ¬ admitsV5Join n c := fun hc => h hc.2.2.2.1
+
+/-- A grant for a DID other than the joiner is rejected: the carried grant must
+name THIS node as its member (the runtime checks `grant.member_did == local`). -/
+theorem v5_wrong_grantee_rejected (n : Network) (c : V5JoinClaim)
+    (h : c.grant.memberDid ≠ c.joinerDid) : ¬ admitsV5Join n c := fun hc => h hc.2.2.2.2
+
+/-- An invalid signed network root is rejected. -/
+theorem v5_invalid_network_sig_rejected (n : Network) (c : V5JoinClaim)
+    (h : c.networkSigValid = false) : ¬ admitsV5Join n c := by
+  intro hc
+  have hv : c.networkSigValid = true := hc.2.1
+  rw [h] at hv
+  simp at hv
+
+/-- Non-vacuity: a fully valid admin-issued claim for an active admin-signed
+grant naming the joiner IS admitted, so the rejection theorems above are not
+trivially over an empty predicate. -/
+theorem v5_admits_witness :
+    ∃ (n : Network) (c : V5JoinClaim), admitsV5Join n c := by
+  refine ⟨{ networkId := "net", adminDid := "admin", adminSigValid := true },
+          { issuerDid := "admin", joinerDid := "member",
+            networkSigValid := true, networkIdConsistent := true,
+            grant := { networkId := "net", memberDid := "member",
+                       active := true, adminSigValid := true } }, ?_⟩
+  exact ⟨rfl, rfl, rfl, ⟨rfl, ⟨rfl, rfl⟩, rfl⟩, rfl⟩
+
 end PeerRegistryDiscovery

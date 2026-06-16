@@ -290,6 +290,17 @@ pub trait DiscoveryStore: Send + Sync {
     /// materialized in the registry partition.
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>>;
 
+    /// Peers that currently have a **network-owned** desired row (`source =
+    /// "network"`, materialized by the membership reconciler). Read-only:
+    /// discovery *excludes* these so the registry-discovery partition never
+    /// collides with the network-membership mesh on the unique `peer_id` index.
+    /// This is the discovery-side mirror of the network reconciler's
+    /// `list_non_network_owned_peers` exclusion — the two partitions yield to
+    /// each other symmetrically. A peer that is both a network member and a
+    /// registry heartbeat publisher (the normal trusted-fleet case) is therefore
+    /// owned by exactly one source.
+    async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>>;
+
     /// Upsert a **registry-owned** desired row for `entry`, stamping the offered
     /// scope template (chosen by [`DiscoveredEntry::chosen_template`]) and
     /// populating the template's collection set plus the replicator addresses the
@@ -324,12 +335,21 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
         .list_operator_owned_peers()
         .await
         .context("list operator-owned desired peers")?;
-    // Operator intent wins: realize the `operatorDesired ∪ registryDesired`
-    // union under the single-row-per-peer unique index by excluding any peer the
-    // operator already authored. We never read further into or mutate those
-    // rows — exclusion only.
+    let network_owned = store
+        .list_network_owned_peers()
+        .await
+        .context("list network-owned desired peers")?;
+    // Operator AND network intent win: realize the `operatorDesired ∪
+    // networkDesired ∪ registryDesired` union under the single-row-per-peer
+    // unique index by excluding any peer another source already authored. We
+    // never read further into or mutate those rows — exclusion only. Excluding
+    // the network partition is the symmetric counterpart to the network
+    // reconciler's `list_non_network_owned_peers`; without it a peer that is
+    // both a network member and a registry heartbeat publisher collides on the
+    // unique `peer_id` index (the index then rejects one writer per sweep).
+    let blocked: BTreeSet<String> = operator_owned.union(&network_owned).cloned().collect();
     let desired = derived
-        .difference(&operator_owned)
+        .difference(&blocked)
         .cloned()
         .collect::<BTreeSet<String>>();
     let existing = store
@@ -575,6 +595,11 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
 
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>> {
         self.list_peers_by_source(SOURCE_OPERATOR).await
+    }
+
+    async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
+        self.list_peers_by_source(super::network::SOURCE_NETWORK)
+            .await
     }
 
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
@@ -993,6 +1018,9 @@ mod tests {
         /// Operator-owned rows. If discovery ever calls a mutation that names a
         /// peer in here, the test asserts it was NOT this set being mutated.
         operator_owned: BTreeSet<String>,
+        /// Network-membership-owned rows (`source = "network"`). Like
+        /// `operator_owned`, read-only and used purely for exclusion.
+        network_owned: BTreeSet<String>,
         upserts: Mutex<Vec<String>>,
         deletes: Mutex<Vec<String>>,
         /// (peer_id, stamped template id) for each upsert, so tests can assert
@@ -1012,10 +1040,18 @@ mod tests {
                 registry,
                 registry_owned: Mutex::new(registry_owned.iter().map(|s| s.to_string()).collect()),
                 operator_owned: operator_owned.iter().map(|s| s.to_string()).collect(),
+                network_owned: BTreeSet::new(),
                 upserts: Mutex::new(Vec::new()),
                 deletes: Mutex::new(Vec::new()),
                 upsert_templates: Mutex::new(Vec::new()),
             }
+        }
+
+        /// Seed the network-owned partition (peers the membership reconciler
+        /// already owns), which discovery must exclude.
+        fn with_network_owned(mut self, peers: &[&str]) -> Self {
+            self.network_owned = peers.iter().map(|s| s.to_string()).collect();
+            self
         }
     }
 
@@ -1036,6 +1072,11 @@ mod tests {
             // Models `filter: { source: { _eq: "operator" } }` — read-only,
             // used for exclusion (operator intent wins).
             Ok(self.operator_owned.clone())
+        }
+        async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
+            // Models `filter: { source: { _eq: "network" } }` — read-only,
+            // used for exclusion (network membership owns the peer).
+            Ok(self.network_owned.clone())
         }
         async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()> {
             // Mirror the GraphQL store: stamp the chosen offered template on the
@@ -1092,6 +1133,40 @@ mod tests {
             .unwrap()
             .iter()
             .any(|p| store.operator_owned.contains(p)));
+    }
+
+    /// Regression for the cross-source collision on the unique `peer_id` index:
+    /// a peer that is BOTH a live registry entry AND already network-membership-
+    /// owned must NOT be materialized as a `source = "registry"` row by
+    /// discovery, or the upsert would collide with the existing `source =
+    /// "network"` row. Discovery must exclude the network partition symmetrically
+    /// with how the network reconciler excludes the registry partition.
+    #[tokio::test]
+    async fn discovery_excludes_network_owned_peers() {
+        // peerNet is a live registry entry but is already network-owned; peerReg
+        // is a live registry entry owned by no other source.
+        let store = FakeStore::new(
+            "self",
+            vec![entry("peerNet", true), entry("peerReg", true)],
+            /* registry_owned */ &[],
+            /* operator_owned */ &[],
+        )
+        .with_network_owned(&["peerNet"]);
+
+        let outcome = reconcile_discovery_tick(&store).await.expect("tick");
+
+        // Only the unowned peer is materialized; the network-owned peer is
+        // excluded (no collision on the unique peer_id index).
+        assert_eq!(outcome.upserted, BTreeSet::from(["peerReg".to_string()]));
+        assert!(
+            !store
+                .upserts
+                .lock()
+                .unwrap()
+                .contains(&"peerNet".to_string()),
+            "network-owned peerNet must not be materialized as a registry row"
+        );
+        assert!(outcome.retracted.is_empty());
     }
 
     #[tokio::test]

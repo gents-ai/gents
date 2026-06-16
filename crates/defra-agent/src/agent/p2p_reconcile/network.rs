@@ -45,6 +45,195 @@ pub fn derive_network_desired(
         .collect()
 }
 
+/// The network-membership materialization gate, factored out of
+/// [`GraphqlNetworkStore::load_materializable_entries`] so it is testable
+/// directly against signed records (the GraphQL store only adds the query +
+/// row→record parsing on top).
+///
+/// Returns the materializable endpoints: each backed by a valid admin-signed
+/// `AgentNetwork`, an **active** admin-signed `NetworkMembership`, and a fresh
+/// member-signed `PeerEndpoint`. This is the executable embodiment of Lean
+/// `decideMaterializable` / `admittedMember` / `memberSignedEndpoint`
+/// (`Proofs/PeerRegistryDiscovery/NetworkMembership.lean`): an invalid network
+/// signature yields the empty set; a revoked (`status != "active"`) or forged
+/// membership, or a forged/stale endpoint, each drops that member. `verify_record`
+/// is the signature check; `now`/`stale_after` parameterize freshness so callers
+/// (and conformance) control the clock.
+pub async fn select_materializable_entries(
+    identity: &dyn AgentIdentity,
+    network: &NetworkRecord,
+    memberships: &[MembershipRecord],
+    endpoints: &[EndpointRecord],
+    now: DateTime<Utc>,
+    stale_after: Duration,
+) -> Result<Vec<NetworkEndpointEntry>> {
+    // Forged/invalid network root → nothing is materializable (mirrors the Lean
+    // `validNetwork` precondition of `admittedMember`).
+    if !verify_record(
+        identity,
+        &network.admin_did,
+        &network.signing_payload(),
+        &network.sig,
+        "AgentNetwork",
+    )
+    .await?
+    {
+        tracing::warn!(
+            network_id = %network.network_id,
+            admin_did = %network.admin_did,
+            "network materializer ignoring AgentNetwork with invalid admin signature"
+        );
+        return Ok(Vec::new());
+    }
+
+    let endpoints_by_did = endpoints
+        .iter()
+        .map(|record| (record.did.clone(), record))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut out = Vec::new();
+    for membership in memberships {
+        // Revoked or wrong-network membership: not an admitted member.
+        if membership.network_id != network.network_id || membership.status.trim() != "active" {
+            continue;
+        }
+        // Membership must be admin-signed (mirrors `adminSignedMembership`).
+        if !verify_record(
+            identity,
+            &network.admin_did,
+            &membership.signing_payload(),
+            &membership.sig,
+            "NetworkMembership",
+        )
+        .await?
+        {
+            tracing::warn!(
+                member_did = %membership.member_did,
+                "network materializer skipped membership with invalid admin signature"
+            );
+            continue;
+        }
+        let Some(endpoint) = endpoints_by_did.get(&membership.member_did) else {
+            continue;
+        };
+        if !endpoint_is_fresh(&endpoint.updated_at, now, stale_after) {
+            continue;
+        }
+        // Endpoint binding must be member-signed (mirrors `memberSignedEndpoint`).
+        if !verify_record(
+            identity,
+            &endpoint.did,
+            &endpoint.signing_payload(),
+            &endpoint.sig,
+            "PeerEndpoint",
+        )
+        .await?
+        {
+            tracing::warn!(
+                did = %endpoint.did,
+                "network materializer skipped endpoint with invalid member signature"
+            );
+            continue;
+        }
+        if endpoint.node_id.trim().is_empty() || endpoint.address.trim().is_empty() {
+            continue;
+        }
+        out.push(NetworkEndpointEntry {
+            peer_id: endpoint.node_id.clone(),
+            agent_did: endpoint.did.clone(),
+            address: endpoint.address.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Why a v5 join admission was rejected. Each variant is a negative arm of Lean
+/// `admitsV5Join` (`Proofs/PeerRegistryDiscovery/NetworkMembership.lean` §13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V5Rejection {
+    /// Issuer is not the network admin (admin-issued invites only, v1).
+    IssuerNotAdmin,
+    /// The signed `AgentNetwork` root did not verify.
+    InvalidNetworkSignature,
+    /// `network_id` is not the deterministic id, or token/network/grant disagree.
+    InconsistentNetworkId,
+    /// The grant is not `status == "active"` (revoked or otherwise).
+    GrantNotActive,
+    /// The grant's admin signature did not verify.
+    InvalidGrantSignature,
+    /// The grant names a member other than the joining node.
+    WrongGrantee,
+}
+
+impl V5Rejection {
+    pub fn reason(self) -> &'static str {
+        match self {
+            V5Rejection::IssuerNotAdmin => "issuer is not the network admin",
+            V5Rejection::InvalidNetworkSignature => "signed network root did not verify",
+            V5Rejection::InconsistentNetworkId => "network_id is inconsistent or not deterministic",
+            V5Rejection::GrantNotActive => "membership grant is not active",
+            V5Rejection::InvalidGrantSignature => "membership grant signature did not verify",
+            V5Rejection::WrongGrantee => {
+                "membership grant is for a different DID than the joining node"
+            }
+        }
+    }
+}
+
+/// Resolved inputs to the v5 join-admission decision. The caller (the CLI join
+/// path) performs the async signature verifications and the deterministic
+/// network-id recompute and passes the resolved booleans here, so the decision
+/// itself stays a pure, conformance-testable function.
+pub struct V5AdmissionClaim<'a> {
+    pub issuer_did: &'a str,
+    pub joiner_did: &'a str,
+    pub network_admin_did: &'a str,
+    /// The signed `AgentNetwork` root's admin signature verified.
+    pub network_sig_valid: bool,
+    /// `network.network_id == derive_network_id(admin, name)` AND the token's
+    /// and the grant's `network_id` all agree with it.
+    pub network_id_consistent: bool,
+    pub grant_member_did: &'a str,
+    pub grant_status: &'a str,
+    /// The grant's admin signature verified.
+    pub grant_sig_valid: bool,
+}
+
+/// Pure v5 join-admission decision — the executable mirror of Lean
+/// `admitsV5Join`. Admit iff: the issuer is the network admin (admin-issued
+/// only); the signed network root verifies; the network id is consistent; the
+/// carried grant is an active admin-signed membership for THIS network
+/// (`admittedMember`); and it names the joiner as its member. Single-use /
+/// replay of the invite nonce is enforced separately by the caller
+/// (`consume_invite_nonce`; Lean `replay_rejected`).
+///
+/// The check order matches the Lean conjunction so the rejection reasons line up
+/// with the model's negative theorems.
+pub fn decide_v5_admission(claim: &V5AdmissionClaim) -> Result<(), V5Rejection> {
+    if claim.issuer_did != claim.network_admin_did {
+        return Err(V5Rejection::IssuerNotAdmin);
+    }
+    if !claim.network_sig_valid {
+        return Err(V5Rejection::InvalidNetworkSignature);
+    }
+    if !claim.network_id_consistent {
+        return Err(V5Rejection::InconsistentNetworkId);
+    }
+    // `admittedMember` = validNetwork (network_sig_valid, above) ∧
+    // adminSignedMembership (grant_sig_valid + network_id agreement, above) ∧
+    // active.
+    if claim.grant_status.trim() != "active" {
+        return Err(V5Rejection::GrantNotActive);
+    }
+    if !claim.grant_sig_valid {
+        return Err(V5Rejection::InvalidGrantSignature);
+    }
+    if claim.grant_member_did != claim.joiner_did {
+        return Err(V5Rejection::WrongGrantee);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkTickOutcome {
     pub upserted: BTreeSet<String>,
@@ -237,23 +426,17 @@ impl NetworkStore for GraphqlNetworkStore {
                 rows.len()
             ),
         };
-        if !verify_record(
-            self.identity.as_ref(),
-            &network.admin_did,
-            &network.signing_payload(),
-            &network.sig,
-            "AgentNetwork",
-        )
-        .await?
-        {
-            tracing::warn!(
-                network_id = %network.network_id,
-                admin_did = %network.admin_did,
-                "network materializer ignoring AgentNetwork with invalid admin signature"
-            );
-            return Ok(Vec::new());
-        }
 
+        let memberships = rows::<MembershipRow>(&response, "NetworkMembership")?
+            .into_iter()
+            .filter_map(|row| match membership_record(&row) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, "network materializer skipped malformed NetworkMembership");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let endpoints = rows::<EndpointRow>(&response, "PeerEndpoint")?
             .into_iter()
             .filter_map(|row| match endpoint_record(&row) {
@@ -263,68 +446,17 @@ impl NetworkStore for GraphqlNetworkStore {
                     None
                 }
             })
-            .map(|record| (record.did.clone(), record))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Vec<_>>();
 
-        let now = Utc::now();
-        let mut out = Vec::new();
-        for row in rows::<MembershipRow>(&response, "NetworkMembership")? {
-            let membership = match membership_record(&row) {
-                Ok(record) => record,
-                Err(error) => {
-                    tracing::warn!(error = %error, "network materializer skipped malformed NetworkMembership");
-                    continue;
-                }
-            };
-            if membership.network_id != network.network_id || membership.status.trim() != "active" {
-                continue;
-            }
-            if !verify_record(
-                self.identity.as_ref(),
-                &network.admin_did,
-                &membership.signing_payload(),
-                &membership.sig,
-                "NetworkMembership",
-            )
-            .await?
-            {
-                tracing::warn!(
-                    member_did = %membership.member_did,
-                    "network materializer skipped membership with invalid admin signature"
-                );
-                continue;
-            }
-            let Some(endpoint) = endpoints.get(&membership.member_did) else {
-                continue;
-            };
-            if !endpoint_is_fresh(&endpoint.updated_at, now, super::intervals::stale_after()) {
-                continue;
-            }
-            if !verify_record(
-                self.identity.as_ref(),
-                &endpoint.did,
-                &endpoint.signing_payload(),
-                &endpoint.sig,
-                "PeerEndpoint",
-            )
-            .await?
-            {
-                tracing::warn!(
-                    did = %endpoint.did,
-                    "network materializer skipped endpoint with invalid member signature"
-                );
-                continue;
-            }
-            if endpoint.node_id.trim().is_empty() || endpoint.address.trim().is_empty() {
-                continue;
-            }
-            out.push(NetworkEndpointEntry {
-                peer_id: endpoint.node_id.clone(),
-                agent_did: endpoint.did.clone(),
-                address: endpoint.address.clone(),
-            });
-        }
-        Ok(out)
+        select_materializable_entries(
+            self.identity.as_ref(),
+            &network,
+            &memberships,
+            &endpoints,
+            Utc::now(),
+            super::intervals::stale_after(),
+        )
+        .await
     }
 
     async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
@@ -420,6 +552,16 @@ pub fn delete_network_desired_mutation(peer_id: &str) -> String {
     )
 }
 
+/// Verify a signed control-plane record. A signature that is cryptographically
+/// invalid OR malformed (wrong length, garbage bytes) is **not verified**: we
+/// return `Ok(false)` so the caller skips that single row, rather than
+/// propagating an error that would fail the whole materialization tick. A
+/// forged/corrupt row replicated into the control plane must not be able to halt
+/// the entire mesh — it is simply not materialized (fail-closed, per-row). The
+/// underlying `verify` returns `Err` for malformed signatures, so this mapping
+/// is what makes the call sites' warn-and-skip behavior actually hold for
+/// forged input (the executable embodiment of `unsigned_membership_not_materialized`
+/// / `forged_endpoint_not_materializable`).
 async fn verify_record(
     identity: &dyn AgentIdentity,
     signer_did: &str,
@@ -427,10 +569,17 @@ async fn verify_record(
     signature: &[u8],
     label: &str,
 ) -> Result<bool> {
-    identity
-        .verify(signer_did, payload, signature)
-        .await
-        .with_context(|| format!("verifying {label} signature for {signer_did}"))
+    match identity.verify(signer_did, payload, signature).await {
+        Ok(valid) => Ok(valid),
+        Err(error) => {
+            tracing::debug!(
+                error = %error,
+                signer_did = %signer_did,
+                "{label} signature unverifiable; treating as not verified"
+            );
+            Ok(false)
+        }
+    }
 }
 
 fn network_record(row: &NetworkRow) -> Result<NetworkRecord> {

@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use defra_agent::agent::p2p_reconcile::network::{decide_v5_admission, V5AdmissionClaim};
 use defra_agent::agent::p2p_reconcile::resolve_template;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::AgentIdentity;
-use defra_agent_protocol::network_token::{derive_network_id, MembershipRecord, NetworkRecord};
+use defra_agent_protocol::network_token::derive_network_id;
 use defra_agent_protocol::pairing_token::{
     check_freshness, decode, signing_payload, InviteToken, DEFAULT_INVITE_MAX_AGE,
 };
@@ -245,42 +246,66 @@ fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Re
     resolve_pairing_template(template)
 }
 
+/// Enforce v5 join admission: the runtime side of Lean `admitsV5Join`. The
+/// structural + signature + grantee decision is the conformance-fenced
+/// [`decide_v5_admission`]; this function resolves its inputs (the async
+/// signature verifications and the deterministic network-id recompute) and maps
+/// a rejection to a descriptive error. Single-use / replay of the nonce is
+/// enforced separately by [`consume_invite_nonce`].
 async fn enforce_v5_membership(identity: &dyn AgentIdentity, remote: &InviteToken) -> Result<()> {
-    if remote.issuer_did != remote.network.admin_did {
+    if remote.network.default_template.trim().is_empty() {
+        anyhow::bail!("signed AgentNetwork default_template is empty");
+    }
+
+    // Deterministic-id recompute + token/network/grant network_id agreement,
+    // folded into the decision's `network_id_consistent`.
+    let expected_network_id =
+        derive_network_id(&remote.network.admin_did, &remote.network.display_name);
+    let network_id_consistent = remote.network.network_id == expected_network_id
+        && remote.network_id == remote.network.network_id
+        && remote.grant.network_id == remote.network.network_id;
+
+    // Async signature verifications. An unverifiable/malformed signature counts
+    // as not-valid and surfaces as the matching rejection from the decision.
+    let network_sig_valid = identity
+        .verify(
+            &remote.network.admin_did,
+            &remote.network.signing_payload(),
+            &remote.network.sig,
+        )
+        .await
+        .unwrap_or(false);
+    let grant_sig_valid = identity
+        .verify(
+            &remote.network.admin_did,
+            &remote.grant.signing_payload(),
+            &remote.grant.sig,
+        )
+        .await
+        .unwrap_or(false);
+
+    let claim = V5AdmissionClaim {
+        issuer_did: &remote.issuer_did,
+        joiner_did: identity.did(),
+        network_admin_did: &remote.network.admin_did,
+        network_sig_valid,
+        network_id_consistent,
+        grant_member_did: &remote.grant.member_did,
+        grant_status: &remote.grant.status,
+        grant_sig_valid,
+    };
+
+    if let Err(rejection) = decide_v5_admission(&claim) {
         anyhow::bail!(
-            "pairing invite issuer {} is not the network admin {}; only admin-issued v5 invites are supported",
+            "v5 join admission rejected: {} (issuer={}, network_admin={}, network_id={}, grantee={}, joiner={})",
+            rejection.reason(),
             remote.issuer_did,
-            remote.network.admin_did
+            remote.network.admin_did,
+            remote.network.network_id,
+            remote.grant.member_did,
+            identity.did(),
         );
     }
-
-    validate_network_record(&remote.network)?;
-    validate_membership_record(&remote.network, &remote.grant, identity.did())?;
-
-    if remote.network_id != remote.network.network_id {
-        anyhow::bail!(
-            "pairing invite network_id {} does not match signed AgentNetwork {}",
-            remote.network_id,
-            remote.network.network_id
-        );
-    }
-
-    verify_signed_record(
-        identity,
-        &remote.network.admin_did,
-        &remote.network.signing_payload(),
-        &remote.network.sig,
-        "AgentNetwork",
-    )
-    .await?;
-    verify_signed_record(
-        identity,
-        &remote.network.admin_did,
-        &remote.grant.signing_payload(),
-        &remote.grant.sig,
-        "NetworkMembership",
-    )
-    .await?;
 
     tracing::debug!(
         network_id = %remote.network.network_id,
@@ -288,68 +313,6 @@ async fn enforce_v5_membership(identity: &dyn AgentIdentity, remote: &InviteToke
         member_did = %remote.grant.member_did,
         "v5 invite membership grant verified"
     );
-    Ok(())
-}
-
-fn validate_network_record(network: &NetworkRecord) -> Result<()> {
-    let expected = derive_network_id(&network.admin_did, &network.display_name);
-    if network.network_id != expected {
-        anyhow::bail!(
-            "signed AgentNetwork network_id {} is not the deterministic id for admin {} and name {:?}",
-            network.network_id,
-            network.admin_did,
-            network.display_name
-        );
-    }
-    if network.default_template.trim().is_empty() {
-        anyhow::bail!("signed AgentNetwork default_template is empty");
-    }
-    Ok(())
-}
-
-fn validate_membership_record(
-    network: &NetworkRecord,
-    grant: &MembershipRecord,
-    local_did: &str,
-) -> Result<()> {
-    if grant.network_id != network.network_id {
-        anyhow::bail!(
-            "NetworkMembership grant is for network {} but AgentNetwork is {}",
-            grant.network_id,
-            network.network_id
-        );
-    }
-    if grant.member_did != local_did {
-        anyhow::bail!(
-            "NetworkMembership grant is for {} but this node is {}",
-            grant.member_did,
-            local_did
-        );
-    }
-    if grant.status.trim() != "active" {
-        anyhow::bail!(
-            "NetworkMembership grant for {} is not active (status={})",
-            grant.member_did,
-            grant.status
-        );
-    }
-    Ok(())
-}
-
-async fn verify_signed_record(
-    identity: &dyn AgentIdentity,
-    signer_did: &str,
-    payload: &[u8],
-    signature: &[u8],
-    label: &str,
-) -> Result<()> {
-    let valid = identity
-        .verify(signer_did, payload, signature)
-        .await
-        .with_context(|| format!("verifying {label} signature for admin {signer_did}"))?;
-    if !valid {
-        anyhow::bail!("{label} signature invalid for admin {signer_did}");
-    }
     Ok(())
 }
 
