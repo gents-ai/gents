@@ -41,6 +41,7 @@ use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
     cancelled_result, current_tool_runtime_context, deadline_remaining, timeout_result,
+    unparseable_args_notice, unparseable_args_result,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
@@ -298,11 +299,12 @@ where
                                 // Dispatch the unwrapped tool inside our own
                                 // deadline/cancellation envelope, then bound the
                                 // model-facing result natively (#401) before
-                                // threading. An unparseable-args failure is rendered
-                                // by dispatch_tool into a `JsonError:` result, which
-                                // on_tool_result terminalizes failed(ArgumentInvalid)
-                                // and surfaces to the model so it re-emits corrected
-                                // arguments next turn.
+                                // threading. An unparseable-args failure comes back
+                                // wrapped in the collision-free unparseable-args
+                                // marker; on_tool_result strips it and terminalizes
+                                // failed(ArgumentInvalid), and we strip it here too
+                                // so the model sees only the clean notice and
+                                // re-emits corrected arguments next turn.
                                 let full_result = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
@@ -339,7 +341,11 @@ where
                                         )))?;
                                     }
                                 }
-                                bounded
+                                // The internal marker must never reach the model.
+                                match unparseable_args_notice(&bounded) {
+                                    Some(notice) => notice.to_string(),
+                                    None => bounded,
+                                }
                             }
                         };
 
@@ -576,12 +582,14 @@ async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> 
 }
 
 /// Render a tool dispatch outcome into the model-facing result string. A
-/// [`ToolError::UnparseableArgs`] becomes a `JsonError:`-prefixed message: the
-/// prefix routes it through `classify_runtime_failure` so the call terminalizes
-/// `failed(ArgumentInvalid)`, and the body tells the model whether its arguments
-/// were truncated (it hit the token cap) or malformed, so it re-emits a corrected
-/// tool call on its next turn instead of blindly repeating the broken payload.
-/// Every other error keeps the existing behavior of being surfaced as the result.
+/// [`ToolError::UnparseableArgs`] is wrapped in the collision-free
+/// [`unparseable_args_result`] marker: `on_tool_result` strips it, terminalizes
+/// the call `failed(ArgumentInvalid)`, and surfaces the (clean) notice to the
+/// model — which tells it whether its arguments were truncated (it hit the token
+/// cap) or malformed, so it re-emits a corrected tool call on its next turn
+/// instead of blindly repeating the broken payload. A bare human-readable prefix
+/// would risk colliding with a legitimate tool's output; the marker cannot. Every
+/// other error keeps the existing behavior of being surfaced as the result.
 fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
     match outcome {
         Ok(result) => result,
@@ -602,7 +610,9 @@ fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> Str
                      (escape any backslash as \\\\)"
                 }
             };
-            format!("JsonError: tool '{name}' arguments could not be parsed: {guidance}.")
+            unparseable_args_result(&format!(
+                "tool '{name}' arguments could not be parsed: {guidance}."
+            ))
         }
         Err(error) => error.to_string(),
     }

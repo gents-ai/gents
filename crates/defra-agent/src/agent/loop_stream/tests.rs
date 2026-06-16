@@ -1169,8 +1169,9 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
 }
 
 #[tokio::test]
-async fn dispatch_tool_renders_unparseable_args_as_jsonerror_result() {
+async fn dispatch_tool_marks_unparseable_args_with_collision_free_marker() {
     use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::tool_call_lifecycle::runtime::unparseable_args_notice;
 
     // A tool whose Args require fields the (valid-JSON) call omits, so the real
     // parse seam raises UnparseableArgs.
@@ -1204,27 +1205,30 @@ async fn dispatch_tool_renders_unparseable_args_as_jsonerror_result() {
 
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
     // Truncated mid-string: escape-only repair cannot complete it, so it stays
-    // UnparseableArgs and dispatch renders a `JsonError:` notice for the model
+    // UnparseableArgs and dispatch wraps a notice in the collision-free marker
     // (which on_tool_result maps to failed(ArgumentInvalid)) — not the tool output.
     let result = super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string()).await;
+    // The result must NOT use a forgeable human-readable prefix a real tool could emit.
     assert!(
-        result.starts_with("JsonError:"),
-        "unparseable args must render a JsonError: notice, got: {result}"
+        !result.starts_with("JsonError:"),
+        "must not key on a collidable prefix, got: {result}"
     );
+    let notice =
+        unparseable_args_notice(&result).expect("dispatch must wrap the notice in the marker");
     assert!(
-        !result.contains("ran") && result.contains("token limit"),
-        "the truncated notice must replace the tool output and guide the model to shorten, got: {result}"
+        !notice.contains("ran") && notice.contains("token limit"),
+        "the notice must replace the tool output and guide the model to shorten, got: {notice}"
     );
 }
 
 /// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,
-/// (b) surfaces a `JsonError:` notice to the model so it can re-emit corrected
-/// arguments next turn, and (c) terminalizes the started `AgentToolCall` as
-/// `failed`/`argumentInvalid` — via the ordinary `on_tool_result` path, since the
-/// `JsonError:` prefix routes through `classify_runtime_failure`. This preserves
-/// the tool-call liveness invariant (Lean `ToolExecution.live_call_reaches_terminal`,
-/// T5: the started call reaches a terminal state) using the proven `Running → Failed`
-/// edge with the existing `FailureClass::ArgumentInvalid`.
+/// (b) surfaces a clean notice to the model (the internal marker stripped) so it
+/// can re-emit corrected arguments next turn, and (c) terminalizes the started
+/// `AgentToolCall` as `failed`/`argumentInvalid` via `on_tool_result`. This
+/// preserves the tool-call liveness invariant (Lean
+/// `ToolExecution.live_call_reaches_terminal`, T5: the started call reaches a
+/// terminal state) using the proven `Running → Failed` edge with the existing
+/// `FailureClass::ArgumentInvalid`.
 #[tokio::test]
 async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     use crate::llm::tool::{Tool, ToolDefinition};
@@ -1290,7 +1294,7 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     futures::pin_mut!(stream);
 
     // The model is notified via a tool result (no error ends the stream); it sees
-    // the JsonError notice and answers on the next turn.
+    // the clean notice and answers on the next turn.
     let mut tool_results = Vec::new();
     while let Some(item) = stream.next().await {
         if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
@@ -1307,12 +1311,20 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
         }
     }
     assert!(
-        tool_results.iter().any(|r| r.contains("JsonError:")),
-        "the model must be notified with a JsonError result, got: {tool_results:?}"
+        tool_results
+            .iter()
+            .any(|r| r.contains("could not be parsed")),
+        "the model must be notified with a clean parse-failure notice, got: {tool_results:?}"
+    );
+    assert!(
+        !tool_results
+            .iter()
+            .any(|r| r.contains("__defra_agent_tool_lifecycle__")),
+        "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 
     // T5: the started call terminalized failed(argumentInvalid) — via on_tool_result
-    // recognizing the JsonError: prefix — instead of dangling in `running`.
+    // stripping the marker and forcing ArgumentInvalid — instead of dangling in `running`.
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
         .await;

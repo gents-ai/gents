@@ -23,28 +23,28 @@
 //!
 //! Before the fix, a parse failure there became `ToolError::JsonError`, which the
 //! dispatcher (`agent/loop_stream.rs`) turned into the *tool result string* fed
-//! back to the model — so the run did NOT fail and did NOT retry the inference;
-//! the model just saw an error and re-emitted the same oversized payload until
-//! the budget was spent, and NOTHING was posted to the status board.
+//! back to the model — so the model just saw a raw error and re-emitted the same
+//! oversized payload until the budget was spent, and NOTHING was posted.
 //!
-//! After the fix, `ToolDyn::call` first attempts a tolerant repair (escape raw
-//! lone backslashes, close a trailing-truncated object) and re-parses:
+//! After the fix, `ToolDyn::call` attempts an ESCAPE-ONLY repair (double raw lone
+//! backslashes; it never closes a truncated value) and re-parses:
 //!
 //!   * The single-backslash case is REPAIRED and the tool runs (the report
 //!     posts) — see [`post_status_json_single_backslash_escape_recovers_and_posts`].
-//!   * The truncation case cannot be repaired into the tool's `Args` (a required
-//!     field was cut off), so instead of being silently dropped it raises the
-//!     typed, retryable `ToolError::UnparseableArgs { kind: Truncated, .. }` so
-//!     the run re-attempts the inference — see
-//!     [`post_status_json_truncated_body_raises_retryable_signal`].
+//!   * The truncation case can NOT be completed by an escape-only repair, so it
+//!     is reported as `ToolError::UnparseableArgs { kind: Truncated, .. }` and is
+//!     never run — see [`post_status_json_truncated_body_is_rejected_not_posted`]
+//!     and [`post_status_json_truncation_signal_is_offset_independent`]. The
+//!     dispatcher then renders that into a clean parse-failure notice for the
+//!     model (terminalizing the call `failed(ArgumentInvalid)`) so the model
+//!     re-emits corrected arguments on its next turn — fail-fast, not a hidden
+//!     daemon retry.
 //!
 //! Note the error TEXT on the truncation path: Rust's `serde_json` reports
-//! `Category::Eof` ("EOF while parsing ..."). That is the CLIENT parser, not
-//! vLLM's server-side Python `json` parser (which renders `"Expecting ','
-//! delimiter: line L column C (char N)"` inside a `BadRequestError` and is
-//! handled as a retryable transient in `crate::error::classify_completion_error`
-//! via `provider_message_is_tool_call_json_parse_failure`). This file therefore
-//! pins the DISTINCT, formerly-unhandled CLIENT-side variant.
+//! `Category::Eof` ("EOF while parsing ..."). That is the CLIENT parser, distinct
+//! from vLLM's server-side Python `json` parser (handled separately in
+//! `crate::error::classify_completion_error`). This file pins the CLIENT-side
+//! variant.
 //!
 //! These tests are deterministic and need no live backend; they exercise the
 //! real `ToolDyn::call` seam directly.
