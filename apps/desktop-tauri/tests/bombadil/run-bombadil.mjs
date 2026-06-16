@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -44,6 +45,7 @@ try {
   await waitForVite(vite, harnessUrl);
   await mkdir(defaultOutputPath, { recursive: true });
 
+  const chromeEnv = await chromePathEnvironment(defaultOutputPath);
   const bombadilArgs = ["browser", "test", harnessUrl, "tests/bombadil/spec.ts"];
   if (!headed) {
     bombadilArgs.push("--headless");
@@ -66,6 +68,7 @@ try {
     cwd: rootDir,
     env: {
       ...process.env,
+      ...chromeEnv,
       RUST_LOG: process.env.BOMBADIL_RUST_LOG ?? "error",
     },
     stdio: "inherit",
@@ -88,6 +91,64 @@ try {
   }
 } finally {
   await stopProcess(vite);
+}
+
+async function resolveChromeExecutable() {
+  const explicit =
+    process.env.BOMBADIL_CHROME_EXECUTABLE ??
+    process.env.CHROME ??
+    process.env.CHROME_PATH ??
+    process.env.CHROME_BIN;
+  if (explicit) {
+    if (!existsSync(explicit)) {
+      throw new Error(`configured Chrome executable does not exist: ${explicit}`);
+    }
+    return explicit;
+  }
+
+  try {
+    const { chromium } = await import("playwright");
+    const executablePath = chromium.executablePath();
+    if (existsSync(executablePath)) {
+      return executablePath;
+    }
+  } catch {
+    // Fall through to Bombadil's managed-browser path below.
+  }
+
+  if (process.env.CI) {
+    throw new Error(
+      "Playwright Chromium is not installed; run `npx playwright install chromium` before Bombadil.",
+    );
+  }
+  return null;
+}
+
+async function chromePathEnvironment(outputPath) {
+  const chromeExecutable = await resolveChromeExecutable();
+  if (!chromeExecutable) {
+    return {};
+  }
+
+  const binDir = resolve(outputPath, "chrome-bin");
+  await mkdir(binDir, { recursive: true });
+  for (const name of ["chromium-browser", "chromium", "google-chrome", "chrome"]) {
+    const wrapper = resolve(binDir, name);
+    await writeFile(wrapper, `#!/bin/sh\nexec ${shellQuote(chromeExecutable)} "$@"\n`);
+    await chmod(wrapper, 0o755);
+  }
+
+  console.log(`[bombadil] chrome: ${chromeExecutable}`);
+  return {
+    PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+    CHROME: process.env.CHROME ?? chromeExecutable,
+    CHROME_PATH: process.env.CHROME_PATH ?? chromeExecutable,
+    CHROME_BIN: process.env.CHROME_BIN ?? chromeExecutable,
+  };
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function resolveBin(name) {
