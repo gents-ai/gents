@@ -30,9 +30,12 @@ Three background loops are spawned per agent at startup (`startup.rs:275-309`), 
 `proofs/Proofs/PeerRegistryDiscovery/NetworkMembership.lean` proves the whole arc; we build Rust to satisfy it (no new theorems anticipated):
 
 - `validNetwork` (admin-signed network), `adminSignedMembership`, `admittedMember` (active + admin-signed) — the **cut-4 admission predicate**.
-- `deriveNetworkDesired` / `decideMaterializable` + `decideMaterializable_agrees` — the **cut-5 reconciler**; the model header states it fences `agent/p2p_reconcile/discovery.rs`.
+- `endpointMaterializable` / `memberSignedEndpoint` — materialization is over `NetworkMembership` + a **member-signed `PeerEndpoint`** (`binding_sig`), *not* `PeerRegistry`.
+- `deriveNetworkDesired` / `decideMaterializable` + `decideMaterializable_agrees` — the **cut-5 reconciler**; the model header states it fences `agent/p2p_reconcile/discovery.rs`. **It materializes every admitted member with a fresh signed endpoint, except self → a MESH** (`NetworkMembership.lean:148`).
 - `membership_growth_requires_admin_sig`, `forged_membership_not_admitted`, `unsigned_*_not_materialized` — admission/materialization safety.
 - `revoke_*`, `tombstone_characterization`, `deriveNetworkDesired_tombstone_eq_revoke` — revocation as a retained `status=revoked` tombstone (≡ erase for the derived set).
+
+**Two planes (resolves the star-vs-mesh tension).** The Lean `deriveNetworkDesired` mesh governs the **control plane only**: network-derived (`source="network"`) desired rows replicate `AgentNetwork`/`NetworkMembership`/`PeerEndpoint`/`NetworkJoinRequest` fleet-wide, mesh-capable, faithful to the model. The **runtime conversation/delegation data plane is a separate, operator-owned scoped star** (coordinator↔each subagent, `conversation` template) layered on top — *not* network-derived. So "no-crosswise" is a property of the data plane + authorization, never of control-plane membership: subagents may know each other as members but have no conversation/delegation replicator edge and no authorizing subagent target. This reuses the existing operator-vs-derived partition in `discovery.rs` (today `source="registry"`; cut 5 adds `source="network"`).
 
 **Model/impl boundary (genesis).** `NetworkState.network` is a single fixed field, and `NetTransition` has no `createNetwork` variant (variants: derive/grant/revoke/joinRequest/endpoint/netOperatorWrite). So the model *assumes* exactly one network and proves everything relative to it; **genesis is a bootstrap act outside the proven transition system**. We fence the singleton operationally (§5) rather than generalizing the model to a set of networks (decided: operational guard + conformance test).
 
@@ -41,13 +44,15 @@ Three background loops are spawned per agent at startup (`startup.rs:275-309`), 
 | # | Decision | Choice |
 |---|----------|--------|
 | D1 | Network model for #511 | Build the real `AgentNetwork` control-plane (cuts 3/4/5) Lean-first, then the e2e. |
-| D2 | No-crosswise enforcement | Explicit scoped **star** pairings (coordinator↔each subagent); subagents never pair with each other. Enforced + asserted at **both** replication-topology and authorization layers. (No auto-pair mesh.) |
+| D2 | Two planes (star-vs-mesh) | **Control plane** = network-derived **mesh** (`deriveNetworkDesired`, `source="network"`), control-plane collections only. **Data plane** = operator-owned scoped **star** (coordinator↔each subagent, `conversation` template). No-crosswise = no subagent↔subagent conversation/delegation replicator **and** no authorizing subagent target — a data-plane + authz property, not a control-plane one. |
 | D3 | Interval cadence | Make heartbeat/stale/sweep intervals env-overridable (Lean-neutral) so convergence is seconds, not minutes. |
-| D4 | `network_id` | The `AgentNetwork` doc's deterministic `_docID` (derived from content incl. `admin_did` + operator name) — human-named, collision-free, admin-bound. |
+| D4 | `network_id` | An **explicit deterministic value computed before create** (derive from `admin_did` + operator name). It is a **signed field** of `AgentNetwork` (`admin_sig` covers it), so it cannot be the `_docID` (circular); `_docID` is a storage detail. |
 | D5 | Singleton fence | Operational create-guard + conformance test; Lean single-network assumption documented at the boundary. |
 | D6 | Inference | Real DeepSeek endpoint; the e2e is `#[ignore]` + env-gated (like `cli_live.rs`), not default CI. Assertions are structural, not exact-content. |
-| D7 | Filtered replication (#363) | Exercised live in v1 via the `conversation` PeerDid/Push template. |
+| D7 | Filtered replication (#363) | Exercised live in v1 via the `conversation` PeerDid/Push template (data-plane star edges). |
 | D8 | Delivery | One PR, whole arc, under #511, on `fleet-discovery-e2e`. |
+| D9 | Join bootstrap | The admin-signed grant (`NetworkMembership`) + network record travel **with the invite / `danet1-` `NetworkPointer`**, so join verifies `admittedMember` from the **signed payload** — not the replicated `PeerRegistry` rows, which `join.rs` itself flags as *not* signature-bound. The `discovery`/control-plane template then backfills durable rows. |
+| D10 | Remote spawn mode | Remote `spawn_subagent` must use **background** `await_mode` (`message_spawn.rs:523` rejects remote+foreground). The e2e asserts background bridge/await semantics. |
 
 ## 5. The cuts
 
@@ -57,19 +62,23 @@ Make `REGISTRY_HEARTBEAT_INTERVAL` / `REGISTRY_STALE_AFTER` (`discovery.rs`) and
 ### Cut 3 — Network control-plane CLI (genesis + membership writes)
 New `p2p network` subcommands beside `register`/`list`/`rm`:
 
-- **`create --name "<human name>"`** — *genesis, admin-only, singleton.* Writes the single `AgentNetwork` doc: `admin_did` = local identity DID, `display_name` = name, `admin_sig` over the doc (matches Lean `validNetwork`). `network_id` = the resulting `_docID` (D4). **Guard:** refuse if an `AgentNetwork` already exists locally (one per node, mirroring the single-field model); re-run is a no-op/explicit error. Subagent nodes never call this — they receive the doc by replication via the `discovery` template.
-- **`grant <member_did>`** — writes a `NetworkMembership` row (`membership_key` = composite of network_id+member_did, `status="active"`, `granted_at`, `admin_sig`); matches Lean `adminSignedMembership`.
+- **`create --name "<human name>"`** — *genesis, admin-only, singleton.* (1) Computes `network_id` deterministically from `admin_did` + name **before signing** (D4). (2) Writes the single `AgentNetwork` doc: `network_id`, `admin_did` = local DID, `display_name` = name, `default_template`, `created_at`, `admin_sig` over those fields (matches Lean `validNetwork`). (3) **Writes the admin's own active `NetworkMembership`** (admin-signed) so the admin is itself an `admittedMember` — without this the cut-4 admission story has no genesis member. (4) Publishes the admin's signed `PeerEndpoint` (`binding_sig`). **Guard:** refuse if an `AgentNetwork` already exists locally (one per node, mirroring the single-field model); re-run is a no-op/explicit error. Subagent nodes never call this — they receive the doc by control-plane replication. Emits a `danet1-` `NetworkPointer` (signed `NetworkRecord`) for distribution.
+- **`grant <member_did>`** — writes a `NetworkMembership` row (`membership_key` = network_id+member_did, `status="active"`, `granted_at`, `admin_sig`); matches Lean `adminSignedMembership`.
 - **`revoke <member_did>`** — writes the `status="revoked"` tombstone (row retained, `revoked_at`, `admin_sig`); matches `tombstoneState`.
 
-Conformance: signing payloads validate against `validNetwork`/`adminSignedMembership`; singleton guard tested; revoke produces a tombstone (retained, not deleted).
+Conformance: signing payloads validate against `validNetwork`/`adminSignedMembership`; singleton guard tested; admin self-membership present after create; revoke produces a tombstone (retained, not deleted).
 
 ### Cut 4 — Join admission via the membership arm
-Extend the join gate so the admission step consults `NetworkMembership` (`admittedMember`): the invite issuer must be an admin-signed **active** member; `admin_sig` verified; the joiner is recorded as a member. Conformance drives off `forged_membership_not_admitted` + `membership_growth_requires_admin_sig`.
+Extend the join gate so admission consults `admittedMember` (admin-signed **active** membership). **Bootstrap (D9):** the joiner will not yet have replicated `AgentNetwork`/`NetworkMembership`, and the local `PeerRegistry` rows are explicitly *not* signature-bound (`join.rs` comment). So the admin-signed grant + network record travel **with the invite / `danet1-` `NetworkPointer`**, and join verifies `admittedMember` against that **signed payload**, then writes the durable membership and lets the control-plane template backfill. Conformance drives off `forged_membership_not_admitted` + `membership_growth_requires_admin_sig`.
 
-**Open for cut-4 planning (Lean is arbiter):** whether the membership arm *replaces* the registry-liveness arm or *composes* with it (registry liveness as bootstrap until the network doc has replicated). TOFU is still required for the **genesis member** (admin's own network, empty membership set). The Lean `admittedMember` is purely membership-based, so the target end-state is membership-gated; the registry arm's role is the bootstrap/transition question.
+**Open for cut-4 planning (Lean is arbiter):** whether the membership arm *replaces* the registry-liveness arm or *composes* with it. Target end-state is membership-gated (`admittedMember` is purely membership-based); the registry arm degrades to a transitional bootstrap, retired once the signed-grant-in-invite path lands. TOFU remains only for the **genesis member** (admin's own network, before any grant exists).
 
-### Cut 5 — Reconciler + runtime fence
-The pairing/discovery reconciler honors `decideMaterializable`: materialize replicators only for admitted members; a revoke/tombstone **retracts** replication (drop the replicator). This is `deriveNetworkDesired` in Rust, already fenced by the Lean. Runtime fence: a revoked member loses replication on the next sweep.
+### Cut 5 — Reconciler + runtime fence (control-plane mesh)
+Materialization input is **`NetworkMembership` + member-signed `PeerEndpoint`** (`binding_sig`, Lean `memberSignedEndpoint`), *not* `PeerRegistry`. Pieces:
+- **Signed endpoint heartbeat:** publish/refresh the local `PeerEndpoint` (`did`, `node_id`, `address`, `updated_at`, `binding_sig`) — the signed analogue of today's self-asserted `PeerRegistry` row.
+- **Network-derived desired rows:** the reconciler computes `deriveNetworkDesired` (every admitted member with a fresh signed endpoint, except self) and materializes `source="network"` `PeerPairingDesired` rows carrying the **control-plane template** (so the mesh replicates only `AgentNetwork`/`NetworkMembership`/`PeerEndpoint`/`NetworkJoinRequest` — *not* conversation collections). The current `discovery` template covers `AgentNetwork`+`NetworkMembership` (`templates.rs:112-113`); cut 5 must ensure the control-plane template set also includes `PeerEndpoint`+`NetworkJoinRequest`. This is `decideMaterializable`/`deriveNetworkDesired` in Rust, already fenced by the Lean.
+- **Revoke fence:** a revoke/tombstone drops the member from the derived set → replicator retracted on the next sweep (`revoke_*` theorems).
+- **Compatibility:** existing discovery writes `source="registry"` (`discovery.rs:47`); cut 5 adds the `source="network"` partition beside it. Plan must state the migration/coexistence story (registry-derived rows remain the transitional path; network-derived rows are the membership-fenced target). The operator-owned conversation **star** (`source="operator"`) is untouched by this mesh.
 
 ### Cut 6 — 5-process e2e (the #511 capstone)
 New test in `crates/defra-agent-cli/tests/` (e.g. `cli_fleet_delegation_live.rs`), scaling up the existing daemon harness and the 2-daemon `cli_p2p.rs` (which already runs real invite/join incl. replay rejection).
@@ -79,17 +88,18 @@ New test in `crates/defra-agent-cli/tests/` (e.g. `cli_fleet_delegation_live.rs`
 **Bring-up & flow:**
 1. Spawn 5 daemons (P1 coordinator + P2–P5), Cut-0 fast intervals, each pointed at the DeepSeek endpoint via env/config. Gate the whole test `#[ignore]` + env (D6).
 2. **Genesis:** P1 `p2p network create --name "<fleet>"` → `AgentNetwork` doc; capture `network_id`.
-3. **Serial join** for each Pi (i=2..5): P1 `grant <did_i>`, P1 `pairings invite` (carries `network_id`), Pi `pairings join <token>` through the real gate (sig → freshness → network-match → **membership admission** → nonce burn → `PeerPairingDesired`). Reciprocal where required.
-4. **Scoped star pairings:** P1↔each Pi with the `conversation` (`PeerDid`/`Push`) template; subagents never pair with each other.
-5. **Authorization config:** P1 behavior gets 4 remote `SubagentTarget`s + `subagent_allow_cross_deployment=true`; each subagent has none + `false`.
-6. **Delegation:** an engineered prompt drives P1 to fan out `spawn_subagent` to ≥2 subagents in parallel; each runs a full cross-node round-trip under real inference.
+3. **Serial join** for each Pi (i=2..5): P1 `grant <did_i>`, P1 `pairings invite` (carries `network_id` + the signed grant per D9), Pi `pairings join <token>` through the real gate (sig → freshness → network-match → **membership admission from the signed payload** → nonce burn → `PeerPairingDesired`). Reciprocal where required.
+4. **Control-plane mesh forms** (cut 5): network-derived `source="network"` rows materialize across all admitted members; `AgentNetwork`/`NetworkMembership`/`PeerEndpoint` converge fleet-wide.
+5. **Data-plane star pairings** (operator-owned): P1↔each Pi with the `conversation` (`PeerDid`/`Push`) template; **no subagent↔subagent conversation edge**.
+6. **Authorization config:** P1 behavior gets 4 remote `SubagentTarget`s + `subagent_allow_cross_deployment=true`; each subagent has none + `false`.
+7. **Delegation:** an engineered prompt drives P1 to fan out `spawn_subagent` to ≥2 subagents in parallel, in **background `await_mode`** (D10: remote+foreground is rejected); each runs a full cross-node round-trip under real inference.
 
 **Assertions (per stage):**
-- *Discovery/membership:* every node `online`+fresh in peers' `PeerRegistry`; `AgentNetwork` + `NetworkMembership` replicate fleet-wide; admission decisions match `admittedMember`; each nonce burned once, replays rejected.
-- *Pairing:* `PeerPairingApplied` converges to desired; the **scoped filtered** replicators are present for P1↔Pi (live #363 check); no subagent↔subagent replicator exists.
+- *Discovery/membership:* every node has a fresh signed `PeerEndpoint`; `AgentNetwork` + `NetworkMembership` + `PeerEndpoint` replicate fleet-wide (control-plane mesh); admission decisions match `admittedMember`; each nonce burned once, replays rejected.
+- *Pairing:* `PeerPairingApplied` converges to desired; the **scoped filtered** conversation replicators are present for the P1↔Pi star edges (live #363 check); **no subagent↔subagent _conversation/delegation_ replicator exists** (control-plane membership replication may be mesh-wide — that is expected, not a violation).
 - *Delegation:* each child `AgentRequest` materializes on its owning node with that subagent's `agent_did` + correct `behavior_id`; lineage stamped (`caused_by_parent_request_id`/`_tool_call_id`, `caused_by_trigger_kind=subagent`).
-- *Round-trip:* ≥2 children produce non-empty responses (structural, not exact); terminals replicate back; P1 parent terminates cleanly, no orphaned bridges.
-- *No-crosswise:* a subagent's onward `spawn_subagent` is denied at the authorization layer (`background_tools.rs:195-219`: no allowed target / `allow_cross_deployment=false`) **and** no topology path exists for it.
+- *Round-trip:* ≥2 children produce non-empty responses (structural, not exact); **background bridge/await semantics hold**; terminals replicate back; P1 parent terminates cleanly, no orphaned bridges.
+- *No-crosswise:* a subagent's onward `spawn_subagent` is denied at the **authorization** layer (`background_tools.rs:195-219`: no allowed target / `allow_cross_deployment=false`) **and** has no conversation/delegation **data-plane** edge to another subagent.
 
 **Flake control:** Cut-0 fast intervals; explicit per-stage convergence polling with bounded deadlines (reuse `wait_for_*` patterns, ~250ms poll); kill-on-drop teardown; structural-only inference assertions. No tolerated flakes (repo standard).
 
@@ -98,6 +108,8 @@ New test in `crates/defra-agent-cli/tests/` (e.g. `cli_fleet_delegation_live.rs`
 - **Real-inference fan-out is the primary flake vector.** Mitigate with a strongly-constrained prompt + tool schema that reliably elicits parallel `spawn_subagent` to ≥2 targets; assert structure (tool calls issued, children materialized, non-empty responses), never exact text.
 - **#363 filtered replication still has the upstream DAG-completeness gate** (per triage note) — the scoped-push path may surface edge cases; we exercise it knowingly and will isolate any failure as upstream vs. ours.
 - **Cut-4 admission composition** (registry arm vs. membership arm vs. both) is a genuine fork resolved against the Lean during cut-4 planning; getting TOFU-for-genesis vs. membership-gated-for-the-rest right is the crux.
+- **Source-partition coexistence.** Cut 5 adds `source="network"` beside the existing `source="registry"` and `source="operator"` partitions in `discovery.rs`. The three must not fight over the same `peer_id`; the plan must define precedence/migration so legacy registry-derived rows degrade cleanly as membership-fenced rows take over.
+- **Signed-endpoint heartbeat** (`PeerEndpoint.binding_sig`) is new signing surface replacing the self-asserted `PeerRegistry` heartbeat as the materialization input — must stay consistent with `memberSignedEndpoint` and not regress the existing registry liveness assertions the e2e still uses for the `online`+fresh checks.
 - **Daemon-process timing** (readiness, replication lag) — bounded deadlines + polling, not sleeps.
 
 ## 7. Sequencing & delivery
