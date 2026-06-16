@@ -1,7 +1,7 @@
 //! Runtime pairing reconcile engine.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
-use super::network::{GraphqlNetworkStore, NetworkStore};
+use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters, Scope};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
@@ -40,6 +40,14 @@ pub trait PairingStateStore: Send + Sync {
     async fn delete_applied(&self, peer_id: &str) -> Result<()>;
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
+
+    /// Called once at the start of each sweep, before the per-peer loop. Lets a
+    /// store amortize per-sweep work (e.g. computing the membership-materializable
+    /// set once instead of re-verifying every signature for every peer — the
+    /// O(N²) the naive per-peer gate would do). Default is a no-op.
+    async fn begin_sweep(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub async fn reconcile_peer_tick(
@@ -154,6 +162,10 @@ async fn sweep_pairings_logged(admin: &dyn RemoteP2pAdmin, store: &dyn PairingSt
 }
 
 async fn sweep_pairings(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStore) -> Result<()> {
+    // Amortize the membership-materializable computation across the whole sweep
+    // (avoids re-verifying every signature per peer). Non-fatal on failure: the
+    // per-peer gate falls back to a live read.
+    store.begin_sweep().await?;
     for peer_id in store.list_peer_ids().await? {
         match reconcile_peer_tick(admin, store, &peer_id).await {
             Ok(outcome) => {
@@ -351,20 +363,39 @@ async fn persist_applied(
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,
+    /// Per-sweep cache of the membership-materializable entries, refreshed by
+    /// [`begin_sweep`](PairingStateStore::begin_sweep). `Some` during a sweep so
+    /// the Layer-2 gate verifies every signature ONCE per sweep instead of once
+    /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
+    /// live read (also the path for the very first read or a refresh failure).
+    materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
 }
 
 impl GraphqlPairingStateStore {
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
-        Self { node, identity }
+        Self {
+            node,
+            identity,
+            materializable_cache: Arc::new(Mutex::new(None)),
+        }
     }
 
     async fn data_plane_peer_is_materializable(&self, peer_id: &str) -> Result<bool> {
-        let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
-        Ok(network
-            .load_materializable_entries()
-            .await?
-            .into_iter()
-            .any(|entry| entry.peer_id == peer_id && entry.agent_did != self.identity.did()))
+        // Prefer the per-sweep cache; fall back to a live read when it is absent
+        // (first read, outside a sweep, or after a refresh failure).
+        let cached = self.materializable_cache.lock().unwrap().clone();
+        let entries = match cached {
+            Some(entries) => entries,
+            None => {
+                let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
+                network.load_materializable_entries().await?
+            }
+        };
+        Ok(super::network::peer_is_materializable(
+            &entries,
+            peer_id,
+            self.identity.did(),
+        ))
     }
 }
 
@@ -505,6 +536,27 @@ impl PairingStateStore for GraphqlPairingStateStore {
             }
         }
         Ok(ids)
+    }
+
+    async fn begin_sweep(&self) -> Result<()> {
+        // Compute the membership-materializable set ONCE for this sweep so the
+        // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
+        // instead of re-verifying every membership/endpoint signature for every
+        // peer (the O(N²) the review flagged). A refresh failure is non-fatal:
+        // clear the cache so the per-peer path falls back to a live read.
+        let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
+        let refreshed = match network.load_materializable_entries().await {
+            Ok(entries) => Some(entries),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "materializable-set refresh failed; per-peer gate will read live this sweep"
+                );
+                None
+            }
+        };
+        *self.materializable_cache.lock().unwrap() = refreshed;
+        Ok(())
     }
 }
 

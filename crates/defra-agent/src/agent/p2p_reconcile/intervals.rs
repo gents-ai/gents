@@ -13,11 +13,20 @@ pub const DEFAULT_SWEEP: Duration = Duration::from_secs(30);
 /// Default stale window multiplier relative to the heartbeat.
 pub const DEFAULT_STALE_MULTIPLE: u32 = 3;
 
-fn env_ms(key: &str) -> Option<Duration> {
-    std::env::var(key)
+/// Parse a millisecond override. A non-positive (`0`) or unparsable value is
+/// rejected (returns `None`, so the default applies): `Duration::ZERO` would
+/// panic `tokio::time::interval`, and a zero interval is never a meaningful
+/// cadence — an operator typo must not crash the reconciler daemons.
+fn parse_ms(raw: &str) -> Option<Duration> {
+    raw.trim()
+        .parse::<u64>()
         .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
         .map(Duration::from_millis)
+}
+
+fn env_ms(key: &str) -> Option<Duration> {
+    std::env::var(key).ok().and_then(|value| parse_ms(&value))
 }
 
 pub fn heartbeat_interval() -> Duration {
@@ -121,5 +130,22 @@ mod tests {
 
         assert_eq!(endpoint_interval(), Duration::from_secs(2));
         assert_eq!(stale_after(), Duration::from_secs(6));
+    }
+
+    #[test]
+    fn zero_or_garbage_override_falls_back_to_default_not_panic() {
+        // `parse_ms` is the pure parser; `0` and unparsable values are rejected
+        // so the default applies (a 0ms interval would panic tokio's timer).
+        assert_eq!(parse_ms("0"), None);
+        assert_eq!(parse_ms("  0 "), None);
+        assert_eq!(parse_ms(""), None);
+        assert_eq!(parse_ms("nope"), None);
+        assert_eq!(parse_ms("-5"), None);
+        assert_eq!(parse_ms("250"), Some(Duration::from_millis(250)));
+
+        // End-to-end: a `0` env override must not yield a zero interval.
+        let _env = EnvGuard::clear();
+        std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "0");
+        assert_eq!(sweep_interval(), DEFAULT_SWEEP);
     }
 }

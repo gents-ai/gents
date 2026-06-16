@@ -147,6 +147,23 @@ pub async fn select_materializable_entries(
     Ok(out)
 }
 
+/// Whether `peer_id` is materializable for the **Layer-2 data plane**: it appears
+/// among `entries` (which have already passed the network/membership/signature/
+/// freshness gate in [`select_materializable_entries`]) and is not this node
+/// itself. The data-plane reconciler installs a conversation replicator only for
+/// a peer this predicate accepts — so membership is the master gate over BOTH
+/// layers (D11), and a revoke (which drops the peer from `entries`) retracts the
+/// Layer-2 edge too.
+pub fn peer_is_materializable(
+    entries: &[NetworkEndpointEntry],
+    peer_id: &str,
+    self_did: &str,
+) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.peer_id == peer_id && entry.agent_did != self_did)
+}
+
 /// Why a v5 join admission was rejected. Each variant is a negative arm of Lean
 /// `admitsV5Join` (`Proofs/PeerRegistryDiscovery/NetworkMembership.lean` §13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -421,10 +438,19 @@ impl NetworkStore for GraphqlNetworkStore {
         let network = match network_rows.as_slice() {
             [] => return Ok(Vec::new()),
             [row] => network_record(row)?,
-            rows => bail!(
-                "expected singleton AgentNetwork for network materialization, found {}",
-                rows.len()
-            ),
+            rows => {
+                // More than one AgentNetwork replicated locally (transitional /
+                // multi-network state; multi-network is out of scope per #490 L4).
+                // Do NOT bail — that would halt ALL pairing on this node, both
+                // layers. Select this node's own network deterministically and
+                // warn, so a stray replicated row can't take the fleet down.
+                let chosen = select_local_network(rows, self.identity.did());
+                tracing::warn!(
+                    count = rows.len(),
+                    "multiple AgentNetwork rows present; materializing against the local node's network"
+                );
+                network_record(chosen)?
+            }
         };
 
         let memberships = rows::<MembershipRow>(&response, "NetworkMembership")?
@@ -580,6 +606,27 @@ async fn verify_record(
             Ok(false)
         }
     }
+}
+
+/// Deterministically select this node's own `AgentNetwork` when more than one
+/// row is present locally. Prefer the network this node administers
+/// (`admin_did == self`); otherwise the lexicographically-smallest `network_id`,
+/// so the choice is stable across sweeps and across nodes. Never panics on a
+/// non-empty slice.
+fn select_local_network<'a>(rows: &'a [NetworkRow], self_did: &str) -> &'a NetworkRow {
+    let self_did = self_did.trim();
+    rows.iter()
+        .find(|row| row.admin_did.as_deref().map(str::trim) == Some(self_did))
+        .unwrap_or_else(|| {
+            rows.iter()
+                .min_by(|a, b| {
+                    a.network_id
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(b.network_id.as_deref().unwrap_or(""))
+                })
+                .expect("select_local_network called on a non-empty slice")
+        })
 }
 
 fn network_record(row: &NetworkRow) -> Result<NetworkRecord> {

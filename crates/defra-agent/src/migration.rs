@@ -1867,6 +1867,93 @@ mod patch_kind_tests {
         assert!(rows[0].profiles.is_none());
     }
 
+    /// GAP-5: the `source` backfill defaults only BLANK rows to `"operator"`; a
+    /// pre-existing `source = "registry"` row is preserved, never reassigned. The
+    /// `source` partition is what the discovery/network reconcilers use for
+    /// mutual exclusion (a registry-owned peer is excluded from network
+    /// materialization and vice versa), so clobbering a legacy registry row to
+    /// `operator` post-upgrade would silently change ownership. This fences the
+    /// migration's coexistence with a populated network mesh.
+    #[tokio::test]
+    async fn pairing_source_backfill_preserves_registry_rows_only_defaults_blank() {
+        #[derive(serde::Deserialize)]
+        struct SourceRow {
+            peer_id: String,
+            source: Option<String>,
+            template: Option<String>,
+        }
+
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // A legacy registry-owned row (explicit source) and a pre-migration row
+        // with no source/template stamped yet.
+        let response = node
+            .execute(
+                r#"mutation {
+                    legacy: create_PeerPairingDesired(input: {
+                        peer_id: "peer-reg",
+                        agent_did: "did:defra-agent:peer-reg",
+                        collections: ["AgentNetwork"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/5101/p2p/peer-reg"],
+                        source: "registry",
+                        template: "network-control"
+                    }) { _docID }
+                    blank: create_PeerPairingDesired(input: {
+                        peer_id: "peer-blank",
+                        agent_did: "did:defra-agent:peer-blank",
+                        collections: ["AgentRequest"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/5102/p2p/peer-blank"]
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seeding PeerPairingDesired rows failed: {:?}",
+            response.errors
+        );
+
+        backfill_pairing_desired_defaults(node.as_ref()).await;
+
+        let response = node
+            .execute(r#"{ PeerPairingDesired { peer_id source template } }"#)
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query failed: {:?}",
+            response.errors
+        );
+        let rows: Vec<SourceRow> = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("PeerPairingDesired"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let reg = rows
+            .iter()
+            .find(|r| r.peer_id == "peer-reg")
+            .expect("registry row present");
+        assert_eq!(
+            reg.source.as_deref(),
+            Some("registry"),
+            "legacy registry row must NOT be reassigned to operator by backfill"
+        );
+        assert_eq!(reg.template.as_deref(), Some("network-control"));
+
+        let blank = rows
+            .iter()
+            .find(|r| r.peer_id == "peer-blank")
+            .expect("blank row present");
+        assert_eq!(
+            blank.source.as_deref(),
+            Some("operator"),
+            "a blank-source row defaults to operator"
+        );
+        assert_eq!(blank.template.as_deref(), Some("conversation"));
+    }
+
     // Pre-scope-key SDL for the four session-keyed conversation collections:
     // identical to the shipped schema minus the `agent_did` field. Registering
     // these on a fresh node simulates a database upgraded from a schema version

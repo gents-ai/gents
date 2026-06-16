@@ -18,7 +18,7 @@ use defra_agent::agent::p2p_reconcile::discovery::{
     DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
 use defra_agent::agent::p2p_reconcile::network::{
-    decide_v5_admission, derive_network_desired, reconcile_network_tick,
+    decide_v5_admission, derive_network_desired, peer_is_materializable, reconcile_network_tick,
     select_materializable_entries, NetworkEndpointEntry, NetworkStore, V5AdmissionClaim,
     V5Rejection,
 };
@@ -618,6 +618,59 @@ fn v5_rejects_wrong_grantee() {
     let mut c = valid_v5_claim();
     c.grant_member_did = "did:key:someone-else";
     assert_eq!(decide_v5_admission(&c), Err(V5Rejection::WrongGrantee));
+}
+
+// ---------------------------------------------------------------------------
+// Layer-2 data-plane membership gate (D11: membership is the master gate over
+// BOTH layers). The full chain: `select_materializable_entries` (the signed
+// gate) feeds `peer_is_materializable` (the per-peer Layer-2 check the data-plane
+// reconciler uses). An active member's conversation edge materializes; a revoke
+// drops it from the gate output, so the Layer-2 edge retracts too.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn data_plane_gate_admits_active_member_and_excludes_self() {
+    let admin = gate_identity("dp-admit-admin");
+    let member = gate_identity("dp-admit-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let entries =
+        select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+            .await
+            .expect("gate");
+
+    // The coordinator (admin) sees the member as a materializable data-plane peer.
+    assert!(
+        peer_is_materializable(&entries, "peer-node-id", admin.did()),
+        "active member must be a materializable data-plane peer"
+    );
+    // The member never pairs with itself.
+    assert!(
+        !peer_is_materializable(&entries, "peer-node-id", member.did()),
+        "self must be excluded from data-plane materialization"
+    );
+}
+
+#[tokio::test]
+async fn data_plane_gate_retracts_revoked_member() {
+    let admin = gate_identity("dp-revoke-admin");
+    let member = gate_identity("dp-revoke-member");
+    let net = signed_network(&admin).await;
+    let mem = signed_membership(&admin, &net.network_id, member.did(), "revoked").await;
+    let ep = signed_endpoint(&member, FRESH).await;
+
+    let entries =
+        select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
+            .await
+            .expect("gate");
+
+    // Revoked ⇒ not in the gate output ⇒ no Layer-2 data-plane edge (retracted).
+    assert!(
+        !peer_is_materializable(&entries, "peer-node-id", admin.did()),
+        "revoked member's data-plane edge must retract (D11 master gate)"
+    );
 }
 
 /// Mirrors the TOFU bootstrap arm: an empty registry (or one holding only our

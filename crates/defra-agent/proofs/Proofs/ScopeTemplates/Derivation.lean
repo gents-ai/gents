@@ -187,10 +187,19 @@ theorem push_template_has_filter {t : Template} (h : scopeCoherent t)
   rfl
 
 /-- Per-collection version of `push_template_has_filter`: under a scope-coherent
-`Push` template, every template collection has a concrete peer-DID filter entry.
-This is the Lean fence for Rust's merged Layer-1/Layer-2 install, where one
-replicator can carry unfiltered control collections plus filtered conversation
-collections in the same per-collection filter map. -/
+`Push` template, EVERY one of the template's collections gets a concrete
+peer-DID filter entry — the template→filter derivation never leaves a `Push`
+collection unfiltered.
+
+SCOPE: this is a property of the template→filter DERIVATION (`scopeFilters`)
+ALONE. It does NOT model the Rust merged Layer-1/Layer-2 install (one replicator
+carrying unfiltered control collections alongside peer-DID-filtered conversation
+collections in a single per-collection filter map): that union is assembled at
+install time and is fenced by the `engine.rs` `merge_desired` unit tests
+(`merge_desired_unions_control_and_data_plane_state`,
+`data_plane_only_desired_is_replicator_only`), not by this theorem. What this
+theorem guarantees the merge can rely on is the per-collection-completeness of
+each push template's derived filter set. -/
 theorem push_template_filters_every_collection {t : Template} (h : scopeCoherent t)
     (hpush : t.delivery = .push) (did : Did) {c : String}
     (hc : c ∈ t.collections) :
