@@ -44,13 +44,10 @@ const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
 
 const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
 
-// Cross-deployment subagent delegation needs both the target-owned child
-// AgentRequest and the parent-owned bridge AgentToolCall to reach the target
-// node. The existing "conversation" template is peer-DID scoped and would carry
-// the child request but not the parent bridge, so this capstone uses the
-// unscoped conversation collection set for the delegation data plane. The
-// membership gate is still enforced by DataPlanePairingDesired materialization.
-const DATA_PLANE_TEMPLATE: &str = "backup";
+// Layer 2 is a filtered data-plane star. The pairing reconciler strips
+// data-plane subscription collections during merge, so these collections ride
+// only in the per-peer replicator with the template's peer-DID filter.
+const DATA_PLANE_TEMPLATE: &str = "conversation";
 
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
@@ -152,14 +149,14 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> Result<()> {
     }
 
     for subagent in subagents {
-        wait_for_applied_collection(
+        wait_for_applied_data_plane_filter(
             &coord.graphql,
             &subagent.peer_id,
             "AgentRequest",
             Duration::from_secs(120),
         )
         .await?;
-        wait_for_applied_collection(
+        wait_for_applied_data_plane_filter(
             &subagent.graphql,
             &coord.peer_id,
             "AgentRequest",
@@ -599,7 +596,7 @@ fn graphql_string_array(values: &[&str]) -> String {
     )
 }
 
-async fn wait_for_applied_collection(
+async fn wait_for_applied_data_plane_filter(
     graphql: &str,
     peer_id: &str,
     collection: &str,
@@ -609,18 +606,23 @@ async fn wait_for_applied_collection(
         let row = applied_row(graphql, peer_id).await?.with_context(|| {
             format!("PeerPairingApplied({peer_id}) missing while waiting for {collection}")
         })?;
-        let has_collection = row
+        let has_subscription_collection = row
             .get("collections")
             .and_then(Value::as_array)
-            .is_some_and(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .any(|value| value == collection)
-            });
+            .is_some_and(|values| values.iter().filter_map(Value::as_str).any(|value| value == collection));
+        let has_filter_collection = row
+            .get("replicator_filter")
+            .and_then(Value::as_str)
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .and_then(|filter| filter.get(collection).cloned())
+            .is_some();
         anyhow::ensure!(
-            has_collection,
-            "PeerPairingApplied({peer_id}) missing collection {collection}: {row}"
+            !has_subscription_collection,
+            "PeerPairingApplied({peer_id}) leaked data-plane collection {collection} into subscriptions: {row}"
+        );
+        anyhow::ensure!(
+            has_filter_collection,
+            "PeerPairingApplied({peer_id}) missing data-plane filter for {collection}: {row}"
         );
         Ok(())
     })

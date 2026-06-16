@@ -596,6 +596,14 @@ fn merge_desired(
     base: Option<PairingDesired>,
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
+    // Layer-2 desired rows add data-plane collections to the per-peer
+    // replicator, not to the subscription set. The subscription side must stay
+    // the Layer-1 network-control set so conversation data never gossips
+    // unfiltered.
+    let data_plane = data_plane.map(|mut desired| {
+        desired.collections.clear();
+        desired
+    });
     match (base, data_plane) {
         (None, None) => None,
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
@@ -708,7 +716,7 @@ mod tests {
             replicator_filter: PairingFilters::new(),
         };
         let data = PairingDesired {
-            collections: BTreeSet::new(),
+            collections: set(&["AgentRequest"]),
             replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
             replicator_collections: set(&["AgentRequest"]),
             replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
@@ -718,6 +726,11 @@ mod tests {
         assert_eq!(
             merged.replicator_collections,
             set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
+        );
+        assert_eq!(
+            merged.collections,
+            set(&["AgentNetwork", "NetworkMembership"]),
+            "data-plane collections must not expand the subscription set"
         );
         assert_eq!(
             merged.replicator_addresses,
@@ -730,6 +743,25 @@ mod tests {
                 .map(|filter| (filter.field.as_str(), filter.value.as_str())),
             Some(("agent_did", "did:key:a"))
         );
+        assert!(!merged.replicator_filter.contains_key("AgentNetwork"));
+    }
+
+    #[test]
+    fn data_plane_only_desired_is_replicator_only() {
+        let data = PairingDesired {
+            collections: set(&["AgentRequest"]),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        };
+
+        let merged = merge_desired(None, Some(data)).expect("data-plane desired");
+        assert!(
+            merged.collections.is_empty(),
+            "data-plane-only desired must not subscribe to conversation collections"
+        );
+        assert_eq!(merged.replicator_collections, set(&["AgentRequest"]));
+        assert!(merged.replicator_filter.contains_key("AgentRequest"));
     }
 
     /// Deterministic name → collection-id transform used by `MockAdmin`.
