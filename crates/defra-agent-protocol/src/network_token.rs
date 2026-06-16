@@ -20,6 +20,21 @@ use std::io::Cursor;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Deterministic, admin-bound network id computed before signing.
+///
+/// `network_id` is itself a signed `AgentNetwork` field, so it cannot depend on
+/// DefraDB's `_docID` or any other storage detail created after insertion.
+pub fn derive_network_id(admin_did: &str, name: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut h = Sha256::new();
+    h.update(admin_did.as_bytes());
+    h.update(b"\x1f");
+    h.update(name.as_bytes());
+    let digest = h.finalize();
+    format!("net-{}", bs58::encode(&digest[..16]).into_string())
+}
+
 /// Canonical signing form of an `AgentNetwork` row. `sig` is the admin DID's
 /// signature over [`signing_payload`](NetworkRecord::signing_payload).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +191,19 @@ mod tests {
             nonce: "nonce-a".into(),
             sig: vec![1, 2, 3],
         }
+    }
+
+    #[test]
+    fn network_id_is_deterministic_and_admin_bound() {
+        let a = derive_network_id("did:key:zAdmin", "Fleet One");
+        let b = derive_network_id("did:key:zAdmin", "Fleet One");
+        let other_admin = derive_network_id("did:key:zOther", "Fleet One");
+        let other_name = derive_network_id("did:key:zAdmin", "Fleet Two");
+
+        assert_eq!(a, b, "deterministic");
+        assert_ne!(a, other_admin, "admin-bound");
+        assert_ne!(a, other_name, "name-bound");
+        assert!(a.starts_with("net-"), "stable, recognizable prefix");
     }
 
     // --- Record signing payloads ----------------------------------------
