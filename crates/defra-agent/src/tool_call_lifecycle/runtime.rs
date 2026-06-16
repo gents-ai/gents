@@ -21,6 +21,13 @@ use crate::background_tools::LiveToolOutputWriter;
 const MARKER_PREFIX: &str = "__defra_agent_tool_lifecycle__:";
 const TIMEOUT_MARKER: &str = "__defra_agent_tool_lifecycle__:timedOut";
 const CANCELLED_MARKER: &str = "__defra_agent_tool_lifecycle__:cancelled";
+/// Internal sentinel for an unparseable-arguments tool result. Like the managed
+/// terminals it uses the collision-free `MARKER_PREFIX`, so ordinary tool output
+/// (including MCP/subagent relays whose text could begin with a human-readable
+/// token like `JsonError:`) can never be mistaken for it. The model-facing notice
+/// follows after a `:` separator; the hook strips the marker before persisting or
+/// threading, so the model only ever sees the clean notice.
+const UNPARSEABLE_ARGS_MARKER: &str = "__defra_agent_tool_lifecycle__:unparseableArgs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedToolTerminal {
@@ -147,6 +154,23 @@ pub(crate) fn timeout_result(deadline_at: Option<DateTime<Utc>>) -> String {
 
 pub(crate) fn cancelled_result() -> String {
     CANCELLED_MARKER.to_string()
+}
+
+/// Build the tool result for an unparseable-arguments failure: a collision-free
+/// marker the hook maps to `failed(ArgumentInvalid)`, carrying the model-facing
+/// `notice` after a `:` separator. Unlike a human-readable prefix, ordinary tool
+/// output cannot collide with the lifecycle marker.
+pub(crate) fn unparseable_args_result(notice: &str) -> String {
+    format!("{UNPARSEABLE_ARGS_MARKER}:{notice}")
+}
+
+/// If `result` is an unparseable-arguments marker, return the model-facing notice
+/// (the text after the marker); otherwise `None`. Callers strip the marker before
+/// persisting the lifecycle result or threading the result back to the model.
+pub(crate) fn unparseable_args_notice(result: &str) -> Option<&str> {
+    result
+        .strip_prefix(UNPARSEABLE_ARGS_MARKER)
+        .map(|rest| rest.strip_prefix(':').unwrap_or(rest))
 }
 
 struct RuntimeManagedTool {

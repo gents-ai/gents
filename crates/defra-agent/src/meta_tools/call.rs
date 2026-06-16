@@ -240,7 +240,7 @@ fn normalize_arguments(
 ) -> Result<Value, StructuredToolError> {
     match arguments {
         Value::Object(_) => Ok(arguments.clone()),
-        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+        Value::String(raw) => match parse_stringified_object(raw) {
             Ok(Value::Object(map)) => Ok(Value::Object(map)),
             Ok(other) => Err(StructuredToolError::invalid_tool_arguments(
                 service_id,
@@ -269,6 +269,28 @@ fn normalize_arguments(
                 json_type_name(other)
             ),
         )),
+    }
+}
+
+/// Parse a stringified `call_tool.arguments` JSON value, applying one tolerant
+/// [`repair_tool_arguments`] pass (escape-only: lone-backslash fixes, never
+/// truncation-closing) when the raw string fails to parse. Mirrors the native
+/// tool seam in [`crate::llm::tool::parse_tool_args`], so a truncated
+/// (`Category::Eof`) payload is never repaired-and-accepted — the repair cannot
+/// complete a cut-off value, so it stays an error.
+///
+/// Note the asymmetry with the native loop: there, an unparseable payload is
+/// rendered into a `JsonError:` tool result that terminalizes the call
+/// `failed(ArgumentInvalid)`. Here the error is returned to the MCP caller
+/// (`call.rs`), which surfaces it to the model as the tool result; both paths
+/// notify the model so it can re-emit corrected arguments, but neither runs a
+/// truncated value.
+fn parse_stringified_object(raw: &str) -> Result<Value, serde_json::Error> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(value) => Ok(value),
+        Err(first_error) => crate::llm::tool::repair_tool_arguments(raw)
+            .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
+            .ok_or(first_error),
     }
 }
 
@@ -677,5 +699,26 @@ mod tests {
 
         assert!(!was_truncated);
         assert_eq!(result, small_text);
+    }
+
+    #[test]
+    fn parse_stringified_object_recovers_lone_backslash() {
+        // A stringified arguments object with a raw lone backslash (`\d`) is not
+        // valid JSON; the escape-only repair doubles it so the object parses.
+        let raw = r#"{"pattern":"regex \d+ here"}"#;
+        let value =
+            parse_stringified_object(raw).expect("lone-backslash object should be repaired");
+        assert_eq!(value["pattern"], "regex \\d+ here");
+    }
+
+    #[test]
+    fn parse_stringified_object_rejects_truncation() {
+        // A truncated (finish_reason=length) object must never be closed-and-run:
+        // escape-only repair cannot complete it, so it stays an error.
+        let raw = r#"{"pattern":"a long value that got cut o"#;
+        assert!(
+            parse_stringified_object(raw).is_err(),
+            "a truncated stringified object must be rejected, not repaired-and-accepted"
+        );
     }
 }
