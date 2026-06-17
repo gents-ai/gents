@@ -5,7 +5,8 @@ use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
-    graphql_optional_float_field, graphql_string_field, join_fields, normalize_required,
+    graphql_optional_float_field, graphql_string_field, graphql_string_list_field, join_fields,
+    normalize_required,
 };
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
@@ -75,6 +76,11 @@ fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String
             row.compaction_threshold,
         )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
+        Some(graphql_string_list_field("skill_refs", &row.skill_refs)),
+        Some(graphql_string_list_field(
+            "skill_excludes",
+            &row.skill_excludes,
+        )),
         Some(format!(
             r#"created_at: "{}""#,
             escape_graphql_string(&created_at)
@@ -118,6 +124,11 @@ fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String
             row.compaction_threshold,
         )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
+        Some(graphql_string_list_field("skill_refs", &row.skill_refs)),
+        Some(graphql_string_list_field(
+            "skill_excludes",
+            &row.skill_excludes,
+        )),
     ];
 
     Ok(format!(

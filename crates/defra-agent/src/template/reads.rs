@@ -199,6 +199,12 @@ fn collect_request_expr(expr: &Expr<'_>, reads: &mut BTreeSet<String>) {
             collect_request_expr(&b.left, reads);
             collect_request_expr(&b.right, reads);
         }
+        Expr::Compare(c) => {
+            collect_request_expr(&c.expr, reads);
+            for op in &c.ops {
+                collect_request_expr(&op.expr, reads);
+            }
+        }
         Expr::IfExpr(i) => {
             collect_request_expr(&i.test_expr, reads);
             collect_request_expr(&i.true_expr, reads);

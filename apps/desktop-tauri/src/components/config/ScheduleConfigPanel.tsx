@@ -122,8 +122,11 @@ export function ScheduleConfigEditor({
     );
     setEnabled(schedule?.enabled ?? true);
     setConcurrency(schedule?.concurrency ?? "serial");
-    setRunStatus(null);
   }, [schedule, selectedTask?.taskId]);
+
+  useEffect(() => {
+    setRunStatus(null);
+  }, [schedule?.scheduleId]);
 
   const intervalValid = isOptionalInt(intervalSecs, { min: 1 });
 

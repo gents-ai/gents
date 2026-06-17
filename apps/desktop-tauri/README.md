@@ -12,31 +12,31 @@ and fleet views from that local store.
 Prerequisites:
 
 - Rust toolchain
-- Bun
+- Node.js 22+ and npm
 - a running or discoverable `defra-agent` runtime for live chat flows
 
 Install frontend dependencies:
 
 ```bash
-bun install
+npm ci
 ```
 
 Run the frontend-only Vite app:
 
 ```bash
-bun run dev
+npm run dev
 ```
 
 Run the full Tauri shell:
 
 ```bash
-bun run tauri dev
+npm run tauri dev
 ```
 
 Build the frontend:
 
 ```bash
-bun run build
+npm run build
 ```
 
 Build the desktop binary from the repo root:
@@ -69,24 +69,71 @@ status bar to report `replication: subscriptions armed`.
 
 ## Tests
 
-Frontend/unit tests:
+The deterministic desktop UI gate is layered so failures point at the right
+surface:
 
 ```bash
-bun run test
+npm run test:ui
 ```
+
+That command checks formatting, builds the frontend, runs Vitest component/model
+tests, runs Playwright browser journeys, and finishes with a short Bombadil
+smoke run.
+
+Individual layers:
+
+```bash
+npm run test:ui:unit
+npm run test:ui:e2e
+npm run test:ui:invariants
+npm run test:ui:screenshots
+npm run test:ui:fuzz -- --time-limit 30s
+npm run test:ui:fuzz:long
+```
+
+The Playwright suite serves `tests/ui-harness/harness.html` with Vite and renders
+the real React shell against a deterministic in-memory `DesktopApiAdapter`. It
+covers fleet, chat, config, operations, interrupt, sad-path, and responsive
+journeys across desktop, laptop, and narrow viewports.
+
+Bombadil uses the same harness and checks persistent invariants while exploring
+the UI:
+
+```bash
+npm run test:ui:fuzz
+npm run test:ui:fuzz -- --time-limit 2m
+```
+
+Artifacts are written under `test-results/` and Playwright's HTML report under
+`playwright-report/`. Playwright failures include screenshots, videos, traces,
+and browser console logs when the browser emitted errors. Stable screenshot
+captures are diagnostic review artifacts, not visual golden snapshots.
+
+Useful artifact commands:
+
+```bash
+npx playwright show-report
+npx playwright show-trace test-results/playwright/<failed-test>/trace.zip
+```
+
+Use screenshots for quick visual triage, then use traces for the full timeline:
+DOM snapshots, clicked elements, network/console signals, and the exact failed
+assertion.
 
 Live UI smoke tests:
 
 ```bash
-bun run test:live
-bun run test:live:chat
-bun run test:live:config
+npm run test:live
+npm run test:live:chat
+npm run test:live:config
+npm run test:live:operations
+npm run test:live:interrupt
 ```
 
 Remote fleet smoke:
 
 ```bash
-bun run smoke:remote-fleet
+npm run smoke:remote-fleet
 ```
 
 The live tests expect real runtime connectivity and should be treated as manual

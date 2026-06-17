@@ -69,6 +69,7 @@ export function ChatHeader({
               <input
                 autoFocus
                 className="title-rename-input"
+                data-testid="conversation-title-input"
                 onBlur={() => void submitTitleRename()}
                 onChange={(event) => setTitleDraft(event.currentTarget.value)}
                 onKeyDown={(event) => {
@@ -85,6 +86,7 @@ export function ChatHeader({
               <h2>{visibleConversationTitle}</h2>
               <button
                 className="icon-button"
+                data-testid="conversation-title-edit"
                 disabled={renamingTitle}
                 onClick={() => setIsRenamingTitle(true)}
                 type="button"

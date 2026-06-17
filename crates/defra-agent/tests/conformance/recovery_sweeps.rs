@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
@@ -30,6 +31,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         actual_sweep_ids, expected_sweep_ids,
         "Lean recovery sweep registry drifted"
     );
+    assert_periodic_recovery_registry_matches_lean(cases);
 
     for case in cases {
         assert_recovery_case_metadata(case);
@@ -144,10 +146,10 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
 }
 
 fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    let expected_cadence = match case.sweep_id.as_str() {
-        "subagent_liveness_terminalize_expired_children"
-        | "subagent_liveness_interrupt_queued_descendants" => "periodic",
-        _ => "startup",
+    let expected_cadence = if rust_periodic_recovery_sweep_ids().contains(case.sweep_id.as_str()) {
+        "periodic"
+    } else {
+        "startup"
     };
     assert_eq!(case.cadence.as_str(), expected_cadence, "{}", case.name);
     assert_eq!(
@@ -177,6 +179,61 @@ fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) 
         "recovery case {} must name its audit reference",
         case.name
     );
+}
+
+fn assert_periodic_recovery_registry_matches_lean(
+    cases: &[lean_vocab_test::LeanRecoverySweepCase],
+) {
+    let mut lean_periodic_by_id = BTreeMap::new();
+    for case in cases.iter().filter(|case| case.cadence == "periodic") {
+        if let Some(previous) =
+            lean_periodic_by_id.insert(case.sweep_id.as_str(), case.rust_function.as_str())
+        {
+            assert_eq!(
+                previous,
+                case.rust_function.as_str(),
+                "Lean emitted conflicting Rust functions for periodic recovery sweep {}",
+                case.sweep_id
+            );
+        }
+    }
+
+    let mut rust_periodic_by_id = BTreeMap::new();
+    for metadata in defra_agent::periodic_recovery_sweep_metadata() {
+        assert!(
+            !metadata.sweep_ids.is_empty(),
+            "periodic recovery registry entry {} must name at least one Lean sweep id",
+            metadata.rust_function
+        );
+        for sweep_id in metadata.sweep_ids {
+            assert!(
+                rust_periodic_by_id
+                    .insert(*sweep_id, metadata.rust_function)
+                    .is_none(),
+                "periodic recovery sweep id {sweep_id} registered more than once"
+            );
+        }
+    }
+
+    assert_eq!(
+        rust_periodic_by_id.keys().copied().collect::<BTreeSet<_>>(),
+        lean_periodic_by_id.keys().copied().collect::<BTreeSet<_>>(),
+        "Rust periodic recovery registry drifted from Lean cadence=periodic sweeps"
+    );
+    for (sweep_id, rust_function) in rust_periodic_by_id {
+        assert_eq!(
+            Some(&rust_function),
+            lean_periodic_by_id.get(sweep_id),
+            "periodic recovery registry Rust function drifted for {sweep_id}"
+        );
+    }
+}
+
+fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
+    defra_agent::periodic_recovery_sweep_metadata()
+        .iter()
+        .flat_map(|metadata| metadata.sweep_ids.iter().copied())
+        .collect()
 }
 
 async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {

@@ -5,6 +5,7 @@ export * from "./ConfigChrome";
 export * from "./EventTriggerConfigPanel";
 export * from "./InferenceProfileConfigPanel";
 export * from "./ScheduleConfigPanel";
+export * from "./SkillConfigPanel";
 export * from "./TaskConfigPanel";
 export * from "./ToolSelectionConfigPanel";
 export * from "./ToolServiceConfigPanel";

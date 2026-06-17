@@ -188,6 +188,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         ..ClientStoreRows::default()
@@ -266,6 +267,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         ..ClientStoreRows::default()
@@ -795,6 +797,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:00Z".to_string()),
             },
             AgentMessageRow {
@@ -806,6 +809,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
                     "{\"role\":\"assistant\",\"content\":[{\"text\":\"final answer\"}]}"
                         .to_string(),
                 ),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:05Z".to_string()),
             },
         ],
@@ -889,6 +893,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("user question")),
+            reasoning: None,
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
@@ -1043,6 +1048,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("subagent task")),
+            reasoning: None,
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
@@ -1265,6 +1271,7 @@ fn transcript_message_row(
         sequence: Some(sequence as i64),
         role: Some(role.to_string()),
         content: Some(content),
+        reasoning: None,
         timestamp: Some("2026-04-21T12:00:00Z".to_string()),
     }
 }

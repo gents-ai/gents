@@ -136,3 +136,61 @@ jobs:
       - name: Build proofs
         working-directory: crates/defra-agent/proofs
         run: lake build
+
+  desktop-ui:
+    runs-on: [self-hosted, macOS, ARM64, studio]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop-tauri/package-lock.json
+
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" --version
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop-tauri
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: apps/desktop-tauri
+        run: npx playwright install chromium
+
+      - name: Check desktop formatting
+        working-directory: apps/desktop-tauri
+        run: npm run format:check
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop-tauri
+        run: npm run build
+
+      - name: Run desktop unit tests
+        working-directory: apps/desktop-tauri
+        run: npm test
+
+      - name: Run desktop browser journeys
+        working-directory: apps/desktop-tauri
+        run: npm run test:ui:e2e
+
+      - name: Run desktop Bombadil smoke
+        working-directory: apps/desktop-tauri
+        run: npm run test:ui:fuzz -- --time-limit 30s
+
+      - name: Upload desktop UI artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-ui-artifacts
+          if-no-files-found: ignore
+          path: |
+            apps/desktop-tauri/test-results
+            apps/desktop-tauri/playwright-report

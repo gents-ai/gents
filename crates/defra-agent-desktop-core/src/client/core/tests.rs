@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -5,7 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use defra_p2p_adapter::{
-    ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest, ReplicatorInfo,
+    ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
+    ReplicationFilter, ReplicatorInfo,
 };
 
 use super::supervisor::{
@@ -181,6 +183,7 @@ impl P2POps for RecordingP2P {
         &self,
         _collections: Vec<String>,
         addr: Option<&str>,
+        _filters: BTreeMap<String, ReplicationFilter>,
         _explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
         _expected_authorizer_did: Option<&str>,
     ) -> P2PResult<()> {
@@ -222,10 +225,6 @@ impl P2POps for RecordingP2P {
     }
 
     async fn remove_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
-        Ok(())
-    }
-
-    async fn republish_document(&self, _collection_name: &str, _doc_id: &str) -> P2PResult<()> {
         Ok(())
     }
 
@@ -376,6 +375,7 @@ async fn probe_p2p_health_reports_healthy_transport() {
         id: Some("peer-alpha".to_string()),
         collections: vec!["AgentRequest".to_string()],
         address: Some("127.0.0.1:56000/p2p/peer-alpha".to_string()),
+        filters: BTreeMap::new(),
         status: Some(0),
         last_status_change: Some("0001-01-01T00:00:00Z".to_string()),
     }]);

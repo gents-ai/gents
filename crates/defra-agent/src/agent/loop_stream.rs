@@ -23,6 +23,8 @@
 //! threaded into the conversation by construction, the in-loop truncation gap
 //! (#401) is closed natively without the recorder shim.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
@@ -31,9 +33,11 @@ use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
+};
 
-use crate::llm::tool::ToolDyn;
+use crate::llm::tool::{ToolDyn, ToolError, UnparseableArgsKind};
 use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -41,11 +45,18 @@ use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
     cancelled_result, current_tool_runtime_context, deadline_remaining, timeout_result,
+    unparseable_args_notice, unparseable_args_result,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) type RenderedRequestSink = Arc<
+    dyn Fn(usize, CompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
@@ -57,6 +68,7 @@ pub(crate) struct LoopConfig {
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
+    pub(crate) on_rendered_request: Option<RenderedRequestSink>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
@@ -205,6 +217,15 @@ where
             }
 
             let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
+            if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                on_rendered_request(current_turn - 1, request.clone())
+                    .await
+                    .map_err(|error| {
+                        StreamingError::Completion(CompletionError::ProviderError(format!(
+                            "capturing rendered completion request failed: {error:#}"
+                        )))
+                    })?;
+            }
 
             let mut stream = model
                 .stream(request)
@@ -298,7 +319,12 @@ where
                                 // Dispatch the unwrapped tool inside our own
                                 // deadline/cancellation envelope, then bound the
                                 // model-facing result natively (#401) before
-                                // threading.
+                                // threading. An unparseable-args failure comes back
+                                // wrapped in the collision-free unparseable-args
+                                // marker; on_tool_result strips it and terminalizes
+                                // failed(ArgumentInvalid), and we strip it here too
+                                // so the model sees only the clean notice and
+                                // re-emits corrected arguments next turn.
                                 let full_result = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
@@ -335,7 +361,11 @@ where
                                         )))?;
                                     }
                                 }
-                                bounded
+                                // The internal marker must never reach the model.
+                                match unparseable_args_notice(&bounded) {
+                                    Some(notice) => notice.to_string(),
+                                    None => bounded,
+                                }
                             }
                         };
 
@@ -536,18 +566,19 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
 
 /// Dispatch one tool call by name, applying the active request's
 /// deadline/cancellation envelope (when a tool runtime scope is in effect).
-/// Returns the tool's full (unbounded) output, or a managed-terminal marker
-/// string that `on_tool_result` classifies into a timed-out/cancelled outcome.
+///
+/// Returns the tool's full (unbounded) output, a managed-terminal marker string
+/// that `on_tool_result` classifies into a timed-out/cancelled outcome, or — for
+/// a [`ToolError::UnparseableArgs`] — a `JsonError:`-prefixed message (see
+/// [`tool_outcome_to_result`]). A tool's own error is rendered into the result
+/// string so the model can react to it, as before.
 async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> String {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         return format!("error: unknown tool '{name}'");
     };
 
     let Some(scope) = current_tool_runtime_context() else {
-        return tool
-            .call(args)
-            .await
-            .unwrap_or_else(|error| error.to_string());
+        return tool_outcome_to_result(name, tool.call(args).await);
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
@@ -566,7 +597,44 @@ async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> 
         biased;
         _ = scope.cancellation_token.cancelled() => cancelled_result(),
         _ = &mut deadline => timeout_result(scope.deadline_at),
-        result = tool.call(args) => result.unwrap_or_else(|error| error.to_string()),
+        result = tool.call(args) => tool_outcome_to_result(name, result),
+    }
+}
+
+/// Render a tool dispatch outcome into the model-facing result string. A
+/// [`ToolError::UnparseableArgs`] is wrapped in the collision-free
+/// [`unparseable_args_result`] marker: `on_tool_result` strips it, terminalizes
+/// the call `failed(ArgumentInvalid)`, and surfaces the (clean) notice to the
+/// model — which tells it whether its arguments were truncated (it hit the token
+/// cap) or malformed, so it re-emits a corrected tool call on its next turn
+/// instead of blindly repeating the broken payload. A bare human-readable prefix
+/// would risk colliding with a legitimate tool's output; the marker cannot. Every
+/// other error keeps the existing behavior of being surfaced as the result.
+fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
+    match outcome {
+        Ok(result) => result,
+        Err(ToolError::UnparseableArgs { kind, reason }) => {
+            tracing::warn!(
+                tool = name,
+                %kind,
+                %reason,
+                "tool-call arguments unparseable after repair; notifying model"
+            );
+            let guidance = match kind {
+                UnparseableArgsKind::Truncated => {
+                    "the arguments were cut off — your response hit the token limit before the \
+                     JSON was complete; re-call the tool with a shorter, complete arguments object"
+                }
+                UnparseableArgsKind::Malformed => {
+                    "the arguments were not valid JSON; re-call the tool with valid JSON \
+                     (escape any backslash as \\\\)"
+                }
+            };
+            unparseable_args_result(&format!(
+                "tool '{name}' arguments could not be parsed: {guidance}."
+            ))
+        }
+        Err(error) => error.to_string(),
     }
 }
 

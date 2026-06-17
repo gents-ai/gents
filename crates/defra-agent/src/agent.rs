@@ -100,6 +100,8 @@ pub struct DefraAgent {
     background_execution_registry: BackgroundExecutionRegistry,
     health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
     /// `ManualSource`. In-process callers that cloned this `DefraAgent`
     /// before calling `run()` can then observe the handle via
@@ -177,6 +179,7 @@ impl DefraAgent {
             background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: options.health_checker_options,
             process_state_observer: options.process_state_observer,
+            rendered_request_capture_factory: None,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
     }

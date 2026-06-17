@@ -415,3 +415,640 @@ fn init_live_runner_tracing() {
             .try_init();
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use anyhow::{bail, Context, Result};
+    use axum::extract::State;
+    use axum::http::{header, StatusCode};
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use defra_agent::default_behavior_id_for_agent;
+    use defra_agent_desktop_core::client::ClientCore;
+    use serde_json::Value;
+    use tokio::sync::oneshot;
+
+    use super::{LiveBackendOverride, LiveBridgeFixture};
+    use crate::bridge::commands::{delete_skill_config, save_skill_config, send_chat_message};
+    use crate::bridge::snapshot::build_session_snapshot_from_store_for_agent;
+    use crate::bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
+
+    const MODEL_NAME: &str = "desktop-live-skill-mock";
+
+    #[test]
+    fn live_fixture_replicates_skill_create_delete_to_agent_node() -> Result<()> {
+        let _guard = live_fixture_test_lock();
+        let mock = MockChatEndpoint::start(MODEL_NAME, "ok")?;
+        let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
+
+        let result = fixture
+            .runtime()
+            .block_on(skill_create_delete_case(fixture.as_ref()));
+        let shutdown_result = fixture.runtime().block_on(fixture.shutdown());
+        shutdown_result?;
+        result
+    }
+
+    #[test]
+    fn live_fixture_desktop_chat_slash_skill_loads_on_agent_node() -> Result<()> {
+        let _guard = live_fixture_test_lock();
+        let mock = MockChatEndpoint::start(MODEL_NAME, "skill loaded")?;
+        let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
+
+        let result = fixture
+            .runtime()
+            .block_on(slash_skill_chat_case(fixture.as_ref(), &mock));
+        let shutdown_result = fixture.runtime().block_on(fixture.shutdown());
+        shutdown_result?;
+        result
+    }
+
+    async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
+        let agent_did = fixture.agent_did().to_string();
+        let behavior_id = default_behavior_id_for_agent(&agent_did);
+        let skill_id = "desktop-crud-skill";
+        let skill_body = "CRUD skill body should replicate to the agent node.";
+
+        save_skill_config(
+            fixture.desktop_core().as_ref(),
+            skill_save_request(&agent_did, skill_id, skill_body),
+        )
+        .await?;
+        wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id)
+            .await
+            .context("skill did not replicate to the agent node after create")?;
+
+        bind_skill_to_behavior(fixture, &agent_did, &behavior_id, skill_id, true).await?;
+        wait_for_remote_behavior_skill_refs(
+            fixture.remote_core().as_ref(),
+            &behavior_id,
+            &[skill_id],
+            &[skill_id],
+        )
+        .await
+        .context("behavior skill refs did not replicate to the agent node")?;
+
+        delete_skill_config(
+            fixture.desktop_core().as_ref(),
+            SkillDeleteRequest {
+                skill_id: skill_id.to_string(),
+                agent_did: agent_did.clone(),
+            },
+        )
+        .await?;
+        wait_for_remote_skill_absent(fixture.remote_core().as_ref(), skill_id)
+            .await
+            .context("skill remained queryable on the agent node after delete")?;
+        wait_for_remote_behavior_skill_refs(fixture.remote_core().as_ref(), &behavior_id, &[], &[])
+            .await
+            .context("behavior skill refs were not pruned on the agent node")?;
+
+        Ok(())
+    }
+
+    async fn slash_skill_chat_case(
+        fixture: &LiveBridgeFixture,
+        mock: &MockChatEndpoint,
+    ) -> Result<()> {
+        let agent_did = fixture.agent_did().to_string();
+        let behavior_id = default_behavior_id_for_agent(&agent_did);
+        let skill_id = "desktop-review";
+        let skill_body = "UNIQUE_DESKTOP_SKILL_BODY_USE_THIS_REVIEW_PROTOCOL";
+        let task = "summarize the current workspace state";
+
+        save_skill_config(
+            fixture.desktop_core().as_ref(),
+            skill_save_request(&agent_did, skill_id, skill_body),
+        )
+        .await?;
+        wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id).await?;
+        let generation_before_bind =
+            wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &agent_did)
+                .await
+                .context("runtime status missing before skill binding")?;
+        bind_skill_to_behavior(fixture, &agent_did, &behavior_id, skill_id, false).await?;
+        wait_for_remote_behavior_skill_refs(
+            fixture.remote_core().as_ref(),
+            &behavior_id,
+            &[skill_id],
+            &[],
+        )
+        .await?;
+        wait_for_remote_runtime_generation_after(
+            fixture.remote_core().as_ref(),
+            &agent_did,
+            generation_before_bind,
+        )
+        .await
+        .context("agent runtime did not reconcile the skill binding before chat submit")?;
+
+        let submitted = send_chat_message(
+            fixture.desktop_core().as_ref(),
+            ChatSendRequest {
+                agent_did: agent_did.clone(),
+                behavior_id: Some(behavior_id.clone()),
+                session_id: None,
+                content: format!("/{skill_id}\n{task}"),
+            },
+        )
+        .await?;
+
+        let desktop_store = fixture.desktop_core().store().snapshot();
+        let session = build_session_snapshot_from_store_for_agent(
+            desktop_store.as_ref(),
+            Some(&agent_did),
+            &submitted.session_id,
+            Some(&submitted.request_id),
+        )
+        .context("desktop session snapshot missing after skill chat submit")?;
+        let pending_turn = session
+            .pending_turn
+            .context("desktop session snapshot did not expose the opening turn")?;
+        assert_eq!(pending_turn.content, task);
+        assert_eq!(pending_turn.selected_skill_ids, vec![skill_id.to_string()]);
+
+        let request =
+            wait_for_remote_request(fixture.remote_core().as_ref(), &submitted.request_id).await?;
+        assert_eq!(request.get("content").and_then(Value::as_str), Some(task));
+        assert_eq!(
+            selected_skill_ids_from_metadata(request.get("metadata").and_then(Value::as_str)),
+            vec![skill_id.to_string()]
+        );
+
+        let captured = wait_for_captured_chat_request(mock, skill_body).await?;
+        assert!(
+            captured.to_string().contains(skill_body),
+            "mock model request did not include selected skill body: {captured}"
+        );
+
+        Ok(())
+    }
+
+    fn live_fixture_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("live fixture test lock poisoned")
+    }
+
+    async fn bind_skill_to_behavior(
+        fixture: &LiveBridgeFixture,
+        agent_did: &str,
+        behavior_id: &str,
+        skill_id: &str,
+        include_exclude: bool,
+    ) -> Result<()> {
+        fixture.desktop_core().refresh_store().await?;
+        let snapshot = fixture.desktop_core().store().snapshot();
+        let mut behavior = snapshot
+            .behavior_row(agent_did, behavior_id)
+            .cloned()
+            .with_context(|| format!("behavior {behavior_id} not present in desktop store"))?;
+        behavior.skill_refs = vec![skill_id.to_string()];
+        behavior.skill_excludes = if include_exclude {
+            vec![skill_id.to_string()]
+        } else {
+            Vec::new()
+        };
+        fixture.desktop_core().save_behavior(&behavior).await
+    }
+
+    fn skill_save_request(agent_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
+        SkillSaveRequest {
+            skill_id: skill_id.to_string(),
+            agent_did: agent_did.to_string(),
+            scope: "behavior".to_string(),
+            name: skill_id.to_string(),
+            description: Some(format!("Test skill {skill_id}")),
+            instructions: instructions.to_string(),
+            tool_refs: Vec::new(),
+            display_name: Some(skill_id.to_string()),
+            enabled: Some(true),
+        }
+    }
+
+    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<Value> {
+        wait_for_row(
+            "remote Skill create",
+            Duration::from_secs(60),
+            || async move {
+                let rows = query_skill_rows(core, skill_id).await?;
+                Ok(rows.into_iter().next())
+            },
+        )
+        .await
+    }
+
+    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
+        wait_for_condition(
+            "remote Skill delete",
+            Duration::from_secs(60),
+            || async move { Ok(query_skill_rows(core, skill_id).await?.is_empty()) },
+        )
+        .await
+    }
+
+    async fn wait_for_remote_behavior_skill_refs(
+        core: &ClientCore,
+        behavior_id: &str,
+        expected_refs: &[&str],
+        expected_excludes: &[&str],
+    ) -> Result<()> {
+        wait_for_condition(
+            "remote AgentBehavior skill refs",
+            Duration::from_secs(60),
+            || async move {
+                let rows = query_agent_behavior_rows(core, behavior_id).await?;
+                let Some(row) = rows.first() else {
+                    return Ok(false);
+                };
+                Ok(string_list(row.get("skill_refs")) == expected_refs
+                    && string_list(row.get("skill_excludes")) == expected_excludes)
+            },
+        )
+        .await
+    }
+
+    async fn wait_for_remote_request(core: &ClientCore, request_id: &str) -> Result<Value> {
+        wait_for_row(
+            "remote AgentRequest",
+            Duration::from_secs(60),
+            || async move {
+                let request_id = escape_graphql_string(request_id);
+                let query = format!(
+                    r#"{{
+                    AgentRequest(
+                        filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                        limit: 1
+                    ) {{ request_id content metadata lifecycle_state status }}
+                }}"#
+                );
+                let rows = query_rows(core, &query, "AgentRequest").await?;
+                Ok(rows.into_iter().next())
+            },
+        )
+        .await
+    }
+
+    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<i64> {
+        wait_for_row(
+            "remote AgentRuntime generation",
+            Duration::from_secs(60),
+            || async move { query_runtime_status_row(core, agent_did).await },
+        )
+        .await
+        .and_then(|row| {
+            row.get("active_generation")
+                .and_then(Value::as_i64)
+                .context("AgentRuntime.active_generation missing")
+        })
+    }
+
+    async fn wait_for_remote_runtime_generation_after(
+        core: &ClientCore,
+        agent_did: &str,
+        previous_generation: i64,
+    ) -> Result<()> {
+        wait_for_condition(
+            "remote AgentRuntime generation advance",
+            Duration::from_secs(90),
+            || async move {
+                let Some(row) = query_runtime_status_row(core, agent_did).await? else {
+                    return Ok(false);
+                };
+                if row.get("last_reconcile_result").and_then(Value::as_str) == Some("error") {
+                    bail!(
+                        "runtime reconcile failed while waiting for skill binding: {}",
+                        row.get("last_reconcile_error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown error")
+                    );
+                }
+                let generation = row
+                    .get("active_generation")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default();
+                let phase = row
+                    .get("reconcile_phase")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                Ok(generation > previous_generation && phase == "idle")
+            },
+        )
+        .await
+    }
+
+    async fn wait_for_captured_chat_request(
+        mock: &MockChatEndpoint,
+        needle: &str,
+    ) -> Result<Value> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let captured = mock.captured_chat_requests();
+            if let Some(request) = captured
+                .iter()
+                .find(|request| request.to_string().contains(needle))
+            {
+                return Ok(request.clone());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out waiting for mock chat request containing {needle:?}; captured={captured:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn query_skill_rows(core: &ClientCore, skill_id: &str) -> Result<Vec<Value>> {
+        let skill_id = escape_graphql_string(skill_id);
+        let query = format!(
+            r#"{{
+                Skill(
+                    filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}
+                ) {{ skill_id agent_did scope name instructions enabled }}
+            }}"#
+        );
+        query_rows(core, &query, "Skill").await
+    }
+
+    async fn query_agent_behavior_rows(core: &ClientCore, behavior_id: &str) -> Result<Vec<Value>> {
+        let behavior_id = escape_graphql_string(behavior_id);
+        let query = format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
+                    limit: 1
+                ) {{ behavior_id skill_refs skill_excludes }}
+            }}"#
+        );
+        query_rows(core, &query, "AgentBehavior").await
+    }
+
+    async fn query_runtime_status_row(core: &ClientCore, agent_did: &str) -> Result<Option<Value>> {
+        let agent_did = escape_graphql_string(agent_did);
+        let query = format!(
+            r#"{{
+                AgentRuntime(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    limit: 1
+                ) {{
+                    active_generation
+                    reconcile_phase
+                    last_reconcile_result
+                    last_reconcile_error
+                }}
+            }}"#
+        );
+        let rows = query_rows(core, &query, "AgentRuntime").await?;
+        Ok(rows.into_iter().next())
+    }
+
+    async fn query_rows(core: &ClientCore, query: &str, collection: &str) -> Result<Vec<Value>> {
+        let response = core.node().execute(query).await;
+        if response.has_errors() {
+            bail!("query {collection} failed: {:?}", response.errors);
+        }
+        Ok(response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(collection))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn wait_for_row<F, Fut>(
+        label: &'static str,
+        timeout: Duration,
+        mut check: F,
+    ) -> Result<Value>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<Option<Value>>>,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(row) = check().await? {
+                return Ok(row);
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for {label}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_condition<F, Fut>(
+        label: &'static str,
+        timeout: Duration,
+        mut check: F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<bool>>,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if check().await? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for {label}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn string_list(value: Option<&Value>) -> Vec<String> {
+        match value {
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            Some(Value::String(value)) if !value.trim().is_empty() => {
+                vec![value.trim().to_string()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
+        let Some(metadata) = metadata else {
+            return Vec::new();
+        };
+        let Ok(value) = serde_json::from_str::<Value>(metadata) else {
+            return Vec::new();
+        };
+        string_list(value.get("selected_skill_ids"))
+    }
+
+    fn escape_graphql_string(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    }
+
+    #[derive(Clone)]
+    struct MockState {
+        model_name: String,
+        final_text: String,
+        captured: Arc<Mutex<Vec<Value>>>,
+    }
+
+    struct MockChatEndpoint {
+        endpoint: String,
+        captured: Arc<Mutex<Vec<Value>>>,
+        shutdown: Option<oneshot::Sender<()>>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockChatEndpoint {
+        fn start(model_name: &str, final_text: &str) -> Result<Self> {
+            std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let state = Arc::new(MockState {
+                model_name: model_name.to_string(),
+                final_text: final_text.to_string(),
+                captured: Arc::clone(&captured),
+            });
+            let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let join = std::thread::spawn(move || {
+                let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+                runtime.block_on(async move {
+                    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+                        return;
+                    };
+                    let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
+                    let _ = port_tx.send(port);
+                    let app = Router::new()
+                        .route("/v1/models", get(handle_models))
+                        .route("/models", get(handle_models))
+                        .route("/v1/chat/completions", post(handle_chat))
+                        .route("/chat/completions", post(handle_chat))
+                        .fallback(handle_fallback)
+                        .with_state(state);
+                    let _ = axum::serve(listener, app)
+                        .with_graceful_shutdown(async move {
+                            let _ = shutdown_rx.await;
+                        })
+                        .await;
+                });
+            });
+
+            let port = port_rx
+                .recv()
+                .context("mock chat endpoint failed to bind a port")?;
+            Ok(Self {
+                endpoint: format!("http://127.0.0.1:{port}/v1"),
+                captured,
+                shutdown: Some(shutdown_tx),
+                join: Some(join),
+            })
+        }
+
+        fn backend_override(&self, model_name: &str) -> LiveBackendOverride {
+            LiveBackendOverride {
+                inference_url: Some(self.endpoint.clone()),
+                model_name: Some(model_name.to_string()),
+                provider: Some("openai-compatible".to_string()),
+                api_key: Some("desktop-live-test-key".to_string()),
+                api_key_env_var: None,
+            }
+        }
+
+        fn captured_chat_requests(&self) -> Vec<Value> {
+            self.captured
+                .lock()
+                .expect("captured mock request mutex poisoned")
+                .clone()
+        }
+    }
+
+    impl Drop for MockChatEndpoint {
+        fn drop(&mut self) {
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+
+    async fn handle_models(State(state): State<Arc<MockState>>) -> Response {
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({ "data": [{ "id": state.model_name }] }).to_string(),
+        )
+            .into_response()
+    }
+
+    async fn handle_chat(State(state): State<Arc<MockState>>, body: String) -> Response {
+        let request_json = match serde_json::from_str::<Value>(&body) {
+            Ok(value) => value,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    r#"{"error":"invalid json"}"#,
+                )
+                    .into_response()
+            }
+        };
+        state
+            .captured
+            .lock()
+            .expect("captured mock request mutex poisoned")
+            .push(request_json);
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            completion_text_sse(&state.final_text),
+        )
+            .into_response()
+    }
+
+    async fn handle_fallback() -> Response {
+        (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"not found"}"#,
+        )
+            .into_response()
+    }
+
+    fn completion_text_sse(text: &str) -> String {
+        let chunk_1 = serde_json::json!({
+            "choices": [{ "delta": { "content": text }, "finish_reason": null }],
+            "usage": null
+        });
+        let chunk_2 = serde_json::json!({
+            "choices": [{
+                "delta": { "content": null, "tool_calls": [] },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 24, "completion_tokens": 6, "total_tokens": 30 }
+        });
+        format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::to_string(&chunk_1).expect("serialize completion chunk 1"),
+            serde_json::to_string(&chunk_2).expect("serialize completion chunk 2"),
+        )
+    }
+}

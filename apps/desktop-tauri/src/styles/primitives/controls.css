@@ -43,6 +43,20 @@
     color: var(--color-text);
   }
 
+  .danger-button {
+    --button-border: rgb(255 111 95 / 0.34);
+    --button-rail: rgb(255 111 95 / 0.28);
+    color: rgb(255 191 184);
+  }
+
+  .danger-button:not(:disabled):hover {
+    --button-rail-width: 3px;
+    --button-rail: rgb(255 111 95 / 0.72);
+    border-color: rgb(255 111 95 / 0.58);
+    background: rgb(255 111 95 / 0.1);
+    color: rgb(255 226 222);
+  }
+
   .primary-button {
     --button-border: rgb(var(--source-green-rgb) / 0.46);
     --button-rail-width: 3px;

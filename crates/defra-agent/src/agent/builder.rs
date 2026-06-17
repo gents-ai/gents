@@ -47,6 +47,8 @@ pub struct DefraAgentBuilder {
     hook_failure_policy: FailurePolicy,
     health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     behaviors: Vec<PendingAgentBehavior>,
 }
 
@@ -107,6 +109,14 @@ impl DefraAgentBuilder {
 
     pub fn process_state_observer(mut self, observer: Arc<dyn ProcessLifecycleObserver>) -> Self {
         self.process_state_observer = Some(observer);
+        self
+    }
+
+    pub fn rendered_request_capture_factory(
+        mut self,
+        factory: crate::rendered_request::RenderedRequestCaptureFactory,
+    ) -> Self {
+        self.rendered_request_capture_factory = Some(factory);
         self
     }
 
@@ -216,6 +226,7 @@ impl DefraAgentBuilder {
             background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: self.health_checker_options,
             process_state_observer: self.process_state_observer,
+            rendered_request_capture_factory: self.rendered_request_capture_factory,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
         })
     }

@@ -8,6 +8,7 @@ import type {
   DeploymentView,
   InferenceBackendView,
   InferenceProfileView,
+  SkillView,
   ToolSelectionView,
 } from "../../lib/types";
 import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
@@ -83,6 +84,7 @@ export function BehaviorConfigPanel({
         inferenceProfiles={deployment.inferenceProfiles}
         savedStatus={savedStatus}
         saving={saving}
+        skills={deployment.skills}
         toolSelections={deployment.toolSelections}
         onCreateBackend={onCreateBackend}
         onCreateProfile={onCreateProfile}
@@ -106,6 +108,7 @@ export type BehaviorConfigEditorProps = {
   currentDefaultBehaviorId: string | null;
   inferenceBackends: InferenceBackendView[];
   inferenceProfiles: InferenceProfileView[];
+  skills: SkillView[];
   toolSelections: ToolSelectionView[];
   saving: boolean;
   savedStatus: string | null;
@@ -125,6 +128,7 @@ export function BehaviorConfigEditor({
   currentDefaultBehaviorId,
   inferenceBackends,
   inferenceProfiles,
+  skills = [],
   toolSelections,
   saving,
   savedStatus,
@@ -148,6 +152,8 @@ export function BehaviorConfigEditor({
   );
   const [enabled, setEnabled] = useState(true);
   const [defaultForAgent, setDefaultForAgent] = useState(false);
+  const [skillRefs, setSkillRefs] = useState<string[]>([]);
+  const [skillExcludes, setSkillExcludes] = useState<string[]>([]);
 
   useEffect(() => {
     const selectedProfileId = behavior?.inferenceProfileId ?? null;
@@ -171,7 +177,28 @@ export function BehaviorConfigEditor({
     );
     setEnabled(behavior?.enabled ?? true);
     setDefaultForAgent(behavior?.isDefault ?? false);
+    setSkillRefs(behavior?.skillRefs ?? []);
+    setSkillExcludes(behavior?.skillExcludes ?? []);
   }, [behavior, inferenceProfiles]);
+
+  const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
+  const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");
+
+  function toggleSkillRef(skillId: string, checked: boolean) {
+    setSkillRefs((current) =>
+      checked
+        ? Array.from(new Set([...current, skillId]))
+        : current.filter((id) => id !== skillId),
+    );
+  }
+
+  function toggleSkillExclude(skillId: string, excluded: boolean) {
+    setSkillExcludes((current) =>
+      excluded
+        ? Array.from(new Set([...current, skillId]))
+        : current.filter((id) => id !== skillId),
+    );
+  }
 
   const selectedBackend = inferenceBackends.find(
     (backend) => backend.backendId === backendId,
@@ -206,6 +233,8 @@ export function BehaviorConfigEditor({
         compactionStrategy: optionalString(compactionStrategy),
         compactionThreshold: parseOptionalFloat(compactionThreshold),
         enabled,
+        skillRefs,
+        skillExcludes,
       });
       if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
         await onSaveAgentConfig({
@@ -390,6 +419,51 @@ export function BehaviorConfigEditor({
           <dd>{resolvedModel}</dd>
         </div>
       </div>
+
+      <section className="behavior-skills-box" data-testid="behavior-skills">
+        <p className="eyebrow">Skills</p>
+        {!skills.length ? (
+          <p className="muted">
+            No skills defined for this agent. Create skills in the Skills tab.
+          </p>
+        ) : null}
+        {behaviorScopedSkills.length ? (
+          <fieldset className="behavior-skill-group">
+            <legend>Behavior-scoped (opt in)</legend>
+            {behaviorScopedSkills.map((skill) => (
+              <label className="checkbox" key={skill.skillId}>
+                <input
+                  checked={skillRefs.includes(skill.skillId)}
+                  data-testid={`behavior-skill-ref-${skill.skillId}`}
+                  onChange={(event) =>
+                    toggleSkillRef(skill.skillId, event.currentTarget.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>{skill.displayName ?? skill.name ?? skill.skillId}</span>
+              </label>
+            ))}
+          </fieldset>
+        ) : null}
+        {principalScopedSkills.length ? (
+          <fieldset className="behavior-skill-group">
+            <legend>Principal-scoped (inherited; uncheck to exclude)</legend>
+            {principalScopedSkills.map((skill) => (
+              <label className="checkbox" key={skill.skillId}>
+                <input
+                  checked={!skillExcludes.includes(skill.skillId)}
+                  data-testid={`behavior-skill-inherit-${skill.skillId}`}
+                  onChange={(event) =>
+                    toggleSkillExclude(skill.skillId, !event.currentTarget.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>{skill.displayName ?? skill.name ?? skill.skillId}</span>
+              </label>
+            ))}
+          </fieldset>
+        ) : null}
+      </section>
 
       <label className="field">
         <span>System prompt</span>

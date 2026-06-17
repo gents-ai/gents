@@ -437,6 +437,27 @@ fn logical_turn_index_for_request(
         .position(|candidate| candidate == &root_id)
 }
 
+fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
+    let Some(metadata) = metadata.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
+        return Vec::new();
+    };
+
+    value
+        .get("selected_skill_ids")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn build_pending_turn(
     store: &defra_agent_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
@@ -496,6 +517,7 @@ fn build_pending_turn(
     Some(PendingTurnView {
         request_id: request.request_id.clone(),
         content: content.to_string(),
+        selected_skill_ids: selected_skill_ids_from_metadata(request.metadata.as_deref()),
         lifecycle_state,
         created_at: normalize_optional(request.created_at.as_deref()),
     })

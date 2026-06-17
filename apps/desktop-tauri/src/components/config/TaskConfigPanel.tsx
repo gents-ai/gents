@@ -121,8 +121,11 @@ export function TaskConfigEditor({
     setPromptTemplate(task?.promptTemplate ?? "");
     setOutputSchemaRef(task?.outputSchemaRef ?? "");
     setEnabled(task?.enabled ?? true);
-    setRunStatus(null);
   }, [selectedBehavior?.behaviorId, task]);
+
+  useEffect(() => {
+    setRunStatus(null);
+  }, [selectedBehavior?.behaviorId, task?.taskId]);
 
   const runArgsValid = isJsonObject(runArgs);
 

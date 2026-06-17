@@ -4,6 +4,9 @@
 //! These are free functions rather than `From` impls: rig's types are foreign,
 //! so `impl From<Native> for RigType` would violate the orphan rule.
 
+use anyhow::{Context, Result};
+use serde_json::Value;
+
 use super::tool::ToolDefinition;
 use super::ToolChoice;
 
@@ -26,6 +29,81 @@ pub(crate) fn to_rig_tool_choice(choice: &ToolChoice) -> rig::message::ToolChoic
         ToolChoice::Specific { function_names } => rig::message::ToolChoice::Specific {
             function_names: function_names.clone(),
         },
+    }
+}
+
+pub(crate) fn rendered_completion_request(
+    context: &crate::rendered_request::RenderedRequestContext,
+    turn_index: usize,
+    request: &rig::completion::CompletionRequest,
+) -> Result<crate::rendered_request::RenderedCompletionRequest> {
+    let request_json = provider_request_json(&context.model_name, context.source, request)?;
+    let messages_json = provider_messages(&request_json, context.source);
+    let tools_json = request_json
+        .get("tools")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let tool_choice_json = request_json
+        .get("tool_choice")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let sampling_json = crate::rendered_request::sampling_json(
+        request.temperature,
+        request.max_tokens,
+        request.additional_params.clone(),
+    );
+
+    crate::rendered_request::build_rendered_completion_request(
+        context,
+        turn_index,
+        request_json,
+        messages_json,
+        tools_json,
+        tool_choice_json,
+        sampling_json,
+    )
+}
+
+fn provider_request_json(
+    model_name: &str,
+    source: crate::rendered_request::RenderedRequestSource,
+    request: &rig::completion::CompletionRequest,
+) -> Result<Value> {
+    match source {
+        crate::rendered_request::RenderedRequestSource::OpenAiResponses => {
+            let provider_request =
+                rig::providers::openai::responses_api::CompletionRequest::try_from((
+                    model_name.to_string(),
+                    request.clone(),
+                ))
+                .context("rendering OpenAI Responses request")?;
+            serde_json::to_value(provider_request).context("encoding OpenAI Responses request")
+        }
+        crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions => {
+            let provider_request = rig::providers::openai::CompletionRequest::try_from((
+                model_name.to_string(),
+                request.clone(),
+            ))
+            .context("rendering OpenAI Chat Completions request")?;
+            serde_json::to_value(provider_request)
+                .context("encoding OpenAI Chat Completions request")
+        }
+    }
+}
+
+fn provider_messages(
+    request_json: &Value,
+    source: crate::rendered_request::RenderedRequestSource,
+) -> Value {
+    match source {
+        crate::rendered_request::RenderedRequestSource::OpenAiResponses => request_json
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+        crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions => request_json
+            .get("messages")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
     }
 }
 
@@ -469,5 +547,80 @@ pub(crate) fn from_rig_assistant_content(
             message::AssistantContent::Reasoning(from_rig_reasoning(reasoning))
         }
         R::Image(image) => message::AssistantContent::Image(from_rig_image(image)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rig::completion::message::{Message, Text, ToolChoice, UserContent};
+    use rig::completion::{CompletionRequest, ToolDefinition};
+    use rig::one_or_many::OneOrMany;
+    use serde_json::{json, Value};
+
+    use super::*;
+
+    fn sample_request() -> CompletionRequest {
+        CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: OneOrMany::many(vec![
+                Message::system("You are exact."),
+                Message::User {
+                    content: OneOrMany::one(UserContent::Text(Text {
+                        text: "Read the file.".to_string(),
+                    })),
+                },
+            ])
+            .expect("non-empty history"),
+            documents: Vec::new(),
+            tools: vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: "Read a file".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            temperature: Some(0.2),
+            max_tokens: Some(512),
+            tool_choice: Some(ToolChoice::Auto),
+            additional_params: Some(json!({
+                "reasoning": { "effort": "medium" }
+            })),
+            output_schema: None,
+        }
+    }
+
+    #[test]
+    fn renders_openai_chat_provider_shape_for_capture() {
+        let context = crate::rendered_request::RenderedRequestContext {
+            request_id: "req-1".to_string(),
+            agent_did: "did:key:test".to_string(),
+            behavior_id: "behavior".to_string(),
+            session_id: "session".to_string(),
+            model_name: "test-model".to_string(),
+            source: crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        };
+
+        let rendered =
+            rendered_completion_request(&context, 0, &sample_request()).expect("render request");
+
+        assert_eq!(rendered.request_id, "req-1");
+        assert_eq!(rendered.turn_index, 0);
+        assert_eq!(
+            rendered.source,
+            crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions
+        );
+        assert_eq!(rendered.messages_json[0]["role"], "system");
+        assert_eq!(rendered.messages_json[1]["role"], "user");
+        assert_eq!(rendered.tools_json[0]["function"]["name"], "read_file");
+        assert_eq!(rendered.sampling_json["temperature"], 0.2);
+        assert_eq!(rendered.sampling_json["max_tokens"], 512);
+        assert_ne!(rendered.request_json, Value::Null);
+        assert_eq!(rendered.prompt_hash.len(), 64);
+        assert_eq!(rendered.tools_hash.len(), 64);
     }
 }
