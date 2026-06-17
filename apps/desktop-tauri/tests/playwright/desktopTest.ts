@@ -8,6 +8,7 @@ export type HarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "long-content"
+  | "operations-rich"
   | "active-turn"
   | "cascade-turn";
 
@@ -145,6 +146,53 @@ export async function adjacentDuplicateTranscriptRows(page: Page) {
       }
       return duplicates;
     });
+}
+
+export async function expectNoPageHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => {
+    const documentWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body?.scrollWidth ?? 0,
+    );
+    return {
+      documentWidth,
+      viewportWidth: window.innerWidth,
+      offenders: Array.from(
+        document.querySelectorAll(
+          [
+            ".app-shell",
+            ".workspace",
+            ".chat-workspace",
+            ".chat-main",
+            ".config-workspace",
+            ".fleet-dashboard",
+            ".fleet-empty",
+            ".operations-rail",
+          ].join(", "),
+        ),
+      )
+        .map((element) => {
+          const htmlElement = element as HTMLElement;
+          const style = window.getComputedStyle(htmlElement);
+          return {
+            selector:
+              htmlElement.getAttribute("data-testid") ??
+              htmlElement.className.toString() ??
+              htmlElement.tagName,
+            clientWidth: htmlElement.clientWidth,
+            scrollWidth: htmlElement.scrollWidth,
+            overflowX: style.overflowX,
+          };
+        })
+        .filter((entry) => {
+          const scrollDelta = entry.scrollWidth - entry.clientWidth;
+          return scrollDelta > 2 && entry.overflowX === "visible";
+        }),
+    };
+  });
+
+  expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth + 2);
+  expect(overflow.offenders).toEqual([]);
 }
 
 export async function captureStableScreenshot(

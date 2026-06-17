@@ -1,4 +1,5 @@
 import type { BackendHealth } from "../../src/components/backendHealth/types";
+import { deriveDisplayState } from "../../src/components/backendHealth/displayState";
 import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
 import type {
   DesktopClientUpdatedHandler,
@@ -11,6 +12,7 @@ import type {
   DesktopSessionSnapshot,
   DeploymentView,
   InitSummary,
+  InferenceBackendView,
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
@@ -32,6 +34,7 @@ export type DesktopUiHarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "long-content"
+  | "operations-rich"
   | "active-turn"
   | "cascade-turn";
 
@@ -51,6 +54,15 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
+  const sessionLineage = new Map<
+    string,
+    {
+      taskId?: string | null;
+      taskName?: string | null;
+      triggerId?: string | null;
+      triggerKind?: string | null;
+    }
+  >();
   let requestSeq = 1;
   let sessionSeq = 1;
   let rowCount = 42;
@@ -60,7 +72,10 @@ export function createDesktopUiHarness(
     scenario === "long-content"
       ? longHarnessMessage()
       : "I am your desktop UI test agent. This seeded turn gives the transcript a stable row for duplicate-message checks.";
-  const activeTurn = scenario === "active-turn" || scenario === "cascade-turn";
+  const activeTurn =
+    scenario === "active-turn" ||
+    scenario === "cascade-turn" ||
+    scenario === "operations-rich";
   sessions.set("session-intro", {
     sessionId: "session-intro",
     agentDid: AGENT_DID,
@@ -167,6 +182,10 @@ export function createDesktopUiHarness(
         status: session.status,
         behaviorId: session.behaviorId,
         latestRequestId: session.latestRequestId,
+        taskId: sessionLineage.get(session.sessionId)?.taskId ?? null,
+        taskName: sessionLineage.get(session.sessionId)?.taskName ?? null,
+        triggerId: sessionLineage.get(session.sessionId)?.triggerId ?? null,
+        triggerKind: sessionLineage.get(session.sessionId)?.triggerKind ?? null,
         createdAt: STARTED_AT,
         updatedAt: STARTED_AT,
         turnState: session.turnState,
@@ -195,7 +214,16 @@ export function createDesktopUiHarness(
     };
   }
 
-  function createSessionFromPrompt(prompt: string, behaviorId?: string | null) {
+  function createSessionFromPrompt(
+    prompt: string,
+    behaviorId?: string | null,
+    lineage?: {
+      taskId?: string | null;
+      taskName?: string | null;
+      triggerId?: string | null;
+      triggerKind?: string | null;
+    },
+  ) {
     const sessionId = `session-${++sessionSeq}`;
     const requestId = `request-${++requestSeq}`;
     const title = prompt.trim().slice(0, 48) || "manual-task-run";
@@ -236,6 +264,9 @@ export function createDesktopUiHarness(
       ],
     };
     sessions.set(sessionId, session);
+    if (lineage) {
+      sessionLineage.set(sessionId, lineage);
+    }
     rowCount += 4;
     syncConversations();
     notify("store");
@@ -576,6 +607,9 @@ export function createDesktopUiHarness(
       return runHarnessTask(request.taskId);
     },
     async listSubagentTree(request) {
+      if (scenario === "operations-rich") {
+        return operationsLineage(request.rootRequestId);
+      }
       const tree: SubagentTreeView = {
         rootRequestId: request.rootRequestId,
         truncated: false,
@@ -598,41 +632,109 @@ export function createDesktopUiHarness(
       if (scenario === "backend-health-error") {
         throw new Error("Harness backend health bridge unavailable.");
       }
-      const rows: BackendHealth[] = deployment.inferenceBackends.map((backend) => ({
+      const backends: InferenceBackendView[] =
+        scenario === "operations-rich"
+          ? [
+              ...deployment.inferenceBackends,
+              {
+                backendId: "backend-local",
+                name: "Local Ollama Harness",
+                providerKind: "openai",
+                endpoint: "http://127.0.0.1:11434/v1",
+                apiKeyConfigured: false,
+                maxConcurrent: 1,
+                maxQueueDepth: 2,
+                enabled: false,
+                models: ["llama3.1:8b"],
+                probeStatus: "unhealthy",
+              },
+            ]
+          : deployment.inferenceBackends;
+      const rows: BackendHealth[] = backends.map((backend) => ({
         backendId: backend.backendId,
         name: backend.name ?? backend.backendId,
         providerKind: backend.providerKind ?? "openai",
         endpoint: backend.endpoint ?? "http://127.0.0.1:8000/v1",
         enabled: backend.enabled ?? true,
         probeStatus: backend.probeStatus ?? "healthy",
-        displayState: backend.enabled === false ? "disabled" : "available",
+        displayState: deriveDisplayState(
+          backend.enabled ?? true,
+          backend.probeStatus ?? "healthy",
+        ),
         lastProbe: STARTED_AT,
         maxConcurrent: backend.maxConcurrent ?? 4,
         maxQueueDepth: backend.maxQueueDepth ?? 16,
         models: backend.models,
-        recentCalls: [],
+        recentCalls:
+          scenario === "operations-rich" && backend.backendId === "backend-openai"
+            ? [
+                {
+                  callId: "call-openai-1",
+                  callSeq: 7,
+                  callKind: "chat",
+                  callState: "failed",
+                  queueDepthAtEnqueue: 1,
+                  queuedAt: STARTED_AT,
+                  startedAt: STARTED_AT,
+                  endedAt: STARTED_AT,
+                  failureReason: "rate_limited",
+                  promptTokens: 1220,
+                  completionTokens: 0,
+                },
+              ]
+            : [],
       }));
       return rows;
     },
     async listMcpServicesWithHealth() {
-      const services: MCPServiceHealthView[] = deployment.toolServiceRegistries.map(
-        (service) => ({
-          serviceId: service.serviceId,
-          agentDid: deployment.agentDid,
-          endpoint: `${service.hostname ?? "localhost"}:${service.mcpPort ?? 7331}${
-            service.mcpPath ?? "/mcp"
-          }`,
-          status: "healthy",
-          failureCount: 0,
-          kMax: 3,
-          backoffUntil: null,
-          lastProbeAt: STARTED_AT,
-          lastSeen: STARTED_AT,
-          updatedAt: STARTED_AT,
-          lastErrorClass: null,
-          lastErrorMessage: null,
-        }),
-      );
+      const registries =
+        scenario === "operations-rich"
+          ? [
+              ...deployment.toolServiceRegistries,
+              {
+                serviceId: "mcp-logs",
+                displayName: "Logs MCP",
+                description: "Log query service",
+                hostname: "logs.internal",
+                tailscaleIp: null,
+                lanIp: "127.0.0.1",
+                mcpPort: 7444,
+                mcpPath: "/mcp",
+                status: "reconnecting",
+                version: "0.1.0",
+                updatedAt: STARTED_AT,
+              },
+            ]
+          : deployment.toolServiceRegistries;
+      const services: MCPServiceHealthView[] = registries.map((service) => ({
+        serviceId: service.serviceId,
+        agentDid: deployment.agentDid,
+        endpoint: `${service.hostname ?? "localhost"}:${service.mcpPort ?? 7331}${
+          service.mcpPath ?? "/mcp"
+        }`,
+        status:
+          scenario === "operations-rich" && service.serviceId === "mcp-logs"
+            ? "reconnecting"
+            : "healthy",
+        failureCount:
+          scenario === "operations-rich" && service.serviceId === "mcp-logs" ? 2 : 0,
+        kMax: 3,
+        backoffUntil:
+          scenario === "operations-rich" && service.serviceId === "mcp-logs"
+            ? "2026-06-17T00:05:00.000Z"
+            : null,
+        lastProbeAt: STARTED_AT,
+        lastSeen: STARTED_AT,
+        updatedAt: STARTED_AT,
+        lastErrorClass:
+          scenario === "operations-rich" && service.serviceId === "mcp-logs"
+            ? "transport"
+            : null,
+        lastErrorMessage:
+          scenario === "operations-rich" && service.serviceId === "mcp-logs"
+            ? "connection refused"
+            : null,
+      }));
       return services;
     },
     async probeMcpService(serviceId) {
@@ -649,22 +751,111 @@ export function createDesktopUiHarness(
         fetchedAt: new Date().toISOString(),
         agentDid: request.agentDid ?? deployment.agentDid,
         liveness: {
-          expiredProcessingCount: 0,
-          requests: [],
-          activeToolCalls: [],
+          expiredProcessingCount: scenario === "operations-rich" ? 1 : 0,
+          requests:
+            scenario === "operations-rich"
+              ? [
+                  {
+                    requestId: "request-intro",
+                    claimedAt: STARTED_AT,
+                    deadline: "2026-06-17T00:01:00.000Z",
+                    deadlineExpired: true,
+                    deadlineAgeMs: 65_000,
+                    lastProgressAgeMs: 120_000,
+                    subagentDepth: 0,
+                    causedByParentRequestId: null,
+                    causedByTriggerKind: null,
+                  },
+                ]
+              : [],
+          activeToolCalls:
+            scenario === "operations-rich"
+              ? [
+                  {
+                    requestId: "request-intro",
+                    toolCallId: "tool-call-cargo",
+                    toolName: "cargo test",
+                    startedAt: STARTED_AT,
+                    deadlineAt: "2026-06-17T00:01:00.000Z",
+                    awaitMode: "background",
+                    runningAgeMs: 120_000,
+                    deadlineExpired: true,
+                  },
+                ]
+              : [],
           activeNativeExecutorsAvailable: true,
-          activeNativeExecutors: [],
+          activeNativeExecutors:
+            scenario === "operations-rich"
+              ? [
+                  {
+                    id: 7,
+                    pid: 4242,
+                    argv0: "cargo",
+                    toolName: "cargo test",
+                    startedAt: STARTED_AT,
+                    ageMs: 120_000,
+                  },
+                ]
+              : [],
         },
         livenessUnavailableReason: null,
-        backgroundedTools: [],
-        stuckDiagnostics: [],
+        backgroundedTools:
+          scenario === "operations-rich"
+            ? [
+                {
+                  requestId: "request-intro",
+                  toolCallId: "tool-call-cargo",
+                  toolName: "cargo test",
+                  lifecycleState: "running",
+                  status: "running",
+                  startedAt: STARTED_AT,
+                  ageMs: 120_000,
+                  deadlineAt: "2026-06-17T00:01:00.000Z",
+                  deadlineExpired: true,
+                  awaitMode: "background",
+                  cancelPolicy: "cascade",
+                  childRequestId: "request-child-1",
+                  stuckSince: STARTED_AT,
+                  cancelPendingRemoteAck: false,
+                  nativeExecutor: null,
+                },
+                {
+                  requestId: "request-child-1",
+                  toolCallId: "tool-call-logs",
+                  toolName: "query_logs",
+                  lifecycleState: "cancelPending",
+                  status: "cancelPending",
+                  startedAt: STARTED_AT,
+                  ageMs: 90_000,
+                  deadlineAt: null,
+                  deadlineExpired: false,
+                  awaitMode: "bridge",
+                  cancelPolicy: "detach",
+                  childRequestId: null,
+                  stuckSince: null,
+                  cancelPendingRemoteAck: true,
+                  nativeExecutor: null,
+                },
+              ]
+            : [],
+        stuckDiagnostics:
+          scenario === "operations-rich"
+            ? [
+                {
+                  requestId: "request-intro",
+                  sessionId: "session-intro",
+                  severity: "critical",
+                  reason: "expiredTool",
+                  deadlineAgeMs: 65_000,
+                  lastProgressAgeMs: 120_000,
+                  toolCallId: "tool-call-cargo",
+                  toolName: "cargo test",
+                  stuckSince: STARTED_AT,
+                },
+              ]
+            : [],
         lineage: request.rootRequestId
-          ? {
-              rootRequestId: request.rootRequestId,
-              nodes: [],
-              edges: [],
-              truncated: false,
-            }
+          ? operationsLineage(request.rootRequestId)
           : null,
       };
       return operations;
@@ -728,9 +919,14 @@ export function createDesktopUiHarness(
   };
 
   function runHarnessTask(taskId: string): TaskRunResult {
+    const task = deployment.tasks.find((row) => row.taskId === taskId);
     const { session, requestId } = createSessionFromPrompt(
       `Run task ${taskId}`,
       deployment.defaultBehaviorId,
+      {
+        taskId,
+        taskName: task?.name ?? taskId,
+      },
     );
     return {
       requestDocId: `${requestId}-doc`,
@@ -750,6 +946,48 @@ export function createDesktopUiHarness(
   }
 
   return { adapter, listenerFactory, scenario };
+}
+
+function operationsLineage(rootRequestId: string): SubagentTreeView {
+  return {
+    rootRequestId,
+    truncated: false,
+    nodes: [
+      {
+        requestId: rootRequestId,
+        sessionId: "session-intro",
+        agentDid: AGENT_DID,
+        behaviorId: DEFAULT_BEHAVIOR_ID,
+        lifecycleState: "processing",
+        status: "processing",
+        subagentDepth: 0,
+        backendId: "backend-openai",
+      },
+      {
+        requestId: "request-child-1",
+        sessionId: "session-child-1",
+        agentDid: AGENT_DID,
+        behaviorId: "ops",
+        lifecycleState: "processing",
+        status: "running",
+        subagentDepth: 1,
+        causedByParentRequestId: rootRequestId,
+        causedByParentToolCallId: "tool-call-cargo",
+        backendId: "backend-openai",
+      },
+    ],
+    edges: [
+      {
+        parentRequestId: rootRequestId,
+        childRequestId: "request-child-1",
+        parentToolCallId: "tool-call-cargo",
+        toolName: "delegate",
+        awaitMode: "background",
+        cancelPolicy: "cascade",
+        lifecycleState: "running",
+      },
+    ],
+  };
 }
 
 export const createBombadilDesktopHarness = createDesktopUiHarness;
@@ -943,6 +1181,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "save-error":
     case "backend-health-error":
     case "long-content":
+    case "operations-rich":
     case "active-turn":
     case "cascade-turn":
       return value;
