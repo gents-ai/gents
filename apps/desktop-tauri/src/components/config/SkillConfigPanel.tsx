@@ -241,7 +241,9 @@ export function SkillConfigEditor({
         />
       </label>
       <label className="field">
-        <span>Tool dependencies (one per line; intersected with the behavior ceiling)</span>
+        <span>
+          Tool dependencies (one per line; intersected with the behavior ceiling)
+        </span>
         <textarea
           className="config-small-textarea"
           data-testid="skill-tool-refs"
