@@ -1215,3 +1215,185 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
         "error: unknown tool 'missing'".to_string()
     );
 }
+
+#[tokio::test]
+async fn dispatch_tool_marks_unparseable_args_with_collision_free_marker() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::tool_call_lifecycle::runtime::unparseable_args_notice;
+
+    // A tool whose Args require fields the (valid-JSON) call omits, so the real
+    // parse seam raises UnparseableArgs.
+    struct StrictArgsTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        body: String,
+        #[allow(dead_code)]
+        findings: Vec<String>,
+    }
+    impl Tool for StrictArgsTool {
+        const NAME: &'static str = "strict";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            Ok("ran".to_string())
+        }
+    }
+
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+    // Truncated mid-string: escape-only repair cannot complete it, so it stays
+    // UnparseableArgs and dispatch wraps a notice in the collision-free marker
+    // (which on_tool_result maps to failed(ArgumentInvalid)) — not the tool output.
+    let result = super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string()).await;
+    // The result must NOT use a forgeable human-readable prefix a real tool could emit.
+    assert!(
+        !result.starts_with("JsonError:"),
+        "must not key on a collidable prefix, got: {result}"
+    );
+    let notice =
+        unparseable_args_notice(&result).expect("dispatch must wrap the notice in the marker");
+    assert!(
+        !notice.contains("ran") && notice.contains("token limit"),
+        "the notice must replace the tool output and guide the model to shorten, got: {notice}"
+    );
+}
+
+/// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,
+/// (b) surfaces a clean notice to the model (the internal marker stripped) so it
+/// can re-emit corrected arguments next turn, and (c) terminalizes the started
+/// `AgentToolCall` as `failed`/`argumentInvalid` via `on_tool_result`. This
+/// preserves the tool-call liveness invariant (Lean
+/// `ToolExecution.live_call_reaches_terminal`, T5: the started call reaches a
+/// terminal state) using the proven `Running → Failed` edge with the existing
+/// `FailureClass::ArgumentInvalid`.
+#[tokio::test]
+async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    struct StrictArgsTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        report_type: String,
+        #[allow(dead_code)]
+        findings: Vec<String>,
+    }
+    impl Tool for StrictArgsTool {
+        const NAME: &'static str = "post_status";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            // Must NOT run: the args never deserialize.
+            panic!("the tool must not run on unparseable arguments");
+        }
+    }
+
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    // Valid JSON, but missing the required `findings` field: a Malformed parse
+    // failure that no repair can recover into the typed args.
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "post_status".to_string(),
+                serde_json::json!({ "report_type": "steward" }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+
+    let stream = run_loop_stream(
+        model,
+        Some(hook),
+        Message::user("post a status report"),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+
+    // The model is notified via a tool result (no error ends the stream); it sees
+    // the clean notice and answers on the next turn.
+    let mut tool_results = Vec::new();
+    while let Some(item) = stream.next().await {
+        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+            tool_result,
+            ..
+        }) = item.expect("loop must not fail; unparseable args are notified, not raised")
+        {
+            tool_results.push(
+                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                    &tool_result.content.first(),
+                ))
+                .to_string(),
+            );
+        }
+    }
+    assert!(
+        tool_results
+            .iter()
+            .any(|r| r.contains("could not be parsed")),
+        "the model must be notified with a clean parse-failure notice, got: {tool_results:?}"
+    );
+    assert!(
+        !tool_results
+            .iter()
+            .any(|r| r.contains("__defra_agent_tool_lifecycle__")),
+        "the internal marker must never leak to the model, got: {tool_results:?}"
+    );
+
+    // T5: the started call terminalized failed(argumentInvalid) — via on_tool_result
+    // stripping the marker and forcing ArgumentInvalid — instead of dangling in `running`.
+    let resp = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "AgentToolCall query failed: {:?}",
+        resp.errors
+    );
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        rows.iter().any(|row| {
+            row.get("tool_name").and_then(|v| v.as_str()) == Some("post_status")
+                && row.get("lifecycle_state").and_then(|v| v.as_str()) == Some("failed")
+                && row.get("tool_failure_class").and_then(|v| v.as_str()) == Some("argumentInvalid")
+        }),
+        "the started tool call must terminalize failed/argumentInvalid, got rows: {rows:?}"
+    );
+}

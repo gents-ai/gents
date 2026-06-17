@@ -339,6 +339,17 @@ impl DefraSessionHook {
                 });
             }
 
+            // Unparseable-args failures arrive wrapped in a collision-free marker
+            // set by the loop's dispatcher. Strip it so the persisted lifecycle
+            // result and the model-facing message are the clean notice, and force
+            // the `failed(ArgumentInvalid)` terminal (the proven Running -> Failed
+            // edge) rather than classifying the text — a tool's own output must
+            // never reach the argument-invalid branch by accident.
+            let (result, force_argument_invalid) = match unparseable_args_notice(result) {
+                Some(notice) => (notice, true),
+                None => (result, false),
+            };
+
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
@@ -388,7 +399,10 @@ impl DefraSessionHook {
                     )
                 })?;
 
-            if let Some(failure) = classify_runtime_failure(result_for_persistence) {
+            if force_argument_invalid {
+                lc.fail(&truncated.text, FailureClass::ArgumentInvalid)
+                    .await?;
+            } else if let Some(failure) = classify_runtime_failure(result_for_persistence) {
                 if let Some(denial) = failure.command_denial.as_ref() {
                     lc.fail_with_command_denial(&truncated.text, denial).await?;
                 } else {
