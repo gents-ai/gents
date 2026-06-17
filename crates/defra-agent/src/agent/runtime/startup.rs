@@ -121,6 +121,7 @@ pub(in crate::agent) async fn run_agent(
         admission_registry: admission_registry.clone(),
         retry_policy: agent.retry_policy.clone(),
         hook_failure_policy: agent.hook_failure_policy,
+        rendered_request_capture_factory: agent.rendered_request_capture_factory.clone(),
         background_execution_registry: agent.background_execution_registry.clone(),
         startup_barrier: startup_barrier.clone(),
     };

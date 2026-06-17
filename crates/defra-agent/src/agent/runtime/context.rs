@@ -23,6 +23,8 @@ pub(super) struct RuntimeContext {
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) retry_policy: RetryPolicy,
     pub(super) hook_failure_policy: crate::hook::FailurePolicy,
+    pub(super) rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
 }
@@ -251,6 +253,7 @@ impl RuntimeContext {
             prompt_builder,
             self.retry_policy.clone(),
             self.hook_failure_policy,
+            self.rendered_request_capture_factory.clone(),
             background_tool_registry,
             self.background_execution_registry.clone(),
             self.startup_barrier.clone(),

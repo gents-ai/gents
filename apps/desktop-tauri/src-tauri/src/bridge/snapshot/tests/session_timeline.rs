@@ -55,6 +55,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("hello")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         responses: vec![AgentResponseRow {
@@ -105,6 +106,7 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
         sequence: Some(2),
         role: Some("assistant".to_string()),
         content: Some(assistant_message_json("hello back")),
+        reasoning: None,
         timestamp: Some("2026-04-21T12:00:01Z".to_string()),
     };
     rows.messages.push(assistant.clone());
@@ -146,6 +148,7 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
         sequence: Some(2),
         role: Some("assistant".to_string()),
         content: Some(assistant_message_json(reply)),
+        reasoning: None,
         timestamp: Some("2026-04-21T12:00:01Z".to_string()),
     });
 
@@ -252,6 +255,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         responses: vec![AgentResponseRow {
@@ -372,6 +376,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         responses: vec![AgentResponseRow {
@@ -505,6 +510,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:00Z".to_string()),
             },
             AgentMessageRow {
@@ -516,6 +522,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                     serde_json::to_string(&Message::assistant("I'll investigate"))
                         .expect("serialize assistant"),
                 ),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:01Z".to_string()),
             },
             AgentMessageRow {
@@ -524,6 +531,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 sequence: Some(3),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn two")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:01:00Z".to_string()),
             },
         ],
@@ -609,6 +617,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {

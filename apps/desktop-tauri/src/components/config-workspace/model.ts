@@ -1,6 +1,7 @@
 export type ConfigTab =
   | "agent"
   | "behavior"
+  | "skills"
   | "backends"
   | "profiles"
   | "toolSelections"
@@ -12,6 +13,7 @@ export type ConfigTab =
 export const TABS: Array<{ id: ConfigTab; label: string }> = [
   { id: "agent", label: "Agent" },
   { id: "behavior", label: "Behavior" },
+  { id: "skills", label: "Skills" },
   { id: "backends", label: "Backends" },
   { id: "profiles", label: "Profiles" },
   { id: "toolSelections", label: "Tool Selections" },

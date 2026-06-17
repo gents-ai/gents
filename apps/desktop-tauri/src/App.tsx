@@ -102,6 +102,7 @@ function App() {
           <ConfigWorkspace
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={() => setWorkspaceView("chat")}
+            onDeleteSkillConfig={shell.onDeleteSkillConfig}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}
@@ -109,6 +110,7 @@ function App() {
             onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
             onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
             onSaveScheduleConfig={shell.onSaveScheduleConfig}
+            onSaveSkillConfig={shell.onSaveSkillConfig}
             onSaveTaskConfig={shell.onSaveTaskConfig}
             onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
             onSaveToolServiceConfig={shell.onSaveToolServiceConfig}

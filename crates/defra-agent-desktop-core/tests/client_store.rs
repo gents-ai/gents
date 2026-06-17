@@ -342,6 +342,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some("old".to_string()),
+            reasoning: None,
             timestamp: Some("2026-04-14T00:01:00Z".to_string()),
         }],
         message_source_agent_dids: vec![Some("did:defra:amy".to_string())],
@@ -407,6 +408,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some("new".to_string()),
+            reasoning: None,
             timestamp: Some("2026-04-14T00:02:00Z".to_string()),
         }],
         sessions: vec![AgentSessionRow {

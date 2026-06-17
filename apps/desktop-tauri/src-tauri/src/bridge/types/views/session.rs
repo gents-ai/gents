@@ -115,6 +115,7 @@ pub(crate) struct ResponseView {
 pub(crate) struct PendingTurnView {
     pub request_id: String,
     pub content: String,
+    pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
     pub created_at: Option<String>,
 }
@@ -142,6 +143,7 @@ pub(crate) enum RenderedTimelineItem {
         item_key: String,
         request_id: String,
         content: String,
+        selected_skill_ids: Vec<String>,
         lifecycle_state: Option<String>,
         created_at: Option<String>,
     },

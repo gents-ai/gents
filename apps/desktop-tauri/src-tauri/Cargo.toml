@@ -34,5 +34,6 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum = "0.8"
 defra-agent-lean-contract.workspace = true
 rig-core.workspace = true

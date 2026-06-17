@@ -23,6 +23,8 @@
 //! threaded into the conversation by construction, the in-loop truncation gap
 //! (#401) is closed natively without the recorder shim.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
@@ -31,7 +33,9 @@ use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
-use rig::completion::{CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
+};
 
 use crate::llm::tool::{ToolDyn, ToolError, UnparseableArgsKind};
 use crate::llm::ToolChoice;
@@ -48,6 +52,12 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 #[cfg(test)]
 mod tests;
 
+pub(crate) type RenderedRequestSink = Arc<
+    dyn Fn(usize, CompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
 #[derive(Clone)]
@@ -58,6 +68,7 @@ pub(crate) struct LoopConfig {
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
+    pub(crate) on_rendered_request: Option<RenderedRequestSink>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
@@ -206,6 +217,15 @@ where
             }
 
             let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
+            if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                on_rendered_request(current_turn - 1, request.clone())
+                    .await
+                    .map_err(|error| {
+                        StreamingError::Completion(CompletionError::ProviderError(format!(
+                            "capturing rendered completion request failed: {error:#}"
+                        )))
+                    })?;
+            }
 
             let mut stream = model
                 .stream(request)

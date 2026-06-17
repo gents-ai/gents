@@ -6,14 +6,14 @@ use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use defra_agent_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
     AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, TASK_NAME, TOOL_SELECTION_NAME,
-    TOOL_SERVICE_REGISTRY_NAME,
+    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME,
+    TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
@@ -27,7 +27,7 @@ const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::f
 
 const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
-const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
+const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
 const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
 const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k max_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
@@ -38,6 +38,7 @@ const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id messag
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+const SKILL_FIELDS: &str = "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
 const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
 const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
 const TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds";
@@ -61,6 +62,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         tasks: load_tasks(node).await?,
         schedules: load_schedules(node).await?,
         event_triggers: load_event_triggers(node).await?,
+        skills: load_skills(node).await?,
         tool_selections: load_tool_selections(node).await?,
         inference_backends: load_inference_backends(node).await?,
         inference_profiles: load_inference_profiles(node).await?,
@@ -145,7 +147,7 @@ pub async fn load_agent_behaviors(node: &EmbeddedNode) -> Result<Vec<AgentBehavi
     load_rows(
         node,
         "AgentBehavior",
-        "query { AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at } }",
+        "query { AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at } }",
     )
     .await
 }
@@ -240,6 +242,15 @@ pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<TaskRow>> {
     .await
 }
 
+pub async fn load_skills(node: &EmbeddedNode) -> Result<Vec<SkillRow>> {
+    load_rows(
+        node,
+        SKILL_NAME,
+        &format!("query {{ {SKILL_NAME} {{ {SKILL_FIELDS} }} }}"),
+    )
+    .await
+}
+
 pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<ScheduleRow>> {
     load_rows(
         node,
@@ -318,6 +329,7 @@ pub async fn load_full_snapshot_from_graphql(graphql: &str) -> Result<ClientStor
         tasks: parse_remote_rows(&data, "Task")?,
         schedules: parse_remote_rows(&data, "Schedule")?,
         event_triggers: parse_remote_rows(&data, "EventTrigger")?,
+        skills: parse_remote_rows(&data, "Skill")?,
         tool_selections: parse_remote_rows(&data, "ToolSelection")?,
         inference_backends: parse_remote_rows(&data, "InferenceBackend")?,
         inference_profiles: parse_remote_rows(&data, "InferenceProfile")?,
@@ -562,6 +574,10 @@ fn append_rows(target: &mut ClientStoreRows, mut incoming: ClientStoreRows) {
     target
         .event_trigger_source_agent_dids
         .append(&mut incoming.event_trigger_source_agent_dids);
+    target.skills.append(&mut incoming.skills);
+    target
+        .skill_source_agent_dids
+        .append(&mut incoming.skill_source_agent_dids);
     target.tool_selections.append(&mut incoming.tool_selections);
     target
         .inference_backends
@@ -616,7 +632,7 @@ query DesktopRemoteChatPatch {{
 const REMOTE_SNAPSHOT_QUERY: &str = r#"
 query DesktopRemoteSnapshot {
   AgentPrincipal { agent_did display_name default_behavior_id enabled created_at created_by }
-  AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at }
+  AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at }
   AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
   AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }
   AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
@@ -629,6 +645,7 @@ query DesktopRemoteSnapshot {
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
   Schedule { schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }
   EventTrigger { trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }
+  Skill { skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at }
   ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds }
   InferenceBackend { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }
   InferenceProfile { profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs }
@@ -767,6 +784,14 @@ pub async fn fetch_doc_patch(
                 node,
                 EVENT_TRIGGER_NAME,
                 &format!("query {{ {EVENT_TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {EVENT_TRIGGER_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        SKILL_NAME => {
+            rows.skills = load_rows(
+                node,
+                SKILL_NAME,
+                &format!("query {{ {SKILL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {SKILL_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -931,6 +956,7 @@ pub async fn load_agent_scoped_snapshot(
     let tasks = load_tasks(node).await?;
     let schedules = load_schedules(node).await?;
     let event_triggers = load_event_triggers(node).await?;
+    let skills = load_skills(node).await?;
     let inference_backends = load_inference_backends(node).await?;
     let inference_profiles = load_inference_profiles(node).await?;
     let tool_service_registries = load_tool_service_registries(node).await?;
@@ -950,6 +976,7 @@ pub async fn load_agent_scoped_snapshot(
         tasks,
         schedules,
         event_triggers,
+        skills,
         tool_selections,
         inference_backends,
         inference_profiles,

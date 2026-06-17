@@ -1,7 +1,9 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use defra_agent::skills::prompt_slash_skill_selection;
 use defra_agent_protocol::row::AgentRequestRow;
 use defra_node::EmbeddedNode;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -59,6 +61,7 @@ pub async fn submit_request(
     let session_id = normalize_required("session_id", session_id)?;
     let agent_did = normalize_required("agent_did", agent_did)?;
     let content = normalize_required("content", content)?;
+    let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
@@ -91,7 +94,7 @@ pub async fn submit_request(
         session_id,
         &retry_parent_request,
         &retry_root_request,
-        content,
+        &content,
         &created_at,
         0,
         i64::from(DEFAULT_REQUEST_MAX_RETRIES),
@@ -107,7 +110,7 @@ pub async fn submit_request(
         &binding.agent_name,
         &binding.behavior_id,
         &request_id,
-        content,
+        &content,
         "active",
         &created_at,
     );
@@ -139,6 +142,7 @@ pub async fn submit_request_to_graphql(
     if options.retry_parent_request.is_some() {
         bail!("remote GraphQL chat submission does not yet support retry threading");
     }
+    let (content, options) = prepare_prompt_submission(content, options)?;
 
     let request_id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
@@ -159,7 +163,7 @@ pub async fn submit_request_to_graphql(
         session_id,
         "",
         &request_id,
-        content,
+        &content,
         &created_at,
         0,
         i64::from(DEFAULT_REQUEST_MAX_RETRIES),
@@ -175,7 +179,7 @@ pub async fn submit_request_to_graphql(
         &binding.agent_name,
         &binding.behavior_id,
         &request_id,
-        content,
+        &content,
         "active",
         &created_at,
     );
@@ -189,6 +193,53 @@ pub async fn submit_request_to_graphql(
         agent_did: agent_did.to_string(),
         behavior_id: binding.behavior_id,
     })
+}
+
+fn prepare_prompt_submission(
+    content: &str,
+    mut options: SubmitRequestOptions,
+) -> Result<(String, SubmitRequestOptions)> {
+    let selection = prompt_slash_skill_selection(content);
+    if selection.selected_skill_ids.is_empty() {
+        return Ok((content.to_string(), options));
+    }
+
+    options.metadata = Some(merge_selected_skill_metadata(
+        options.metadata.take(),
+        &selection.selected_skill_ids,
+    )?);
+    Ok((selection.prompt, options))
+}
+
+fn merge_selected_skill_metadata(
+    metadata: Option<String>,
+    selected_skill_ids: &[String],
+) -> Result<String> {
+    let mut value = match metadata
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .with_context(|| "request metadata must be valid JSON to add selected_skill_ids")?,
+        None => Value::Object(Map::new()),
+    };
+
+    let object = value
+        .as_object_mut()
+        .context("request metadata must be a JSON object to add selected_skill_ids")?;
+    object.insert(
+        "selected_skill_ids".to_string(),
+        Value::Array(
+            selected_skill_ids
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+
+    serde_json::to_string(&value).context("serializing selected skill metadata")
 }
 
 pub async fn retry_request(
@@ -804,6 +855,39 @@ mod tests {
     #[derive(Debug, Deserialize)]
     struct RecoveryConversationRow {
         latest_request_id: String,
+    }
+
+    #[test]
+    fn prepare_prompt_submission_strips_skill_selector_and_records_metadata() -> Result<()> {
+        let (content, options) = prepare_prompt_submission(
+            "/triage\ninspect the failure",
+            SubmitRequestOptions::default(),
+        )?;
+
+        assert_eq!(content, "inspect the failure");
+        assert_eq!(
+            options.metadata.as_deref(),
+            Some(r#"{"selected_skill_ids":["triage"]}"#)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_prompt_submission_merges_selected_skills_with_metadata() -> Result<()> {
+        let (content, options) = prepare_prompt_submission(
+            "/skill review inspect",
+            SubmitRequestOptions {
+                metadata: Some(r#"{"queue":{"source":"manual"}}"#.to_string()),
+                ..SubmitRequestOptions::default()
+            },
+        )?;
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(options.metadata.as_deref().unwrap())?;
+        assert_eq!(content, "inspect");
+        assert_eq!(metadata["queue"]["source"], "manual");
+        assert_eq!(metadata["selected_skill_ids"][0], "review");
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
