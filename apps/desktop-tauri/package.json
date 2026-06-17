@@ -12,6 +12,8 @@
     "test:ui": "npm run format:check && npm run build && npm run test:ui:unit && npm run test:ui:e2e && npm run test:ui:fuzz -- --time-limit 20s",
     "test:ui:unit": "vitest run",
     "test:ui:e2e": "playwright test",
+    "test:ui:invariants": "playwright test tests/playwright/desktop-invariants.spec.ts",
+    "test:ui:screenshots": "playwright test tests/playwright/desktop-screenshots.spec.ts",
     "test:ui:fuzz": "node ./tests/bombadil/run-bombadil.mjs",
     "test:ui:fuzz:long": "node ./tests/bombadil/run-bombadil.mjs --time-limit 5m",
     "test:ui:bombadil": "node ./tests/bombadil/run-bombadil.mjs",

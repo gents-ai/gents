@@ -1,38 +1,15 @@
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
-
-type HarnessScenario =
-  | "default"
-  | "empty-fleet"
-  | "loading"
-  | "bridge-unavailable"
-  | "save-error"
-  | "backend-health-error"
-  | "long-content"
-  | "active-turn"
-  | "cascade-turn";
-
-const PEER_ID = "peer-bombadil-local";
-
-const test = base.extend<{ browserLogs: string[] }>({
-  browserLogs: async ({ page }, use, testInfo) => {
-    const logs: string[] = [];
-    page.on("console", (message) => {
-      logs.push(`[console:${message.type()}] ${message.text()}`);
-    });
-    page.on("pageerror", (error) => {
-      logs.push(`[pageerror] ${error.stack ?? error.message}`);
-    });
-
-    await use(logs);
-
-    if (testInfo.status !== testInfo.expectedStatus && logs.length > 0) {
-      await testInfo.attach("browser-console.log", {
-        body: logs.join("\n"),
-        contentType: "text/plain",
-      });
-    }
-  },
-});
+import {
+  adjacentDuplicateTranscriptRows,
+  captureStableScreenshot,
+  expect,
+  gotoHarness,
+  openChat,
+  openConfig,
+  openConfigTab,
+  PEER_ID,
+  saveConfig,
+  test,
+} from "./desktopTest";
 
 test.describe("desktop UI harness", () => {
   test("fleet dashboard connects a local runtime and opens chat/config", async ({
@@ -41,7 +18,7 @@ test.describe("desktop UI harness", () => {
     await gotoHarness(page);
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
     await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toBeVisible();
-    await attachStableScreenshot(page, testInfo, "fleet-dashboard");
+    await captureStableScreenshot(page, testInfo, "fleet-dashboard");
 
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
     await page.getByTestId("fleet-connect-local").click();
@@ -52,7 +29,7 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByTestId("transcript-panel")).toContainText(
       "desktop UI test agent",
     );
-    await attachStableScreenshot(page, testInfo, "chat-with-transcript");
+    await captureStableScreenshot(page, testInfo, "chat-with-transcript");
 
     await page.getByRole("button", { name: "Configure" }).click();
     await expect(page.locator(".config-workspace")).toBeVisible();
@@ -98,7 +75,7 @@ test.describe("desktop UI harness", () => {
   }, testInfo) => {
     await gotoHarness(page);
     await openConfig(page);
-    await attachStableScreenshot(page, testInfo, "config-workspace");
+    await captureStableScreenshot(page, testInfo, "config-workspace");
 
     await openConfigTab(page, "behavior");
     await page
@@ -157,7 +134,7 @@ test.describe("desktop UI harness", () => {
     await openChat(page);
     await page.getByRole("button", { name: /open operations drawer/i }).click();
     await expect(page.getByRole("complementary", { name: "Operations" })).toBeVisible();
-    await attachStableScreenshot(page, testInfo, "operations-drawer-open");
+    await captureStableScreenshot(page, testInfo, "operations-drawer-open");
 
     await expect(page.getByRole("tab", { name: /Background/ })).toHaveAttribute(
       "aria-selected",
@@ -201,7 +178,7 @@ test.describe("desktop UI harness", () => {
   }, testInfo) => {
     await gotoHarness(page, "empty-fleet");
     await expect(page.getByTestId("fleet-empty")).toBeVisible();
-    await attachStableScreenshot(page, testInfo, "empty-fleet");
+    await captureStableScreenshot(page, testInfo, "empty-fleet");
 
     await gotoHarness(page, "bridge-unavailable");
     await expect(page.getByTestId("error-banner")).toContainText(
@@ -240,69 +217,3 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByTestId("composer-send")).toBeVisible();
   });
 });
-
-async function gotoHarness(page: Page, scenario: HarnessScenario = "default") {
-  await page.goto(`/tests/ui-harness/harness.html?scenario=${scenario}`);
-  await expect(page.locator(".app-shell")).toBeVisible();
-}
-
-async function openChat(page: Page) {
-  await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
-}
-
-async function openConfig(page: Page) {
-  await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
-  await page.getByRole("button", { name: "Configure" }).click();
-  await expect(page.locator(".config-workspace")).toBeVisible();
-}
-
-async function openConfigTab(page: Page, tabId: string) {
-  const tab = page.getByTestId(`config-tab-${tabId}`);
-  await tab.click();
-  await expect(tab).toHaveClass(/selected/);
-}
-
-async function saveConfig(page: Page, testId: string) {
-  await page.getByTestId(testId).click();
-  await expect(page.locator(".config-editor").getByText("Saved")).toBeVisible();
-}
-
-async function adjacentDuplicateTranscriptRows(page: Page) {
-  return page
-    .locator('[data-testid="transcript-panel"] .message-card')
-    .evaluateAll((cards) => {
-      const rows = cards.map((card) => {
-        const roleText = card.querySelector(".message-role")?.textContent ?? "";
-        const contentText = card.querySelector(".message-content")?.textContent ?? "";
-        const role = roleText.replace(/\s+/g, " ").trim();
-        const content = contentText.replace(/\s+/g, " ").trim();
-        return { role, content };
-      });
-      const duplicates: string[] = [];
-      for (let index = 1; index < rows.length; index += 1) {
-        const previous = rows[index - 1];
-        const current = rows[index];
-        if (
-          previous.role &&
-          previous.content &&
-          previous.role === current.role &&
-          previous.content === current.content
-        ) {
-          duplicates.push(`${current.role}: ${current.content}`);
-        }
-      }
-      return duplicates;
-    });
-}
-
-async function attachStableScreenshot(page: Page, testInfo: TestInfo, name: string) {
-  const body = await page.screenshot({ fullPage: true });
-  await testInfo.attach(`${name}.png`, {
-    body,
-    contentType: "image/png",
-  });
-}

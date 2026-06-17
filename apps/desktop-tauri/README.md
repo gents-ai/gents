@@ -85,6 +85,8 @@ Individual layers:
 ```bash
 npm run test:ui:unit
 npm run test:ui:e2e
+npm run test:ui:invariants
+npm run test:ui:screenshots
 npm run test:ui:fuzz -- --time-limit 30s
 npm run test:ui:fuzz:long
 ```
@@ -103,7 +105,20 @@ npm run test:ui:fuzz -- --time-limit 2m
 ```
 
 Artifacts are written under `test-results/` and Playwright's HTML report under
-`playwright-report/`.
+`playwright-report/`. Playwright failures include screenshots, videos, traces,
+and browser console logs when the browser emitted errors. Stable screenshot
+captures are diagnostic review artifacts, not visual golden snapshots.
+
+Useful artifact commands:
+
+```bash
+npx playwright show-report
+npx playwright show-trace test-results/playwright/<failed-test>/trace.zip
+```
+
+Use screenshots for quick visual triage, then use traces for the full timeline:
+DOM snapshots, clicked elements, network/console signals, and the exact failed
+assertion.
 
 Live UI smoke tests:
 
