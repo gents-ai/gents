@@ -122,12 +122,18 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       Transition pre post
   /-- A replicator INSTALL that fails even though the membership-level connect
   succeeded (the fallible counterpart of `reconcileInstallReplicator`). The
-  replicator's own transport dial (`add_replicator`) can time out independently
-  of `connect`, so the replicator is NOT installed while any collection
-  subscriptions an earlier op already wrote stay in `applied`. This is the EXACT
-  observed live failure: a `PeerPairingApplied` row with subscribed collections
-  but no replicator. `post = pre`: no progress, the desired replicator is still
-  missing. -/
+  `connected = true` premise is load-bearing and deliberate: a wholly-undialable
+  ticket fails `connect` FIRST (`dialFailed`), so this transition does NOT model
+  the undialable case. It models the connect-OK-but-install-fails mode, whose
+  realistic causes are (a) the replicator's OWN transport dial (`add_replicator`)
+  transiently timing out independently of `connect`'s earlier dial, or (b) a
+  pre-dial failure inside `add_replicator` — collection-cid `not_found` or
+  replication-filter validation — which the shareable-address fix does NOT cover.
+  Either way the replicator is NOT installed while collection subscriptions an
+  earlier op already wrote stay in `applied`. This is the EXACT observed durable
+  partial row: a `PeerPairingApplied` with subscribed collections but no
+  replicator (TLA: `MCPairingTransportReplicatorStuck`). `post = pre`: no
+  progress, the desired replicator is still missing. -/
   | reconcileInstallReplicatorFailed {pre post : ReconcileState} (desired : PairingDesired) (r : ReplicatorId) :
       pre.desired = some desired →
       r ∈ desired.replicators →

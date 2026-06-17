@@ -9,7 +9,7 @@ See `../README.md` for how this fits the broader formal-verification model.
 - `ReversePairing` — control-plane convergence of subscription/replicator reverse-pairing between two peers. Spec design: `docs/superpowers/specs/2026-05-08-reverse-pairing-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-08-reverse-pairing-tla-spec.md` (removed from the tree; see git history).
 - `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B. Spec design: `docs/superpowers/specs/2026-05-12-subagent-completion-cross-deployment-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-12-subagent-completion-cross-deployment-tla-spec.md` (removed from the tree; see git history).
 - `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md` (removed from the tree; see git history).
-- `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang (reconciler subscribes the control-plane collections but the replicator's dial times out and never installs) was outside the modeled world. This spec closes that gap. It is a **two-config diagnostic**: `MCPairingTransportDialable` (the shareable-address fix — all properties hold) and `MCPairingTransportUndialable` (the bug — `ReplicatorLiveness` is intentionally violated and TLC returns the stuck trace). Companion to the Lean `PairingReconcile.Convergence` `convergence_requires_successful_install` obligation.
+- `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -52,9 +52,14 @@ For PairingTransport — the dialable model checks clean (all properties hold):
 ./scripts/run-tlc.sh MCPairingTransportDialable
 ```
 
-The un-dialable model is a diagnostic and is EXPECTED to report a liveness violation on `ReplicatorLiveness`; the counterexample is the #511 hang:
+The other two configs are diagnostics and are EXPECTED to report violations — each reproduces a distinct real failure mode. MODE A (connect-fails-first, the literal #511 hang) violates `ReplicatorLiveness` with a never-`Connected` trace:
 ```bash
 ./scripts/run-tlc.sh MCPairingTransportUndialable
+```
+
+MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyHasProgress` and returns the exact "subscribed collections, null replicator" partial row:
+```bash
+./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
 ```
 
 The script runs TLC with parallel workers and writes state-graph artifacts to `states/` (gitignored).
@@ -148,17 +153,20 @@ Active lines from `MCSubagentCancelPropagation.cfg`:
 
 Note: `CancelAckProgress` is defined in `SubagentCancelPropagation.tla` but is not enforced by the default TLC config. It can fail only in bounded-pool-exhausted traces after B has already durably handled the cancel and A has lost the matching in-flight attempt through crash or timeout. The #188 safety boundary is `cancelHandledB`; ack progress is an observability/retry-retirement requirement.
 
-Active lines from `MCPairingTransportDialable.cfg` (`Dialable = TRUE`, all hold):
+Active lines from `MCPairingTransportDialable.cfg` (`Dialable = TRUE`, `ReplicatorInstallable = TRUE`, all hold):
 
 - **`INVARIANT TypeOK`** — `connState`, `subscribed`, `replicatorInstalled`, `docsReplicated` stay in their declared domains.
-- **`INVARIANT PartialApplyHasProgress`** — whenever the link is `Connected` and the control-plane collection is subscribed but the replicator is not yet installed, `InstallReplicator` is still ENABLED. Catches a reconciler that subscribes and then declares victory without installing the replicator — the exact shape of the live partial-apply ("subscribed collections, `replicator_addresses: null`").
+- **`INVARIANT PartialApplyHasProgress`** — whenever the link is `Connected` and the control-plane collection is subscribed but the replicator is not yet installed, `InstallReplicator` is still ENABLED. On the healthy path this holds; it is the guard that the MODE B/C diagnostic deliberately violates (see below), catching a partial-apply that has become a silent dead end.
 - **`INVARIANT ReplicationImpliesReplicator`** — `docsReplicated` is reachable only through an installed replicator.
-- **`PROPERTY ReplicatorLiveness`** (`<>replicatorInstalled`) — under a dialable address and strong fairness on `DialSucceed`, the replicator eventually installs despite arbitrary intervening dial timeouts.
+- **`PROPERTY ReplicatorLiveness`** (`<>replicatorInstalled`) — under a dialable ticket, an installable replicator, and strong fairness on `DialSucceed`, the replicator eventually installs despite arbitrary intervening dial timeouts.
 - **`PROPERTY EndToEndLiveness`** (`<>docsReplicated`) — a document eventually flows initiator→target.
 
-`MCPairingTransportUndialable.cfg` (`Dialable = FALSE`) keeps the same INVARIANT lines (they still hold — the failure is purely liveness) but is EXPECTED to violate `PROPERTY ReplicatorLiveness`. The counterexample — `Disconnected → Connecting → …` with the connection never reaching `Connected` — is the #511 hang. This config is a committed diagnostic, not a passing check; see "Recorded runs".
+The two diagnostic configs each reproduce one real failure mode (the production grounding for each is in "PairingTransport derived requirements"):
 
-The key structural result: `DialSucceed` requires `Dialable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`) cannot make an un-dialable address dialable — dialability is a *transport precondition the layer above must supply* (dial the shareable public address, not a listen-form address). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires a live connection, which requires a dialable address.
+- **`MCPairingTransportUndialable.cfg`** (`Dialable = FALSE`) — **MODE A, the literal #511 hang.** The invariants still hold (the failure is purely liveness; `PartialApplyHasProgress` is *vacuous* here — the `Connected ∧ subscribed` state is never reached). `PROPERTY ReplicatorLiveness` is violated; the counterexample is `Disconnected → Connecting → …` with the connection NEVER reaching `Connected`, so nothing subscribes — faithful to the real connect-FIRST hard gate, where an undialable ticket aborts the whole tick before any op and writes no applied row at all.
+- **`MCPairingTransportReplicatorStuck.cfg`** (`Dialable = TRUE`, `ReplicatorInstallable = FALSE`) — **MODE B/C, the durable partial row.** The connection establishes and the collection subscribes, but the replicator install can never succeed (its separate transport dial keeps timing out, or a pre-dial cid/filter check fails). TLC reaches `Connected ∧ subscribed ∧ ¬replicatorInstalled` and reports it as an `INVARIANT PartialApplyHasProgress` violation — that state IS the live "subscribed collections, `replicator_addresses: null`" row, now a *modeled* state rather than only prose. `ReplicatorLiveness` and `EndToEndLiveness` are also violated; `TypeOK` and `ReplicationImpliesReplicator` still hold.
+
+The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
 ## Fairness annotations
 
@@ -235,8 +243,9 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCReversePairingMulti.cfg` | `Collection = {c1, c2}`, `MaxCrashes = 0` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 2,164,720 distinct states; 28,085,121 generated | 18 | 36min 38s |
 | `MCSubagentCompletion.cfg` | `Child = {c1, c2}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = eventIdsUsed <= 3 /\ queueIdsUsed <= 2` | Passes all listed SubagentCompletion invariants and `CompletionProgress` | 787,112 distinct states; 5,752,621 generated | 20 | 2min 01s |
 | `MCSubagentCancelPropagation.cfg` | `Child = {c1}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = unhandled child retains one fresh RPC id` | Passes all listed SubagentCancelPropagation invariants and `CancelPropagationProgress` | 416,230 distinct states; 1,651,727 generated | 21 | 11s |
-| `MCPairingTransportDialable.cfg` | `Dialable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 9 distinct states; 12 generated | — | <1s (OpenJDK 25) |
-| `MCPairingTransportUndialable.cfg` | `Dialable = FALSE` | **Diagnostic:** invariants hold; `ReplicatorLiveness` intentionally VIOLATED (counterexample = the #511 hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
+| `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
+| `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
+| `MCPairingTransportReplicatorStuck.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = FALSE` | **MODE B/C diagnostic:** `TypeOK`/`ReplicationImpliesReplicator` hold; `PartialApplyHasProgress` intentionally VIOLATED at `Connected ∧ subscribed ∧ ¬installed` (the partial row); `ReplicatorLiveness`/`EndToEndLiveness` also violated | 5 distinct states; 6 generated | — | <1s (OpenJDK 25) |
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 
@@ -294,12 +303,19 @@ The SubagentCancelPropagation model surfaces these implementation obligations:
 
 ## PairingTransport derived requirements
 
-The PairingTransport model surfaces these implementation obligations:
+The model distinguishes three production failure modes, grounded in `reconcile_peer_tick` (engine.rs) + `add_replicator` (defradb.rs iroh) + `parse_public_peer_addr`:
 
-1. The address a peer dials must be the **shareable public address** (a reachable direct addr), not a listen-form / under-specified address. Under no-relay + no-discovery there is no fallback resolution path, so an un-dialable address is a permanent liveness failure, not a slow one. (Fix site: invite-token construction must use the shareable form on *every* path — both the live-daemon and persisted-token branches.)
-2. The reconciler must keep retrying the dial (the model's SF on `Dial`/`Redial`); a single connect failure must not be terminal. Aborting the current tick on connect failure and retrying next tick is acceptable — it matches the Lean `dialFailed` fixpoint — *provided* the address eventually becomes dialable.
-3. Dialability is a precondition the layer above the reconciler must guarantee; the reconcile loop cannot manufacture it. A reconciler that subscribes the control-plane collections and reports success without installing the replicator violates `PartialApplyHasProgress` — partial apply must remain visibly incomplete and retryable, never silently "done".
+- **MODE A — connect-fails-first** (`Dialable = FALSE`). `admin.connect(addresses)` is a connect-FIRST hard gate (`?` before the diff). An undialable listen-form ticket (parse yields no direct addrs under no-relay/no-discovery) fails connect, the whole tick aborts, and NO `PeerPairingApplied` row is written — the sweep just retries every 30s. This is the literal #511 fleet hang.
+- **MODE B — connect OK, replicator dial fails** (`ReplicatorInstallable = FALSE`). connect succeeds (the ticket is dialable), the InstallCollection ops persist per-op, then `add_replicator`'s *own, separate* transport dial times out. Same ticket as connect, so the shareable-address fix covers it.
+- **MODE C — connect OK, replicator pre-dial check fails** (`ReplicatorInstallable = FALSE`, same modeled state as B). `add_replicator` resolves every replicated collection's cid and validates filters BEFORE its dial; a missing collection schema (`not_found`) or filter-validation failure produces the same partial row, and the shareable-address fix does **NOT** cover it.
+
+Implementation obligations:
+
+1. The address a peer dials must be the **shareable public address** (a reachable direct addr), not a listen-form / under-specified address. Under no-relay + no-discovery there is no fallback resolution path, so an un-dialable address is a permanent liveness failure (MODE A), not a slow one. Fix site: invite-token construction must use the shareable form on *every* path (both the live-daemon and persisted-token branches), and the endpoint heartbeat must publish the shareable form.
+2. The reconciler must keep retrying (the model's SF on `Dial`/`Redial`, WF on the install); a single connect/install failure must not be terminal. Aborting the current tick on connect failure and retrying next tick is acceptable — it matches the Lean `dialFailed` fixpoint — *provided* the precondition eventually holds.
+3. Dialability and replicator-installability are preconditions the layer above the reconciler must guarantee; the reconcile loop cannot manufacture either. A reconciler stuck at subscribed-but-no-replicator violates `PartialApplyHasProgress` — partial apply must remain visibly incomplete and retryable, never silently "done".
 4. End-to-end replication is reachable only through an installed replicator (`ReplicationImpliesReplicator`); a green control-plane subscription is not evidence that data will flow.
+5. **For the #511 cut-6 e2e: the "subscribed collections, null replicator" partial row is AMBIGUOUS between MODE B (fixed by the shareable address) and MODE C (a schema/filter materialization bug, NOT fixed). Diagnose by log signature — `"Address Lookup failed"` / dial timeout = A/B; `collection not found` / filter-validation error = C — before concluding the address fix was insufficient.**
 
 ## Refining the model
 
