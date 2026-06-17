@@ -66,6 +66,19 @@ export async function gotoHarness(page: Page, scenario: HarnessScenario = "defau
   ).toBeVisible();
 }
 
+export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
+  const params = new URLSearchParams({ backend: "live" });
+  if (bridgeUrl) {
+    params.set("bridgeUrl", bridgeUrl);
+  }
+  await page.goto(`/tests/ui-harness/harness.html?${params.toString()}`);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-desktop-ui-harness-backend",
+    "live",
+  );
+}
+
 export async function openChat(page: Page) {
   await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
   await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
