@@ -742,6 +742,28 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
     Ok(())
 }
 
+/// Idempotent migration ensuring the separate data-plane desired collection
+/// exists. Fresh stores get it from `schemas::ALL`; upgraded stores add it at
+/// startup before the pairing reconciler reads desired state.
+pub async fn ensure_data_plane_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("DataPlanePairingDesired")
+        .context("get DataPlanePairingDesired collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::DATA_PLANE_PAIRING_DESIRED)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add DataPlanePairingDesired schema"),
+    }
+}
+
 /// Fill any `PeerPairingDesired` row still missing `source` or `template` with
 /// the operator-partition / `conversation` defaults. Idempotent and convergent:
 /// once every row carries both fields it updates nothing, so it is safe to run on
@@ -1535,6 +1557,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_peer_pairing_desired_migrations(node.clone())
         .await
         .context("ensure PeerPairingDesired migrations")?;
+    ensure_data_plane_pairing_desired_migrations(node.clone())
+        .await
+        .context("ensure DataPlanePairingDesired migrations")?;
     ensure_peer_registry_migrations(node.clone())
         .await
         .context("ensure PeerRegistry migrations")?;
@@ -1840,6 +1865,93 @@ mod patch_kind_tests {
             Some(&["/ip4/127.0.0.1/tcp/4101/p2p/peer-b".to_string()][..])
         );
         assert!(rows[0].profiles.is_none());
+    }
+
+    /// GAP-5: the `source` backfill defaults only BLANK rows to `"operator"`; a
+    /// pre-existing `source = "registry"` row is preserved, never reassigned. The
+    /// `source` partition is what the discovery/network reconcilers use for
+    /// mutual exclusion (a registry-owned peer is excluded from network
+    /// materialization and vice versa), so clobbering a legacy registry row to
+    /// `operator` post-upgrade would silently change ownership. This fences the
+    /// migration's coexistence with a populated network mesh.
+    #[tokio::test]
+    async fn pairing_source_backfill_preserves_registry_rows_only_defaults_blank() {
+        #[derive(serde::Deserialize)]
+        struct SourceRow {
+            peer_id: String,
+            source: Option<String>,
+            template: Option<String>,
+        }
+
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // A legacy registry-owned row (explicit source) and a pre-migration row
+        // with no source/template stamped yet.
+        let response = node
+            .execute(
+                r#"mutation {
+                    legacy: create_PeerPairingDesired(input: {
+                        peer_id: "peer-reg",
+                        agent_did: "did:defra-agent:peer-reg",
+                        collections: ["AgentNetwork"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/5101/p2p/peer-reg"],
+                        source: "registry",
+                        template: "network-control"
+                    }) { _docID }
+                    blank: create_PeerPairingDesired(input: {
+                        peer_id: "peer-blank",
+                        agent_did: "did:defra-agent:peer-blank",
+                        collections: ["AgentRequest"],
+                        replicator_addresses: ["/ip4/127.0.0.1/tcp/5102/p2p/peer-blank"]
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seeding PeerPairingDesired rows failed: {:?}",
+            response.errors
+        );
+
+        backfill_pairing_desired_defaults(node.as_ref()).await;
+
+        let response = node
+            .execute(r#"{ PeerPairingDesired { peer_id source template } }"#)
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query failed: {:?}",
+            response.errors
+        );
+        let rows: Vec<SourceRow> = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("PeerPairingDesired"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let reg = rows
+            .iter()
+            .find(|r| r.peer_id == "peer-reg")
+            .expect("registry row present");
+        assert_eq!(
+            reg.source.as_deref(),
+            Some("registry"),
+            "legacy registry row must NOT be reassigned to operator by backfill"
+        );
+        assert_eq!(reg.template.as_deref(), Some("network-control"));
+
+        let blank = rows
+            .iter()
+            .find(|r| r.peer_id == "peer-blank")
+            .expect("blank row present");
+        assert_eq!(
+            blank.source.as_deref(),
+            Some("operator"),
+            "a blank-source row defaults to operator"
+        );
+        assert_eq!(blank.template.as_deref(), Some("conversation"));
     }
 
     // Pre-scope-key SDL for the four session-keyed conversation collections:

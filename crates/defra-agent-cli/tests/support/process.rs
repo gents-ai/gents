@@ -1,8 +1,6 @@
-use std::io::BufRead;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -142,6 +140,24 @@ pub fn spawn_server_with_ready_json(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
+    // Capture stdout/stderr to temp files rather than pipes. The previous
+    // approach drained stdout on a reader thread that STOPPED at the readiness
+    // JSON; after that the OS pipe buffer fills under verbose RUST_LOG and
+    // blocks the daemon, and stderr was never drained on the success path at
+    // all. Files never block writers, and they preserve the FULL logs for
+    // post-hoc diagnosis on failure (`ServeProcess::captured_output`) — which is
+    // essential for debugging multi-node P2P, where the interesting output
+    // arrives long after readiness. We then poll the stdout log for readiness:
+    // the daemon prints the readiness JSON with Rust's `println!`, which is
+    // line-buffered even when redirected to a file, so the line lands promptly.
+    let stdout_log = tempfile::NamedTempFile::new().context("creating defra-agent stdout log")?;
+    let stderr_log = tempfile::NamedTempFile::new().context("creating defra-agent stderr log")?;
+    let stdout = stdout_log
+        .reopen()
+        .context("opening defra-agent stdout log")?;
+    let stderr = stderr_log
+        .reopen()
+        .context("opening defra-agent stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)
@@ -155,81 +171,44 @@ pub fn spawn_server_with_ready_json(
         .arg(port.to_string())
         .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
     for (name, value) in envs {
         command.env(name, value);
     }
-    let mut child = command.spawn().context("spawning defra-agent server")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("capturing defra-agent server stdout")?;
-    let captured_stdout = Arc::new(Mutex::new(String::new()));
-    let thread_captured_stdout = Arc::clone(&captured_stdout);
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut buffer = String::new();
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => {
-                    let _ = tx.send(Err((
-                        anyhow!("server stdout closed before readiness JSON was emitted"),
-                        buffer,
-                    )));
-                    break;
-                }
-                Ok(_) => {
-                    buffer.push_str(&line);
-                    if let Ok(mut captured) = thread_captured_stdout.lock() {
-                        *captured = buffer.clone();
-                    }
-                    if let Some(value) = server_readiness_json(&buffer) {
-                        let _ = tx.send(Ok(value));
-                        break;
-                    }
-                }
-                Err(error) => {
-                    let _ = tx.send(Err((anyhow!("reading server stdout: {error}"), buffer)));
-                    break;
-                }
-            }
-        }
-    });
+    let child = command.spawn().context("spawning defra-agent server")?;
+    let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
-    let readiness = match rx.recv_timeout(Duration::from_secs(30)) {
-        Ok(Ok(value)) => value,
-        Ok(Err((error, captured_stdout))) => {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .context("waiting for failed defra-agent server process")?;
-            return Err(anyhow!(
-                "{error}\nstdout:\n{}\nstderr:\n{}",
-                captured_stdout,
-                String::from_utf8_lossy(&output.stderr)
-            ));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        // Readiness JSON is on stdout; tracing logs go to stderr — poll only the
+        // stdout log so logging verbosity never affects readiness detection.
+        let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
+        if let Some(value) = server_readiness_json(&stdout_so_far) {
+            return Ok((serve, value));
         }
-        Err(_) => {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .context("waiting for timed out defra-agent server process")?;
-            let captured_stdout = captured_stdout
-                .lock()
-                .map(|captured| captured.clone())
-                .unwrap_or_default();
+        if let Some(status) = serve
+            .child
+            .try_wait()
+            .context("checking serve child status")?
+        {
+            let (stdout, stderr) = serve.captured_output()?;
             bail!(
-                "timed out waiting for defra-agent server readiness JSON\nstdout:\n{}\nstderr:\n{}",
-                captured_stdout,
-                String::from_utf8_lossy(&output.stderr)
+                "server exited before emitting readiness JSON ({status})\nstdout:\n{}\nstderr:\n{}",
+                stdout,
+                stderr
             );
         }
-    };
-
-    Ok((ServeProcess::new(child), readiness))
+        if Instant::now() >= deadline {
+            let (stdout, stderr) = serve.captured_output()?;
+            bail!(
+                "timed out waiting for defra-agent server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                stdout,
+                stderr
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn server_readiness_json(buffer: &str) -> Option<Value> {

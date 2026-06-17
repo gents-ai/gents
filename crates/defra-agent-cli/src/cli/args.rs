@@ -1820,6 +1820,12 @@ pub(crate) enum P2pNetworkCommand {
         aliases = ["deregister", "remove"]
     )]
     Rm(P2pAccessArgs),
+    #[command(about = "Create the local singleton AgentNetwork control-plane root")]
+    Create(P2pNetworkCreateArgs),
+    #[command(about = "Grant active network membership to a member DID")]
+    Grant(P2pNetworkGrantArgs),
+    #[command(about = "Revoke network membership with a retained tombstone")]
+    Revoke(P2pNetworkRevokeArgs),
 }
 
 #[derive(clap::Args)]
@@ -1849,6 +1855,43 @@ pub(crate) struct P2pNetworkListArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkCreateArgs {
+    /// Human-readable network name; network_id is derived from (admin_did, name).
+    #[arg(long)]
+    pub(crate) name: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkGrantArgs {
+    /// The member DID to admit.
+    pub(crate) member_did: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pNetworkRevokeArgs {
+    /// The member DID to revoke.
+    pub(crate) member_did: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
 }
 
@@ -2052,6 +2095,10 @@ pub(crate) struct P2pInviteArgs {
         default_value = "conversation"
     )]
     pub(crate) template: String,
+    /// Member DID this invite admits. The DID must already have an active
+    /// admin-signed NetworkMembership grant on the issuer.
+    #[arg(long = "member-did", value_name = "DID")]
+    pub(crate) member_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -2068,12 +2115,8 @@ pub(crate) struct P2pJoinArgs {
     /// template (the normal path).
     #[arg(long = "template", value_name = "TEMPLATE")]
     pub(crate) template: Option<String>,
-    /// Mark this as a reciprocal join completing a pairing the issuer initiated
-    /// (the issuer already accepted our invite and we are pairing back). The
-    /// signature is still verified, but the registry-membership gate is bypassed:
-    /// re-gating the reciprocal leg on membership would reject a pairing both
-    /// sides already agreed to. Set automatically in the `reciprocal_join_command`
-    /// emitted by a first join.
+    /// Deprecated compatibility flag accepted by older scripts. v5 joins always
+    /// verify the token's admin-signed network root and membership grant.
     #[arg(long, default_value_t = false)]
     pub(crate) reciprocal: bool,
     /// Wait for the runtime to observe the peer as connected.
@@ -2893,6 +2936,13 @@ mod tests {
     fn p2p_invite_template_defaults_to_conversation() {
         let args = parse_p2p_invite(&[]);
         assert_eq!(args.template, "conversation");
+        assert_eq!(args.member_did, None);
+    }
+
+    #[test]
+    fn p2p_invite_member_did_parses() {
+        let args = parse_p2p_invite(&["--member-did", "did:key:zMember"]);
+        assert_eq!(args.member_did.as_deref(), Some("did:key:zMember"));
     }
 
     /// `--template` is the sole scope input on the pairing front door: the dead

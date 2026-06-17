@@ -8,6 +8,41 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+fn create_network(home: &std::path::Path, name: &str) -> Result<Value> {
+    let out = run_cli_json(
+        home,
+        &[
+            "p2p", "network", "create", "--name", name, "--output", "json",
+        ],
+    )?;
+    assert_eq!(
+        out.get("status").and_then(Value::as_str),
+        Some("network_created"),
+        "network create output: {out}"
+    );
+    Ok(out)
+}
+
+fn grant_member(home: &std::path::Path, member_did: &str) -> Result<Value> {
+    let out = run_cli_json(
+        home,
+        &["p2p", "network", "grant", member_did, "--output", "json"],
+    )?;
+    assert_eq!(
+        out.get("status").and_then(Value::as_str),
+        Some("membership_granted"),
+        "network grant output: {out}"
+    );
+    Ok(out)
+}
+
+fn mint_invite_for(home: &std::path::Path, member_did: &str) -> Result<Value> {
+    run_cli_json(
+        home,
+        &["p2p", "pairings", "invite", "--member-did", member_did],
+    )
+}
+
 /// Task C2 (#16): an invite token is single-use. The first join consuming its
 /// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
 /// join presenting the *same* token (same nonce) is rejected as a replay, even
@@ -94,8 +129,11 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
 
-    // Mint exactly ONE invite from A.
-    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
+    create_network(&home_a, "Replay Fleet")?;
+    grant_member(&home_a, &agent_did_b)?;
+
+    // Mint exactly ONE invite from A for B's active membership grant.
+    let invite_a = mint_invite_for(&home_a, &agent_did_b)?;
     let token_a = invite_a
         .get("token")
         .and_then(Value::as_str)
@@ -639,12 +677,18 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         .get("p2p_peer_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("A readiness JSON missing p2p_peer_id: {readiness_a}"))?;
-    let peer_id_b = readiness_b
-        .get("p2p_peer_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("B readiness JSON missing p2p_peer_id: {readiness_b}"))?;
+    assert!(
+        readiness_b
+            .get("p2p_peer_id")
+            .and_then(Value::as_str)
+            .is_some(),
+        "B readiness JSON missing p2p_peer_id: {readiness_b}"
+    );
 
-    let invite_a = run_cli_json(&home_a, &["p2p", "pairings", "invite"])?;
+    create_network(&home_a, "Invite Fleet")?;
+    grant_member(&home_a, &agent_did_b)?;
+
+    let invite_a = mint_invite_for(&home_a, &agent_did_b)?;
     assert_eq!(
         invite_a.get("status").and_then(Value::as_str),
         Some("invite_created")
@@ -676,35 +720,19 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         join_b.get("agent_did").and_then(Value::as_str),
         Some(agent_did_a.as_str())
     );
-    let reciprocal = join_b
-        .get("reciprocal_token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("join B missing reciprocal token: {join_b}"))?;
-
-    let join_a = run_cli_json(&home_a, &["p2p", "pairings", "join", reciprocal])?;
     assert_eq!(
-        join_a.get("status").and_then(Value::as_str),
-        Some("pairing_joined"),
-        "join A output: {join_a}"
-    );
-    assert_eq!(
-        join_a.get("peer_id").and_then(Value::as_str),
-        Some(peer_id_b)
-    );
-    assert_eq!(
-        join_a.get("agent_did").and_then(Value::as_str),
+        join_b.get("member_did").and_then(Value::as_str),
         Some(agent_did_b.as_str())
+    );
+    assert!(
+        join_b.get("reciprocal_token").is_none(),
+        "v5 joins no longer mint reciprocal tokens: {join_b}"
     );
 
     let row_b = peer_pairing_row(&graphql_b, peer_id_a).await?;
     assert_eq!(
         row_b.get("agent_did").and_then(Value::as_str),
         Some(agent_did_a.as_str())
-    );
-    let row_a = peer_pairing_row(&graphql_a, peer_id_b).await?;
-    assert_eq!(
-        row_a.get("agent_did").and_then(Value::as_str),
-        Some(agent_did_b.as_str())
     );
 
     // The `conversation` template (the invite/join default) is filtered-PUSH
@@ -720,15 +748,6 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
             .and_then(Value::as_array)
             .is_some_and(|rows| !rows.is_empty()),
         "B applied row missing a replicator toward A after joining: {applied_b}"
-    );
-    let applied_a =
-        wait_for_pairing_applied(&graphql_a, peer_id_b, Duration::from_secs(70)).await?;
-    assert!(
-        applied_a
-            .get("replicator_addresses")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty()),
-        "A applied row missing a replicator toward B after joining: {applied_a}"
     );
 
     Ok(())

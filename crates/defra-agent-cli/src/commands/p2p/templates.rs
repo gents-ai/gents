@@ -179,9 +179,19 @@ mod tests {
     // ---- render tests ----
 
     #[test]
-    fn template_rows_has_three_entries() {
+    fn template_rows_matches_builtin_catalog() {
         let rows = template_rows();
-        assert_eq!(rows.len(), 3);
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "conversation",
+                "agent-config",
+                "backup",
+                "discovery",
+                "network-control",
+            ]
+        );
     }
 
     #[test]

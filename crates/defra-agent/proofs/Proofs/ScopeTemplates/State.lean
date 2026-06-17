@@ -40,9 +40,18 @@ inductive Scope where
   deriving DecidableEq, Repr
 
 /-- The scope filter key resolved from a scope against a concrete peer DID.
-Byte-identical in shape to `PairingReconcile.ScopeFilterKey` and the Rust
+Byte-identical in shape to the predicate part of Rust
 `FilterPredicate { field, value }`. -/
 structure ScopeFilterKey where
+  field : String
+  value : Did
+  deriving DecidableEq, Repr
+
+/-- One per-collection filter resolved from a scope against a concrete peer DID.
+Mirrors Rust `PairingFilters` entries: map key = `collection`, value =
+`FilterPredicate { field, value }`. -/
+structure CollectionScopeFilter where
+  collection : String
   field : String
   value : Did
   deriving DecidableEq, Repr

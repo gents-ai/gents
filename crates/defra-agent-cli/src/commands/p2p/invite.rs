@@ -4,33 +4,58 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::{AgentIdentity, KeyIdentity};
+use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
 use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
 use serde_json::json;
-
-use defra_agent::agent::p2p_reconcile::resolve_network_id;
 
 use crate::cli::args::P2pInviteArgs;
 use crate::{
     http_get_json, normalize_optional_string, print_json, read_init_config, read_runtime_state,
-    resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir,
+    resolve_agent_did, resolve_config_access, resolve_graphql_endpoint, resolve_home_dir,
 };
 
+use super::network_admin::{load_membership_record, load_single_network_record};
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
-
-// Re-export so join.rs can import from one place.
-pub(super) use defra_agent_protocol::pairing_token::encode as encode_token;
 
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let template = resolve_pairing_template(&args.template)?;
+    let member_did = args
+        .member_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("p2p pairings invite requires --member-did for v5 membership-gated invites")?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let network = load_single_network_record(&access)
+        .await
+        .context("loading local AgentNetwork for v5 invite")?;
+    let grant = load_membership_record(&access, &network.network_id, member_did)
+        .await?
+        .with_context(|| format!("no NetworkMembership grant found for {member_did}"))?;
+    validate_invite_grant(&network, &grant, member_did)?;
 
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for invite signing")?;
-    let token =
-        current_invite_token_signed(args.home.as_deref(), &graphql, &template, identity.as_ref())
-            .await?;
+    if identity.did() != network.admin_did {
+        anyhow::bail!(
+            "local DID {} is not network admin {}; only admin-issued v5 invites are supported",
+            identity.did(),
+            network.admin_did
+        );
+    }
+    let token = current_invite_token_signed(
+        args.home.as_deref(),
+        &graphql,
+        &template,
+        identity.as_ref(),
+        grant,
+        network,
+    )
+    .await?;
     let encoded = encode_invite(&token)?;
 
     print_json(&json!({
@@ -51,29 +76,33 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     Ok(())
 }
 
-/// Build a signed v4 invite token for the current node.
-pub(super) async fn current_invite_token(
-    home: Option<&Path>,
-    graphql: &str,
-    template: &str,
-) -> Result<InviteToken> {
-    let identity =
-        resolve_home_identity(home).context("resolving local agent identity for invite signing")?;
-    current_invite_token_signed(home, graphql, template, identity.as_ref()).await
-}
-
 async fn current_invite_token_signed(
     home: Option<&Path>,
     graphql: &str,
     template: &str,
     identity: &dyn AgentIdentity,
+    grant: MembershipRecord,
+    network: NetworkRecord,
 ) -> Result<InviteToken> {
     let home_dir = resolve_home_dir(home);
-    let mut token = if let Some(t) = build_persisted_token(&home_dir, graphql, template, identity)?
+    // Prefer the LIVE shareable address: it is the runtime's best-known *dialable*
+    // address (NAT/relay-aware), whereas the persisted runtime-state file carries
+    // only listen-form addresses, which are not guaranteed dialable under
+    // no-relay/no-discovery. An un-dialable invite ticket is a permanent
+    // replication-liveness failure, not a slow one — see PairingTransport.tla
+    // (the `Dialable = FALSE` counterexample) and the Lean
+    // `convergence_requires_successful_install` obligation. The persisted path is
+    // an offline fallback used only when the live HTTP endpoint is unreachable.
+    let mut token = match build_live_token(home, graphql, template, identity, &grant, &network)
+        .await
     {
-        t
-    } else {
-        build_live_token(home, graphql, template, identity).await?
+        Ok(t) => t,
+        Err(live_err) => {
+            match build_persisted_token(&home_dir, graphql, template, identity, &grant, &network)? {
+                Some(t) => t,
+                None => return Err(live_err),
+            }
+        }
     };
 
     // Sign: compute payload over token with sig=[] then fill in the signature.
@@ -98,6 +127,8 @@ fn build_persisted_token(
     graphql: &str,
     template: &str,
     identity: &dyn AgentIdentity,
+    grant: &MembershipRecord,
+    network: &NetworkRecord,
 ) -> Result<Option<InviteToken>> {
     let Some(runtime_state) = read_runtime_state(home_dir)? else {
         return Ok(None);
@@ -108,6 +139,10 @@ fn build_persisted_token(
     let Some(peer_id) = normalize_optional_string(runtime_state.p2p_peer_id.as_deref()) else {
         return Ok(None);
     };
+    // Offline fallback only (the live shareable address is preferred — see
+    // `current_invite_token_signed`). Listen-form addresses are not guaranteed
+    // dialable under no-relay/no-discovery; this path runs only when the live
+    // HTTP endpoint is unreachable, where no better address is available.
     let Some(ticket) = runtime_state
         .p2p_listen_addresses
         .iter()
@@ -117,14 +152,16 @@ fn build_persisted_token(
     };
 
     Ok(Some(InviteToken {
-        v: 4,
+        v: 5,
         issuer_did: identity.did().to_string(),
         peer_id,
         ticket,
         nonce: mint_nonce(),
-        network_id: resolve_network_id(),
+        network_id: network.network_id.clone(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         template: template.to_string(),
+        grant: grant.clone(),
+        network: network.clone(),
         sig: Vec::new(), // filled in by caller
     }))
 }
@@ -134,6 +171,8 @@ async fn build_live_token(
     graphql: &str,
     template: &str,
     identity: &dyn AgentIdentity,
+    grant: &MembershipRecord,
+    network: &NetworkRecord,
 ) -> Result<InviteToken> {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
 
@@ -171,16 +210,45 @@ async fn build_live_token(
     };
 
     Ok(InviteToken {
-        v: 4,
+        v: 5,
         issuer_did,
         peer_id,
         ticket,
         nonce: mint_nonce(),
-        network_id: resolve_network_id(),
+        network_id: network.network_id.clone(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         template: template.to_string(),
+        grant: grant.clone(),
+        network: network.clone(),
         sig: Vec::new(), // filled in by caller
     })
+}
+
+fn validate_invite_grant(
+    network: &NetworkRecord,
+    grant: &MembershipRecord,
+    member_did: &str,
+) -> Result<()> {
+    if grant.network_id != network.network_id {
+        anyhow::bail!(
+            "NetworkMembership grant is for network {} but AgentNetwork is {}",
+            grant.network_id,
+            network.network_id
+        );
+    }
+    if grant.member_did != member_did {
+        anyhow::bail!(
+            "NetworkMembership grant is for {} but invite requested {member_did}",
+            grant.member_did
+        );
+    }
+    if grant.status.trim() != "active" {
+        anyhow::bail!(
+            "NetworkMembership grant for {member_did} is not active (status={})",
+            grant.status
+        );
+    }
+    Ok(())
 }
 
 /// Load the local agent identity from the home dir's init config.
@@ -226,13 +294,36 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
 
 #[cfg(test)]
 mod tests {
+    use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
     use defra_agent_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
     use super::*;
 
-    fn v4_token() -> InviteToken {
+    fn network_record() -> NetworkRecord {
+        NetworkRecord {
+            network_id: "default".to_string(),
+            admin_did: "did:key:agent-a".to_string(),
+            display_name: "Default".to_string(),
+            default_template: "network-control".to_string(),
+            created_at: "2026-06-13T00:00:00Z".to_string(),
+            sig: vec![1, 2, 3],
+        }
+    }
+
+    fn grant_record() -> MembershipRecord {
+        MembershipRecord {
+            network_id: "default".to_string(),
+            member_did: "did:key:agent-b".to_string(),
+            status: "active".to_string(),
+            granted_at: "2026-06-13T00:00:00Z".to_string(),
+            revoked_at: String::new(),
+            sig: vec![4, 5, 6],
+        }
+    }
+
+    fn v5_token() -> InviteToken {
         InviteToken {
-            v: 4,
+            v: 5,
             issuer_did: "did:key:agent-a".to_string(),
             peer_id: "peer-a".to_string(),
             ticket: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
@@ -240,19 +331,23 @@ mod tests {
             network_id: "default".to_string(),
             issued_at: "2026-06-13T00:00:00Z".to_string(),
             template: "conversation".to_string(),
+            grant: grant_record(),
+            network: network_record(),
             sig: vec![0xAB, 0xCD],
         }
     }
 
     #[test]
-    fn invite_token_v4_round_trips_with_template_and_nonce() {
-        let original = v4_token();
+    fn invite_token_v5_round_trips_with_template_nonce_and_grant() {
+        let original = v5_token();
         let encoded = encode(&original).expect("encode");
         assert!(encoded.starts_with(TOKEN_PREFIX));
         let decoded = decode(&encoded).expect("decode");
         assert_eq!(decoded, original);
         assert_eq!(decoded.template, "conversation");
         assert_eq!(decoded.nonce, "nonce-a");
+        assert_eq!(decoded.grant.member_did, "did:key:agent-b");
+        assert_eq!(decoded.network.admin_did, "did:key:agent-a");
     }
 
     #[test]
@@ -262,12 +357,10 @@ mod tests {
     }
 
     #[test]
-    fn invite_token_rejects_v3_token() {
-        // Encode a v=3 shaped token; decode must reject with a re-issue hint
-        // (profiles dropped / nonce added in v4).
-        let mut old = v4_token();
-        old.v = 3;
-        let encoded = encode(&old).expect("encode v3");
+    fn invite_token_rejects_v4_token() {
+        let mut old = v5_token();
+        old.v = 4;
+        let encoded = encode(&old).expect("encode v4");
         let err = decode(&encoded).unwrap_err().to_string();
         assert!(
             err.contains("re-issue") || err.contains("newer"),
@@ -277,7 +370,7 @@ mod tests {
 
     #[test]
     fn invite_token_rejects_truncated_base58() {
-        let encoded = encode(&v4_token()).expect("encode");
+        let encoded = encode(&v5_token()).expect("encode");
         let truncated = &encoded[..encoded.len() - 4];
         let err = decode(truncated).unwrap_err().to_string();
         assert!(
@@ -285,5 +378,24 @@ mod tests {
                 || err.contains("parsing pairing invite token"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_invite_grant_requires_active_matching_member_and_network() {
+        let network = network_record();
+        let grant = grant_record();
+        assert!(validate_invite_grant(&network, &grant, "did:key:agent-b").is_ok());
+
+        let mut wrong_member = grant.clone();
+        wrong_member.member_did = "did:key:other".to_string();
+        assert!(validate_invite_grant(&network, &wrong_member, "did:key:agent-b").is_err());
+
+        let mut revoked = grant.clone();
+        revoked.status = "revoked".to_string();
+        assert!(validate_invite_grant(&network, &revoked, "did:key:agent-b").is_err());
+
+        let mut wrong_network = grant;
+        wrong_network.network_id = "net-other".to_string();
+        assert!(validate_invite_grant(&network, &wrong_network, "did:key:agent-b").is_err());
     }
 }

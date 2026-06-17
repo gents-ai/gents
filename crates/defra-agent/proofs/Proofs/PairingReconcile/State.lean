@@ -14,33 +14,43 @@ namespace PairingReconcile
 
 abbrev PeerId := String
 
-/-- A per-collection scope filter key carried by a filtered replicator.
+/-- A per-collection scope filter predicate carried by a filtered replicator.
 
 Mirrors the Rust `FilterPredicate { field, value }` (the #1033 single-field
-equality predicate resolved from a `Scope::PeerDid`). The model treats it
-abstractly: only equality matters, since a filter is part of the replicator's
-*identity*, not behavior we reason about field-by-field here. A replicator is
-unfiltered when its filter is `none`. -/
-structure ScopeFilterKey where
+equality predicate resolved from a `Scope::PeerDid`) plus the collection it
+applies to. The model treats it abstractly: only equality matters, since a
+filter is part of the replicator's *identity*, not behavior we reason about
+field-by-field here. -/
+structure CollectionFilterKey where
+  collection : String
   field : String
   value : String
   deriving DecidableEq, Repr
 
-/-- A managed replicator's identity: its address plus an optional scope filter.
+/-- A managed replicator's per-collection filter identity.
 
-This is the deliverable of Part A: `(address, filter)` makes "same address,
-different filter" two DISTINCT replicators, so a filter change is a teardown of
-the old identity and an install of the new one (no in-place mutate). `none`
-means an unfiltered replicator (today's `Replicate`-delivery behavior). -/
-abbrev ReplicatorId := String × Option ScopeFilterKey
+Mirrors Rust `PairingFilters = BTreeMap<collection, FilterPredicate>`. Empty
+means unfiltered. A non-empty set may filter only some collections carried by a
+replicator; collections absent from the set are unfiltered control-plane
+collections. -/
+abbrev ReplicatorFilter := Finset CollectionFilterKey
+
+/-- A managed replicator's identity: its address plus its filter map identity.
+
+This is the deliverable of Part A generalized for per-collection filters:
+`(address, filters)` makes "same address, different filter map" two DISTINCT
+replicators, so a filter change is a teardown of the old identity and an install
+of the new one (no in-place mutate). `∅` means an unfiltered replicator
+(`Replicate` delivery). -/
+abbrev ReplicatorId := String × ReplicatorFilter
 
 namespace ReplicatorId
 
 /-- The replicator's transport address (the connection target). -/
 def address (r : ReplicatorId) : String := r.1
 
-/-- The replicator's optional scope filter (`none` = unfiltered). -/
-def filter (r : ReplicatorId) : Option ScopeFilterKey := r.2
+/-- The replicator's per-collection filter identity (`∅` = unfiltered). -/
+def filter (r : ReplicatorId) : ReplicatorFilter := r.2
 
 end ReplicatorId
 
@@ -69,13 +79,14 @@ end PairingDesired
 /-- Remote-observed actual pairing for one peer.
 
 RUST BOUNDARY: the model keys actual replicators on the full `ReplicatorId =
-(address, Option filter)` so the convergence proofs can reason about the filter
-identity uniformly. The Rust `PairingActual` (`p2p_reconcile/diff.rs`) observes
-the transport *address only* — the installed filter is not recoverable from the
-peer — and recovers the `(address, filter)` identity from the reconciler-owned
-`PairingApplied.replicator_filter` instead. The two are equivalent for the
-diff's safety obligations because a managed replicator's filter is always known
-on the applied side; this abstraction gap is the intended boundary, not a hole. -/
+(address, ReplicatorFilter)` so the convergence proofs can reason about the
+filter identity uniformly. The Rust `PairingActual` (`p2p_reconcile/diff.rs`)
+observes the transport *address only* — the installed filter map is not
+recoverable from the peer — and recovers the `(address, filters)` identity from
+the reconciler-owned `PairingApplied.replicator_filter` instead. The two are
+equivalent for the diff's safety obligations because a managed replicator's
+filter map is always known on the applied side; this abstraction gap is the
+intended boundary, not a hole. -/
 structure PairingActual where
   collections : Finset String
   replicators : Finset ReplicatorId
@@ -94,7 +105,7 @@ inductive DiffOp where
   | teardownCollection (c : String)
   | installReplicator (r : ReplicatorId)
   | teardownReplicator (r : ReplicatorId)
-  deriving DecidableEq, Repr
+  deriving DecidableEq
 
 /-- Full reconcile state for one peer. -/
 structure ReconcileState where

@@ -71,6 +71,7 @@ pub async fn test_p2p_db(name: &str) -> TestDb {
                 max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
                 rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
                 rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+                max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
             })
             .build()
             .await

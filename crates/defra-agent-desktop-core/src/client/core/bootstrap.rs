@@ -63,6 +63,7 @@ impl ClientCore {
                     max_concurrent_push_tasks: options.max_concurrent_push_tasks,
                     rate_limit_burst: options.rate_limit_burst,
                     rate_limit_rate: options.rate_limit_rate,
+                    max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
                 })
                 .build()
                 .await

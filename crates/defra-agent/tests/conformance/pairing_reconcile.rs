@@ -1,8 +1,11 @@
 //! Entry test for the pairing reconcile conformance harness.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use defra_agent::agent::p2p_reconcile::DiffOp;
+use defra_agent::agent::p2p_reconcile::{
+    merge_layered_desired, DiffOp, FilterPredicate, PairingDesired, PairingFilters,
+};
 
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
@@ -14,6 +17,22 @@ fn fixture_path(fixture: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/pairing_scenarios")
         .join(fixture)
+}
+
+fn set(values: &[&str]) -> BTreeSet<String> {
+    values.iter().map(|value| value.to_string()).collect()
+}
+
+fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
+    let mut filters = PairingFilters::new();
+    filters.insert(
+        collection.to_string(),
+        FilterPredicate {
+            field: field.to_string(),
+            value: value.to_string(),
+        },
+    );
+    filters
 }
 
 #[tokio::test]
@@ -94,4 +113,86 @@ async fn filter_change_reinstalls_replicator() {
         !matches!(ops.last(), Some(DiffOp::TeardownReplicator(_))),
         "reconverged pairing must not keep tearing down, got {ops:?}"
     );
+}
+
+/// Conformance fence for cut 5's Layer-1/Layer-2 merge against the
+/// PairingReconcile + ScopeTemplates Lean surfaces:
+///
+/// - unfiltered network-control collections remain subscriptions;
+/// - filtered conversation collections extend only the replicator collection
+///   set, never the subscription set;
+/// - the resulting replicator identity carries a per-collection filter map.
+#[test]
+fn layered_desired_merge_keeps_data_plane_replicator_only() {
+    let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
+    let control = PairingDesired {
+        collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        replicator_addresses: set(&[address]),
+        replicator_collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        replicator_filter: PairingFilters::new(),
+    };
+    let data_plane = PairingDesired {
+        collections: set(&["AgentRequest", "AgentResponse"]),
+        replicator_addresses: set(&[address]),
+        replicator_collections: set(&["AgentRequest", "AgentResponse"]),
+        replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a")
+            .into_iter()
+            .chain(one_filter("AgentResponse", "agent_did", "did:key:a"))
+            .collect(),
+    };
+
+    let merged =
+        merge_layered_desired(Some(control), Some(data_plane)).expect("merged desired state");
+
+    assert_eq!(
+        merged.collections,
+        set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        "data-plane collections must not become unfiltered subscriptions"
+    );
+    assert_eq!(
+        merged.replicator_collections,
+        set(&[
+            "AgentNetwork",
+            "NetworkMembership",
+            "PeerEndpoint",
+            "AgentRequest",
+            "AgentResponse",
+        ])
+    );
+    assert_eq!(merged.replicator_addresses, set(&[address]));
+    assert_eq!(
+        merged
+            .replicator_filter
+            .get("AgentRequest")
+            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+        Some(("agent_did", "did:key:a"))
+    );
+    assert_eq!(
+        merged
+            .replicator_filter
+            .get("AgentResponse")
+            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+        Some(("agent_did", "did:key:a"))
+    );
+    assert!(
+        !merged.replicator_filter.contains_key("AgentNetwork"),
+        "network-control collections stay unfiltered inside the mixed replicator"
+    );
+}
+
+/// A denied materializability gate is represented at the merge boundary by
+/// absence of Layer-2 desired state. This keeps the control-plane mesh intact
+/// while withholding the data-plane push collections.
+#[test]
+fn layered_desired_merge_absent_data_plane_preserves_control_only() {
+    let control = PairingDesired {
+        collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_addresses: set(&["/ip4/127.0.0.1/tcp/4103/p2p/peer-a"]),
+        replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_filter: PairingFilters::new(),
+    };
+
+    let merged = merge_layered_desired(Some(control.clone()), None).expect("control desired state");
+
+    assert_eq!(merged, control);
 }

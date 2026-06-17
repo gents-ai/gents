@@ -1,0 +1,9 @@
+type DataPlanePairingDesired {
+    peer_id: String @index(unique: true)
+    agent_did: String @index
+    collections: [String!]!
+    replicator_addresses: [String!]!
+    template: String @index
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}

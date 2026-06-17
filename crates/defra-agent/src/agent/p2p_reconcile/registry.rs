@@ -208,7 +208,7 @@ pub async fn run_registry_heartbeat(
         return Ok(());
     };
 
-    let mut interval = tokio::time::interval(REGISTRY_HEARTBEAT_INTERVAL);
+    let mut interval = tokio::time::interval(super::intervals::heartbeat_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Perform the initial registration immediately, then heartbeat.

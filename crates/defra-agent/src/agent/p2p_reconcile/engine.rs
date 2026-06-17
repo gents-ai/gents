@@ -1,7 +1,7 @@
 //! Runtime pairing reconcile engine.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -11,7 +11,9 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
+use crate::identity::AgentIdentity;
 
+use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters, Scope};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
@@ -38,6 +40,14 @@ pub trait PairingStateStore: Send + Sync {
     async fn delete_applied(&self, peer_id: &str) -> Result<()>;
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
+
+    /// Called once at the start of each sweep, before the per-peer loop. Lets a
+    /// store amortize per-sweep work (e.g. computing the membership-materializable
+    /// set once instead of re-verifying every signature for every peer — the
+    /// O(N²) the naive per-peer gate would do). Default is a no-op.
+    async fn begin_sweep(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub async fn reconcile_peer_tick(
@@ -103,6 +113,7 @@ pub async fn reconcile_peer_tick(
 
 pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
     if node.p2p_arc().is_none() {
@@ -112,9 +123,9 @@ pub async fn run_pairing_reconciler(
     }
 
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let store = GraphqlPairingStateStore::new(node.clone());
+    let store = GraphqlPairingStateStore::new(node.clone(), identity);
     let mut subscription = node.subscribe(&[EventName::Update]);
-    let mut interval = tokio::time::interval(PAIRING_SWEEP_INTERVAL);
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     sweep_pairings(&admin, &store).await?;
@@ -151,6 +162,10 @@ async fn sweep_pairings_logged(admin: &dyn RemoteP2pAdmin, store: &dyn PairingSt
 }
 
 async fn sweep_pairings(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStore) -> Result<()> {
+    // Amortize the membership-materializable computation across the whole sweep
+    // (avoids re-verifying every signature per peer). Non-fatal on failure: the
+    // per-peer gate falls back to a live read.
+    store.begin_sweep().await?;
     for peer_id in store.list_peer_ids().await? {
         match reconcile_peer_tick(admin, store, &peer_id).await {
             Ok(outcome) => {
@@ -168,7 +183,7 @@ async fn sweep_pairings(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStor
             Err(error) => {
                 tracing::warn!(
                     peer_id = %peer_id,
-                    error = %error,
+                    error = ?error,
                     "pairing reconcile tick failed"
                 );
             }
@@ -347,17 +362,49 @@ async fn persist_applied(
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
+    /// Per-sweep cache of the membership-materializable entries, refreshed by
+    /// [`begin_sweep`](PairingStateStore::begin_sweep). `Some` during a sweep so
+    /// the Layer-2 gate verifies every signature ONCE per sweep instead of once
+    /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
+    /// live read (also the path for the very first read or a refresh failure).
+    materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
 }
 
 impl GraphqlPairingStateStore {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
+        Self {
+            node,
+            identity,
+            materializable_cache: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    async fn data_plane_materialized_entry(
+        &self,
+        peer_id: &str,
+    ) -> Result<Option<NetworkEndpointEntry>> {
+        // Prefer the per-sweep cache; fall back to a live read when it is absent
+        // (first read, outside a sweep, or after a refresh failure).
+        let cached = self.materializable_cache.lock().unwrap().clone();
+        let entries = match cached {
+            Some(entries) => entries,
+            None => {
+                let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
+                network.load_materializable_entries().await?
+            }
+        };
+        Ok(
+            super::network::materializable_entry_for_peer(&entries, peer_id, self.identity.did())
+                .cloned(),
+        )
     }
 }
 
 #[async_trait]
 impl PairingStateStore for GraphqlPairingStateStore {
     async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>> {
+        let raw_peer_id = peer_id.to_string();
         let peer_id = escape_graphql_string(peer_id);
         let query = format!(
             r#"{{
@@ -366,13 +413,34 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     replicator_addresses
                     template
                 }}
+                DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    agent_did
+                    replicator_addresses
+                    template
+                }}
             }}"#
         );
         let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query PeerPairingDesired")?;
-        first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
+        ensure_no_errors(&response, "query pairing desired state")?;
+        let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
             .map(desired_from_pairing_row)
-            .transpose()
+            .transpose()?;
+        let materialized_entry = self
+            .data_plane_materialized_entry(&raw_peer_id)
+            .await
+            .with_context(|| format!("checking network membership gate for {raw_peer_id}"))?;
+        let data_plane = match (
+            materialized_entry,
+            first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?,
+        ) {
+            (Some(entry), Some(row)) => Some(data_plane_desired_from_pairing_row(
+                row,
+                &entry,
+                self.identity.did(),
+            )?),
+            _ => None,
+        };
+        Ok(merge_layered_desired(base, data_plane))
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
@@ -452,6 +520,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
         let query = r#"{
             PeerPairingDesired { peer_id }
+            DataPlanePairingDesired { peer_id }
             PeerPairingApplied { peer_id }
         }"#;
         let response = self.node.execute(query).await;
@@ -462,12 +531,38 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 ids.insert(row.peer_id);
             }
         }
+        for row in rows::<PeerIdRow>(&response, "DataPlanePairingDesired")? {
+            if !row.peer_id.trim().is_empty() {
+                ids.insert(row.peer_id);
+            }
+        }
         for row in rows::<PeerIdRow>(&response, "PeerPairingApplied")? {
             if !row.peer_id.trim().is_empty() {
                 ids.insert(row.peer_id);
             }
         }
         Ok(ids)
+    }
+
+    async fn begin_sweep(&self) -> Result<()> {
+        // Compute the membership-materializable set ONCE for this sweep so the
+        // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
+        // instead of re-verifying every membership/endpoint signature for every
+        // peer (the O(N²) the review flagged). A refresh failure is non-fatal:
+        // clear the cache so the per-peer path falls back to a live read.
+        let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
+        let refreshed = match network.load_materializable_entries().await {
+            Ok(entries) => Some(entries),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "materializable-set refresh failed; per-peer gate will read live this sweep"
+                );
+                None
+            }
+        };
+        *self.materializable_cache.lock().unwrap() = refreshed;
+        Ok(())
     }
 }
 
@@ -520,11 +615,13 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
             .expect("default pairing template is in the catalog")
     });
 
-    // The scope filter value is the peer's agent DID. A peer-DID-scoped template
-    // with a blank agent_did cannot be honored: it would build an `agent_did == ""`
-    // predicate (matches nothing) or, worse, an unscoped replicator. Refuse the
-    // row and skip this peer (caught per-peer by the sweep), mirroring the
-    // discovery-side skip of blank-DID registry entries.
+    // The scope filter value is the row's agent DID. For network-control rows
+    // this is the remote member DID; for data-plane rows the loader first
+    // sanitizes it to this node's DID so the node pushes only its own docs. A
+    // peer-DID-scoped template with a blank agent_did cannot be honored: it would
+    // build an `agent_did == ""` predicate (matches nothing) or, worse, an
+    // unscoped replicator. Refuse the row and skip this peer (caught per-peer by
+    // the sweep), mirroring the discovery-side skip of blank-DID registry entries.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && matches!(template.scope, Scope::PeerDid { .. }) {
         anyhow::bail!(
@@ -553,6 +650,87 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
         replicator_collections,
         replicator_filter,
     })
+}
+
+fn data_plane_desired_from_pairing_row(
+    mut row: PairingStateRow,
+    signed_endpoint: &NetworkEndpointEntry,
+    self_did: &str,
+) -> Result<PairingDesired> {
+    let row_addresses = row
+        .replicator_addresses
+        .as_ref()
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if !row_addresses.is_empty()
+        && (row_addresses.len() != 1 || !row_addresses.contains(signed_endpoint.address.as_str()))
+    {
+        tracing::warn!(
+            peer_id = %signed_endpoint.peer_id,
+            signed_address = %signed_endpoint.address,
+            row_addresses = ?row_addresses,
+            "DataPlanePairingDesired address did not match signed PeerEndpoint; using signed endpoint address"
+        );
+    }
+
+    if let Some(row_did) = row
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+    {
+        if row_did != self_did {
+            anyhow::bail!(
+                "DataPlanePairingDesired for peer {} scopes agent_did {} but this node is {}; \
+                 refusing to install a data-plane replicator for a foreign DID",
+                signed_endpoint.peer_id,
+                row_did,
+                self_did
+            );
+        }
+    }
+
+    row.agent_did = Some(self_did.to_string());
+    row.replicator_addresses = Some(vec![signed_endpoint.address.clone()]);
+    desired_from_pairing_row(row)
+}
+
+/// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
+/// desired state for the same peer.
+///
+/// Data-plane templates are delivered by filtered push replicators, so their
+/// collections extend only the per-peer replicator set. They must not extend the
+/// subscription set, otherwise conversation documents could gossip unfiltered.
+pub fn merge_layered_desired(
+    base: Option<PairingDesired>,
+    data_plane: Option<PairingDesired>,
+) -> Option<PairingDesired> {
+    // Layer-2 desired rows add data-plane collections to the per-peer
+    // replicator, not to the subscription set. The subscription side must stay
+    // the Layer-1 network-control set so conversation data never gossips
+    // unfiltered.
+    let data_plane = data_plane.map(|mut desired| {
+        desired.collections.clear();
+        desired
+    });
+    match (base, data_plane) {
+        (None, None) => None,
+        (Some(desired), None) | (None, Some(desired)) => Some(desired),
+        (Some(mut left), Some(right)) => {
+            left.collections.extend(right.collections);
+            left.replicator_addresses.extend(right.replicator_addresses);
+            left.replicator_collections
+                .extend(right.replicator_collections);
+            left.replicator_filter.extend(right.replicator_filter);
+            Some(left)
+        }
+    }
 }
 
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
@@ -630,6 +808,131 @@ mod tests {
 
     fn set(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
+        let mut filters = PairingFilters::new();
+        filters.insert(
+            collection.to_string(),
+            crate::agent::p2p_reconcile::FilterPredicate {
+                field: field.to_string(),
+                value: value.to_string(),
+            },
+        );
+        filters
+    }
+
+    #[test]
+    fn merge_desired_unions_control_and_data_plane_state() {
+        let control = PairingDesired {
+            collections: set(&["AgentNetwork", "NetworkMembership"]),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+            replicator_filter: PairingFilters::new(),
+        };
+        let data = PairingDesired {
+            collections: set(&["AgentRequest"]),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        };
+
+        let merged = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
+        assert_eq!(
+            merged.replicator_collections,
+            set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
+        );
+        assert_eq!(
+            merged.collections,
+            set(&["AgentNetwork", "NetworkMembership"]),
+            "data-plane collections must not expand the subscription set"
+        );
+        assert_eq!(
+            merged.replicator_addresses,
+            set(&["/ip4/1/tcp/1/p2p/peer-a"])
+        );
+        assert_eq!(
+            merged
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:a"))
+        );
+        assert!(!merged.replicator_filter.contains_key("AgentNetwork"));
+    }
+
+    #[test]
+    fn data_plane_only_desired_is_replicator_only() {
+        let data = PairingDesired {
+            collections: set(&["AgentRequest"]),
+            replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        };
+
+        let merged = merge_layered_desired(None, Some(data)).expect("data-plane desired");
+        assert!(
+            merged.collections.is_empty(),
+            "data-plane-only desired must not subscribe to conversation collections"
+        );
+        assert_eq!(merged.replicator_collections, set(&["AgentRequest"]));
+        assert!(merged.replicator_filter.contains_key("AgentRequest"));
+    }
+
+    #[test]
+    fn data_plane_desired_uses_signed_endpoint_address_and_self_did() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let desired = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: None,
+                collections: None,
+                replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
+                template: Some("conversation".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("data-plane desired");
+
+        assert_eq!(
+            desired.replicator_addresses,
+            set(&["/ip4/127.0.0.1/tcp/4001/p2p/peer-b"])
+        );
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:self"))
+        );
+    }
+
+    #[test]
+    fn data_plane_desired_rejects_foreign_agent_did_scope() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let error = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:someone-else".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+                template: Some("conversation".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect_err("foreign data-plane scope should be rejected");
+
+        assert!(error.to_string().contains("foreign DID"));
     }
 
     /// Deterministic name → collection-id transform used by `MockAdmin`.

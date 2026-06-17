@@ -44,6 +44,9 @@ pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.gra
 pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
 pub const PEER_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/peer_pairing_desired.graphql");
+pub const DATA_PLANE_PAIRING_DESIRED_NAME: &str = "DataPlanePairingDesired";
+pub const DATA_PLANE_PAIRING_DESIRED: &str =
+    include_str!("../schemas/agent/data_plane_pairing_desired.graphql");
 pub const PEER_PAIRING_APPLIED_NAME: &str = "PeerPairingApplied";
 pub const PEER_PAIRING_APPLIED: &str =
     include_str!("../schemas/agent/peer_pairing_applied.graphql");
@@ -83,6 +86,7 @@ pub const ALL: &[&str] = &[
     SCHEDULE,
     EVENT_TRIGGER,
     PEER_PAIRING_DESIRED,
+    DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
     PEER_REGISTRY,
     CONSUMED_INVITE_NONCE,
@@ -113,6 +117,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
     PEER_PAIRING_DESIRED_NAME,
+    DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
     PEER_REGISTRY_NAME,
     CONSUMED_INVITE_NONCE_NAME,
@@ -147,7 +152,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 26);
+        assert_eq!(ALL.len(), 27);
     }
 
     #[test]

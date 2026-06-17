@@ -69,11 +69,9 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         //
         // The §9 network-membership layer (NetworkMembership.lean: admin-signed
         // Membership + member-signed Endpoint → materialization, with the five
-        // §9 obligations) lives under this same barrel. Its executable decision
-        // (`decideMaterializable`) is fenced against the network discovery
-        // reconciler when that reconciler lands (design spec cut 5); the cut-2
-        // PR carries the proven model + SDL only, so the runtime fence is a
-        // tracked follow-up here, not a silent gap.
+        // §9 obligations) lives under this same barrel. peer_registry_discovery.rs
+        // fences the executable derivation/reconciliation seam by calling the
+        // real `derive_network_desired` and `reconcile_network_tick` functions.
         (
             "PeerRegistryDiscovery",
             Module("conformance/peer_registry_discovery.rs"),

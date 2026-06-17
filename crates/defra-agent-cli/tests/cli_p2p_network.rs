@@ -18,7 +18,6 @@
 mod support;
 use support::*;
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -45,14 +44,12 @@ const P2P_LOOPBACK_ARGS: &[&str] = &[
     "disabled",
 ];
 
-/// A booted node: its home dir, ports, identity, live peer id and shareable
-/// listen address.
+/// A booted node: its home dir, GraphQL endpoint, identity, and live peer id.
 struct Node {
     home: std::path::PathBuf,
     graphql: String,
     agent_did: String,
     peer_id: String,
-    listen_addr: String,
     // Held to keep the server process alive for the test's lifetime; dropped on
     // teardown (its Drop kills the child).
     #[allow(dead_code)]
@@ -101,28 +98,52 @@ async fn boot_node(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("{label} readiness JSON missing p2p_peer_id: {readiness}"))?
         .to_string();
-    let listen_addr = readiness
-        .get("p2p_listen_addresses")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("{label} readiness JSON missing P2P listen address: {readiness}"))?
-        .to_string();
-
     Ok(Node {
         home,
         graphql,
         agent_did,
         peer_id,
-        listen_addr,
         serve,
     })
 }
 
-/// Mint a signed v4 invite on `node` (scope comes from `--template`, which
-/// defaults to `conversation`) and return the encoded token.
-fn mint_invite(node: &Node) -> Result<String> {
-    let invite = run_cli_json(&node.home, &["p2p", "pairings", "invite"])?;
+fn network_create(node: &Node, name: &str) -> Result<String> {
+    let out = run_cli_json(
+        &node.home,
+        &[
+            "p2p", "network", "create", "--name", name, "--output", "json",
+        ],
+    )?;
+    assert_eq!(
+        out.get("status").and_then(Value::as_str),
+        Some("network_created"),
+        "network create output: {out}"
+    );
+    out.get("network_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("network create missing network_id: {out}"))
+}
+
+fn network_grant(admin: &Node, member_did: &str) -> Result<Value> {
+    let out = run_cli_json(
+        &admin.home,
+        &["p2p", "network", "grant", member_did, "--output", "json"],
+    )?;
+    assert_eq!(
+        out.get("status").and_then(Value::as_str),
+        Some("membership_granted"),
+        "network grant output: {out}"
+    );
+    Ok(out)
+}
+
+/// Mint a signed v5 invite from `node` for an active `member_did` grant.
+fn mint_invite(node: &Node, member_did: &str) -> Result<String> {
+    let invite = run_cli_json(
+        &node.home,
+        &["p2p", "pairings", "invite", "--member-did", member_did],
+    )?;
     assert_eq!(
         invite.get("status").and_then(Value::as_str),
         Some("invite_created"),
@@ -161,61 +182,272 @@ fn join(node: &Node, token: &str) -> Result<Value> {
     Ok(out)
 }
 
-/// Close the pairing loop with the proven invite/join flow: the joiner accepts
-/// the seed's *signed* invite (the gated path under test), then the seed pairs
-/// back by joining the reciprocal token. The reciprocal leg carries
-/// `--reciprocal` so the seed's (possibly already populated) registry does not
-/// re-gate a pairing both sides have agreed to. Both legs verify signatures.
-fn pair_bidirectional_signed(joiner: &Node, seed: &Node, token: &str) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn network_create_is_singleton_and_writes_admin_membership() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let model_name = format!("mock-net-create-{}", Uuid::new_v4().simple());
+    let mock = MockModelEndpoint::start(&model_name)?;
+    let admin = boot_node(tempdir.path(), "admin", &model_name, mock.endpoint(), false).await?;
+
+    let created = run_cli_json(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
+        ],
+    )?;
+    let network_id = created
+        .get("network_id")
+        .and_then(Value::as_str)
+        .context("network create output missing network_id")?;
+    assert!(network_id.starts_with("net-"), "output: {created}");
+    assert_eq!(
+        created.get("admin_did").and_then(Value::as_str),
+        Some(admin.agent_did.as_str()),
+        "network create output: {created}"
+    );
+    assert!(
+        created
+            .get("pointer")
+            .and_then(Value::as_str)
+            .is_some_and(|token| token.starts_with("danet1-")),
+        "network create must emit a danet1 pointer: {created}"
+    );
+
+    let network = graphql_query(
+        &admin.graphql,
+        r#"{ AgentNetwork { network_id admin_did display_name default_template admin_sig } }"#,
+    )
+    .await?;
+    let networks = network
+        .pointer("/data/AgentNetwork")
+        .and_then(Value::as_array)
+        .context("AgentNetwork query missing rows")?;
+    assert_eq!(networks.len(), 1, "AgentNetwork rows: {network}");
+    assert_eq!(networks[0]["network_id"], json!(network_id));
+    assert_eq!(networks[0]["admin_did"], json!(admin.agent_did));
+    assert_eq!(networks[0]["display_name"], json!("Fleet One"));
+    assert_eq!(networks[0]["default_template"], json!("network-control"));
+    assert!(
+        networks[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "AgentNetwork must carry admin_sig: {network}"
+    );
+
+    let memberships = graphql_query(
+        &admin.graphql,
+        r#"{ NetworkMembership { network_id member_did status admin_sig } }"#,
+    )
+    .await?;
+    let membership_rows = memberships
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows")?;
+    assert!(
+        membership_rows.iter().any(|row| {
+            row.get("network_id") == Some(&json!(network_id))
+                && row.get("member_did") == Some(&json!(admin.agent_did))
+                && row.get("status") == Some(&json!("active"))
+                && row
+                    .get("admin_sig")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sig| !sig.is_empty())
+        }),
+        "admin self-membership missing: {memberships}"
+    );
+
+    let endpoints = graphql_query(
+        &admin.graphql,
+        r#"{ PeerEndpoint { did node_id address binding_sig } }"#,
+    )
+    .await?;
+    let endpoint_rows = endpoints
+        .pointer("/data/PeerEndpoint")
+        .and_then(Value::as_array)
+        .context("PeerEndpoint query missing rows")?;
+    assert!(
+        endpoint_rows.iter().any(|row| {
+            row.get("did") == Some(&json!(admin.agent_did))
+                && row.get("node_id") == Some(&json!(admin.peer_id))
+                && row
+                    .get("address")
+                    .and_then(Value::as_str)
+                    .is_some_and(|addr| !addr.is_empty())
+                && row
+                    .get("binding_sig")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sig| !sig.is_empty())
+        }),
+        "PeerEndpoint row missing: {endpoints}"
+    );
+
+    let second = run_cli_failure_stderr(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet Two",
+            "--output",
+            "json",
+        ],
+    )?;
+    assert!(
+        second.contains("already exists") && second.contains("singleton"),
+        "second create should fail singleton guard, got: {second}"
+    );
+
+    drop((admin, mock));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grant_then_revoke_writes_active_then_tombstone() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let model_name = format!("mock-net-grant-{}", Uuid::new_v4().simple());
+    let mock = MockModelEndpoint::start(&model_name)?;
+    let admin = boot_node(tempdir.path(), "admin", &model_name, mock.endpoint(), false).await?;
+
+    let created = run_cli_json(
+        &admin.home,
+        &[
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
+        ],
+    )?;
+    let network_id = created
+        .get("network_id")
+        .and_then(Value::as_str)
+        .context("network create output missing network_id")?
+        .to_string();
+    let member = format!("did:key:zMember{}", Uuid::new_v4().simple());
+
+    let grant = run_cli_json(
+        &admin.home,
+        &["p2p", "network", "grant", &member, "--output", "json"],
+    )?;
+    assert_eq!(
+        grant.get("status").and_then(Value::as_str),
+        Some("membership_granted"),
+        "grant output: {grant}"
+    );
+    let member_escaped = escape_graphql_string(&member);
+    let after_grant = graphql_query(
+        &admin.graphql,
+        &format!(
+            r#"{{
+                NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{
+                    network_id
+                    member_did
+                    status
+                    granted_at
+                    revoked_at
+                    admin_sig
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let rows = after_grant
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows after grant")?;
+    assert_eq!(rows.len(), 1, "grant rows: {after_grant}");
+    assert_eq!(rows[0]["network_id"], json!(network_id));
+    assert_eq!(rows[0]["member_did"], json!(member));
+    assert_eq!(rows[0]["status"], json!("active"));
+    assert_eq!(rows[0]["revoked_at"], json!(""));
+    assert!(
+        rows[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "grant must carry admin_sig: {after_grant}"
+    );
+
+    let revoke = run_cli_json(
+        &admin.home,
+        &["p2p", "network", "revoke", &member, "--output", "json"],
+    )?;
+    assert_eq!(
+        revoke.get("status").and_then(Value::as_str),
+        Some("membership_revoked"),
+        "revoke output: {revoke}"
+    );
+    let after_revoke = graphql_query(
+        &admin.graphql,
+        &format!(
+            r#"{{
+                NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{
+                    network_id
+                    member_did
+                    status
+                    granted_at
+                    revoked_at
+                    admin_sig
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let rows = after_revoke
+        .pointer("/data/NetworkMembership")
+        .and_then(Value::as_array)
+        .context("NetworkMembership query missing rows after revoke")?;
+    assert_eq!(
+        rows.len(),
+        1,
+        "revoke must retain one tombstone row: {after_revoke}"
+    );
+    assert_eq!(rows[0]["network_id"], json!(network_id));
+    assert_eq!(rows[0]["member_did"], json!(member));
+    assert_eq!(rows[0]["status"], json!("revoked"));
+    assert!(
+        rows[0]
+            .get("revoked_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "revoke tombstone must keep revoked_at: {after_revoke}"
+    );
+    assert!(
+        rows[0]
+            .get("admin_sig")
+            .and_then(Value::as_str)
+            .is_some_and(|sig| !sig.is_empty()),
+        "revoke tombstone must carry admin_sig: {after_revoke}"
+    );
+
+    drop((admin, mock));
+    Ok(())
+}
+
+/// Accept the admin-issued signed invite on the joiner. v5 invites no longer
+/// mint reciprocal tokens; reverse wiring is network-derived by the reconciler.
+fn pair_via_signed_invite(joiner: &Node, token: &str) -> Result<()> {
     let joined = join(joiner, token)?;
-    if let Some(reciprocal) = joined.get("reciprocal_token").and_then(Value::as_str) {
-        let out = run_cli_json(
-            &seed.home,
-            &["p2p", "pairings", "join", "--reciprocal", reciprocal],
-        )?;
-        let status = out.get("status").and_then(Value::as_str);
-        anyhow::ensure!(
-            matches!(status, Some("pairing_joined") | Some("pairing_exists")),
-            "reciprocal join status: {out}"
-        );
-    }
+    anyhow::ensure!(
+        joined.get("reciprocal_token").is_none(),
+        "v5 join unexpectedly emitted reciprocal token: {joined}"
+    );
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Registry / desired polling helpers (condition-polled, no sleeps)
 // ---------------------------------------------------------------------------
-
-async fn registry_peer_ids(graphql: &str) -> Result<BTreeSet<String>> {
-    let response = graphql_query(graphql, r#"{ PeerRegistry { peer_id } }"#).await?;
-    Ok(response
-        .pointer("/data/PeerRegistry")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.get("peer_id").and_then(Value::as_str))
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-/// Poll until `graphql`'s replicated `PeerRegistry` contains `peer_id`.
-async fn wait_for_registry_peer(graphql: &str, peer_id: &str, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if registry_peer_ids(graphql).await?.contains(peer_id) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "timed out waiting for PeerRegistry on {graphql} to contain {peer_id}; saw {:?}",
-                registry_peer_ids(graphql).await.unwrap_or_default()
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
 
 /// Read the `source` of the `PeerPairingDesired` row for `peer_id`, if present.
 async fn desired_source(graphql: &str, peer_id: &str) -> Result<Option<String>> {
@@ -321,6 +553,8 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
 
     let seed = boot_node(tempdir.path(), "seed", &model_name, mock.endpoint(), false).await?;
     let node_a = boot_node(tempdir.path(), "alpha", &model_name, mock.endpoint(), true).await?;
+    network_create(&seed, "Discovery Fleet")?;
+    network_grant(&seed, &node_a.agent_did)?;
 
     // Both nodes self-register via the explicit `p2p network register` command
     // (deterministic; the heartbeat does this too) and `p2p network list` shows
@@ -345,9 +579,8 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     );
 
     // A pairs with S over the discovery profile (the signed-join path under test).
-    let seed_invite = mint_invite(&seed)?;
-    pair_bidirectional_signed(&node_a, &seed, &seed_invite)?;
-    wait_for_pairing_applied(&seed.graphql, &node_a.peer_id, Duration::from_secs(120)).await?;
+    let seed_invite = mint_invite(&seed, &node_a.agent_did)?;
+    pair_via_signed_invite(&node_a, &seed_invite)?;
     wait_for_pairing_applied(&node_a.graphql, &seed.peer_id, Duration::from_secs(120)).await?;
 
     // A further member B becomes visible to A (as S forwarding B's row would
@@ -472,9 +705,9 @@ async fn desired_payload(
 // Test 2 — signed-invite authorization
 // ---------------------------------------------------------------------------
 
-/// (a) a tampered-signature token is rejected; (b) once a registry has other
-/// members, a validly-signed invite from a non-member is rejected; (c) a valid
-/// member-signed invite is accepted and the desired row records the issuer DID as
+/// (a) a tampered-signature token is rejected; (b) a validly-signed invite whose
+/// grant targets a different DID is rejected; (c) a valid admin-signed invite
+/// for this joiner is accepted and the desired row records the issuer DID as
 /// `agent_did`/`invited_by`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn network_signed_invite_authorization() -> Result<()> {
@@ -499,10 +732,13 @@ async fn network_signed_invite_authorization() -> Result<()> {
         false,
     )
     .await?;
+    network_create(&seed, "Authorization Fleet")?;
+    network_grant(&seed, &joiner.agent_did)?;
+    network_grant(&seed, &outsider.agent_did)?;
 
     // (a) Tampered signature: mutate a base58 char in the seed's token. The CLI
     // must error with the signature-invalid message and a non-zero exit.
-    let valid_token = mint_invite(&seed)?;
+    let valid_token = mint_invite(&seed, &joiner.agent_did)?;
     let tampered = tamper_token(&valid_token)?;
     let stderr = run_cli_failure_stderr(&joiner.home, &["p2p", "pairings", "join", &tampered])?;
     assert!(
@@ -510,9 +746,19 @@ async fn network_signed_invite_authorization() -> Result<()> {
         "tampered join should be rejected at the signature boundary, got: {stderr}"
     );
 
-    // Bootstrap arm (TOFU): the joiner has no peer members yet (only its own
-    // self-registration), so a validly member-signed invite from the seed is
-    // accepted, and the seed is recorded as the issuer.
+    // (b) A valid admin-signed token still cannot admit the wrong local DID.
+    let wrong_member_token = mint_invite(&seed, &outsider.agent_did)?;
+    let stderr = run_cli_failure_stderr(
+        &joiner.home,
+        &["p2p", "pairings", "join", &wrong_member_token],
+    )?;
+    assert!(
+        stderr.contains("grant is for"),
+        "wrong-member join should be rejected with a membership-grant error, got: {stderr}"
+    );
+
+    // (c) The joiner has an active admin-signed grant, so the invite is accepted
+    // and the seed is recorded as the issuer.
     let bootstrap = join(&joiner, &valid_token)?;
     assert_eq!(
         bootstrap.get("agent_did").and_then(Value::as_str),
@@ -524,19 +770,6 @@ async fn network_signed_invite_authorization() -> Result<()> {
         row.get("agent_did").and_then(Value::as_str),
         Some(seed.agent_did.as_str()),
         "desired row agent_did/invited_by must equal the issuer DID: {row}"
-    );
-
-    // (b) Non-member, valid signature: register the seed into the joiner's
-    // registry so it is now a non-empty *peer* trust set, then attempt a join
-    // with the OUTSIDER's validly-signed invite. The outsider is not a member of
-    // the joiner's registry, so the join must be rejected.
-    seed_register_into(&seed, &joiner).await?;
-    let outsider_token = mint_invite(&outsider)?;
-    let stderr =
-        run_cli_failure_stderr(&joiner.home, &["p2p", "pairings", "join", &outsider_token])?;
-    assert!(
-        stderr.contains("not a live member"),
-        "non-member join should be rejected with a membership error, got: {stderr}"
     );
 
     drop((seed, joiner, outsider, mock));
@@ -556,35 +789,6 @@ fn tamper_token(token: &str) -> Result<String> {
     let last = decoded.sig.len() - 1;
     decoded.sig[last] ^= 0x01;
     encode(&decoded).context("re-encoding tampered token")
-}
-
-/// Make `seed` a live member of `target`'s replicated registry by writing the
-/// seed's `PeerRegistry` row directly into the target node (mirrors what
-/// replication would deliver, deterministically and without a full pairing).
-async fn seed_register_into(seed: &Node, target: &Node) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_PeerRegistry(input: {{
-                peer_id: "{peer_id}",
-                agent_did: "{agent_did}",
-                addresses: ["{addr}"],
-                templates: ["conversation"],
-                status: "online",
-                network_id: "default",
-                registered_at: "{now}",
-                updated_at: "{now}"
-            }}) {{ _docID }}
-        }}"#,
-        peer_id = escape_graphql_string(&seed.peer_id),
-        agent_did = escape_graphql_string(&seed.agent_did),
-        addr = escape_graphql_string(&seed.listen_addr),
-        now = escape_graphql_string(&now),
-    );
-    graphql_query(&target.graphql, &mutation).await?;
-    // Confirm it landed before the caller relies on it.
-    wait_for_registry_peer(&target.graphql, &seed.peer_id, Duration::from_secs(10)).await?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,9 @@
 # `req_sig` is the candidate's signature over the request (network_id,
 # candidate_did, candidate_node_id, candidate_address, requested_at), proving the
 # candidate authored this join request.
-type NetworkJoinRequest {
+# `@branchable` is REQUIRED: replicates over P2P (candidate-authored requests
+# reach the admin). DefraDB only P2P-syncs branchable collections.
+type NetworkJoinRequest @branchable {
     request_key: String @index(unique: true)
     network_id: String @index
     candidate_did: String @index
