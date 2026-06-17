@@ -85,12 +85,24 @@ async fn current_invite_token_signed(
     network: NetworkRecord,
 ) -> Result<InviteToken> {
     let home_dir = resolve_home_dir(home);
-    let mut token = if let Some(t) =
-        build_persisted_token(&home_dir, graphql, template, identity, &grant, &network)?
+    // Prefer the LIVE shareable address: it is the runtime's best-known *dialable*
+    // address (NAT/relay-aware), whereas the persisted runtime-state file carries
+    // only listen-form addresses, which are not guaranteed dialable under
+    // no-relay/no-discovery. An un-dialable invite ticket is a permanent
+    // replication-liveness failure, not a slow one — see PairingTransport.tla
+    // (the `Dialable = FALSE` counterexample) and the Lean
+    // `convergence_requires_successful_install` obligation. The persisted path is
+    // an offline fallback used only when the live HTTP endpoint is unreachable.
+    let mut token = match build_live_token(home, graphql, template, identity, &grant, &network)
+        .await
     {
-        t
-    } else {
-        build_live_token(home, graphql, template, identity, &grant, &network).await?
+        Ok(t) => t,
+        Err(live_err) => {
+            match build_persisted_token(&home_dir, graphql, template, identity, &grant, &network)? {
+                Some(t) => t,
+                None => return Err(live_err),
+            }
+        }
     };
 
     // Sign: compute payload over token with sig=[] then fill in the signature.
@@ -127,6 +139,10 @@ fn build_persisted_token(
     let Some(peer_id) = normalize_optional_string(runtime_state.p2p_peer_id.as_deref()) else {
         return Ok(None);
     };
+    // Offline fallback only (the live shareable address is preferred — see
+    // `current_invite_token_signed`). Listen-form addresses are not guaranteed
+    // dialable under no-relay/no-discovery; this path runs only when the live
+    // HTTP endpoint is unreachable, where no better address is available.
     let Some(ticket) = runtime_state
         .p2p_listen_addresses
         .iter()

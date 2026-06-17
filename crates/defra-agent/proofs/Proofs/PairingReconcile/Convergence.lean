@@ -122,6 +122,9 @@ theorem no_flap_on_converged_step
   | dial desired h_desired h_has_wiring h_disconnected h_post =>
       subst h_post
       simp [managedWiringUnchanged, dialState]
+  | dialFailed desired h_desired h_has_wiring h_disconnected h_post =>
+      subst h_post
+      simp [managedWiringUnchanged]
   | peerDisconnected h_connected h_post =>
       subst h_post
       simp [managedWiringUnchanged, disconnectedState]
@@ -140,6 +143,9 @@ theorem no_flap_on_converged_step
       unfold ReconcileState.converged at h
       simp [h_desired] at h
       exact h_missing (h.2.1 h_target)
+  | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
+      subst h_post
+      simp [managedWiringUnchanged]
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
       exfalso
       unfold ReconcileState.converged at h
@@ -246,5 +252,99 @@ theorem no_flap_on_converged_stable_desired
     (_h_desired_stable : post.desired = pre.desired) :
     managedWiringUnchanged pre post :=
   no_flap_on_converged_step h h_trans
+
+/-! ## Fallible connect/install: the partial-apply hang as a proof obligation
+
+`PairingReconcile` now models the connect (`dial` vs `dialFailed`) and the
+replicator install (`reconcileInstallReplicator` vs
+`reconcileInstallReplicatorFailed`) as FALLIBLE. These theorems turn the observed
+live failure — a peer that is connected with control-plane collections already
+subscribed, but whose replicator never installs because its transport dial keeps
+timing out — into a first-class, NON-CONVERGING FIXPOINT of the failure
+transitions.
+
+The upshot the live bug taught us, now a theorem: convergence is NOT a property
+of the reconciler alone. It requires an external guarantee that the successful
+transition is eventually taken — i.e. that the dial eventually succeeds. When the
+transport never provides a dialable path (the live hang), the system is trapped
+in these fixpoints, and no amount of re-running the reconciler escapes them. -/
+
+/-- A failed dial is a non-converging self-loop. From a state with managed wiring
+and no connection, `dialFailed` is an enabled transition to the SAME state, and
+that state is non-converged (the `hasWiring ∧ ¬connected` disagreement term is
+1). The connection can never be established by re-running this step. -/
+theorem dial_failure_is_nonconverging_fixpoint
+    {s : ReconcileState} {desired : PairingDesired}
+    (h_desired : s.desired = some desired)
+    (h_wiring : desired.hasWiring = true)
+    (h_disconnected : s.actual.connected = false) :
+    Transition s s ∧ ¬ s.converged ∧ 0 < disagreementCount s := by
+  refine ⟨Transition.dialFailed desired h_desired h_wiring h_disconnected rfl, ?_, ?_⟩
+  · intro hc
+    unfold ReconcileState.converged at hc
+    simp only [h_desired] at hc
+    obtain ⟨_, _, _, _, h_conn⟩ := hc
+    have hco := h_conn h_wiring
+    rw [h_disconnected] at hco
+    simp at hco
+  · simp only [disagreementCount, h_desired, h_wiring, h_disconnected]
+    simp
+
+/-- The EXACT observed live failure, as a theorem. The peer is connected, its
+control-plane collections are already in `actual` (subscribed), but a desired
+replicator is still missing. Then: (1) the state is non-converged; (2) the
+SUCCESSFUL install is an enabled transition; (3) the FAILING install is an
+enabled transition to the SAME state (a self-loop); (4) the diff is genuinely
+positive. The reconciler cannot choose which of (2)/(3) fires — that depends
+solely on whether the replicator's transport dial succeeds — so the partial
+state is a real branch point whose failing branch never converges. -/
+theorem partial_applied_replicator_stuck
+    {s : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}
+    (h_desired : s.desired = some desired)
+    (h_target : r ∈ desired.replicators)
+    (h_missing : r ∉ s.actual.replicators)
+    (h_connected : s.actual.connected = true) :
+    ¬ s.converged ∧
+      Transition s (installReplicatorState s r) ∧
+      Transition s s ∧
+      0 < disagreementCount s := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro hc
+    unfold ReconcileState.converged at hc
+    simp only [h_desired] at hc
+    obtain ⟨_, h_repl, _, _, _⟩ := hc
+    exact h_missing (h_repl h_target)
+  · exact Transition.reconcileInstallReplicator desired r h_desired h_target h_missing h_connected rfl
+  · exact Transition.reconcileInstallReplicatorFailed desired r h_desired h_target h_missing h_connected rfl
+  · have h_mem : r ∈ desired.replicators \ s.actual.replicators :=
+      Finset.mem_sdiff.mpr ⟨h_target, h_missing⟩
+    have h_card : 0 < (desired.replicators \ s.actual.replicators).card :=
+      Finset.card_pos.mpr ⟨_, h_mem⟩
+    simp only [disagreementCount, h_desired]
+    omega
+
+/-- Liveness obligation, made explicit. The failing install is a self-loop that
+never reduces the disagreement measure, so from the partial-applied state the
+measure can only reach 0 via the SUCCESSFUL install. Convergence therefore
+requires that the successful transition is eventually taken — i.e. that the
+replicator's transport dial eventually succeeds. The reconciler cannot discharge
+this on its own; it is a transport-liveness assumption on the layer below
+(modeled in `tla/PairingTransport.tla`). This is the formal counterpart of the
+live hang. -/
+theorem convergence_requires_successful_install
+    {s post : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}
+    (h_desired : s.desired = some desired)
+    (h_target : r ∈ desired.replicators)
+    (h_missing : r ∉ s.actual.replicators)
+    (h_failed_step : post = s) :
+    disagreementCount post = disagreementCount s ∧ 0 < disagreementCount post := by
+  rw [h_failed_step]
+  refine ⟨rfl, ?_⟩
+  have h_mem : r ∈ desired.replicators \ s.actual.replicators :=
+    Finset.mem_sdiff.mpr ⟨h_target, h_missing⟩
+  have h_card : 0 < (desired.replicators \ s.actual.replicators).card :=
+    Finset.card_pos.mpr ⟨_, h_mem⟩
+  simp only [disagreementCount, h_desired]
+  omega
 
 end PairingReconcile

@@ -23,7 +23,7 @@
 - Create: `crates/defra-agent/src/agent/p2p_reconcile/intervals.rs` — env-overridable interval resolution (one home for all three + the new endpoint intervals).
 
 **Cut 3 — network control-plane CLI**
-- Modify: `crates/defra-agent-cli/src/cli/args.rs` (add `Create`/`Grant`/`Revoke` to `P2pNetworkCommand`).
+- Modify: `crates/defra-agent-cli/src/cli/args.rs` (add `Create`/`Grant`/`Revoke` to `P2pNetworkCommand`; use existing `home: Option<PathBuf>` + `output: OutputFormat` / `--output` style).
 - Modify: `crates/defra-agent-cli/src/commands/p2p/network.rs` (handlers).
 - Create: `crates/defra-agent-cli/src/commands/p2p/network_admin.rs` (genesis + grant + revoke logic) — keeps `network.rs` focused on register/list/rm.
 - Modify: `crates/defra-agent-cli/src/commands/p2p/mod.rs` (wire subcommands).
@@ -32,13 +32,14 @@
 
 **Cut 4 — membership-gated join + token v5**
 - Modify: `crates/defra-agent-protocol/src/pairing_token.rs` (`InviteToken` v5 + `grant`/`network` fields + freshness/decode).
+- Modify: `crates/defra-agent-cli/src/cli/args.rs` (add `--member-did` to `P2pInviteArgs` for v5 grant selection).
 - Modify: `crates/defra-agent-cli/src/commands/p2p/invite.rs` (mint v5: embed signed grant + network record).
 - Modify: `crates/defra-agent-cli/src/commands/p2p/join.rs` (membership-arm admission from signed payload; admin-issued check; grantee check).
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/discovery.rs` (`decide_join_admission` membership arm, or a sibling fn).
 - Test: `crates/defra-agent-cli/tests/cli_p2p.rs` (extend); conformance in `peer_registry_discovery.rs`.
 
 **Cut 5 — reconciler + runtime fence (two layers, one gate)**
-- Create: `crates/defra-agent-schemas/schemas/agent/data_plane_pairing_desired.graphql`; register in `crates/defra-agent-schemas/src/lib.rs` + `crates/defra-agent/src/schema.rs`.
+- Create: `crates/defra-agent-schemas/schemas/agent/data_plane_pairing_desired.graphql`; register in `crates/defra-agent-schemas/src/lib.rs`, `crates/defra-agent-protocol/src/schemas.rs`, `crates/defra-agent/src/schema.rs`, and the runtime migration/ensure path in `crates/defra-agent/src/migration.rs`.
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/templates.rs` (add narrow `network-control` template).
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/registry.rs` or new `endpoint.rs` (signed `PeerEndpoint` heartbeat).
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/discovery.rs` (`deriveNetworkDesired` in Rust → `source="network"` rows; membership gate).
@@ -222,7 +223,8 @@ In `args.rs`, extend `P2pNetworkCommand`:
 pub(crate) enum P2pNetworkCommand {
     Register(P2pNetworkRegisterArgs),
     List(P2pNetworkListArgs),
-    Rm(P2pNetworkRmArgs),
+    /// Existing registry deregistration remains the generic access-args shape.
+    Rm(P2pAccessArgs),
     /// Genesis: create the single AgentNetwork doc (admin-only, singleton).
     Create(P2pNetworkCreateArgs),
     /// Admin grants an active NetworkMembership to a member DID.
@@ -237,11 +239,11 @@ pub(crate) struct P2pNetworkCreateArgs {
     #[arg(long)]
     pub name: String,
     #[arg(long)]
-    pub home: Option<String>,
+    pub home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub graphql: Option<String>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub format: OutputFormat,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub output: OutputFormat,
 }
 
 #[derive(Debug, clap::Args)]
@@ -249,26 +251,26 @@ pub(crate) struct P2pNetworkGrantArgs {
     /// The member DID to admit.
     pub member_did: String,
     #[arg(long)]
-    pub home: Option<String>,
+    pub home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub graphql: Option<String>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub format: OutputFormat,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub output: OutputFormat,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct P2pNetworkRevokeArgs {
     pub member_did: String,
     #[arg(long)]
-    pub home: Option<String>,
+    pub home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub graphql: Option<String>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub format: OutputFormat,
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
+    pub output: OutputFormat,
 }
 ```
 
-(If `P2pNetworkRmArgs` doesn't exist yet, mirror `P2pNetworkListArgs`. Match the existing `home`/`graphql`/`format` arg style already on `P2pNetworkRegisterArgs`.)
+(For `rm`, keep using the existing `P2pAccessArgs`. Match the existing `home`/`graphql`/`output` arg style already on `P2pNetworkRegisterArgs` / `P2pNetworkListArgs`.)
 
 - [ ] **Step 2: Verify it compiles**
 
@@ -301,7 +303,7 @@ async fn network_create_is_singleton_and_writes_admin_membership() -> anyhow::Re
     wait_for_runtime_ready(&gql, &agent_did, std::time::Duration::from_secs(30)).await?;
 
     // create
-    let created = run_cli_json(&home, &["p2p", "network", "create", "--name", "Fleet One", "--format", "json"])?;
+    let created = run_cli_json(&home, &["p2p", "network", "create", "--name", "Fleet One", "--output", "json"])?;
     let network_id = created["network_id"].as_str().expect("network_id").to_string();
     assert!(network_id.starts_with("net-"));
 
@@ -315,7 +317,7 @@ async fn network_create_is_singleton_and_writes_admin_membership() -> anyhow::Re
     assert!(rows.iter().any(|r| r["member_did"] == serde_json::json!(agent_did) && r["status"] == "active"));
 
     // singleton guard: a second create errors
-    let second = run_cli_json(&home, &["p2p", "network", "create", "--name", "Fleet Two", "--format", "json"]);
+    let second = run_cli_json(&home, &["p2p", "network", "create", "--name", "Fleet Two", "--output", "json"]);
     assert!(second.is_err() || second.unwrap()["error"].is_string(), "second create must be rejected");
     Ok(())
 }
@@ -328,7 +330,7 @@ Expected: FAIL — unknown subcommand `create`.
 
 - [ ] **Step 3: Implement the genesis handler**
 
-Create `network_admin.rs`. Read first: `network.rs:52-139` (`p2p_network_register`) for the `resolve_config_access` / `resolve_home_identity` / mutation-render conventions, and `network_token.rs` for `NetworkRecord::signing_payload`. Then:
+Create `network_admin.rs`. Read first: `network.rs:52-139` (`p2p_network_register`) for the `resolve_config_access` / mutation-render conventions, `invite.rs` for the synchronous `resolve_home_identity` helper, and `network_token.rs` for `NetworkRecord::signing_payload`. Then:
 
 ```rust
 //! `p2p network create|grant|revoke`: the admin-signed control-plane writes
@@ -337,11 +339,12 @@ use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent_protocol::network_token::{derive_network_id, NetworkRecord, MembershipRecord, EndpointRecord};
-// ... resolve_config_access, resolve_home_identity, graphql helpers (see network.rs imports)
+// ... resolve_config_access, graphql helpers (see network.rs imports)
+// ... resolve_home_identity (import/reuse the synchronous helper from invite.rs, or move it to a shared p2p helper)
 
 pub(super) async fn p2p_network_create(args: P2pNetworkCreateArgs) -> Result<()> {
     let (access, _home) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
-    let identity = resolve_home_identity(args.home.as_deref()).await?;
+    let identity = resolve_home_identity(args.home.as_deref())?;
     let admin_did = identity.did().to_string();
 
     // Singleton guard: refuse if an AgentNetwork already exists locally.
@@ -372,12 +375,12 @@ pub(super) async fn p2p_network_create(args: P2pNetworkCreateArgs) -> Result<()>
     //    else write here from EndpointRecord with node_id/address read from live p2p status (see network.rs:55-87).
     publish_self_endpoint(&access, args.home.as_deref(), &args.graphql, &identity).await?;
 
-    print_network_created(&args.format, &network_id, &admin_did)?;
+    print_network_created(&args.output, &network_id, &admin_did)?;
     Ok(())
 }
 ```
 
-Implement the small `write_agent_network` / `write_membership` upsert helpers in this file using `escape_graphql_string` and emitting `null` (never `[]`) for empty list fields. Render `admin_sig` / `member_sig` as base58 or hex consistently with how `network_token` encodes signatures (check `encode`/`decode` in `pairing_token.rs`).
+Implement the small `write_agent_network` / `write_membership` upsert helpers in this file using `escape_graphql_string` and emitting `null` (never `[]`) for empty list fields. Render `AgentNetwork.admin_sig`, `NetworkMembership.admin_sig`, and `PeerEndpoint.binding_sig` as base58 or hex consistently with how `network_token` encodes signatures (check `encode`/`decode` in `pairing_token.rs`).
 
 - [ ] **Step 4: Wire the match arms**
 
@@ -412,14 +415,15 @@ git commit -m "feat(cli): p2p network create — genesis + singleton guard + adm
 async fn grant_then_revoke_writes_active_then_tombstone() -> anyhow::Result<()> {
     // ... create network on admin daemon (reuse the preamble) ...
     let member = "did:key:zMember123";
-    run_cli_json(&home, &["p2p", "network", "grant", member, "--format", "json"])?;
+    run_cli_json(&home, &["p2p", "network", "grant", member, "--output", "json"])?;
+    let member_escaped = escape_graphql_string(member);
     let after_grant = graphql_query(&gql, &format!(
-        r#"query {{ NetworkMembership(filter: {{ member_did: {{ _eq: "{member}" }} }}) {{ status revoked_at }} }}"#)).await?;
+        r#"query {{ NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{ status revoked_at }} }}"#)).await?;
     assert_eq!(after_grant["data"]["NetworkMembership"][0]["status"], "active");
 
-    run_cli_json(&home, &["p2p", "network", "revoke", member, "--format", "json"])?;
+    run_cli_json(&home, &["p2p", "network", "revoke", member, "--output", "json"])?;
     let after_revoke = graphql_query(&gql, &format!(
-        r#"query {{ NetworkMembership(filter: {{ member_did: {{ _eq: "{member}" }} }}) {{ status revoked_at }} }}"#)).await?;
+        r#"query {{ NetworkMembership(filter: {{ member_did: {{ _eq: "{member_escaped}" }} }}) {{ status revoked_at }} }}"#)).await?;
     // tombstone retained, not deleted
     assert_eq!(after_revoke["data"]["NetworkMembership"].as_array().unwrap().len(), 1);
     assert_eq!(after_revoke["data"]["NetworkMembership"][0]["status"], "revoked");
@@ -521,11 +525,11 @@ git commit -m "feat(protocol): InviteToken v5 carries admin-signed grant + netwo
 
 ### Task 4.2 — `invite` mints v5 (admin-issued)
 
-**Files:** `crates/defra-agent-cli/src/commands/p2p/invite.rs`
+**Files:** `crates/defra-agent-cli/src/commands/p2p/invite.rs`, `crates/defra-agent-cli/src/cli/args.rs`
 
 - [ ] **Step 1: Write a CLI test (extend `cli_p2p.rs`)**
 
-Assert that `p2p pairings invite --template network-control` from the admin daemon (after `network create` + `grant <peerB_did>`) emits a token that `decode`s to v5 with `grant.member_did == peerB_did` and `network.admin_did == admin_did`. (Run the CLI, capture stdout token, `decode` it in-test.)
+Assert that `p2p pairings invite --member-did <peerB_did> --template network-control` from the admin daemon (after `network create` + `grant <peerB_did>`) emits a token that `decode`s to v5 with `grant.member_did == peerB_did` and `network.admin_did == admin_did`. (Run the CLI, capture stdout token, `decode` it in-test.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -534,7 +538,7 @@ Expected: FAIL — invite still mints v4 / has no grant.
 
 - [ ] **Step 3: Implement**
 
-In `invite.rs`, after resolving the live peer id/ticket (existing `build_live_token`), additionally: load the local `AgentNetwork` (admin record) and the `NetworkMembership` grant for the invitee DID (the invite must name the invitee — add a `--member-did` arg, or require the grant already exists and the caller passes the target DID). Populate `grant` + `network` from those signed rows, set the enrollment `template` default to `network-control`, and sign as today. Fail if the caller is not the admin (`issuer_did == network.admin_did`).
+In `args.rs`, add `member_did: Option<String>` to `P2pInviteArgs` as `#[arg(long = "member-did")]`; require it for v5 network-control invites. In `invite.rs`, after resolving the live peer id/ticket (existing `build_live_token`), additionally: load the local `AgentNetwork` (admin record) and the `NetworkMembership` grant for the invitee DID. Populate `grant` + `network` from those signed rows, set the enrollment `template` default to `network-control`, and sign as today. Fail if the caller is not the admin (`issuer_did == network.admin_did`).
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -639,7 +643,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-Add a heartbeat that, on the `intervals::endpoint_interval()` cadence, builds an `EndpointRecord { did, node_id, address, updated_at, sig }`, signs it, and upserts the `PeerEndpoint` row. Spawn it in `startup.rs` alongside `run_registry_heartbeat` (read `startup.rs:283-296` for the spawn pattern). Reuse `load_live_http_p2p_status` for `node_id`/`address`.
+Add a heartbeat that, on the `intervals::endpoint_interval()` cadence, builds an `EndpointRecord { did, node_id, address, updated_at, sig }`, signs it, and upserts the `PeerEndpoint` row. Spawn it in `startup.rs` alongside `run_registry_heartbeat` (read `startup.rs:283-296` for the spawn pattern). Resolve `node_id`/`address` from the runtime's embedded P2P handle / node state, following the existing registry heartbeat boundary; do not depend on the CLI-only `load_live_http_p2p_status` helper from runtime code.
 
 - [ ] **Step 4: Run / commit**
 
@@ -673,7 +677,7 @@ git commit -m "proof: data-plane edges ⊆ admitted members + per-collection fil
 
 ### Task 5.4 — `DataPlanePairingDesired` schema + registration
 
-**Files:** Create `crates/defra-agent-schemas/schemas/agent/data_plane_pairing_desired.graphql`; modify `crates/defra-agent-schemas/src/lib.rs`, `crates/defra-agent/src/schema.rs`
+**Files:** Create `crates/defra-agent-schemas/schemas/agent/data_plane_pairing_desired.graphql`; modify `crates/defra-agent-schemas/src/lib.rs`, `crates/defra-agent-protocol/src/schemas.rs`, `crates/defra-agent/src/schema.rs`, `crates/defra-agent/src/migration.rs`
 
 - [ ] **Step 1: Write the schema (mirror `peer_pairing_desired.graphql`)**
 
@@ -696,7 +700,7 @@ type DataPlanePairingDesired {
 
 - [ ] **Step 2: Register it**
 
-In `schemas/src/lib.rs`: add `pub const DATA_PLANE_PAIRING_DESIRED_NAME: &str = "DataPlanePairingDesired";` + `pub const DATA_PLANE_PAIRING_DESIRED: &str = include_str!("../schemas/agent/data_plane_pairing_desired.graphql");` and add both to the schema-body list (~line 85) and name list (~line 115). In `schema.rs`, add the `... as ..._SCHEMA` import and include it in the runtime schema set used by `ensure_runtime_schemas`.
+In `schemas/src/lib.rs`: add `pub const DATA_PLANE_PAIRING_DESIRED_NAME: &str = "DataPlanePairingDesired";` + `pub const DATA_PLANE_PAIRING_DESIRED: &str = include_str!("../schemas/agent/data_plane_pairing_desired.graphql");` and add both to the schema-body list (~line 85) and name list (~line 115). In `defra-agent-protocol/src/schemas.rs`, re-export the new schema/name and include it in `ALL` / `ALL_COLLECTION_NAMES`. In `schema.rs`, add the `... as ..._SCHEMA` import and include it in the runtime schema set used by `ensure_runtime_schemas`. In `migration.rs`, add the idempotent runtime migration/ensure hook for upgraded DBs and wire it into `ensure_all_runtime_migrations`.
 
 - [ ] **Step 3: Write/Run a schema-load test**
 
@@ -708,7 +712,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/defra-agent-schemas/ crates/defra-agent/src/schema.rs
+git add crates/defra-agent-schemas/ crates/defra-agent-protocol/src/schemas.rs crates/defra-agent/src/schema.rs crates/defra-agent/src/migration.rs
 git commit -m "feat(schema): DataPlanePairingDesired collection (Layer-2 desired) (cut 5)"
 ```
 
@@ -743,7 +747,7 @@ git commit -m "feat(p2p): derive_network_desired → source=network mesh rows (c
 
 - [ ] **Step 1: Write the failing conformance test**
 
-In `tests/conformance/pairing_reconcile.rs`: for a coordinator↔subagent peer that has BOTH a `source="network"` `PeerPairingDesired` (control-plane, unfiltered) AND a `DataPlanePairingDesired` (conversation, peer-DID-filtered), the reconciler installs ONE replicator whose collections = union and whose filter map scopes ONLY the conversation collections. Then: revoking the subagent's membership (so `decideMaterializable` is false) retracts the WHOLE replicator (both layers).
+In `tests/conformance/pairing_reconcile.rs`: for a coordinator↔subagent peer that has BOTH a `source="network"` `PeerPairingDesired` (control-plane, unfiltered) AND a `DataPlanePairingDesired` (conversation, peer-DID-filtered), the reconciler installs ONE replicator whose `replicator_collections` = control ∪ conversation, whose subscription `collections` stay limited to network-control collections, and whose filter map scopes ONLY the conversation collections. Then: revoking the subagent's membership (so `decideMaterializable` is false) retracts the WHOLE replicator (both layers).
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -752,7 +756,13 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-In `engine.rs reconcile_peer_tick`: (a) load BOTH desired collections for the peer; (b) gate on `decide_materializable(peer)` — if not an active admitted member, treat desired as empty (retract); (c) else compute the **union** desired (collections = control ∪ conversation; `replicator_filter` = per-collection map with entries only for the conversation collections via `scope_filter`); (d) diff against the single `PeerPairingApplied` row + actual; (e) install via the existing `add_replicator` path with the union (full replace). Use `remove_replicator_collections` semantics for collection-scoped teardown when only one layer's collections change (read embedded_impl `delete_replicator`). No `PeerPairingApplied`/`diff.rs` schema change (per §6a).
+In `engine.rs reconcile_peer_tick`: (a) load BOTH desired collections for the peer; (b) gate on `decide_materializable(peer)` — if not an active admitted member, treat desired as empty (retract); (c) else compute the merged desired carefully:
+
+- `collections` = Layer-1 network-control subscription collections only.
+- `replicator_collections` = Layer-1 network-control collections ∪ Layer-2 conversation/delegation collections.
+- `replicator_filter` = per-collection map with entries only for the Layer-2 conversation/delegation collections via `scope_filter`; leave network-control collections unfiltered.
+
+Then (d) diff against the single `PeerPairingApplied` row + actual; (e) install via the existing `add_replicator` path with the merged `replicator_collections` (full replace). Use `remove_replicator_collections` semantics for collection-scoped teardown when only one layer's carried collections change (read embedded_impl `delete_replicator`). No `PeerPairingApplied`/`diff.rs` schema change (per §6a).
 
 - [ ] **Step 4: Run / commit**
 
@@ -786,6 +796,13 @@ git add -A && git commit -m "test: full defra-agent suite green after cut 5"
 - [ ] **Step 1: Write a helper that spawns N daemons**
 
 ```rust
+const P2P_LOOPBACK_ARGS: &[&str] = &[
+    "--p2p-bind-addr", "127.0.0.1",
+    "--p2p-port", "0",
+    "--p2p-relay-mode", "disabled",
+    "--p2p-discovery", "disabled",
+];
+
 struct FleetNode { home: std::path::PathBuf, port: u16, serve: ServeProcess, gql: String, agent_did: String }
 
 async fn bring_up_fleet(tmp: &std::path::Path, n: usize, model_endpoint: &str, model: &str)
@@ -804,7 +821,7 @@ async fn bring_up_fleet(tmp: &std::path::Path, n: usize, model_endpoint: &str, m
             ("DEFRA_AGENT_REGISTRY_STALE_MS", "5000"),
             ("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000"),
         ];
-        let (mut serve, _ready) = spawn_server_with_ready_json(&home, port, &["--p2p-port", "0"], &envs)?;
+        let (mut serve, _ready) = spawn_server_with_ready_json(&home, port, P2P_LOOPBACK_ARGS, &envs)?;
         wait_for_port(port, &mut serve)?;
         let gql = graphql_url(port);
         let agent_did = read_agent_did(&home)?; // from init json / runtime, as cli_live.rs does
@@ -836,7 +853,7 @@ git commit -m "test(e2e): fleet bring-up harness helper (cut 6)"
 #[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 + endpoint/model, run with --ignored"]
 async fn five_process_fleet_discovery_join_pairing_delegation() -> anyhow::Result<()> {
     if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        eprintln!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet live e2e");
+        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet live e2e");
         return Ok(());
     }
     let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")?; // DeepSeek server
@@ -846,16 +863,21 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> anyhow::Resul
     let (coord, subs) = fleet.split_first().unwrap();
 
     // 1) genesis
-    let created = run_cli_json(&coord.home, &["p2p","network","create","--name","FleetE2E","--format","json"])?;
+    let created = run_cli_json(&coord.home, &["p2p","network","create","--name","FleetE2E","--output","json"])?;
     let network_id = created["network_id"].as_str().unwrap().to_string();
 
     // 2) serial grant + invite + join for each subagent (Layer-1 substrate)
     for s in subs {
-        run_cli_json(&coord.home, &["p2p","network","grant", &s.agent_did, "--format","json"])?;
+        run_cli_json(&coord.home, &["p2p","network","grant", &s.agent_did, "--output","json"])?;
         let tok = run_cli_text(&coord.home, &["p2p","pairings","invite","--member-did",&s.agent_did,"--template","network-control"])?;
         let token = extract_token(&tok); // dapair1-... line
         run_cli_json(&s.home, &["p2p","pairings","join", &token, "--wait"])?;
     }
+
+    // Do not depend on the legacy reciprocal-token path here. A member's
+    // network-control join pushes its signed membership/endpoint to the admin;
+    // the admin then materializes the reverse Layer-1 edge through
+    // deriveNetworkDesired. Poll for that reverse desired/applied edge below.
 
     // ASSERT discovery/membership convergence (poll, bounded ~30s with fast intervals)
     for n in &fleet {
@@ -872,14 +894,23 @@ async fn five_process_fleet_discovery_join_pairing_delegation() -> anyhow::Resul
     //    v1 writes DataPlanePairingDesired rows by GraphQL upsert (operator-owned, source="operator")
     //    — same approach as the legacy write_pairing helper, but on the new collection. No new CLI.
     for s in subs {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let pid = escape_graphql_string(&peer_id_of(s));
+        let did = escape_graphql_string(&s.agent_did);
+        let addr = escape_graphql_string(&address_of(s));
+        let now = escape_graphql_string(&now);
         let m = format!(r#"mutation {{ upsert_DataPlanePairingDesired(
             filter: {{ peer_id: {{ _eq: "{pid}" }} }},
-            create: {{ peer_id: "{pid}", agent_did: "{did}", template: "conversation",
+            add: {{ peer_id: "{pid}", agent_did: "{did}", template: "conversation",
+                    source: "operator", collections: null,
+                    replicator_addresses: ["{addr}"],
+                    created_at: "{now}", updated_at: "{now}" }},
+            update: {{ agent_did: "{did}", template: "conversation",
                        source: "operator", collections: null,
-                       replicator_addresses: ["{addr}"] }},
-            update: {{ template: "conversation", replicator_addresses: ["{addr}"] }}
+                       replicator_addresses: ["{addr}"],
+                       updated_at: "{now}" }}
         ) {{ _docID }} }}"#,
-            pid = escape(&peer_id_of(s)), did = escape(&s.agent_did), addr = escape(&address_of(s)));
+            pid = pid, did = did, addr = addr, now = now);
         graphql_query(&coord.gql, &m).await?;
     }
     // ASSERT: a conversation replicator is present for each coord↔sub edge; assert NO

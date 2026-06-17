@@ -86,6 +86,19 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       pre.actual.connected = true →
       post = disconnectedState pre →
       Transition pre post
+  /-- A connect/dial attempt that FAILS (the fallible counterpart of `dial`).
+  The live `admin.connect(&addresses).await?` can return `Err` — an iroh dial
+  timeout (e.g. an under-specified/unreachable address under no-relay +
+  no-discovery), at which point `reconcile_peer_tick` aborts the tick before
+  installing anything. The peer stays disconnected and the tick makes no
+  progress. Modeling this makes "wiring desired, but stuck disconnected" a
+  REACHABLE state — which infallible `dial` alone can never express. -/
+  | dialFailed {pre post : ReconcileState} (desired : PairingDesired) :
+      pre.desired = some desired →
+      desired.hasWiring = true →
+      pre.actual.connected = false →
+      post = pre →
+      Transition pre post
   | reconcileInstall {pre post : ReconcileState} (desired : PairingDesired) (c : String) :
       pre.desired = some desired →
       c ∈ desired.collections →
@@ -106,6 +119,21 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       r ∉ pre.actual.replicators →
       pre.actual.connected = true →
       post = installReplicatorState pre r →
+      Transition pre post
+  /-- A replicator INSTALL that fails even though the membership-level connect
+  succeeded (the fallible counterpart of `reconcileInstallReplicator`). The
+  replicator's own transport dial (`add_replicator`) can time out independently
+  of `connect`, so the replicator is NOT installed while any collection
+  subscriptions an earlier op already wrote stay in `applied`. This is the EXACT
+  observed live failure: a `PeerPairingApplied` row with subscribed collections
+  but no replicator. `post = pre`: no progress, the desired replicator is still
+  missing. -/
+  | reconcileInstallReplicatorFailed {pre post : ReconcileState} (desired : PairingDesired) (r : ReplicatorId) :
+      pre.desired = some desired →
+      r ∈ desired.replicators →
+      r ∉ pre.actual.replicators →
+      pre.actual.connected = true →
+      post = pre →
       Transition pre post
   | reconcileTeardownReplicator {pre post : ReconcileState} (desired : PairingDesired) (r : ReplicatorId) :
       pre.desired = some desired →
@@ -184,6 +212,9 @@ theorem unmanaged_collection_survives
   | dial desired h_desired h_has_wiring h_disconnected h_post =>
       cases h_post
       exact hc
+  | dialFailed desired h_desired h_has_wiring h_disconnected h_post =>
+      cases h_post
+      exact hc
   | peerDisconnected h_connected h_post =>
       cases h_post
       exact hc
@@ -197,6 +228,9 @@ theorem unmanaged_collection_survives
         exact False.elim (hunmanaged h_applied)
       · exact Finset.mem_erase.mpr ⟨h_eq, hc⟩
   | reconcileInstallReplicator desired target h_desired h_target h_missing h_connected h_post =>
+      cases h_post
+      exact hc
+  | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact hc
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
@@ -224,6 +258,9 @@ theorem unmanaged_replicator_survives
   | dial desired h_desired h_has_wiring h_disconnected h_post =>
       cases h_post
       exact hr
+  | dialFailed desired h_desired h_has_wiring h_disconnected h_post =>
+      cases h_post
+      exact hr
   | peerDisconnected h_connected h_post =>
       cases h_post
       exact hr
@@ -236,6 +273,9 @@ theorem unmanaged_replicator_survives
   | reconcileInstallReplicator desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact Finset.mem_insert_of_mem hr
+  | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
+      cases h_post
+      exact hr
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
       cases h_post
       by_cases h_eq : r = target
