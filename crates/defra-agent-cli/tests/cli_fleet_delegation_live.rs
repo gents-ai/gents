@@ -1,5 +1,19 @@
 //! Five-process fleet e2e for filtered conversation pairing and
-//! cross-deployment live subagent delegation.
+//! cross-deployment live subagent delegation, driven entirely by the daemon
+//! reconcilers (no direct REST replicator install). Each coordinator<->subagent
+//! edge is an independent two-node reconcile with two documents: (1) a v5
+//! network-control join (P2P mesh + control-plane document gossip) and (2) an
+//! operator conversation `DataPlanePairingDesired` row (the doc sync delegation
+//! needs). See `establish_reconciler_pairing`.
+//!
+//! KNOWN WALL (#511, under investigation): the control-plane substrate forms and
+//! some reverse mesh edges converge, but the coordinator's reverse-edge dial to
+//! some subagents fails `iroh ... Address Lookup failed` because that subagent's
+//! `PeerEndpoint` ticket (from `shareable_address()`) lacks a dialable direct
+//! addr under 5-node loopback+no-relay+no-discovery startup (PairingTransport
+//! MODE A). The convergence checkpoint dumps doc-state + logs to triage. The
+//! root cause is in the iroh address layer (defradb.rs `shareable_address`), not
+//! this test; committed as a diagnostic that pinpoints the wall.
 //!
 //! Normal test runs compile this file but skip the live test. To run:
 //!
@@ -20,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_agent::subagent_target_entry;
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 const P2P_LOOPBACK_ARGS: &[&str] = &[
@@ -39,6 +53,10 @@ const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
     ("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000"),
     ("DEFRA_AGENT_REGISTRY_STALE_MS", "300000"),
     ("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000"),
+    // Surface reconcile/transport failures (connect timeouts, replicator install
+    // errors) at the daemon so dump_fleet_logs can triage MODE A/B/C on timeout,
+    // without the global-debug heartbeat spam the harness note warns against.
+    ("RUST_LOG", "warn,defra_agent::agent::p2p_reconcile=debug"),
 ];
 
 const CONVERSATION_COLLECTIONS: &[&str] = &[
@@ -122,14 +140,33 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
 
-    for subagent in subagents {
-        install_conversation_replicator(&coord.graphql, &coord.agent_did, &subagent.address)
-            .await?;
-        install_conversation_replicator(&subagent.graphql, &subagent.agent_did, &coord.address)
-            .await?;
-        upsert_trusted_peer_document(&subagent.graphql, &coord.peer_id, &coord.agent_did).await?;
+    // Reconciler-driven pairing (no direct REST replicator install). Each
+    // coordinator<->subagent edge is an independent two-node reconcile with TWO
+    // documents, exactly as the runtime is meant to be driven:
+    //   Layer 1 — P2P mesh + network control-plane gossip: the coordinator is the
+    //     network admin (genesis); it grants each subagent and issues a single-use
+    //     v5 invite; each subagent joins. join is document-only — it writes a
+    //     network-control PeerPairingDesired row and the DAEMON's pairing
+    //     reconciler does the connect + control-plane replicator install, so the
+    //     network membership/endpoint docs gossip and members learn the mesh.
+    //   Layer 2 — conversation document sync: operator writes a conversation
+    //     DataPlanePairingDesired row on BOTH sides of each edge. Once Layer 1 has
+    //     replicated membership (the master gate), the reconciler honors it and
+    //     installs the filtered conversation replicator merged onto the substrate
+    //     edge — the doc sync subagent delegation needs.
+    establish_reconciler_pairing(coord, subagents).await?;
+
+    // Convergence checkpoint (pre-inference): the daemon reconciler must reach
+    // PeerPairingApplied with a non-null replicator_addresses on each of the 4
+    // bidirectional coordinator<->subagent edges. This is where a transport
+    // failure would surface (PairingTransport MODE A connect-fails / B replicator
+    // dial / C cid-filter); on timeout we dump daemon logs to triage by signature.
+    if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
+        dump_fleet_doc_state(&fleet).await;
+        dump_fleet_logs(&fleet);
+        return Err(error);
     }
-    assert_no_subagent_pairing_edges(subagents).await?;
+    assert_no_subagent_data_plane_edges(subagents).await?;
 
     configure_fleet_behaviors(tempdir.path(), coord, subagents).await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
@@ -301,72 +338,126 @@ fn required_output_string(value: &Value, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("output missing {key}: {value}"))
 }
 
-async fn install_conversation_replicator(
-    graphql: &str,
-    agent_did: &str,
-    address: &str,
-) -> Result<()> {
-    let api_base = graphql
-        .strip_suffix("/graphql")
-        .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
-    let filters = CONVERSATION_COLLECTIONS
-        .iter()
-        .map(|collection| {
-            (
-                (*collection).to_string(),
-                json!({ "Field": "agent_did", "Value": agent_did }),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let body = json!({
-        "Collections": CONVERSATION_COLLECTIONS,
-        "Addresses": [address],
-        "Filters": filters,
-    });
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("building P2P replicator client")?
-        .post(format!("{api_base}/p2p/replicators"))
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("installing conversation replicator to {address}"))?;
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    anyhow::ensure!(
-        status.is_success(),
-        "installing conversation replicator to {address} failed with {status}: {text}"
-    );
+/// Drive both reconciler documents for every coordinator<->subagent edge, then
+/// return. All work is document writes (CLI join / GraphQL upsert); the daemon
+/// reconcilers do the connect + replicator install.
+async fn establish_reconciler_pairing(coord: &FleetNode, subagents: &[FleetNode]) -> Result<()> {
+    // Layer 1: genesis + grants + single-use v5 invites + joins.
+    run_cli_json(
+        &coord.home,
+        &[
+            "p2p", "network", "create", "--name", "Fleet One", "--output", "json",
+        ],
+    )
+    .context("coordinator network create")?;
+    for subagent in subagents {
+        run_cli_json(
+            &coord.home,
+            &[
+                "p2p",
+                "network",
+                "grant",
+                &subagent.agent_did,
+                "--output",
+                "json",
+            ],
+        )
+        .with_context(|| format!("granting membership to {}", subagent.agent_did))?;
+    }
+    for subagent in subagents {
+        // The invite MUST carry the network-control template: `p2p pairings
+        // invite` otherwise defaults to "conversation", and a conversation Push
+        // edge replicates only conversation collections — it never gossips
+        // PeerEndpoint/NetworkMembership, so the coordinator never learns the
+        // joiner's endpoint, never derives the reverse mesh edge, and the
+        // membership gate for the Layer-2 conversation rows never opens.
+        let invite = run_cli_json(
+            &coord.home,
+            &[
+                "p2p",
+                "pairings",
+                "invite",
+                "--member-did",
+                &subagent.agent_did,
+                "--template",
+                "network-control",
+            ],
+        )
+        .with_context(|| format!("minting v5 invite for {}", subagent.agent_did))?;
+        let token = invite
+            .get("token")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("invite for {} missing token: {invite}", subagent.agent_did))?;
+        let joined = run_cli_json(&subagent.home, &["p2p", "pairings", "join", token])
+            .with_context(|| format!("{} joining fleet", subagent.agent_did))?;
+        let status = joined.get("status").and_then(Value::as_str);
+        anyhow::ensure!(
+            matches!(status, Some("pairing_joined") | Some("pairing_exists")),
+            "unexpected join status for {}: {joined}",
+            subagent.agent_did
+        );
+    }
+
+    // Layer 2: conversation data-plane row on both sides of each edge. Each node
+    // pushes its OWN agent_did's docs to the peer (the scoped filter the prior
+    // direct install used and the conversation template's `agent_did` scope).
+    for subagent in subagents {
+        upsert_conversation_data_plane(
+            &coord.graphql,
+            &subagent.peer_id,
+            &coord.agent_did,
+            &subagent.address,
+        )
+        .await?;
+        upsert_conversation_data_plane(
+            &subagent.graphql,
+            &coord.peer_id,
+            &subagent.agent_did,
+            &coord.address,
+        )
+        .await?;
+    }
     Ok(())
 }
 
-async fn upsert_trusted_peer_document(graphql: &str, peer_id: &str, agent_did: &str) -> Result<()> {
+/// Operator-write a conversation `DataPlanePairingDesired` row: `peer_id` is who
+/// to dial, `address` is the peer's shareable address, `agent_did` is the scope
+/// filter (docs with this DID are pushed to the peer). The reconciler resolves
+/// the `conversation` template into a filtered Push replicator, gated on the
+/// peer being a materializable network member (Layer 1).
+async fn upsert_conversation_data_plane(
+    graphql: &str,
+    peer_id: &str,
+    agent_did: &str,
+    address: &str,
+) -> Result<()> {
     let peer_id = escape_graphql_string(peer_id);
     let agent_did = escape_graphql_string(agent_did);
+    let address = escape_graphql_string(address);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let collections = CONVERSATION_COLLECTIONS
+        .iter()
+        .map(|collection| format!("\"{collection}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mutation = format!(
         r#"mutation {{
-            upsert_PeerPairingDesired(
+            upsert_DataPlanePairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{agent_did}",
-                    collections: null,
-                    replicator_addresses: null,
-                    profiles: null,
+                    collections: [{collections}],
+                    replicator_addresses: ["{address}"],
                     template: "conversation",
-                    source: "operator",
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{agent_did}",
-                    collections: null,
-                    replicator_addresses: null,
-                    profiles: null,
+                    collections: [{collections}],
+                    replicator_addresses: ["{address}"],
                     template: "conversation",
-                    source: "operator",
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -376,7 +467,126 @@ async fn upsert_trusted_peer_document(graphql: &str, peer_id: &str, agent_did: &
     Ok(())
 }
 
-async fn assert_no_subagent_pairing_edges(subagents: &[FleetNode]) -> Result<()> {
+/// Wait for the daemon reconciler to install the replicator on all 4
+/// bidirectional coordinator<->subagent edges.
+async fn wait_for_fleet_pairing(coord: &FleetNode, subagents: &[FleetNode]) -> Result<()> {
+    for subagent in subagents {
+        // Join direction first (joiner -> inviter) — the proven 2-node primitive.
+        wait_for_replicator_installed(&subagent.graphql, &coord.peer_id, Duration::from_secs(120))
+            .await
+            .with_context(|| {
+                format!("{} -> coordinator conversation replicator", subagent.agent_did)
+            })?;
+        // Reverse edge (inviter -> joiner) — depends on the joiner's endpoint
+        // having replicated to the coordinator (network derivation).
+        wait_for_replicator_installed(&coord.graphql, &subagent.peer_id, Duration::from_secs(120))
+            .await
+            .with_context(|| {
+                format!("coordinator -> {} conversation replicator", subagent.agent_did)
+            })?;
+    }
+    Ok(())
+}
+
+/// On a pairing-convergence failure, dump the durable pairing/network document
+/// state on every node — far more decisive than logs for "why no wiring":
+/// shows which desired/applied rows exist, which memberships/endpoints have
+/// replicated, and where the bootstrap chain stalled.
+async fn dump_fleet_doc_state(fleet: &[FleetNode]) {
+    let query = r#"{
+        AgentNetwork { network_id admin_did }
+        NetworkMembership { member_did status }
+        PeerEndpoint { did }
+        PeerPairingDesired { peer_id source template replicator_addresses }
+        DataPlanePairingDesired { peer_id template replicator_addresses }
+        PeerPairingApplied { peer_id collections replicator_addresses }
+    }"#;
+    for node in fleet {
+        match graphql_query(&node.graphql, query).await {
+            Ok(response) => {
+                let data = response.get("data").unwrap_or(&response);
+                eprintln!(
+                    "\n##### DOC STATE {} (peer={}) #####\n{}",
+                    node.agent_did,
+                    node.peer_id,
+                    serde_json::to_string_pretty(data).unwrap_or_default()
+                );
+            }
+            Err(error) => eprintln!("(doc-state query failed for {}: {error})", node.agent_did),
+        }
+    }
+}
+
+/// Poll `PeerPairingApplied` for `peer_id` until its `replicator_addresses` is
+/// non-empty — i.e. the reconciler actually installed the replicator (the
+/// PairingTransport `ReplicatorLiveness` property, concretely).
+async fn wait_for_replicator_installed(
+    graphql: &str,
+    peer_id: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let escaped = escape_graphql_string(peer_id);
+    let query = format!(
+        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ peer_id collections replicator_addresses }} }}"#
+    );
+    let deadline = Instant::now() + timeout;
+    let mut last = Value::Null;
+    loop {
+        let response = graphql_query(graphql, &query).await?;
+        if let Some(row) = response
+            .pointer("/data/PeerPairingApplied")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+        {
+            last = row.clone();
+            let installed = row
+                .get("replicator_addresses")
+                .and_then(Value::as_array)
+                .is_some_and(|addrs| addrs.iter().any(|a| a.as_str().is_some_and(|s| !s.is_empty())));
+            if installed {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for replicator install on edge peer={peer_id} (graphql={graphql}); last PeerPairingApplied row: {last}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Dump each daemon's captured log tail — called on a pairing-convergence
+/// failure so the transport mode (A: "Address Lookup failed"/dial timeout;
+/// C: "collection not found"/filter) is visible without re-running.
+fn dump_fleet_logs(fleet: &[FleetNode]) {
+    let tail = |text: &str| {
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(120);
+        lines[start..].join("\n")
+    };
+    for node in fleet {
+        match node.serve.captured_output() {
+            Ok((stdout, stderr)) => {
+                eprintln!(
+                    "\n===== {} ({}) stderr tail =====\n{}",
+                    node.agent_did,
+                    node.graphql,
+                    tail(&stderr)
+                );
+                if !stdout.trim().is_empty() {
+                    eprintln!("----- {} stdout tail -----\n{}", node.agent_did, tail(&stdout));
+                }
+            }
+            Err(error) => eprintln!("(could not read logs for {}: {error})", node.agent_did),
+        }
+    }
+}
+
+/// No-crosswise is a DATA-PLANE property: subagents must never get a conversation
+/// `DataPlanePairingDesired` edge to another subagent (the star). Control-plane
+/// `PeerPairingDesired` mesh edges between members are expected and allowed.
+async fn assert_no_subagent_data_plane_edges(subagents: &[FleetNode]) -> Result<()> {
     let sub_peer_ids = subagents
         .iter()
         .map(|node| node.peer_id.as_str())
@@ -384,29 +594,19 @@ async fn assert_no_subagent_pairing_edges(subagents: &[FleetNode]) -> Result<()>
     for node in subagents {
         let response = graphql_query(
             &node.graphql,
-            r#"{
-                PeerPairingDesired { peer_id agent_did template }
-                DataPlanePairingDesired { peer_id agent_did template }
-            }"#,
+            r#"{ DataPlanePairingDesired { peer_id agent_did template } }"#,
         )
         .await?;
-        let mut rows = response
-            .pointer("/data/PeerPairingDesired")
+        let rows = response
+            .pointer("/data/DataPlanePairingDesired")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        rows.extend(
-            response
-                .pointer("/data/DataPlanePairingDesired")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
-        );
         for row in rows {
             let peer_id = row.get("peer_id").and_then(Value::as_str).unwrap_or("");
             anyhow::ensure!(
                 !sub_peer_ids.contains(peer_id),
-                "subagent {} unexpectedly has subagent pairing edge: {row}",
+                "subagent {} unexpectedly has a data-plane edge to another subagent: {row}",
                 node.agent_did
             );
         }
