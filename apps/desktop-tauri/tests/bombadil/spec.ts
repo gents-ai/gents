@@ -14,6 +14,11 @@ const shellState = extract((state) => {
     shellMounted: Boolean(document.querySelector(".app-shell")),
     errorBanner:
       document.querySelector('[data-testid="error-banner"]')?.textContent ?? "",
+    documentWidth: Math.max(
+      document.documentElement.scrollWidth,
+      document.body?.scrollWidth ?? 0,
+    ),
+    viewportWidth: document.defaultView?.innerWidth ?? 0,
     primarySurfaceCount: surfaceSelectors.filter((selector) =>
       document.querySelector(selector),
     ).length,
@@ -46,6 +51,24 @@ const unnamedButtons = extract((state) => {
     .filter((label) => label.length === 0);
 });
 
+const tablistSelectionProblems = extract((state) => {
+  return Array.from(state.document.querySelectorAll('[role="tablist"]'))
+    .map((tablist) => {
+      const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+      const selected = tabs.filter(
+        (tab) => tab.getAttribute("aria-selected") === "true",
+      );
+      return {
+        label:
+          tablist.getAttribute("aria-label") ??
+          normalizeText(tablist.textContent ?? ""),
+        tabCount: tabs.length,
+        selectedCount: selected.length,
+      };
+    })
+    .filter((entry) => entry.tabCount > 0 && entry.selectedCount !== 1);
+});
+
 export const desktop_shell_stays_mounted = always(
   () => shellState.current.shellMounted,
 );
@@ -56,6 +79,14 @@ export const desktop_shell_has_one_primary_surface = always(
 
 export const desktop_shell_does_not_show_global_errors = always(
   () => shellState.current.errorBanner.length === 0,
+);
+
+export const desktop_shell_does_not_horizontally_overflow = always(
+  () => shellState.current.documentWidth <= shellState.current.viewportWidth + 2,
+);
+
+export const visible_tablists_have_one_selected_tab = always(
+  () => tablistSelectionProblems.current.length === 0,
 );
 
 export const transcript_does_not_render_adjacent_duplicate_messages = always(() => {

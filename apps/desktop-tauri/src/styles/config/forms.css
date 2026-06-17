@@ -159,4 +159,10 @@
   .config-workspace .grid-3 {
     gap: var(--space-5);
   }
+
+  @media (max-width: 760px) {
+    .run-history-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 }

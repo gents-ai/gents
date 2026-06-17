@@ -137,4 +137,36 @@
     border-color: rgb(255 111 95 / 0.28);
     background: rgb(72 15 10 / 0.42);
   }
+
+  @media (max-width: 760px) {
+    .app-shell {
+      padding: var(--space-5);
+      gap: var(--space-5);
+    }
+
+    .workspace {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(220px, 34vh) minmax(0, 1fr);
+      gap: var(--space-5);
+    }
+
+    .workspace-tabs {
+      max-width: 100%;
+      overflow-x: auto;
+    }
+
+    .chat-header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-4);
+    }
+
+    .chat-header h2 {
+      font-size: 22px;
+    }
+
+    .chat-status {
+      justify-content: flex-start;
+    }
+  }
 }

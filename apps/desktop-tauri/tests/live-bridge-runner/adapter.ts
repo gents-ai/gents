@@ -18,32 +18,56 @@ import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
 import { normalizePeerStatusUrl } from "./process";
 
+type BridgeHttpClient = {
+  getJson: <T>(path: string) => Promise<T>;
+  postJson: <T = unknown>(path: string, body: unknown) => Promise<T>;
+  fetchWithTimeout: (input: string, init: RequestInit) => Promise<Response>;
+  decodeJson: <T>(response: Response) => Promise<T>;
+};
+
+type BridgeAdapterObservers = {
+  onChatRequest?: (request: TauriDriverChatRequest) => void;
+  onChatResult?: (result: ChatSendResult) => void;
+  onTaskRunResult?: (result: TaskRunResult) => void;
+};
+
 export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter {
+  return createBridgeHttpAdapter(runner, {
+    onChatRequest: (request) => runner.sentRequests.push(request),
+    onChatResult: (result) => runner.sendResults.push(result),
+    onTaskRunResult: (result) => runner.taskRunResults.push(result),
+  });
+}
+
+export function createBridgeHttpAdapter(
+  client: BridgeHttpClient,
+  observers: BridgeAdapterObservers = {},
+): DesktopApiAdapter {
   return {
     fetchDesktopSnapshot: async () =>
-      runner.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),
+      client.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),
     initLocalStandardRuntime: async () =>
-      runner.postJson<InitSummary>("/desktop/init", {}),
+      client.postJson<InitSummary>("/desktop/init", {}),
     startDesktopClient: async () =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
+      client.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
     shutdownDesktopClient: async () =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
+      client.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
     setSelectedAgent: async (agentDid) => {
-      await runner.postJson("/desktop/selected-agent", { agentDid });
+      await client.postJson("/desktop/selected-agent", { agentDid });
     },
     addPeer: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
     fetchPeerStatus: async (serverAddress) => {
-      const response = await runner.fetchWithTimeout(
+      const response = await client.fetchWithTimeout(
         normalizePeerStatusUrl(serverAddress),
         {},
       );
-      return runner.decodeJson<unknown>(response);
+      return client.decodeJson<unknown>(response);
     },
     repairP2P: async () =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
+      client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
     fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>
-      runner.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
+      client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,
         agentDid: agentDid ?? null,
         requestId: requestId ?? null,
@@ -55,70 +79,70 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
         sessionId: request.sessionId ?? null,
         content: request.content,
       };
-      runner.sentRequests.push(normalized);
-      const result = await runner.postJson<ChatSendResult>(
+      observers.onChatRequest?.(normalized);
+      const result = await client.postJson<ChatSendResult>(
         "/desktop/chat/send",
         normalized,
       );
-      runner.sendResults.push(result);
+      observers.onChatResult?.(result);
       return result;
     },
     renameConversation: async (request) => {
-      await runner.postJson("/desktop/conversation/rename", request);
+      await client.postJson("/desktop/conversation/rename", request);
     },
     saveAgentConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
     saveBehaviorConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
     saveBackendConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
     saveInferenceProfileConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>(
+      client.postJson<DesktopClientSnapshot>(
         "/desktop/inference-profile/save",
         request,
       ),
     saveToolSelectionConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/tool-selection/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/tool-selection/save", request),
     saveToolServiceConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/tool-service/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/tool-service/save", request),
     testToolService: async (request) =>
-      runner.postJson("/desktop/tool-service/test", request),
+      client.postJson("/desktop/tool-service/test", request),
     saveTaskConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/task/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/task/save", request),
     saveScheduleConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/schedule/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/schedule/save", request),
     runSchedule: async (request) => {
-      const result = await runner.postJson<TaskRunResult>(
+      const result = await client.postJson<TaskRunResult>(
         "/desktop/schedule/run",
         request,
       );
-      runner.taskRunResults.push(result);
+      observers.onTaskRunResult?.(result);
       return result;
     },
     saveEventTriggerConfig: async (request) =>
-      runner.postJson<DesktopClientSnapshot>("/desktop/event-trigger/save", request),
+      client.postJson<DesktopClientSnapshot>("/desktop/event-trigger/save", request),
     runTask: async (request) => {
-      const result = await runner.postJson<TaskRunResult>("/desktop/task/run", request);
-      runner.taskRunResults.push(result);
+      const result = await client.postJson<TaskRunResult>("/desktop/task/run", request);
+      observers.onTaskRunResult?.(result);
       return result;
     },
     listSubagentTree: async (request) =>
-      runner.postJson<SubagentTreeView>("/desktop/subagent-tree", request),
+      client.postJson<SubagentTreeView>("/desktop/subagent-tree", request),
     listBackendsWithHealth: async () =>
-      runner.getJson<BackendHealth[]>("/desktop/backend-health"),
+      client.getJson<BackendHealth[]>("/desktop/backend-health"),
     listMcpServicesWithHealth: async () =>
-      runner.getJson<MCPServiceHealthView[]>("/desktop/mcp-health"),
+      client.getJson<MCPServiceHealthView[]>("/desktop/mcp-health"),
     probeMcpService: async (serviceId) =>
-      runner.postJson<McpServiceProbeResult>("/desktop/mcp/probe", { serviceId }),
+      client.postJson<McpServiceProbeResult>("/desktop/mcp/probe", { serviceId }),
     fetchOperationsSnapshot: async (request) =>
-      runner.postJson<DesktopOperationsSnapshot>(
+      client.postJson<DesktopOperationsSnapshot>(
         "/desktop/operations/snapshot",
         request,
       ),
     previewInterruptCascade: async (request) =>
-      runner.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
+      client.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
-      runner.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+      client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
   };
 }
 
