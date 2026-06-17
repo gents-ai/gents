@@ -1107,17 +1107,20 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&self) -> Result<()> {
-        // #465: terminalize expired subagent children (and project their
-        // background bridges), and interrupt queued descendants of terminal
-        // parents, on the live tick — startup recovery alone leaves a
-        // mid-run wedge in place until the next restart.
-        let liveness = crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_subagent_liveness(
+        for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
             self.node.as_ref(),
             &self.local_did,
         )
-        .await?;
-        if !liveness.is_noop() {
-            tracing::debug!(?liveness, "subagent liveness reconciliation applied");
+        .await?
+        {
+            if !run.is_noop() {
+                tracing::debug!(
+                    sweep_ids = ?run.metadata.sweep_ids,
+                    rust_function = run.metadata.rust_function,
+                    outcome = ?run.outcome,
+                    "periodic recovery sweep applied"
+                );
+            }
         }
         let unclaimed =
             reconcile_unclaimed_cross_deployment_spawns(self.node.clone(), &self.local_did).await?;
