@@ -592,6 +592,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         max_tokens: None,
         additional_params: None,
         tool_choice: None,
+        on_rendered_request: None,
         max_turns: 0,
     };
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);

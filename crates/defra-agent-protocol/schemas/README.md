@@ -138,11 +138,12 @@ The normal CLI path is:
 
 1. `chat` or `request submit` writes `AgentRequest`
 2. runtime claims and executes the request
-3. streaming writes `AgentResponse`
-4. transcript/session layers write `AgentSession`, `AgentConversation`, `AgentMessage`
-5. once the final assistant message is committed, `AgentResponse.materialized_message_sequence`
+3. an explicitly configured rendered-request capture sink may observe each provider-bound request in memory before streaming starts
+4. streaming writes `AgentResponse`
+5. transcript/session layers write `AgentSession`, `AgentConversation`, `AgentMessage`
+6. once the final assistant message is committed, `AgentResponse.materialized_message_sequence`
    points at the committed `AgentMessage.sequence`
-6. tool activity writes `AgentToolCall` and `AgentToolResult`
+7. tool activity writes `AgentToolCall` and `AgentToolResult`
 
 ### Reconcile
 
