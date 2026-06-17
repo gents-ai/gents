@@ -380,7 +380,10 @@ impl GraphqlPairingStateStore {
         }
     }
 
-    async fn data_plane_peer_is_materializable(&self, peer_id: &str) -> Result<bool> {
+    async fn data_plane_materialized_entry(
+        &self,
+        peer_id: &str,
+    ) -> Result<Option<NetworkEndpointEntry>> {
         // Prefer the per-sweep cache; fall back to a live read when it is absent
         // (first read, outside a sweep, or after a refresh failure).
         let cached = self.materializable_cache.lock().unwrap().clone();
@@ -391,11 +394,10 @@ impl GraphqlPairingStateStore {
                 network.load_materializable_entries().await?
             }
         };
-        Ok(super::network::peer_is_materializable(
-            &entries,
-            peer_id,
-            self.identity.did(),
-        ))
+        Ok(
+            super::network::materializable_entry_for_peer(&entries, peer_id, self.identity.did())
+                .cloned(),
+        )
     }
 }
 
@@ -423,16 +425,20 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
             .map(desired_from_pairing_row)
             .transpose()?;
-        let data_plane = if self
-            .data_plane_peer_is_materializable(&raw_peer_id)
+        let materialized_entry = self
+            .data_plane_materialized_entry(&raw_peer_id)
             .await
-            .with_context(|| format!("checking network membership gate for {raw_peer_id}"))?
-        {
-            first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
-                .map(desired_from_pairing_row)
-                .transpose()?
-        } else {
-            None
+            .with_context(|| format!("checking network membership gate for {raw_peer_id}"))?;
+        let data_plane = match (
+            materialized_entry,
+            first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?,
+        ) {
+            (Some(entry), Some(row)) => Some(data_plane_desired_from_pairing_row(
+                row,
+                &entry,
+                self.identity.did(),
+            )?),
+            _ => None,
         };
         Ok(merge_layered_desired(base, data_plane))
     }
@@ -609,11 +615,13 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
             .expect("default pairing template is in the catalog")
     });
 
-    // The scope filter value is the peer's agent DID. A peer-DID-scoped template
-    // with a blank agent_did cannot be honored: it would build an `agent_did == ""`
-    // predicate (matches nothing) or, worse, an unscoped replicator. Refuse the
-    // row and skip this peer (caught per-peer by the sweep), mirroring the
-    // discovery-side skip of blank-DID registry entries.
+    // The scope filter value is the row's agent DID. For network-control rows
+    // this is the remote member DID; for data-plane rows the loader first
+    // sanitizes it to this node's DID so the node pushes only its own docs. A
+    // peer-DID-scoped template with a blank agent_did cannot be honored: it would
+    // build an `agent_did == ""` predicate (matches nothing) or, worse, an
+    // unscoped replicator. Refuse the row and skip this peer (caught per-peer by
+    // the sweep), mirroring the discovery-side skip of blank-DID registry entries.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && matches!(template.scope, Scope::PeerDid { .. }) {
         anyhow::bail!(
@@ -642,6 +650,55 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
         replicator_collections,
         replicator_filter,
     })
+}
+
+fn data_plane_desired_from_pairing_row(
+    mut row: PairingStateRow,
+    signed_endpoint: &NetworkEndpointEntry,
+    self_did: &str,
+) -> Result<PairingDesired> {
+    let row_addresses = row
+        .replicator_addresses
+        .as_ref()
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if !row_addresses.is_empty()
+        && (row_addresses.len() != 1 || !row_addresses.contains(signed_endpoint.address.as_str()))
+    {
+        tracing::warn!(
+            peer_id = %signed_endpoint.peer_id,
+            signed_address = %signed_endpoint.address,
+            row_addresses = ?row_addresses,
+            "DataPlanePairingDesired address did not match signed PeerEndpoint; using signed endpoint address"
+        );
+    }
+
+    if let Some(row_did) = row
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+    {
+        if row_did != self_did {
+            anyhow::bail!(
+                "DataPlanePairingDesired for peer {} scopes agent_did {} but this node is {}; \
+                 refusing to install a data-plane replicator for a foreign DID",
+                signed_endpoint.peer_id,
+                row_did,
+                self_did
+            );
+        }
+    }
+
+    row.agent_did = Some(self_did.to_string());
+    row.replicator_addresses = Some(vec![signed_endpoint.address.clone()]);
+    desired_from_pairing_row(row)
 }
 
 /// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
@@ -820,6 +877,62 @@ mod tests {
         );
         assert_eq!(merged.replicator_collections, set(&["AgentRequest"]));
         assert!(merged.replicator_filter.contains_key("AgentRequest"));
+    }
+
+    #[test]
+    fn data_plane_desired_uses_signed_endpoint_address_and_self_did() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let desired = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: None,
+                collections: None,
+                replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
+                template: Some("conversation".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("data-plane desired");
+
+        assert_eq!(
+            desired.replicator_addresses,
+            set(&["/ip4/127.0.0.1/tcp/4001/p2p/peer-b"])
+        );
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:self"))
+        );
+    }
+
+    #[test]
+    fn data_plane_desired_rejects_foreign_agent_did_scope() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let error = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:someone-else".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+                template: Some("conversation".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect_err("foreign data-plane scope should be rejected");
+
+        assert!(error.to_string().contains("foreign DID"));
     }
 
     /// Deterministic name → collection-id transform used by `MockAdmin`.

@@ -147,21 +147,27 @@ pub async fn select_materializable_entries(
     Ok(out)
 }
 
-/// Whether `peer_id` is materializable for the **Layer-2 data plane**: it appears
-/// among `entries` (which have already passed the network/membership/signature/
-/// freshness gate in [`select_materializable_entries`]) and is not this node
-/// itself. The data-plane reconciler installs a conversation replicator only for
-/// a peer this predicate accepts — so membership is the master gate over BOTH
-/// layers (D11), and a revoke (which drops the peer from `entries`) retracts the
-/// Layer-2 edge too.
+/// Return the signed materialized endpoint for a Layer-2 data-plane peer. The
+/// endpoint set has already passed the network/membership/signature/freshness
+/// gate in [`select_materializable_entries`], so callers must use the returned
+/// address as the authoritative dial target instead of trusting a data-plane row.
+pub fn materializable_entry_for_peer<'a>(
+    entries: &'a [NetworkEndpointEntry],
+    peer_id: &str,
+    self_did: &str,
+) -> Option<&'a NetworkEndpointEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.peer_id == peer_id && entry.agent_did != self_did)
+}
+
+/// Whether `peer_id` is materializable for the **Layer-2 data plane**.
 pub fn peer_is_materializable(
     entries: &[NetworkEndpointEntry],
     peer_id: &str,
     self_did: &str,
 ) -> bool {
-    entries
-        .iter()
-        .any(|entry| entry.peer_id == peer_id && entry.agent_did != self_did)
+    materializable_entry_for_peer(entries, peer_id, self_did).is_some()
 }
 
 /// Why a v5 join admission was rejected. Each variant is a negative arm of Lean

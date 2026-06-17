@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use defra_agent::agent::p2p_reconcile::network::{decide_v5_admission, V5AdmissionClaim};
 use defra_agent::agent::p2p_reconcile::resolve_template;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::AgentIdentity;
-use defra_agent_protocol::network_token::derive_network_id;
+use defra_agent_protocol::network_token::{derive_network_id, MembershipRecord};
 use defra_agent_protocol::pairing_token::{
     check_freshness, decode, signing_payload, InviteToken, DEFAULT_INVITE_MAX_AGE,
 };
@@ -16,7 +16,9 @@ use crate::request_helpers::parse_duration_suffix;
 use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_endpoint};
 
 use super::invite::resolve_home_identity;
-use super::network_admin::{load_optional_network_record, write_agent_network, write_membership};
+use super::network_admin::{
+    load_membership_record, load_optional_network_record, write_agent_network, write_membership,
+};
 use super::pairings::{
     peer_pairing_exists, resolve_pairing_template, wait_for_pairing_connected,
     write_pairing_desired,
@@ -84,22 +86,19 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     }
     enforce_v5_membership(identity.as_ref(), &remote).await?;
     enforce_local_network_match(&access, &remote).await?;
+    enforce_local_membership_can_import_grant(&access, &remote).await?;
+
+    // Single-use enforcement (Task C2 / #16): consume the token's nonce against
+    // the `ConsumedInviteNonce` ledger before importing any token-carried
+    // control-plane documents. A replayed invite must be rejected without
+    // mutating local AgentNetwork / NetworkMembership state.
+    consume_invite_nonce(&access, &remote.nonce, &remote.issuer_did).await?;
 
     // Keep a durable copy of the signed network root and grant on the joiner so
     // subsequent network-derived discovery has local membership context before
     // the desired pairing is reconciled.
     write_agent_network(&access, &remote.network).await?;
     write_membership(&access, &remote.grant).await?;
-
-    // Single-use enforcement (Task C2 / #16): consume the token's nonce against
-    // the `ConsumedInviteNonce` ledger. This runs AFTER signature + freshness +
-    // signed-membership gates and BEFORE writing the desired pairing row, so a
-    // token's nonce is burned as part of the admission that wires it. The
-    // first join records the nonce and proceeds; any later join presenting the
-    // same token finds the nonce already consumed (or loses the unique-index race
-    // at insert) and is rejected. Mirrors Lean `admitsJoin` (`nonce ∉
-    // consumedNonces`) and the `replay_rejected` theorem.
-    consume_invite_nonce(&access, &remote.nonce, &remote.issuer_did).await?;
 
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -345,6 +344,59 @@ async fn enforce_local_network_match(access: &ConfigAccess, remote: &InviteToken
     Ok(())
 }
 
+/// Do not let an invite-carried active grant regress a locally known revocation
+/// tombstone. A future re-grant is accepted only when the token's `granted_at`
+/// is strictly newer than the local `revoked_at`.
+async fn enforce_local_membership_can_import_grant(
+    access: &ConfigAccess,
+    remote: &InviteToken,
+) -> Result<()> {
+    let Some(existing) =
+        load_membership_record(access, &remote.grant.network_id, &remote.grant.member_did)
+            .await
+            .context("loading local NetworkMembership before join")?
+    else {
+        return Ok(());
+    };
+
+    if existing.status.trim() != "revoked" {
+        return Ok(());
+    }
+
+    if active_grant_supersedes_revocation(&remote.grant, &existing)? {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "pairing invite carries an active grant for {} but this node already knows a \
+         revoked membership in network {}; join rejected until a newer signed grant is used",
+        remote.grant.member_did,
+        remote.grant.network_id
+    );
+}
+
+fn active_grant_supersedes_revocation(
+    incoming: &MembershipRecord,
+    existing: &MembershipRecord,
+) -> Result<bool> {
+    if existing.status.trim() != "revoked" {
+        return Ok(true);
+    }
+    if incoming.status.trim() != "active" {
+        return Ok(false);
+    }
+
+    let revoked_at = parse_rfc3339(&existing.revoked_at, "existing revoked_at")?;
+    let granted_at = parse_rfc3339(&incoming.granted_at, "incoming granted_at")?;
+    Ok(granted_at > revoked_at)
+}
+
+fn parse_rfc3339(value: &str, label: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value.trim())
+        .map(|datetime| datetime.with_timezone(&Utc))
+        .with_context(|| format!("parsing {label} timestamp {value:?}"))
+}
+
 /// Resolve the collection set a template scopes, as owned strings for the
 /// `PeerPairingDesired` row. The reconciler independently resolves collections
 /// from `template`, so this is informational; the template id is authoritative.
@@ -353,4 +405,44 @@ fn template_collections(template: &str) -> Vec<String> {
     resolve_template(template)
         .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn membership(status: &str, granted_at: &str, revoked_at: &str) -> MembershipRecord {
+        MembershipRecord {
+            network_id: "network-1".to_string(),
+            member_did: "did:key:member".to_string(),
+            status: status.to_string(),
+            granted_at: granted_at.to_string(),
+            revoked_at: revoked_at.to_string(),
+            sig: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn active_grant_does_not_supersede_newer_revocation() {
+        let incoming = membership("active", "2026-06-17T10:00:00Z", "");
+        let existing = membership("revoked", "2026-06-17T09:00:00Z", "2026-06-17T11:00:00Z");
+
+        assert!(!active_grant_supersedes_revocation(&incoming, &existing).unwrap());
+    }
+
+    #[test]
+    fn active_grant_supersedes_older_revocation() {
+        let incoming = membership("active", "2026-06-17T12:00:00Z", "");
+        let existing = membership("revoked", "2026-06-17T09:00:00Z", "2026-06-17T11:00:00Z");
+
+        assert!(active_grant_supersedes_revocation(&incoming, &existing).unwrap());
+    }
+
+    #[test]
+    fn existing_active_membership_allows_import() {
+        let incoming = membership("active", "2026-06-17T10:00:00Z", "");
+        let existing = membership("active", "2026-06-17T09:00:00Z", "");
+
+        assert!(active_grant_supersedes_revocation(&incoming, &existing).unwrap());
+    }
 }

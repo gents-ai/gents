@@ -346,7 +346,13 @@ async fn establish_reconciler_pairing(coord: &FleetNode, subagents: &[FleetNode]
     run_cli_json(
         &coord.home,
         &[
-            "p2p", "network", "create", "--name", "Fleet One", "--output", "json",
+            "p2p",
+            "network",
+            "create",
+            "--name",
+            "Fleet One",
+            "--output",
+            "json",
         ],
     )
     .context("coordinator network create")?;
@@ -421,10 +427,12 @@ async fn establish_reconciler_pairing(coord: &FleetNode, subagents: &[FleetNode]
 }
 
 /// Operator-write a conversation `DataPlanePairingDesired` row: `peer_id` is who
-/// to dial, `address` is the peer's shareable address, `agent_did` is the scope
-/// filter (docs with this DID are pushed to the peer). The reconciler resolves
-/// the `conversation` template into a filtered Push replicator, gated on the
-/// peer being a materializable network member (Layer 1).
+/// to dial, `address` is the peer's expected shareable address, and `agent_did`
+/// is the local scope filter (docs with this DID are pushed to the peer). The
+/// reconciler resolves the `conversation` template into a filtered Push
+/// replicator, gated on the peer being a materializable network member (Layer 1);
+/// the signed materialized `PeerEndpoint` remains authoritative for the actual
+/// dial address.
 async fn upsert_conversation_data_plane(
     graphql: &str,
     peer_id: &str,
@@ -475,14 +483,20 @@ async fn wait_for_fleet_pairing(coord: &FleetNode, subagents: &[FleetNode]) -> R
         wait_for_replicator_installed(&subagent.graphql, &coord.peer_id, Duration::from_secs(120))
             .await
             .with_context(|| {
-                format!("{} -> coordinator conversation replicator", subagent.agent_did)
+                format!(
+                    "{} -> coordinator conversation replicator",
+                    subagent.agent_did
+                )
             })?;
         // Reverse edge (inviter -> joiner) — depends on the joiner's endpoint
         // having replicated to the coordinator (network derivation).
         wait_for_replicator_installed(&coord.graphql, &subagent.peer_id, Duration::from_secs(120))
             .await
             .with_context(|| {
-                format!("coordinator -> {} conversation replicator", subagent.agent_did)
+                format!(
+                    "coordinator -> {} conversation replicator",
+                    subagent.agent_did
+                )
             })?;
     }
     Ok(())
@@ -542,7 +556,11 @@ async fn wait_for_replicator_installed(
             let installed = row
                 .get("replicator_addresses")
                 .and_then(Value::as_array)
-                .is_some_and(|addrs| addrs.iter().any(|a| a.as_str().is_some_and(|s| !s.is_empty())));
+                .is_some_and(|addrs| {
+                    addrs
+                        .iter()
+                        .any(|a| a.as_str().is_some_and(|s| !s.is_empty()))
+                });
             if installed {
                 return Ok(());
             }
@@ -575,7 +593,11 @@ fn dump_fleet_logs(fleet: &[FleetNode]) {
                     tail(&stderr)
                 );
                 if !stdout.trim().is_empty() {
-                    eprintln!("----- {} stdout tail -----\n{}", node.agent_did, tail(&stdout));
+                    eprintln!(
+                        "----- {} stdout tail -----\n{}",
+                        node.agent_did,
+                        tail(&stdout)
+                    );
                 }
             }
             Err(error) => eprintln!("(could not read logs for {}: {error})", node.agent_did),
