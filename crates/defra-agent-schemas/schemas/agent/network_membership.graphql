@@ -7,7 +7,9 @@
 # `AgentMessage.message_key`). `status` is "active" | "revoked". `admin_sig` is
 # the admin's signature over the grant/revoke (network_id, member_did, status,
 # granted_at/revoked_at), proving the admin authorized this membership change.
-type NetworkMembership {
+# `@branchable` is REQUIRED: replicates over P2P (members receive admin-signed
+# grants/tombstones). DefraDB only P2P-syncs branchable collections.
+type NetworkMembership @branchable {
     membership_key: String @index(unique: true)
     network_id: String @index
     member_did: String @index
