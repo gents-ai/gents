@@ -12,10 +12,10 @@
 //! loop awaited the blocking `endpoint.connect()` inline, starving `accept()`,
 //! so two peers dialing each other in-window deadlocked — the #511 wall. With
 //! #1045 this converges reliably (2-node 8/8, 5-node substrate 5/5, full
-//! delegation 5/5). The convergence checkpoint still dumps doc-state + full
-//! daemon logs on timeout (`dump_fleet_doc_state` / `persist_fleet_logs`) for
-//! future triage. Until #1045 merges and the workspace `defradb` rev is bumped,
-//! this passes only against a local `[patch]` of defradb.
+//! delegation 5/5). Those fixes are now in the pinned defradb rev, so this runs
+//! against the workspace pin directly. The convergence checkpoint still dumps
+//! doc-state + full daemon logs on timeout (`dump_fleet_doc_state` /
+//! `persist_fleet_logs`) for future triage.
 //!
 //! Normal test runs compile this file but skip the live test. To run:
 //!

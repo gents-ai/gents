@@ -568,6 +568,7 @@ fn resolve_server_p2p_config(
         max_concurrent_push_tasks: crate::DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
         rate_limit_burst: crate::DEFAULT_P2P_RATE_LIMIT_BURST,
         rate_limit_rate: crate::DEFAULT_P2P_RATE_LIMIT_RATE,
+        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
     }))
 }
 

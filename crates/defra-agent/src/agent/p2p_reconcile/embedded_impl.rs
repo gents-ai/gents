@@ -261,6 +261,9 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
                 ReplicationFilter {
                     field: predicate.field.clone(),
                     value: serde_json::Value::String(predicate.value.clone()),
+                    // defra-agent's pairing scope is a simple field==value filter;
+                    // the rich `Conditions` predicate (added upstream) is unused.
+                    conditions: None,
                 },
             )
         })
@@ -327,6 +330,7 @@ mod tests {
                     max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
                     rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
                     rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+                    max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
                 })
                 .build()
                 .await
