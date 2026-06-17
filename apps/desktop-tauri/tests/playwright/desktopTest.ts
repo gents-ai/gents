@@ -19,28 +19,31 @@ type DesktopFixtures = {
 };
 
 export const test = base.extend<DesktopFixtures>({
-  browserLogs: async ({ page }, use, testInfo) => {
-    const logs: string[] = [];
-    page.on("console", (message) => {
-      logs.push(`[console:${message.type()}] ${message.text()}`);
-    });
-    page.on("pageerror", (error) => {
-      logs.push(`[pageerror] ${error.stack ?? error.message}`);
-    });
-
-    await use(logs);
-
-    const unexpected = logs.filter(
-      (line) => line.startsWith("[pageerror]") || line.startsWith("[console:error]"),
-    );
-    if (testInfo.status !== testInfo.expectedStatus || unexpected.length > 0) {
-      await testInfo.attach("browser-console.log", {
-        body: logs.join("\n") || "(no browser console output)",
-        contentType: "text/plain",
+  browserLogs: [
+    async ({ page }, use, testInfo) => {
+      const logs: string[] = [];
+      page.on("console", (message) => {
+        logs.push(`[console:${message.type()}] ${message.text()}`);
       });
-    }
-    expect(unexpected).toEqual([]);
-  },
+      page.on("pageerror", (error) => {
+        logs.push(`[pageerror] ${error.stack ?? error.message}`);
+      });
+
+      await use(logs);
+
+      const unexpected = logs.filter(
+        (line) => line.startsWith("[pageerror]") || line.startsWith("[console:error]"),
+      );
+      if (testInfo.status !== testInfo.expectedStatus || unexpected.length > 0) {
+        await testInfo.attach("browser-console.log", {
+          body: logs.join("\n") || "(no browser console output)",
+          contentType: "text/plain",
+        });
+      }
+      expect(unexpected).toEqual([]);
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };
