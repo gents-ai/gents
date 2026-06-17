@@ -49,6 +49,8 @@ pub(crate) struct BehaviorView {
     pub compaction_threshold: Option<f64>,
     pub enabled: bool,
     pub is_default: bool,
+    pub skill_refs: Vec<String>,
+    pub skill_excludes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +170,21 @@ pub(crate) struct TaskRunSummaryView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct SkillView {
+    pub skill_id: String,
+    pub agent_did: Option<String>,
+    pub scope: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
+    pub tool_refs: Vec<String>,
+    pub display_name: Option<String>,
+    pub enabled: Option<bool>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ScheduleView {
     pub schedule_id: String,
     pub task_id: Option<String>,
@@ -240,6 +257,7 @@ pub(crate) struct DeploymentView {
     pub inference_profiles: Vec<InferenceProfileView>,
     pub tool_selections: Vec<ToolSelectionView>,
     pub tool_service_registries: Vec<ToolServiceRegistryView>,
+    pub skills: Vec<SkillView>,
     pub tasks: Vec<TaskView>,
     pub schedules: Vec<ScheduleView>,
     pub event_triggers: Vec<EventTriggerView>,

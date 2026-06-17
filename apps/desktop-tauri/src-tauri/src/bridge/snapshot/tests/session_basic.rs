@@ -38,6 +38,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("mini 1 only")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:00:01Z".to_string()),
             },
             AgentMessageRow {
@@ -46,6 +47,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
                 sequence: Some(2),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("mini 2 only")),
+                reasoning: None,
                 timestamp: Some("2026-04-21T12:01:01Z".to_string()),
             },
         ],
@@ -154,6 +156,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("first question")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         ..ClientStoreRows::default()
@@ -219,6 +222,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
             sequence: Some(2),
             role: Some("user".to_string()),
             content: Some(user_message_json("follow up question")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:01:01Z".to_string()),
         }],
         ..ClientStoreRows::default()
@@ -314,6 +318,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("same prompt")),
+            reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
         ..ClientStoreRows::default()

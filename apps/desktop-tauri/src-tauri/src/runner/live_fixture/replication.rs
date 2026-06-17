@@ -128,7 +128,13 @@ async fn set_replicator_with_retry(
     loop {
         match core
             .p2p()
-            .add_replicator(collections.clone(), Some(addr), Vec::new(), None)
+            .add_replicator(
+                collections.clone(),
+                Some(addr),
+                Default::default(),
+                Vec::new(),
+                None,
+            )
             .await
         {
             Ok(()) => return Ok(()),

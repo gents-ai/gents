@@ -7,6 +7,8 @@ import type {
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
   ScheduleSaveRequest,
+  SkillDeleteRequest,
+  SkillSaveRequest,
   TaskRunResult,
   TaskSaveRequest,
   ToolSelectionSaveRequest,
@@ -23,6 +25,7 @@ import {
   EventTriggerConfigPanel,
   InferenceProfileConfigPanel,
   ScheduleConfigPanel,
+  SkillConfigPanel,
   TaskConfigPanel,
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
@@ -47,6 +50,8 @@ type ConfigWorkspaceProps = {
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
+  onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
@@ -68,6 +73,8 @@ export function ConfigWorkspace({
   onSaveToolServiceConfig,
   onTestToolService,
   onSaveBehaviorConfig,
+  onDeleteSkillConfig,
+  onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
   onRunSchedule,
@@ -84,6 +91,7 @@ export function ConfigWorkspace({
     selectedEventTriggerId,
     selectedProfileId,
     selectedScheduleId,
+    selectedSkillId,
     selectedTaskId,
     selectedToolSelectionId,
     selectedToolServiceId,
@@ -94,6 +102,7 @@ export function ConfigWorkspace({
     setSelectedEventTriggerId,
     setSelectedProfileId,
     setSelectedScheduleId,
+    setSelectedSkillId,
     setSelectedTaskId,
     setSelectedToolSelectionId,
     setSelectedToolServiceId,
@@ -208,6 +217,21 @@ export function ConfigWorkspace({
           onSaveBehaviorConfig={onSaveBehaviorConfig}
           onSavedStatusChange={setSavedStatus}
           onSelectBehavior={selectConfigBehavior}
+        />
+      ) : null}
+
+      {activeTab === "skills" ? (
+        <SkillConfigPanel
+          deployment={selectedDeployment}
+          savedStatus={savedStatus}
+          saving={saving}
+          selectedSkillId={selectedSkillId}
+          onCreateSkill={() => setSelectedSkillId(NEW_DOCUMENT_ID)}
+          onDeleteSkillConfig={onDeleteSkillConfig}
+          onDeletedSkill={() => setSelectedSkillId(null)}
+          onSaveSkillConfig={onSaveSkillConfig}
+          onSavedStatusChange={setSavedStatus}
+          onSelectSkill={setSelectedSkillId}
         />
       ) : null}
 

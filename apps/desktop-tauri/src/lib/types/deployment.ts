@@ -29,6 +29,8 @@ export type BehaviorView = {
   compactionThreshold?: number | null;
   enabled: boolean;
   isDefault: boolean;
+  skillRefs: string[];
+  skillExcludes: string[];
 };
 
 export type InferenceBackendView = {
@@ -96,6 +98,19 @@ export type ToolServiceRegistryView = {
   status?: string | null;
   version?: string | null;
   updatedAt?: string | null;
+};
+
+export type SkillView = {
+  skillId: string;
+  agentDid?: string | null;
+  scope?: string | null;
+  name?: string | null;
+  description?: string | null;
+  instructions?: string | null;
+  toolRefs: string[];
+  displayName?: string | null;
+  enabled?: boolean | null;
+  createdAt?: string | null;
 };
 
 export type TaskView = {
@@ -194,6 +209,7 @@ export type DeploymentView = {
   inferenceProfiles: InferenceProfileView[];
   toolSelections: ToolSelectionView[];
   toolServiceRegistries: ToolServiceRegistryView[];
+  skills: SkillView[];
   tasks: TaskView[];
   schedules: ScheduleView[];
   eventTriggers: EventTriggerView[];

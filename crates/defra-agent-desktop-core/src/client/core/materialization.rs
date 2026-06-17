@@ -333,6 +333,7 @@ fn nonempty(value: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::RwLock as StdRwLock;
 
@@ -341,7 +342,7 @@ mod tests {
     use defra_node::NodeBuilder;
     use defra_p2p_adapter::{
         ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
-        ReplicatorInfo,
+        ReplicationFilter, ReplicatorInfo,
     };
 
     use super::*;
@@ -398,6 +399,7 @@ mod tests {
             &self,
             _collections: Vec<String>,
             _addr: Option<&str>,
+            _filters: BTreeMap<String, ReplicationFilter>,
             _explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
             _expected_authorizer_did: Option<&str>,
         ) -> P2PResult<()> {
@@ -433,10 +435,6 @@ mod tests {
         }
 
         async fn remove_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
-            Ok(())
-        }
-
-        async fn republish_document(&self, _collection_name: &str, _doc_id: &str) -> P2PResult<()> {
             Ok(())
         }
 

@@ -9,7 +9,7 @@ use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -47,6 +47,9 @@ pub struct ClientStoreRows {
     pub schedule_source_agent_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub event_trigger_source_agent_dids: Vec<Option<String>>,
+    pub skills: Vec<SkillRow>,
+    #[serde(skip)]
+    pub skill_source_agent_dids: Vec<Option<String>>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -83,6 +86,8 @@ pub struct ClientStore {
     pub task_source_agent_dids: Vec<Option<String>>,
     pub schedule_source_agent_dids: Vec<Option<String>>,
     pub event_trigger_source_agent_dids: Vec<Option<String>>,
+    pub skills: Vec<SkillRow>,
+    pub skill_source_agent_dids: Vec<Option<String>>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -209,6 +214,13 @@ impl ClientStore {
             incoming.event_trigger_source_agent_dids,
             event_trigger_merge_key,
         );
+        upsert_rows_with_sources_by_key(
+            &mut rows.skills,
+            &mut rows.skill_source_agent_dids,
+            incoming.skills,
+            incoming.skill_source_agent_dids,
+            skill_merge_key,
+        );
         upsert_rows_by_key(
             &mut rows.tool_selections,
             incoming.tool_selections,
@@ -304,6 +316,7 @@ impl ClientStore {
         self.task_source_agent_dids = vec![source.clone(); self.tasks.len()];
         self.schedule_source_agent_dids = vec![source.clone(); self.schedules.len()];
         self.event_trigger_source_agent_dids = vec![source.clone(); self.event_triggers.len()];
+        self.skill_source_agent_dids = vec![source.clone(); self.skills.len()];
         self.inference_backend_source_agent_dids =
             vec![source.clone(); self.inference_backends.len()];
         self.inference_profile_source_agent_dids =
@@ -336,6 +349,8 @@ impl ClientStore {
             task_source_agent_dids: self.task_source_agent_dids.clone(),
             schedule_source_agent_dids: self.schedule_source_agent_dids.clone(),
             event_trigger_source_agent_dids: self.event_trigger_source_agent_dids.clone(),
+            skills: self.skills.clone(),
+            skill_source_agent_dids: self.skill_source_agent_dids.clone(),
             tool_selections: self.tool_selections.clone(),
             inference_backends: self.inference_backends.clone(),
             inference_profiles: self.inference_profiles.clone(),
@@ -731,6 +746,7 @@ impl ClientStore {
             + self.tasks.len()
             + self.schedules.len()
             + self.event_triggers.len()
+            + self.skills.len()
             + self.tool_selections.len()
             + self.inference_backends.len()
             + self.inference_profiles.len()
@@ -916,6 +932,10 @@ fn event_trigger_merge_key(row: &EventTriggerRow, source_agent_did: Option<&str>
         source_agent_did.unwrap_or_default(),
         row.trigger_id
     )
+}
+
+fn skill_merge_key(row: &SkillRow, source_agent_did: Option<&str>) -> String {
+    format!("{}\0{}", source_agent_did.unwrap_or_default(), row.skill_id)
 }
 
 fn tool_selection_merge_key(row: &ToolSelectionRow) -> String {

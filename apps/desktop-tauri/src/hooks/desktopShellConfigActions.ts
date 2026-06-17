@@ -1,10 +1,12 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import {
+  deleteSkillConfig,
   saveAgentConfig,
   saveBackendConfig,
   saveBehaviorConfig,
   saveInferenceProfileConfig,
+  saveSkillConfig,
   saveToolSelectionConfig,
   saveToolServiceConfig,
   testToolService,
@@ -15,6 +17,8 @@ import type {
   BehaviorSaveRequest,
   DesktopClientSnapshot,
   InferenceProfileSaveRequest,
+  SkillDeleteRequest,
+  SkillSaveRequest,
   ToolSelectionSaveRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
@@ -70,6 +74,38 @@ export function createDesktopShellConfigActions({
       throw err;
     } finally {
       setSavingBehaviorConfig(false);
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveSkillConfig(request: SkillSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveSkillConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteSkillConfig(request: SkillDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteSkillConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
       setSavingConfig(false);
     }
   }
@@ -151,7 +187,9 @@ export function createDesktopShellConfigActions({
     onSaveAgentConfig,
     onSaveBackendConfig,
     onSaveBehaviorConfig,
+    onDeleteSkillConfig,
     onSaveInferenceProfileConfig,
+    onSaveSkillConfig,
     onSaveToolSelectionConfig,
     onSaveToolServiceConfig,
     onTestToolService,

@@ -66,6 +66,17 @@ pub(crate) struct BehaviorSaveRequest {
     pub compaction_strategy: Option<String>,
     pub compaction_threshold: Option<f64>,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub skill_refs: Vec<String>,
+    #[serde(default)]
+    pub skill_excludes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkillDeleteRequest {
+    pub skill_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +182,21 @@ pub(crate) struct TaskSaveRequest {
     pub prompt_template: String,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkillSaveRequest {
+    pub skill_id: String,
+    pub agent_did: String,
+    pub scope: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub instructions: String,
+    #[serde(default)]
+    pub tool_refs: Vec<String>,
+    pub display_name: Option<String>,
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
