@@ -183,7 +183,7 @@ async fn sweep_pairings(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStor
             Err(error) => {
                 tracing::warn!(
                     peer_id = %peer_id,
-                    error = %error,
+                    error = ?error,
                     "pairing reconcile tick failed"
                 );
             }

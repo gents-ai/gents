@@ -6,14 +6,16 @@
 //! operator conversation `DataPlanePairingDesired` row (the doc sync delegation
 //! needs). See `establish_reconciler_pairing`.
 //!
-//! KNOWN WALL (#511, under investigation): the control-plane substrate forms and
-//! some reverse mesh edges converge, but the coordinator's reverse-edge dial to
-//! some subagents fails `iroh ... Address Lookup failed` because that subagent's
-//! `PeerEndpoint` ticket (from `shareable_address()`) lacks a dialable direct
-//! addr under 5-node loopback+no-relay+no-discovery startup (PairingTransport
-//! MODE A). The convergence checkpoint dumps doc-state + logs to triage. The
-//! root cause is in the iroh address layer (defradb.rs `shareable_address`), not
-//! this test; committed as a diagnostic that pinpoints the wall.
+//! Requires the defradb iroh fixes in sourcenetwork/defradb.rs#1045 (addr
+//! hygiene + observed-addr reverse-dial fallback + spawning the dial off the
+//! command loop). The load-bearing one is the spawn: defradb's iroh command
+//! loop awaited the blocking `endpoint.connect()` inline, starving `accept()`,
+//! so two peers dialing each other in-window deadlocked — the #511 wall. With
+//! #1045 this converges reliably (2-node 8/8, 5-node substrate 5/5, full
+//! delegation 5/5). The convergence checkpoint still dumps doc-state + full
+//! daemon logs on timeout (`dump_fleet_doc_state` / `persist_fleet_logs`) for
+//! future triage. Until #1045 merges and the workspace `defradb` rev is bumped,
+//! this passes only against a local `[patch]` of defradb.
 //!
 //! Normal test runs compile this file but skip the live test. To run:
 //!
@@ -53,9 +55,9 @@ const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
     ("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000"),
     ("DEFRA_AGENT_REGISTRY_STALE_MS", "300000"),
     ("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000"),
-    // Surface reconcile/transport failures (connect timeouts, replicator install
-    // errors) at the daemon so dump_fleet_logs can triage MODE A/B/C on timeout,
-    // without the global-debug heartbeat spam the harness note warns against.
+    // Reconcile-level tracing aids triage when dump_fleet_logs fires on a
+    // convergence timeout, without transport noise (the daemon mutes iroh/p2p to
+    // warn regardless via with_default_transport_noise_filters).
     ("RUST_LOG", "warn,defra_agent::agent::p2p_reconcile=debug"),
 ];
 
@@ -79,7 +81,15 @@ struct FleetNode {
     graphql: String,
     agent_did: String,
     peer_id: String,
+    /// Readiness-reported address (host:port form). Retained for debugging; the
+    /// data-plane row uses `shareable` instead (see below).
+    #[allow(dead_code)]
     address: String,
+    /// The node's shareable address in the SAME form the runtime advertises via
+    /// PeerEndpoint (`/p2p/shareable-address`, an iroh endpoint ticket). Used for
+    /// the data-plane row so it matches the control-plane (network-derived)
+    /// address and the merged replicator holds ONE address per peer, not two.
+    shareable: String,
     behavior_id: String,
     tool_selection_id: String,
     backend_id: String,
@@ -134,8 +144,18 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
+    // Fleet size is env-overridable for substrate diagnostics (default 5 = the
+    // full delegation fleet). DEFRA_AGENT_FLEET_SUBSTRATE_ONLY=1 returns right
+    // after the pairing convergence checkpoint, skipping inference — used to
+    // bisect the reconciler/transport substrate independent of the model.
+    let fleet_size: usize = std::env::var("DEFRA_AGENT_FLEET_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let substrate_only = std::env::var("DEFRA_AGENT_FLEET_SUBSTRATE_ONLY").as_deref() == Ok("1");
+
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), fleet_size, &endpoint, &model).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -163,10 +183,25 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     // dial / C cid-filter); on timeout we dump daemon logs to triage by signature.
     if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
         dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "fail");
         dump_fleet_logs(&fleet);
         return Err(error);
     }
     assert_no_subagent_data_plane_edges(subagents).await?;
+
+    if substrate_only {
+        // Diagnostic: persist each daemon's full captured log so the convergence
+        // timeline can be analyzed even on a passing run (the temp logs are
+        // dropped with the fleet otherwise).
+        persist_fleet_logs(&fleet, "pass");
+        tracing::info!(
+            fleet_size,
+            "reconciler-driven pairing converged on all edges; \
+             DEFRA_AGENT_FLEET_SUBSTRATE_ONLY=1 set, skipping delegation"
+        );
+        drop(fleet);
+        return Ok(());
+    }
 
     configure_fleet_behaviors(tempdir.path(), coord, subagents).await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
@@ -283,6 +318,9 @@ async fn bring_up_fleet(
             .ok_or_else(|| anyhow!("{label} readiness missing p2p_peer_id: {readiness}"))?;
         let address = shareable_address_from_readiness(&readiness, &peer_id)
             .with_context(|| format!("{label} readiness missing P2P address: {readiness}"))?;
+        let shareable = fetch_shareable_address(&graphql)
+            .await
+            .with_context(|| format!("{label} fetching shareable P2P address"))?;
 
         nodes.push(FleetNode {
             home,
@@ -290,6 +328,7 @@ async fn bring_up_fleet(
             agent_did,
             peer_id,
             address,
+            shareable,
             behavior_id,
             tool_selection_id,
             backend_id,
@@ -336,6 +375,40 @@ fn required_output_string(value: &Value, key: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("output missing {key}: {value}"))
+}
+
+/// Fetch the node's shareable P2P address (iroh endpoint ticket) from the live
+/// `/p2p/shareable-address` endpoint — the SAME form the PeerEndpoint heartbeat
+/// publishes and the network-control layer derives. Retries briefly so a node
+/// that has not yet learned a dialable direct address (Fix A returns None until
+/// it has one) is given a moment to settle.
+async fn fetch_shareable_address(graphql: &str) -> Result<String> {
+    let api_base = graphql
+        .strip_suffix("/graphql")
+        .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
+    let url = format!("{api_base}/p2p/shareable-address");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building shareable-address client")?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Ok(value) = resp.json::<Value>().await {
+                if let Some(addr) = value
+                    .get("address")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    return Ok(addr.to_string());
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out fetching shareable address from {url}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Drive both reconciler documents for every coordinator<->subagent edge, then
@@ -408,18 +481,22 @@ async fn establish_reconciler_pairing(coord: &FleetNode, subagents: &[FleetNode]
     // pushes its OWN agent_did's docs to the peer (the scoped filter the prior
     // direct install used and the conversation template's `agent_did` scope).
     for subagent in subagents {
+        // Use the peer's SHAREABLE address (same form the network-control layer
+        // derives from PeerEndpoint), so the merged per-peer replicator holds ONE
+        // address, not two — eliminating the reinstall churn (and dial flake) the
+        // two-address mismatch caused.
         upsert_conversation_data_plane(
             &coord.graphql,
             &subagent.peer_id,
             &coord.agent_did,
-            &subagent.address,
+            &subagent.shareable,
         )
         .await?;
         upsert_conversation_data_plane(
             &subagent.graphql,
             &coord.peer_id,
             &subagent.agent_did,
-            &coord.address,
+            &coord.shareable,
         )
         .await?;
     }
@@ -571,6 +648,29 @@ async fn wait_for_replicator_installed(
             );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Persist each daemon's FULL captured stdout+stderr to `/tmp/fleet_<label>_<suffix>.log`
+/// for offline timeline/trace analysis (the temp logs are dropped with the fleet).
+fn persist_fleet_logs(fleet: &[FleetNode], suffix: &str) {
+    for (idx, node) in fleet.iter().enumerate() {
+        if let Ok((stdout, stderr)) = node.serve.captured_output() {
+            let label = if idx == 0 {
+                "coordinator".to_string()
+            } else {
+                format!("subagent-{idx}")
+            };
+            let path = format!("/tmp/fleet_{label}_{suffix}.log");
+            let _ = std::fs::write(
+                &path,
+                format!(
+                    "# {} peer={}\n=== STDOUT ===\n{stdout}\n=== STDERR ===\n{stderr}\n",
+                    node.agent_did, node.peer_id
+                ),
+            );
+            eprintln!("wrote {path} ({} stderr bytes)", stderr.len());
+        }
     }
 }
 
