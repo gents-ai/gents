@@ -185,7 +185,9 @@ export function ToolSelectionConfigEditor({
     setCommandForbiddenArgvPrefixes(
       (toolSelection?.commandForbiddenArgvPrefixes ?? []).join("\n"),
     );
-    setCommandNetworkMode(normalizeCommandNetworkMode(toolSelection?.commandNetworkMode));
+    setCommandNetworkMode(
+      normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
+    );
     setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
     setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
     const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
