@@ -6,6 +6,10 @@ license.workspace = true
 description = "Consumer CLI for the defra-agent library"
 autobins = false
 
+[features]
+default = ["codex-tui"]
+codex-tui = ["dep:codex-arg0", "dep:codex-config", "dep:codex-tui"]
+
 [[bin]]
 name = "defra-agent"
 path = "src/main.rs"
@@ -18,12 +22,12 @@ chrono.workspace = true
 ciborium = "0.2"
 clap.workspace = true
 codex-app-server-protocol.workspace = true
-codex-arg0.workspace = true
-codex-config.workspace = true
+codex-arg0 = { workspace = true, optional = true }
+codex-config = { workspace = true, optional = true }
 codex-login.workspace = true
 codex-model-provider-info.workspace = true
 codex-protocol.workspace = true
-codex-tui.workspace = true
+codex-tui = { workspace = true, optional = true }
 codex-utils-absolute-path.workspace = true
 defra-agent = { path = "../defra-agent" }
 defra-native-fs-runner = { path = "../defra-native-fs-runner" }
