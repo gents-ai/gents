@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -35,16 +35,15 @@ export function SkillConfigPanel({
   onDeleteSkillConfig,
   onSaveSkillConfig,
 }: SkillConfigPanelProps) {
-  const selectedSkill = useMemo(
-    () => deployment.skills.find((skill) => skill.skillId === selectedSkillId) ?? null,
-    [deployment.skills, selectedSkillId],
-  );
+  const skills = deployment.skills ?? [];
+  const selectedSkill =
+    skills.find((skill) => skill.skillId === selectedSkillId) ?? null;
 
   return (
     <section className="config-layout">
       <ConfigDocumentList
         eyebrow="Skills"
-        items={deployment.skills.map((skill) => {
+        items={skills.map((skill) => {
           const title = displaySkillListTitle(skill);
           return {
             id: skill.skillId,
