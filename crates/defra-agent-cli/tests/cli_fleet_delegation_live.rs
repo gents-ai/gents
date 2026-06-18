@@ -278,6 +278,20 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 // coordinator's durable `AgentToolCall` rows as a convergence projection — the
 // four fan-out bridges reach terminal only as the remote children's terminal
 // states replicate back, and the synthesis bridge exists only after all four.
+//
+// SCOPE — this is the all-SUCCESS happy-path capstone. GREEN means: 4 distinct
+// remote researchers COMPLETED, their reports replicated to the coordinator AND
+// reached the synthesizer's input (data-flow fence), synthesis COMPLETED locally,
+// and the orchestrator returned a grounded answer. It deliberately does NOT
+// cover (these are separate concerns, not regressions):
+//   - D10 partial-FAILURE at the fleet level (synthesis over a dead researcher) —
+//     proven in Lean/conformance + the cut-1 hermetic tests, not live here;
+//   - parent-reclaim idempotency, cross-node cancel/cascade, the deadline-edge
+//     final-poll path — exercised by no live test yet.
+// A PASS also depends on the configured LLM emitting one fan_out_and_synthesize
+// call with four distinct-target tasks + substantive answers; off-shape output
+// fails FAST (not a 360s hang) but a model swap can require prompt re-tuning.
+// Validated against DeepSeek-V4-Flash (DEFRA_AGENT_LIVE_OPENAI_MODEL=d4f).
 
 const WORKFLOW_COORDINATOR_PROMPT: &str = r#"You are a fleet workflow orchestrator. You have a workflow tool named `fan_out_and_synthesize` and five subagent targets: four remote researchers (researcher-1, researcher-2, researcher-3, researcher-4) and one local target named `synthesizer`. For any fleet request you MUST make exactly one call to `fan_out_and_synthesize` and call no other tool and do not answer directly. Set the top-level `target` to "researcher-1". Provide exactly four tasks and set each task's `target` to researcher-1, researcher-2, researcher-3, and researcher-4 respectively (one task per researcher). Set `synthesis_target` to "synthesizer". Set `synthesis_prompt` to an instruction asking the synthesizer to combine the four researchers' findings into one short paragraph."#;
 
@@ -398,6 +412,10 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     assert_synthesis_consumed_reports(&coord.graphql, &group, &reports).await?;
     // Cut-1 invariant: synthesis ran locally on the coordinator.
     assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+    // No-crosswise held THROUGH the run: the fan-out did not induce a
+    // researcher<->researcher data-plane edge (re-checked post-convergence, not
+    // only at setup).
+    assert_no_subagent_data_plane_edges(subagents).await?;
 
     let parent_terminal =
         wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
@@ -789,29 +807,63 @@ async fn assert_synthesis_consumed_reports(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("synthesis bridge args not found"))?
         .to_string();
-    let alnum = |s: &str| {
-        s.chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-    };
-    let args_alnum = alnum(&args);
+    let args_alnum = alnum_lower(&args);
     for (i, report) in reports.iter().enumerate() {
-        let r = alnum(report);
-        let chars: Vec<char> = r.chars().collect();
+        // Both sides must be the SAME rendering: the engine embeds the child's
+        // TEXT-ONLY render (render_assistant_message_text) in the synthesis args,
+        // so reduce the replicated report to its text before comparing — otherwise
+        // the raw message envelope/reasoning would spuriously fail the match.
+        let report_text = alnum_lower(&message_answer_text(report));
         anyhow::ensure!(
-            chars.len() >= 80,
+            report_text.chars().count() >= 24,
             "researcher #{i} report too short to fence ({} alnum chars)",
-            chars.len()
+            report_text.chars().count()
         );
-        let start = chars.len() / 4;
-        let chunk: String = chars[start..start + 80].iter().collect();
+        // Full-text containment (no fixed-offset slice): the entire rendered
+        // report must appear in what the synthesizer was handed.
         anyhow::ensure!(
-            args_alnum.contains(&chunk),
-            "synthesis input did not contain researcher #{i}'s replicated report (chunk {chunk:?})"
+            args_alnum.contains(&report_text),
+            "synthesis input did not contain researcher #{i}'s replicated report"
         );
     }
     Ok(())
+}
+
+/// Lowercase alphanumeric projection — erases JSON escaping and whitespace so two
+/// renderings of the same text compare equal.
+fn alnum_lower(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Extract the assistant answer TEXT from a persisted native message JSON
+/// (`{"role":"assistant","content":[{"text":"..."}, {reasoning}]}`), matching the
+/// engine's text-only render. Falls back to the raw string if not in that shape.
+fn message_answer_text(raw: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return raw.to_string();
+    };
+    let texts: Vec<String> = value
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if texts.is_empty() {
+        raw.to_string()
+    } else {
+        texts.join("\n")
+    }
 }
 
 /// The synthesis child must run LOCALLY on the coordinator (cut-1 invariant:
