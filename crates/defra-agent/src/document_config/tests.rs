@@ -570,6 +570,7 @@ fn validate_accepts_well_formed_subagent_targets() {
         agent_did: "did:defra-agent:test".to_string(),
         subagent_targets: Some(vec![code_entry, research_entry]),
         subagent_spawn_enabled: Some(true),
+        orchestration_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(true),
         ..Default::default()

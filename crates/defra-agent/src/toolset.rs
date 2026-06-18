@@ -15,6 +15,7 @@ mod file_tools;
 #[cfg(feature = "agent-memory")]
 mod memory;
 mod native_runner;
+mod orchestration;
 mod session_history;
 mod shared;
 mod subagent;
@@ -40,6 +41,7 @@ pub use context_budget::{
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
 #[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
+pub(crate) use orchestration::{build_orchestration_tools, orchestration_tool_names};
 pub use session_history::{
     build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
     SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
@@ -67,6 +69,7 @@ pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
 pub(crate) const LIST_PROCESSES_TOOL_NAME: &str = "list_processes";
 pub(crate) const READ_PROCESS_TOOL_NAME: &str = "read_process";
 pub(crate) const CANCEL_PROCESS_TOOL_NAME: &str = "cancel_process";
+pub(crate) use crate::workflow::FAN_OUT_AND_SYNTHESIZE_TOOL_NAME;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {

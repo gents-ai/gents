@@ -111,6 +111,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ToolExecution", Module("conformance/tool_execution.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
+        ("Workflow", Module("workflow_conformance.rs")),
         (
             "ReversePairingHandlers",
             Module("conformance/pairing_reconcile.rs"),

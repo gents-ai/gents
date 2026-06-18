@@ -5,7 +5,8 @@ use serde::Serialize;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::toolset::{
-    background_tool_names, subagent_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    background_tool_names, orchestration_tool_names, subagent_tool_names, CONTEXT_BUDGET_TOOL_NAME,
+    FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 
 use super::{BehaviorToolConfig, ToolSurface};
@@ -37,6 +38,7 @@ impl ToolSurfaceExplanation {
         builder.include_many("host", surface.host_tools.tool_names());
         explain_meta(config, surface, &mut builder);
         explain_subagents(config, surface, &mut builder);
+        explain_orchestration(config, surface, &mut builder);
         explain_background(config, surface, &mut builder);
         builder.include_many(
             "custom",
@@ -201,6 +203,31 @@ fn explain_subagents(
         );
     } else {
         builder.exclude("subagent", "spawn_subagent");
+    }
+}
+
+fn explain_orchestration(
+    config: &BehaviorToolConfig,
+    surface: &ToolSurface,
+    builder: &mut ExplanationBuilder,
+) {
+    let included = orchestration_tool_names(&surface.orchestration_tools, &surface.subagent_tools);
+    if !included.is_empty() {
+        builder.include_many("workflow_orchestration", included);
+    } else if config.orchestration_tools().enabled {
+        builder.unavailable(
+            "workflow_orchestration",
+            FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string(),
+        );
+        builder.warn(
+            "workflow_orchestration_unavailable",
+            "Workflow orchestration is configured, but subagent spawning, background subagents, or available subagent targets are missing.",
+        );
+    } else {
+        builder.exclude(
+            "workflow_orchestration",
+            FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string(),
+        );
     }
 }
 

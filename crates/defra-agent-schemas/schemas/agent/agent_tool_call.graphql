@@ -29,6 +29,8 @@ type AgentToolCall @branchable {
     cancel_policy: String
     cancel_cause: String
     child_request_id: String @index
+    workflow_group_id: String @index
+    workflow_role: String @index
     unclaimed_deadline_at: DateTime
     cancel_cascade_intent_at: DateTime
     cancel_pending_remote_ack: Boolean

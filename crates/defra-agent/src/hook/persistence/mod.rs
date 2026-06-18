@@ -34,9 +34,10 @@ use crate::tool_call_lifecycle::{
 };
 use crate::toolset::{
     CommandPolicyDenial, CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME,
-    LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
-    READ_SUBAGENT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
-    STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
+    FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+    SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
@@ -53,6 +54,7 @@ enum SubagentTargetHost {
 mod background_tools;
 mod helpers;
 mod message_spawn;
+mod orchestration;
 mod prompt_hook;
 mod subagent_bridge;
 mod subagent_tools;

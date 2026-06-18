@@ -19,6 +19,7 @@ type ToolSelection {
     backgroundable_tool_names: [String]
     subagent_targets: [String]
     subagent_spawn_enabled: Boolean
+    orchestration_enabled: Boolean
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
     subagent_default_await_mode: String

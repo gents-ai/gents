@@ -1030,6 +1030,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
+                orchestration_enabled: false,
                 enable_memory: false,
                 enable_session_history_tool: false,
                 enable_defra_query: false,

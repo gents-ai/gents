@@ -265,6 +265,7 @@ pub struct ToolSelectionDocument {
     )]
     pub subagent_targets: Option<Vec<String>>,
     pub subagent_spawn_enabled: Option<bool>,
+    pub orchestration_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
     pub subagent_default_await_mode: Option<String>,
@@ -466,6 +467,7 @@ pub(crate) async fn load_tool_selection_record(
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
+                orchestration_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
                 subagent_default_await_mode
@@ -521,6 +523,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
+                orchestration_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
                 subagent_default_await_mode
@@ -576,6 +579,7 @@ pub(crate) async fn list_tool_selection_records(
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
+                orchestration_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
                 subagent_default_await_mode
@@ -625,6 +629,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
+                orchestration_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
                 subagent_default_await_mode
@@ -713,6 +718,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_spawn_enabled",
             selection.subagent_spawn_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "orchestration_enabled",
+            selection.orchestration_enabled,
         ),
         graphql_fields::graphql_optional_bool_field(
             "subagent_steering_enabled",
@@ -809,6 +818,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "subagent_spawn_enabled",
             selection.subagent_spawn_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "orchestration_enabled",
+            selection.orchestration_enabled,
         ),
         graphql_fields::graphql_optional_bool_field(
             "subagent_steering_enabled",

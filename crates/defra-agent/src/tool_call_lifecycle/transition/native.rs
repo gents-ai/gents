@@ -54,6 +54,20 @@ impl ToolCallLifecycle {
         } else {
             String::new()
         };
+        let workflow_fields = match (
+            self.workflow_group_id.as_deref(),
+            self.workflow_role.as_deref(),
+        ) {
+            (Some(group_id), Some(role)) if !group_id.is_empty() && !role.is_empty() => {
+                let escaped_group_id = escape_graphql_string(group_id);
+                let escaped_role = escape_graphql_string(role);
+                format!(
+                    r#"workflow_group_id: "{escaped_group_id}",
+                    workflow_role: "{escaped_role}","#
+                )
+            }
+            _ => String::new(),
+        };
 
         let mutation = format!(
             r#"mutation {{
@@ -72,6 +86,7 @@ impl ToolCallLifecycle {
                     started_at: "{started_at_str}",
                     deadline_at: "{deadline_at_str}",
                     {bridge_fields}
+                    {workflow_fields}
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,

@@ -721,6 +721,8 @@ pub fn session_shape_query(session_id: &str) -> String {
                 tool_call_id
                 status
                 lifecycle_state
+                workflow_group_id
+                workflow_role
                 args
                 result
                 deadline_at

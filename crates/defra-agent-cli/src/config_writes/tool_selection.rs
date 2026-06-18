@@ -86,6 +86,7 @@ mod tests {
             selection_id: "test-subagent-fields".to_string(),
             agent_did: "did:test:subagent-enablement".to_string(),
             subagent_spawn_enabled: Some(true),
+            orchestration_enabled: Some(true),
             subagent_targets: Some(vec![target.clone()]),
             subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
@@ -111,6 +112,11 @@ mod tests {
             loaded.subagent_spawn_enabled,
             Some(true),
             "subagent_spawn_enabled must persist"
+        );
+        assert_eq!(
+            loaded.orchestration_enabled,
+            Some(true),
+            "orchestration_enabled must persist"
         );
         assert_eq!(
             loaded.subagent_targets,
@@ -178,6 +184,7 @@ mod tests {
             agent_did: "did:test:clobber".to_string(),
             display_name: Some("Original".to_string()),
             subagent_spawn_enabled: Some(true),
+            orchestration_enabled: Some(true),
             subagent_targets: Some(vec![target.clone()]),
             subagent_background_enabled: Some(true),
             subagent_default_await_mode: Some("background".to_string()),
@@ -195,6 +202,7 @@ mod tests {
             display_name: Some("Updated".to_string()),
             subagent_targets: None,
             subagent_spawn_enabled: None,
+            orchestration_enabled: None,
             subagent_steering_enabled: None,
             subagent_background_enabled: None,
             subagent_default_await_mode: None,
@@ -223,6 +231,11 @@ mod tests {
             loaded.subagent_spawn_enabled,
             Some(true),
             "subagent_spawn_enabled must NOT be clobbered by a None update"
+        );
+        assert_eq!(
+            loaded.orchestration_enabled,
+            Some(true),
+            "orchestration_enabled must NOT be clobbered by a None update"
         );
         assert_eq!(
             loaded.subagent_targets,
@@ -398,6 +411,7 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .as_ref()
                 .and_then(|values| string_list_field("subagent_targets", values)),
             optional_bool_field("subagent_spawn_enabled", selection.subagent_spawn_enabled),
+            optional_bool_field("orchestration_enabled", selection.orchestration_enabled),
             optional_bool_field(
                 "subagent_steering_enabled",
                 selection.subagent_steering_enabled,

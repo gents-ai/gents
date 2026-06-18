@@ -1465,6 +1465,7 @@ mod live_tests {
                 defra_query_collections: Vec::new(),
                 subagent_targets: targets,
                 subagent_spawn_enabled: true,
+                orchestration_enabled: false,
                 subagent_steering_enabled: false,
                 subagent_background_enabled: false,
                 subagent_default_await_mode: None,
@@ -1632,6 +1633,7 @@ mod live_tests {
                     }
                     .to_entry()],
                     subagent_spawn_enabled: true,
+                    orchestration_enabled: true,
                     subagent_steering_enabled: true,
                     subagent_background_enabled: true,
                     subagent_default_await_mode: Some("background".to_string()),
@@ -1694,6 +1696,10 @@ mod live_tests {
         assert_eq!(
             live_sel.subagent_spawn_enabled, true,
             "subagent_spawn_enabled must persist through apply"
+        );
+        assert_eq!(
+            live_sel.orchestration_enabled, true,
+            "orchestration_enabled must persist through apply"
         );
         assert_eq!(
             live_sel.subagent_steering_enabled, true,

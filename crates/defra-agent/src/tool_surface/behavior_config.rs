@@ -11,7 +11,8 @@ use super::build::{
 };
 use super::modes::ToolCeiling;
 use super::selection::{
-    BackgroundToolConfig, CustomToolFactory, SubagentToolConfig, ToolSelection,
+    BackgroundToolConfig, CustomToolFactory, OrchestrationToolConfig, SubagentToolConfig,
+    ToolSelection,
 };
 use super::ToolSurface;
 use crate::document_config::WriteToolDecl;
@@ -22,6 +23,7 @@ pub struct BehaviorToolConfig {
     enable_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
     subagent_tools: SubagentToolConfig,
+    orchestration_tools: OrchestrationToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
@@ -38,6 +40,7 @@ impl BehaviorToolConfig {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
+            orchestration_tools: OrchestrationToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
             enable_memory: false,
@@ -94,6 +97,7 @@ impl BehaviorToolConfig {
             enable_meta_tools,
             allowed_mcp_service_ids,
             backgroundable_tool_names,
+            orchestration_enabled,
             enable_memory,
             enable_session_history_tool,
             enable_defra_query,
@@ -134,6 +138,9 @@ impl BehaviorToolConfig {
                 background_enabled: subagent_tools.background_enabled,
                 default_await_mode: subagent_tools.default_await_mode,
                 allow_cross_deployment: subagent_tools.allow_cross_deployment,
+            },
+            orchestration_tools: OrchestrationToolConfig {
+                enabled: orchestration_enabled,
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
@@ -177,6 +184,11 @@ impl BehaviorToolConfig {
         &self.background_tools
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn orchestration_tools(&self) -> &OrchestrationToolConfig {
+        &self.orchestration_tools
+    }
+
     pub fn custom_tool_names(&self) -> Vec<String> {
         self.custom_tools
             .iter()
@@ -210,6 +222,7 @@ impl BehaviorToolConfig {
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
             subagent_tools,
+            orchestration_tools: self.orchestration_tools.clone(),
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
             enable_memory: self.enable_memory,
@@ -276,6 +289,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)
+            .field("orchestration_tools", &self.orchestration_tools)
             .field("background_tools", &self.background_tools)
             .field(
                 "custom_tools",

@@ -183,6 +183,68 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
 }
 
 #[test]
+fn orchestration_tool_names_require_distinct_spawn_background_gates() {
+    let enabled = crate::tool_surface::OrchestrationToolConfig { enabled: true };
+    let disabled = crate::tool_surface::OrchestrationToolConfig { enabled: false };
+    let subagents = SubagentToolConfig {
+        targets: subagent_targets("worker"),
+        spawn_enabled: true,
+        steering_enabled: false,
+        background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
+        allow_cross_deployment: false,
+    };
+
+    assert_eq!(
+        orchestration_tool_names(&enabled, &subagents),
+        vec![FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string()]
+    );
+    assert!(orchestration_tool_names(&disabled, &subagents).is_empty());
+
+    let mut no_spawn = subagents.clone();
+    no_spawn.spawn_enabled = false;
+    assert!(orchestration_tool_names(&enabled, &no_spawn).is_empty());
+
+    let mut no_background = subagents.clone();
+    no_background.background_enabled = false;
+    assert!(orchestration_tool_names(&enabled, &no_background).is_empty());
+
+    let mut no_targets = subagents.clone();
+    no_targets.targets.clear();
+    assert!(orchestration_tool_names(&enabled, &no_targets).is_empty());
+}
+
+#[tokio::test]
+async fn fan_out_and_synthesize_definition_bounds_width() {
+    let config = crate::tool_surface::OrchestrationToolConfig { enabled: true };
+    let subagents = SubagentToolConfig {
+        targets: subagent_targets("research"),
+        spawn_enabled: true,
+        steering_enabled: false,
+        background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
+        allow_cross_deployment: false,
+    };
+    let tools = build_orchestration_tools(config, subagents);
+    assert_eq!(
+        tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+        vec![FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string()]
+    );
+
+    let definition = tools[0].definition(String::new()).await;
+    assert_eq!(definition.name, FAN_OUT_AND_SYNTHESIZE_TOOL_NAME);
+    assert_eq!(definition.parameters["properties"]["tasks"]["minItems"], 1);
+    assert_eq!(
+        definition.parameters["properties"]["tasks"]["maxItems"],
+        crate::workflow::MAX_FAN_OUT_TASKS
+    );
+    assert_eq!(
+        definition.parameters["properties"]["target"]["enum"],
+        serde_json::json!(["research"])
+    );
+}
+
+#[test]
 fn native_tool_backgroundable_capability_is_explicit() {
     let root = temp_root("defra-agent-backgroundable-capability");
     let tools = ToolSet::readwrite(root);

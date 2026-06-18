@@ -85,6 +85,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub(crate) identity_contracts: Vec<LeanIdentityContract>,
     #[serde(default)]
+    pub(crate) workflow_cases: Vec<LeanWorkflowCase>,
+    #[serde(default)]
     pub(crate) event_delivery_transition_case_count: usize,
     #[serde(default)]
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
@@ -115,6 +117,14 @@ pub(crate) struct LeanStateMachineContract {
     /// to deserialize this field on machines that don't emit any.
     #[serde(default)]
     pub(crate) named_transitions: Vec<LeanNamedTransition>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanWorkflowCase {
+    pub(crate) name: String,
+    pub(crate) group_terminal_states: Vec<String>,
+    pub(crate) synthesis_present: bool,
+    pub(crate) legal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -260,6 +270,10 @@ static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
 
 pub(crate) fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
+}
+
+pub(crate) fn lean_workflow_cases() -> &'static [LeanWorkflowCase] {
+    &lean_contract_snapshot().workflow_cases
 }
 
 pub(crate) fn lean_vocabulary_contract(domain: &str) -> &'static LeanVocabularyContract {

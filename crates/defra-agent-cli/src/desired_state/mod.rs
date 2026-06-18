@@ -163,6 +163,8 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) subagent_spawn_enabled: bool,
     #[serde(default)]
+    pub(crate) orchestration_enabled: bool,
+    #[serde(default)]
     pub(crate) subagent_steering_enabled: bool,
     #[serde(default)]
     pub(crate) subagent_background_enabled: bool,

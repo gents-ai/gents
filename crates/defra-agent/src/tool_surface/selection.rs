@@ -28,6 +28,11 @@ pub(crate) struct SubagentToolConfig {
     pub allow_cross_deployment: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct OrchestrationToolConfig {
+    pub enabled: bool,
+}
+
 impl SubagentToolConfig {
     pub(crate) fn from_document(selection: &crate::document_config::ToolSelectionDocument) -> Self {
         let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
@@ -102,6 +107,8 @@ pub struct ToolSelection {
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
+    /// Enable hook-managed workflow orchestration tools.
+    pub orchestration_enabled: bool,
     /// Enable the feature-gated, per-agent persistent key-value memory tool.
     pub enable_memory: bool,
     /// Enable the narrower `sessions` convenience tool for recent session history.
@@ -125,6 +132,7 @@ impl Default for ToolSelection {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
             enable_defra_query: true,
@@ -166,6 +174,7 @@ impl ToolSelection {
                 .backgroundable_tool_names
                 .clone()
                 .unwrap_or_default(),
+            orchestration_enabled: selection.orchestration_enabled.unwrap_or(false),
             enable_memory: selection.enable_memory.unwrap_or(false),
             enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
             enable_defra_query: selection.enable_defra_query.unwrap_or(true),

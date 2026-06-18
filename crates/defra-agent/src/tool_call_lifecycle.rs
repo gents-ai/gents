@@ -294,6 +294,8 @@ pub struct ToolCallLifecycle {
     pub(crate) cancel_policy: CancelPolicy,
     pub(crate) child_request_id: Option<String>,
     pub(crate) unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) workflow_group_id: Option<String>,
+    pub(crate) workflow_role: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -330,6 +332,8 @@ impl ToolCallLifecycle {
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
             unclaimed_deadline_at: None,
+            workflow_group_id: None,
+            workflow_role: None,
         }
     }
 
@@ -371,6 +375,8 @@ impl ToolCallLifecycle {
             cancel_policy,
             child_request_id: Some(child_request_id),
             unclaimed_deadline_at: None,
+            workflow_group_id: None,
+            workflow_role: None,
         }
     }
 
@@ -407,6 +413,8 @@ impl ToolCallLifecycle {
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
             unclaimed_deadline_at: None,
+            workflow_group_id: None,
+            workflow_role: None,
         }
     }
 
@@ -478,6 +486,15 @@ impl ToolCallLifecycle {
         deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     ) {
         self.unclaimed_deadline_at = deadline_at;
+    }
+
+    pub(crate) fn set_workflow_group(
+        &mut self,
+        group_id: impl Into<String>,
+        role: impl Into<String>,
+    ) {
+        self.workflow_group_id = Some(group_id.into());
+        self.workflow_role = Some(role.into());
     }
 }
 
