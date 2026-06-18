@@ -267,6 +267,434 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     Ok(())
 }
 
+// ===========================================================================
+// Cut 5 — workflow orchestration over the fleet (#378 capstone)
+// ===========================================================================
+//
+// The coordinator is a workflow ORCHESTRATOR: it issues one
+// `fan_out_and_synthesize` call that fans out across the four remote researcher
+// deployments (cross-deployment subagents) and then runs a LOCAL synthesizer
+// (cut 1 requires synthesis to be local). The barrier is asserted from the
+// coordinator's durable `AgentToolCall` rows as a convergence projection — the
+// four fan-out bridges reach terminal only as the remote children's terminal
+// states replicate back, and the synthesis bridge exists only after all four.
+
+const WORKFLOW_COORDINATOR_PROMPT: &str = r#"You are a fleet workflow orchestrator. You have a workflow tool named `fan_out_and_synthesize` and five subagent targets: four remote researchers (researcher-1, researcher-2, researcher-3, researcher-4) and one local target named `synthesizer`. For any fleet request you MUST make exactly one call to `fan_out_and_synthesize` and call no other tool and do not answer directly. Set the top-level `target` to "researcher-1". Provide exactly four tasks and set each task's `target` to researcher-1, researcher-2, researcher-3, and researcher-4 respectively (one task per researcher). Set `synthesis_target` to "synthesizer". Set `synthesis_prompt` to an instruction asking the synthesizer to combine the four researchers' findings into one short paragraph."#;
+
+const WORKFLOW_RESEARCHER_PROMPT: &str = r#"You are a remote research subagent. Answer the assigned question directly in one short factual paragraph. Do not delegate to other subagents."#;
+
+const WORKFLOW_SYNTHESIZER_PROMPT: &str = r#"You are a synthesizer. You are given JSON outcomes from several researchers. Read all of them and write one concise combined paragraph that references each researcher's finding."#;
+
+const FLEET_SYNTHESIZER_BEHAVIOR_ID: &str = "fleet-synthesizer";
+const FLEET_SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct WorkflowBridgeRow {
+    lifecycle_state: Option<String>,
+    workflow_role: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    child_request_id: Option<String>,
+}
+
+const WORKFLOW_TERMINAL_STATES: &[&str] = &["completed", "failed", "timedOut", "cancelled"];
+
+fn is_workflow_terminal(state: Option<&str>) -> bool {
+    state.is_some_and(|s| WORKFLOW_TERMINAL_STATES.contains(&s))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+async fn five_process_workflow_orchestration_live() -> Result<()> {
+    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow e2e");
+        return Ok(());
+    }
+    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    assert_endpoint_reachable(&endpoint).await?;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let (coord, subagents) = fleet
+        .split_first()
+        .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
+
+    establish_reconciler_pairing(coord, subagents).await?;
+    if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "wf-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error);
+    }
+
+    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents).await?;
+    wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
+        .await?;
+    for subagent in subagents {
+        wait_for_runtime_quiescence(
+            &subagent.graphql,
+            &subagent.agent_did,
+            2,
+            Duration::from_secs(6),
+        )
+        .await?;
+    }
+
+    let parent_prompt = "Use the research fleet via workflow orchestration: ask researcher-1 for one fact about Mercury, researcher-2 about Venus, researcher-3 about Earth, and researcher-4 about Mars, then synthesize a one-paragraph summary comparing the four planets.";
+    let submit = run_cli_json(
+        &coord.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--behavior-id",
+            &coord.behavior_id,
+            "--content",
+            parent_prompt,
+            "--no-wait",
+        ],
+    )?;
+    let parent_request_id = required_output_string(&submit, "request_id")?;
+    let parent_session_id = required_output_string(&submit, "session_id")?;
+
+    // Convergence projection on the coordinator's authoritative view: the four
+    // fan-out bridges (remote children) reach terminal as their states replicate
+    // back, and exactly one synthesis bridge appears, terminal, only after them.
+    let group = match wait_for_workflow_group_converged(
+        &coord.graphql,
+        &parent_session_id,
+        Duration::from_secs(360),
+    )
+    .await
+    {
+        Ok(group) => group,
+        Err(error) => {
+            dump_fleet_doc_state(&fleet).await;
+            persist_fleet_logs(&fleet, "wf-fail");
+            dump_fleet_logs(&fleet);
+            return Err(error);
+        }
+    };
+
+    assert_workflow_barrier(&group)?;
+    assert_fan_out_spanned_remote_deployments(&coord.graphql, &group, subagents).await?;
+
+    let parent_terminal =
+        wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
+            .await?;
+    assert_eq!(
+        parent_terminal, "completed",
+        "orchestrator request must complete after the synthesis returns"
+    );
+    let parent_answer =
+        wait_for_assistant_answer(&coord.graphql, &parent_request_id, Duration::from_secs(60))
+            .await?;
+    anyhow::ensure!(
+        !parent_answer.trim().is_empty(),
+        "orchestrator must return a non-empty synthesized answer"
+    );
+
+    drop(fleet);
+    Ok(())
+}
+
+/// Configure the coordinator as a workflow orchestrator with a LOCAL synthesizer
+/// behavior + four REMOTE researcher targets, and the researchers as report
+/// writers. Registers the "allowed subagents" (subagent_targets) the workflow
+/// references — the authorization layer that sits on top of P2P pairing.
+async fn configure_fleet_workflow_behaviors(
+    root: &Path,
+    coord: &FleetNode,
+    subagents: &[FleetNode],
+) -> Result<()> {
+    let coord_prompt = root.join("wf-coordinator-system-prompt.txt");
+    fs::write(&coord_prompt, WORKFLOW_COORDINATOR_PROMPT)?;
+    configure_behavior_prompt(coord, &coord_prompt, "Fleet Workflow Coordinator")?;
+
+    // Local synthesizer behavior on the coordinator's own DID/deployment.
+    let synth_prompt = root.join("wf-synthesizer-system-prompt.txt");
+    fs::write(&synth_prompt, WORKFLOW_SYNTHESIZER_PROMPT)?;
+    configure_synthesizer_behavior(coord, &synth_prompt)?;
+
+    let sub_prompt = root.join("wf-researcher-system-prompt.txt");
+    fs::write(&sub_prompt, WORKFLOW_RESEARCHER_PROMPT)?;
+    for (index, subagent) in subagents.iter().enumerate() {
+        configure_behavior_prompt(
+            subagent,
+            &sub_prompt,
+            &format!("Fleet Workflow Researcher {}", index + 1),
+        )?;
+        configure_subagent_target_gate(subagent)?;
+    }
+
+    configure_workflow_coordinator_targets(coord, subagents)?;
+    Ok(())
+}
+
+/// Create a second behavior on the coordinator (the local synthesizer). It is a
+/// subagent target of `(coord.agent_did, FLEET_SYNTHESIZER_BEHAVIOR_ID)`, so the
+/// synthesis child materializes on the coordinator's own deployment.
+fn configure_synthesizer_behavior(coord: &FleetNode, prompt_path: &Path) -> Result<()> {
+    run_cli_json(
+        &coord.home,
+        &[
+            "config",
+            "behavior",
+            "set",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--behavior-id",
+            FLEET_SYNTHESIZER_BEHAVIOR_ID,
+            "--display-name",
+            "Fleet Synthesizer",
+            "--system-prompt-file",
+            prompt_path
+                .to_str()
+                .ok_or_else(|| anyhow!("synthesizer prompt path is not UTF-8"))?,
+            "--backend-id",
+            &coord.backend_id,
+            "--model-name",
+            &coord.model_name,
+            "--tool-selection-id",
+            &coord.tool_selection_id,
+            "--inference-profile-id",
+            &coord.inference_profile_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The coordinator's "allowed subagents" for the workflow: orchestration enabled
+/// + the four remote researchers + the local synthesizer, plus the spawn/
+/// background/cross-deployment gates the engine enforces.
+fn configure_workflow_coordinator_targets(
+    coord: &FleetNode,
+    subagents: &[FleetNode],
+) -> Result<()> {
+    let mut args = vec![
+        "config".to_string(),
+        "tools".to_string(),
+        "set".to_string(),
+        "--graphql".to_string(),
+        coord.graphql.clone(),
+        "--agent-did".to_string(),
+        coord.agent_did.clone(),
+        "--selection-id".to_string(),
+        coord.tool_selection_id.clone(),
+        "--display-name".to_string(),
+        "Fleet Workflow Coordinator Tools".to_string(),
+        "--orchestration-enabled".to_string(),
+        "true".to_string(),
+        "--subagent-spawn-enabled".to_string(),
+        "true".to_string(),
+        "--subagent-background-enabled".to_string(),
+        "true".to_string(),
+        "--subagent-allow-cross-deployment".to_string(),
+        "true".to_string(),
+        "--cross-deployment-spawn-timeout-seconds".to_string(),
+        "180".to_string(),
+        "--enable-meta-tools".to_string(),
+        "false".to_string(),
+        "--enable-defra-query".to_string(),
+        "false".to_string(),
+    ];
+    for (index, subagent) in subagents.iter().enumerate() {
+        args.push("--subagent-target".to_string());
+        args.push(subagent_target_entry(
+            &format!("researcher-{}", index + 1),
+            &subagent.agent_did,
+            &subagent.behavior_id,
+            Some(format!("Remote fleet researcher {}", index + 1)),
+        ));
+    }
+    // The local synthesizer target lives on the coordinator's own DID.
+    args.push("--subagent-target".to_string());
+    args.push(subagent_target_entry(
+        FLEET_SYNTHESIZER_TARGET_NAME,
+        &coord.agent_did,
+        FLEET_SYNTHESIZER_BEHAVIOR_ID,
+        Some("Local fleet synthesizer".to_string()),
+    ));
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_cli_json(&coord.home, &refs)?;
+    Ok(())
+}
+
+struct WorkflowGroup {
+    #[allow(dead_code)]
+    group_id: String,
+    fan_out: Vec<WorkflowBridgeRow>,
+    synthesis: WorkflowBridgeRow,
+}
+
+/// Poll the coordinator's durable rows until the workflow group converges: one
+/// `fan_out_and_synthesize` orchestration call, four terminal `fan_out_child`
+/// bridges, and one terminal `synthesis` bridge.
+async fn wait_for_workflow_group_converged(
+    coord_graphql: &str,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<WorkflowGroup> {
+    let deadline = Instant::now() + timeout;
+    let mut last = String::new();
+    loop {
+        if let Some(group) = try_load_converged_group(coord_graphql, session_id, &mut last).await? {
+            return Ok(group);
+        }
+        if Instant::now() >= deadline {
+            bail!("workflow group did not converge on the coordinator within {timeout:?}; last state: {last}");
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+}
+
+async fn try_load_converged_group(
+    coord_graphql: &str,
+    session_id: &str,
+    last: &mut String,
+) -> Result<Option<WorkflowGroup>> {
+    let escaped_session = escape_graphql_string(session_id);
+    let orch_query = format!(
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ tool_call_id lifecycle_state }} }}"#
+    );
+    let orch = graphql_query(coord_graphql, &orch_query).await?;
+    let Some(orch_row) = orch
+        .pointer("/data/AgentToolCall")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+    else {
+        *last = "no fan_out_and_synthesize tool call yet".to_string();
+        return Ok(None);
+    };
+    let group_id = orch_row
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let escaped_group = escape_graphql_string(&group_id);
+    let bridges_query = format!(
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, workflow_group_id: {{ _eq: "{escaped_group}" }} }}, order: {{ started_at: ASC }}) {{ tool_call_id lifecycle_state workflow_role started_at completed_at child_request_id }} }}"#
+    );
+    let bridges_resp = graphql_query(coord_graphql, &bridges_query).await?;
+    let bridges: Vec<WorkflowBridgeRow> = bridges_resp
+        .pointer("/data/AgentToolCall")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| serde_json::from_value(r.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let fan_out: Vec<WorkflowBridgeRow> = bridges
+        .iter()
+        .filter(|b| b.workflow_role.as_deref() == Some("fan_out_child"))
+        .cloned()
+        .collect();
+    let synthesis: Vec<WorkflowBridgeRow> = bridges
+        .iter()
+        .filter(|b| b.workflow_role.as_deref() == Some("synthesis"))
+        .cloned()
+        .collect();
+    *last = format!(
+        "fan_out={} (terminal {}), synthesis={} (terminal {})",
+        fan_out.len(),
+        fan_out
+            .iter()
+            .filter(|b| is_workflow_terminal(b.lifecycle_state.as_deref()))
+            .count(),
+        synthesis.len(),
+        synthesis
+            .iter()
+            .filter(|b| is_workflow_terminal(b.lifecycle_state.as_deref()))
+            .count(),
+    );
+    let all_fan_out_terminal = fan_out.len() == 4
+        && fan_out
+            .iter()
+            .all(|b| is_workflow_terminal(b.lifecycle_state.as_deref()));
+    let synthesis_terminal =
+        synthesis.len() == 1 && is_workflow_terminal(synthesis[0].lifecycle_state.as_deref());
+    if all_fan_out_terminal && synthesis_terminal {
+        return Ok(Some(WorkflowGroup {
+            group_id,
+            fan_out,
+            synthesis: synthesis.into_iter().next().expect("one synthesis"),
+        }));
+    }
+    Ok(None)
+}
+
+/// Barrier-completeness, projection-side, over the coordinator's durable rows:
+/// the synthesis bridge starts only after every fan-out bridge has completed.
+fn assert_workflow_barrier(group: &WorkflowGroup) -> Result<()> {
+    let max_fan_out_completed = group
+        .fan_out
+        .iter()
+        .filter_map(|b| b.completed_at.clone())
+        .max()
+        .ok_or_else(|| anyhow!("fan-out bridges missing completed_at"))?;
+    let synthesis_started = group
+        .synthesis
+        .started_at
+        .clone()
+        .ok_or_else(|| anyhow!("synthesis bridge missing started_at"))?;
+    anyhow::ensure!(
+        synthesis_started >= max_fan_out_completed,
+        "barrier violated: synthesis started {synthesis_started} before the last fan-out completed {max_fan_out_completed}"
+    );
+    Ok(())
+}
+
+/// Prove the fan-out genuinely spanned the remote deployments: each fan-out
+/// child request (replicated back to the coordinator) is owned by a distinct
+/// subagent DID, none of them the coordinator.
+async fn assert_fan_out_spanned_remote_deployments(
+    coord_graphql: &str,
+    group: &WorkflowGroup,
+    subagents: &[FleetNode],
+) -> Result<()> {
+    let remote_dids: HashSet<&str> = subagents.iter().map(|s| s.agent_did.as_str()).collect();
+    let mut seen = HashSet::new();
+    for bridge in &group.fan_out {
+        let child_request_id = bridge
+            .child_request_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("fan-out bridge missing child_request_id"))?;
+        let escaped = escape_graphql_string(child_request_id);
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }} }}"#
+        );
+        let resp = graphql_query(coord_graphql, &query).await?;
+        let did = resp
+            .pointer("/data/AgentRequest/0/agent_did")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("fan-out child {child_request_id} not visible on coordinator"))?
+            .to_string();
+        anyhow::ensure!(
+            remote_dids.contains(did.as_str()),
+            "fan-out child {child_request_id} ran on {did}, not a remote researcher deployment"
+        );
+        seen.insert(did);
+    }
+    anyhow::ensure!(
+        seen.len() == subagents.len(),
+        "fan-out should span all {} remote deployments, saw {}",
+        subagents.len(),
+        seen.len()
+    );
+    Ok(())
+}
+
 async fn bring_up_fleet(
     root: &Path,
     count: usize,
