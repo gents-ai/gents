@@ -64,6 +64,7 @@ Subagents are requests: a parent's tool call spawns a child request — possibly
 ## Development
 
 ```bash
+make help                                    # curated build/test targets
 cargo test -p defra-agent                    # runtime suite (lib + integration)
 cargo test --workspace                       # everything
 cargo build -p defra-agent-cli --no-default-features  # CLI without embedded Codex TUI
