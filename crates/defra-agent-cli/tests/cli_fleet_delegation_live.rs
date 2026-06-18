@@ -391,7 +391,9 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     let group = match wait_for_workflow_group_converged(
         &coord.graphql,
         &parent_session_id,
-        Duration::from_secs(360),
+        // Tight budget: the happy path converges in ~50-90s; 180s is generous slack
+        // while still surfacing a genuine hang quickly.
+        Duration::from_secs(180),
     )
     .await
     {
@@ -547,13 +549,13 @@ fn configure_workflow_coordinator_targets(
         "--subagent-allow-cross-deployment".to_string(),
         "true".to_string(),
         "--cross-deployment-spawn-timeout-seconds".to_string(),
-        // D10: a short spawn timeout so the broken researcher's unclaimed child is
-        // declared dead quickly (the 3 healthy ones are claimed in seconds, well
-        // within this window). Happy path keeps the generous default.
+        // The spawn timeout is the CLAIM window for healthy children (they claim in
+        // seconds), so both paths run it tight. D10 goes tighter still so the
+        // broken researcher's unclaimed child is declared dead promptly.
         if broken_last {
             "30".to_string()
         } else {
-            "180".to_string()
+            "60".to_string()
         },
         "--enable-meta-tools".to_string(),
         "false".to_string(),
@@ -988,7 +990,11 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     let group = match wait_for_workflow_finished(
         &coord.graphql,
         &parent_session_id,
-        Duration::from_secs(360),
+        // Tight budget: the workflow finishes in ~75s; with the fast-dead fix the
+        // broken bridge dies at the 30s spawn timeout, so 180s is generous slack.
+        // (Pre-fix this hung to the ~1800s request deadline — caught here AND by
+        // the explicit speed fence below.)
+        Duration::from_secs(180),
     )
     .await
     {
@@ -1019,16 +1025,51 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
         "synthesis must complete over the partial-failure set"
     );
 
+    // Speed fence (proves the ENGINE FIX, not just D10 synthesis): the dead bridge
+    // was declared dead at the SPAWN TIMEOUT (~30s), not the parent request
+    // deadline (~1800s). Without the fix the bridge lives ~1800s, blowing this
+    // bound — a regression that loses the fast-dead path is caught directly here,
+    // not merely as a slow convergence timeout.
+    let dead = group
+        .fan_out
+        .iter()
+        .find(|b| b.lifecycle_state.as_deref() != Some("completed"))
+        .ok_or_else(|| anyhow!("D10 expected one non-completed fan-out bridge"))?;
+    let dead_started = dead
+        .started_at
+        .as_deref()
+        .ok_or_else(|| anyhow!("dead bridge missing started_at"))?;
+    let dead_completed = dead
+        .completed_at
+        .as_deref()
+        .ok_or_else(|| anyhow!("dead bridge missing completed_at"))?;
+    let dead_lifetime = chrono::DateTime::parse_from_rfc3339(dead_completed)?
+        - chrono::DateTime::parse_from_rfc3339(dead_started)?;
+    anyhow::ensure!(
+        dead_lifetime.num_seconds() < 90,
+        "dead bridge must terminalize at the spawn timeout (fast), lived {}s — engine fix regressed?",
+        dead_lifetime.num_seconds()
+    );
+
     // The synthesizer's input must carry a STRUCTURED FAILURE record for the dead
     // researcher (D10) AND the three surviving reports (data flow over survivors).
     let synth_args = fetch_tool_call_args(&coord.graphql, &group.synthesis.tool_call_id).await?;
     // The outcomes are a nested JSON string inside `args`, so the inner quotes are
-    // escaped — compare on the alnum projection (which strips escaping/whitespace):
-    // a healthy outcome folds to "oktrue", the dead one to "okfalse".
+    // escaped — compare on the alnum projection (strips escaping/whitespace): a
+    // healthy outcome folds to "oktrue", the dead one to "okfalse".
     let args_alnum = alnum_lower(&synth_args);
+    let oktrue = args_alnum.matches("oktrue").count();
+    let okfalse = args_alnum.matches("okfalse").count();
     anyhow::ensure!(
-        args_alnum.contains("okfalse"),
-        "synthesis input must contain a structured failure record (ok:false) for the dead researcher: {synth_args}"
+        oktrue == 3 && okfalse == 1,
+        "synthesis input must carry exactly 3 healthy (oktrue) + 1 failed (okfalse) outcome; got {oktrue} oktrue / {okfalse} okfalse"
+    );
+    // The failure record must carry the UNCLAIMED-dead reason — this ties the dead
+    // outcome to the injected fault and proves WHY the researcher failed reached
+    // the synthesizer (not merely that one did).
+    anyhow::ensure!(
+        args_alnum.contains("notclaimedbeforespawntimeout"),
+        "synthesis input must carry the unclaimed-dead failure reason: {synth_args}"
     );
     let mut survivor_reports = 0;
     for bridge in &group.fan_out {
@@ -1042,13 +1083,18 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
         let report = alnum_lower(&message_answer_text(
             &wait_for_assistant_answer(&coord.graphql, crid, Duration::from_secs(60)).await?,
         ));
-        if report.chars().count() >= 24 {
-            anyhow::ensure!(
-                args_alnum.contains(&report),
-                "surviving researcher report did not reach the synthesizer"
-            );
-            survivor_reports += 1;
-        }
+        // Hard assert (not if-skip): a too-short survivor report is a fence
+        // failure, and every completed survivor must be accounted for.
+        anyhow::ensure!(
+            report.chars().count() >= 24,
+            "surviving researcher report too short to fence ({} alnum chars)",
+            report.chars().count()
+        );
+        anyhow::ensure!(
+            args_alnum.contains(&report),
+            "surviving researcher report did not reach the synthesizer"
+        );
+        survivor_reports += 1;
     }
     anyhow::ensure!(
         survivor_reports == 3,
@@ -1069,9 +1115,17 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     let parent_answer =
         wait_for_assistant_answer(&coord.graphql, &parent_request_id, Duration::from_secs(60))
             .await?;
+    // Grounded on SURVIVORS: the answer must reference the surviving planets
+    // (researcher-4/Mars is the injected fault), so a non-empty failure paragraph
+    // cannot pass and the parent provably synthesized over the partial results.
+    let lowered = parent_answer.to_lowercase();
+    let survivors_named = ["mercury", "venus", "earth"]
+        .iter()
+        .filter(|p| lowered.contains(*p))
+        .count();
     anyhow::ensure!(
-        !parent_answer.trim().is_empty(),
-        "orchestrator must return a non-empty answer over the partial results"
+        survivors_named >= 2,
+        "answer must reference the surviving planets (>=2 of mercury/venus/earth); got {survivors_named}: {parent_answer:?}"
     );
 
     drop(fleet);
