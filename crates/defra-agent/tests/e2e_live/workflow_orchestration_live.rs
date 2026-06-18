@@ -99,8 +99,11 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         &agent_did,
         &model,
         &profile_id,
-        "Answer the assigned research question in one short factual sentence.",
-        Some("Researches one factual sub-question and returns a concise answer."),
+        "You are a city researcher. Write a substantive multi-paragraph report on the \
+         assigned city covering: (1) its founding/early history, (2) one iconic landmark and \
+         why it matters, (3) the city's cultural character today. Be concrete and detailed; \
+         several paragraphs.",
+        Some("Researches one city and returns a detailed multi-paragraph report."),
     )
     .await;
     configure_behavior(
@@ -109,8 +112,12 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         &agent_did,
         &model,
         &profile_id,
-        "Synthesize the supplied JSON outcomes into one concise final answer. Mention failed items if any.",
-        Some("Synthesizes workflow fan-out outcomes into a final answer."),
+        "You are given JSON reports that other researchers wrote about several cities. Read \
+         ALL of them, then write an analytical synthesis of the COMMONALITIES and shared themes \
+         across the cities — patterns in their history, landmarks, and culture. Ground every \
+         observation in the supplied reports; do not introduce facts that are not present in \
+         them. Name each city you draw from.",
+        Some("Reads the per-city reports and synthesizes their shared themes."),
     )
     .await;
 
@@ -144,7 +151,9 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         &orchestrator_behavior_id,
         request_id,
         session_id,
-        "Use workflow orchestration to answer: compare the capitals of France, Germany, and Italy, then synthesize a one-sentence answer.",
+        "Use workflow orchestration to produce a comparative essay: have a researcher write a \
+         detailed report on each of Paris, Berlin, and Rome, then have the synthesizer analyze \
+         the commonalities and shared themes across the three cities.",
     )
     .await;
 
@@ -244,47 +253,70 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     let authored = fetch_tool_call_args(db.node.as_ref(), &group_id).await;
     eprintln!("[workflow-live] orchestrator authored fan_out_and_synthesize args:\n{authored}");
 
-    // Every fan-out child must have returned non-empty research data.
+    // Every fan-out child must have returned a SUBSTANTIVE report (not a
+    // one-liner) — this task forces real per-city research the synthesizer must
+    // actually consume.
     for (i, row) in fan_out.iter().enumerate() {
         let crid = row.child_request_id.as_deref().expect("fan-out child id");
-        let answer = fetch_answer(db.node.as_ref(), crid).await;
-        eprintln!("[workflow-live] fan-out researcher #{i} answer: {answer:?}");
+        let report = answer_text(&fetch_answer(db.node.as_ref(), crid).await);
+        eprintln!(
+            "[workflow-live] ── fan-out researcher #{i} report ({} chars) ──\n{report}\n",
+            report.len()
+        );
         assert!(
-            !answer.trim().is_empty(),
-            "fan-out researcher #{i} ({crid}) must return a non-empty answer"
+            report.trim().chars().count() > 200,
+            "fan-out researcher #{i} ({crid}) must return a substantive report, got {} chars",
+            report.trim().chars().count()
         );
     }
 
-    // The synthesis child must have produced a non-empty synthesized report.
+    // The synthesis child must have produced a substantive synthesized analysis.
     let synthesis_crid = synthesis[0]
         .child_request_id
         .as_deref()
         .expect("synthesis child id");
-    let report = fetch_answer(db.node.as_ref(), synthesis_crid).await;
-    eprintln!("[workflow-live] SYNTHESIZED REPORT:\n{report}");
-    assert!(
-        !report.trim().is_empty(),
-        "synthesis child ({synthesis_crid}) must return a non-empty synthesized report"
+    let report = answer_text(&fetch_answer(db.node.as_ref(), synthesis_crid).await);
+    eprintln!(
+        "[workflow-live] ══ SYNTHESIZED ANALYSIS ({} chars) ══\n{report}\n",
+        report.len()
     );
-    // Soft signal that synthesis actually reasoned over the fan-out data — the
-    // three capitals should surface. Never hard-fail on model wording.
+    assert!(
+        report.trim().chars().count() > 200,
+        "synthesis child ({synthesis_crid}) must return a substantive analysis, got {} chars",
+        report.trim().chars().count()
+    );
+    // The commonalities task CANNOT be answered without reading the three
+    // reports, so a faithful synthesis names the cities it drew from. Require at
+    // least two of three to surface (robust to model wording); soft-signal the
+    // shared-theme framing.
     let lowered = report.to_lowercase();
-    let hits = ["paris", "berlin", "rome"]
+    let cities = ["paris", "berlin", "rome"]
         .iter()
-        .filter(|city| lowered.contains(*city))
+        .filter(|c| lowered.contains(*c))
         .count();
-    if hits >= 2 {
-        eprintln!("[workflow-live] SOFT-OK: synthesized report references {hits}/3 capitals");
-    } else {
-        eprintln!(
-            "[workflow-live] SOFT-WARN: synthesized report referenced only {hits}/3 capitals: {report:?}"
-        );
-    }
+    assert!(
+        cities >= 2,
+        "synthesis must reference the cities it drew from (>=2/3); report: {report:?}"
+    );
+    let themes = [
+        "common",
+        "shared",
+        "both",
+        "all three",
+        "similar",
+        "theme",
+        "pattern",
+    ]
+    .iter()
+    .any(|w| lowered.contains(*w));
+    eprintln!(
+        "[workflow-live] SYNTHESIS read the reports: references {cities}/3 cities; shared-theme framing present={themes}"
+    );
 
-    // The synthesized report must flow back as the orchestrator's final answer
+    // The synthesized analysis must flow back as the orchestrator's final answer
     // (D5: synthesis returns to the orchestrator continuation).
-    let final_answer = fetch_answer(db.node.as_ref(), request_id).await;
-    eprintln!("[workflow-live] ORCHESTRATOR FINAL ANSWER:\n{final_answer}");
+    let final_answer = answer_text(&fetch_answer(db.node.as_ref(), request_id).await);
+    eprintln!("[workflow-live] ══ ORCHESTRATOR FINAL ANSWER ══\n{final_answer}\n");
     assert!(
         !final_answer.trim().is_empty(),
         "orchestrator final answer must be non-empty (synthesis must return to the parent)"
@@ -294,12 +326,32 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     Ok(())
 }
 
-const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are a workflow orchestrator. You have a workflow tool \
+/// Extract the assistant's answer text from a persisted native message JSON
+/// (`{"role":"assistant","content":[{"text":"..."}, {reasoning}]}`); fall back to
+/// the raw string if it is not in that shape.
+fn answer_text(raw: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return raw.to_string();
+    };
+    value
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|items| {
+            items
+                .iter()
+                .find_map(|item| item.get("text").and_then(|t| t.as_str()))
+        })
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| raw.to_string())
+}
+
+const ORCHESTRATOR_SYSTEM_PROMPT: &str =
+    "You are a workflow orchestrator. You have a workflow tool \
 named `fan_out_and_synthesize`. For the user's request, you MUST make exactly one call to \
 `fan_out_and_synthesize`; do not call `spawn_subagent` directly and do not answer directly. Use \
-target exactly \"researcher\", synthesis_target exactly \"synthesizer\", exactly three tasks, and a \
-synthesis_prompt asking for one concise comparison sentence. The three task prompts must ask for the \
-capital of France, Germany, and Italy respectively.";
+target exactly \"researcher\", synthesis_target exactly \"synthesizer\", and exactly three tasks — \
+one asking for a detailed report on Paris, one on Berlin, one on Rome. The synthesis_prompt must \
+ask the synthesizer to analyze the commonalities and shared themes across the three city reports.";
 
 async fn fetch_orchestration_tool_calls(
     node: &EmbeddedNode,
