@@ -65,7 +65,6 @@ const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":10}}
 ]"#;
 
-#[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_group_id","Kind":11}},
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":11}}

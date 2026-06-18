@@ -184,10 +184,14 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         .filter(|row| row.workflow_role.as_deref() == Some("synthesis"))
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        fan_out.len(),
-        3,
-        "expected exactly 3 fan_out_child bridges in group {group_id}; got {workflow_rows:?}"
+    // The barrier-completeness property is N-agnostic: assert the D6 width bound
+    // (1..=maxBackgroundedPerParent = 8), not the exact count the prompt asks
+    // for, so a model that emits 2 or 4 tasks does not masquerade as a barrier
+    // violation. The structural barrier checks below hold for whatever N ran.
+    assert!(
+        (1..=8).contains(&fan_out.len()),
+        "expected 1..=8 fan_out_child bridges (D6 width bound) in group {group_id}; got {} ({workflow_rows:?})",
+        fan_out.len()
     );
     assert_eq!(
         synthesis.len(),

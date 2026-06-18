@@ -1,6 +1,27 @@
 use super::*;
 
 impl ToolCallLifecycle {
+    /// GraphQL fragment for the durable workflow-group projection fields,
+    /// emitted on every create path so a bridge stays projectable by
+    /// `workflow_group_id` regardless of which transition created its row.
+    /// Empty for non-workflow tool calls (back-compat with older rows).
+    fn workflow_fields_fragment(&self) -> String {
+        match (
+            self.workflow_group_id.as_deref(),
+            self.workflow_role.as_deref(),
+        ) {
+            (Some(group_id), Some(role)) if !group_id.is_empty() && !role.is_empty() => {
+                let escaped_group_id = escape_graphql_string(group_id);
+                let escaped_role = escape_graphql_string(role);
+                format!(
+                    r#"workflow_group_id: "{escaped_group_id}",
+                    workflow_role: "{escaped_role}","#
+                )
+            }
+            _ => String::new(),
+        }
+    }
+
     /// Pending → Running. Creates the DefraDB row if missing; idempotent if
     /// already in Running. Sets `started_at` to `now`.
     pub async fn start_running(&mut self) -> Result<()> {
@@ -54,20 +75,7 @@ impl ToolCallLifecycle {
         } else {
             String::new()
         };
-        let workflow_fields = match (
-            self.workflow_group_id.as_deref(),
-            self.workflow_role.as_deref(),
-        ) {
-            (Some(group_id), Some(role)) if !group_id.is_empty() && !role.is_empty() => {
-                let escaped_group_id = escape_graphql_string(group_id);
-                let escaped_role = escape_graphql_string(role);
-                format!(
-                    r#"workflow_group_id: "{escaped_group_id}",
-                    workflow_role: "{escaped_role}","#
-                )
-            }
-            _ => String::new(),
-        };
+        let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -275,6 +283,7 @@ impl ToolCallLifecycle {
         let message_sequence = self.message_sequence;
         let failure_class_str = failure.as_str();
         let command_denial_fields = command_denial_fields_fragment(command_denial);
+        let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -295,6 +304,7 @@ impl ToolCallLifecycle {
                     completed_at: "{started_at_str}",
                     tool_failure_class: "{failure_class_str}",
                     {command_denial_fields}
+                    {workflow_fields}
                     latency_ms: 0
                 }}) {{ _docID }}
             }}"#
@@ -390,6 +400,7 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
         let cancel_cause = cause.as_str();
+        let workflow_fields = self.workflow_fields_fragment();
 
         let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
 
@@ -411,6 +422,7 @@ impl ToolCallLifecycle {
                     started_at: null,
                     deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
+                    {workflow_fields}
                     latency_ms: 0
                 }}) {{ _docID }}
             }}"#

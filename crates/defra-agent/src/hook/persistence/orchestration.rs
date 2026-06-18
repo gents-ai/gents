@@ -1,5 +1,11 @@
 use super::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::defra_node::EmbeddedNode;
+use crate::graphql::escape_graphql_string;
+use crate::workflow::{
+    workflow_barrier_projection_legal, WORKFLOW_ROLE_FAN_OUT_CHILD, WORKFLOW_ROLE_SYNTHESIS,
+};
 
 #[derive(Debug, Clone)]
 struct WorkflowSpawnSpec {
@@ -8,6 +14,68 @@ struct WorkflowSpawnSpec {
     agent_did: String,
     behavior_id: String,
     prompt: String,
+}
+
+/// A persisted workflow bridge row, read back from `AgentToolCall` by
+/// `workflow_group_id`. This is the durable projection the barrier is proven
+/// over (`workflow_barrier_projection_legal`) and the source for idempotent
+/// adoption on a parent reclaim mid-barrier.
+#[derive(Debug, Clone, Deserialize)]
+struct WorkflowGroupBridgeRow {
+    tool_call_id: String,
+    #[serde(default)]
+    child_request_id: Option<String>,
+    #[serde(default)]
+    workflow_role: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+}
+
+impl WorkflowGroupBridgeRow {
+    fn is_role(&self, role: &str) -> bool {
+        self.workflow_role.as_deref() == Some(role)
+    }
+}
+
+/// Load every persisted bridge row in one workflow group (the durable barrier
+/// projection surface). Ordered by `started_at` so adopted fan-out indices are
+/// stable across a reclaim.
+async fn load_workflow_group_bridges(
+    node: &EmbeddedNode,
+    session_id: &str,
+    workflow_group_id: &str,
+) -> anyhow::Result<Vec<WorkflowGroupBridgeRow>> {
+    let escaped_session = escape_graphql_string(session_id);
+    let escaped_group = escape_graphql_string(workflow_group_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session}" }},
+                    workflow_group_id: {{ _eq: "{escaped_group}" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_id
+                child_request_id
+                workflow_role
+                lifecycle_state
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "loading workflow group bridges for group {workflow_group_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,32 +396,86 @@ impl DefraSessionHook {
         args: &crate::workflow::FanOutAndSynthesizeArgs,
     ) -> anyhow::Result<String> {
         let fan_out_specs = self.resolve_fan_out_specs(parent_context, args)?;
-        let mut fan_out_bridges = Vec::with_capacity(fan_out_specs.len());
-        for (index, spec) in fan_out_specs.iter().enumerate() {
-            let bridge = self
-                .spawn_workflow_subagent_bridge(
-                    workflow_group_id,
-                    message_sequence,
-                    crate::workflow::WORKFLOW_ROLE_FAN_OUT_CHILD,
-                    parent_context,
-                    spec,
-                    AwaitMode::Background,
-                )
+
+        // Idempotent adoption (reclaim safety): a parent reclaim mid-barrier
+        // must not double-spawn the group. Adopt any bridges already persisted
+        // under this `workflow_group_id`; spawn only the missing slots.
+        let existing =
+            load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
                 .await?;
+        let existing_fan_out: Vec<&WorkflowGroupBridgeRow> = existing
+            .iter()
+            .filter(|row| row.is_role(WORKFLOW_ROLE_FAN_OUT_CHILD))
+            .collect();
+
+        let mut fan_out_bridges: Vec<(usize, WorkflowSpawnSpec, WorkflowBridge)> =
+            Vec::with_capacity(fan_out_specs.len());
+        for (index, spec) in fan_out_specs.iter().enumerate() {
+            let bridge = if let Some(row) = existing_fan_out.get(index) {
+                WorkflowBridge {
+                    tool_call_id: row.tool_call_id.clone(),
+                    child_request_id: row.child_request_id.clone().unwrap_or_default(),
+                }
+            } else {
+                match self
+                    .spawn_workflow_subagent_bridge(
+                        workflow_group_id,
+                        message_sequence,
+                        WORKFLOW_ROLE_FAN_OUT_CHILD,
+                        parent_context,
+                        spec,
+                        AwaitMode::Background,
+                    )
+                    .await
+                {
+                    Ok(bridge) => bridge,
+                    Err(error) => {
+                        // A spawn failure mid-fan-out must not orphan the bridges
+                        // already spawned this call; terminalize them before bailing.
+                        self.cancel_workflow_bridges(parent_context, &fan_out_bridges)
+                            .await;
+                        return Err(error);
+                    }
+                }
+            };
             fan_out_bridges.push((index, spec.clone(), bridge));
         }
 
         let mut outcomes = Vec::with_capacity(fan_out_bridges.len());
-        for (index, spec, bridge) in fan_out_bridges {
+        for (index, spec, bridge) in &fan_out_bridges {
             outcomes.push(
                 self.await_workflow_fan_out_bridge(
                     parent_context,
                     workflow_group_id,
-                    index,
-                    &spec,
-                    &bridge,
+                    *index,
+                    spec,
+                    bridge,
                 )
                 .await?,
+            );
+        }
+
+        // Barrier enforcement, projection-side: gate synthesis on the proven
+        // predicate evaluated over the DURABLE fan-out bridge rows (the exact
+        // surface `Proofs/Workflow/FanOut.lean` and the conformance fence are
+        // stated over). The per-bridge await above terminalizes each bridge; this
+        // re-reads persisted state so a best-effort/deadline path that left a
+        // bridge non-terminal can never reach synthesis.
+        let durable_fan_out_states: Vec<String> =
+            load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
+                .await?
+                .into_iter()
+                .filter(|row| row.is_role(WORKFLOW_ROLE_FAN_OUT_CHILD))
+                .filter_map(|row| row.lifecycle_state)
+                .collect();
+        if !workflow_barrier_projection_legal(
+            durable_fan_out_states.iter().map(String::as_str),
+            true,
+        ) {
+            anyhow::bail!(
+                "workflow barrier not satisfied for group {workflow_group_id}: fan-out bridges \
+                 are not all terminal in durable rows ({durable_fan_out_states:?}); refusing to \
+                 spawn synthesis"
             );
         }
 
@@ -378,16 +500,25 @@ impl DefraSessionHook {
             behavior_id: synthesis_target.behavior_id.clone(),
             prompt: synthesis_prompt,
         };
-        let synthesis_bridge = self
-            .spawn_workflow_subagent_bridge(
+        let synthesis_bridge = if let Some(row) = existing
+            .iter()
+            .find(|row| row.is_role(WORKFLOW_ROLE_SYNTHESIS))
+        {
+            WorkflowBridge {
+                tool_call_id: row.tool_call_id.clone(),
+                child_request_id: row.child_request_id.clone().unwrap_or_default(),
+            }
+        } else {
+            self.spawn_workflow_subagent_bridge(
                 workflow_group_id,
                 message_sequence,
-                crate::workflow::WORKFLOW_ROLE_SYNTHESIS,
+                WORKFLOW_ROLE_SYNTHESIS,
                 parent_context,
                 &synthesis_spec,
                 AwaitMode::Foreground,
             )
-            .await?;
+            .await?
+        };
         self.await_foreground_subagent(
             &synthesis_bridge.tool_call_id,
             parent_context,
@@ -430,6 +561,25 @@ impl DefraSessionHook {
                 })
             })
             .collect()
+    }
+
+    /// Terminalize a set of just-spawned workflow bridges so a spawn failure
+    /// mid-fan-out cannot leave durable `running` bridge rows (and the cascade
+    /// policy interrupts their child requests). Best-effort per bridge.
+    async fn cancel_workflow_bridges(
+        &self,
+        parent_context: &ParentSubagentContext,
+        bridges: &[(usize, WorkflowSpawnSpec, WorkflowBridge)],
+    ) {
+        for (_, _, bridge) in bridges {
+            if let Ok(Some(mut lifecycle)) = self
+                .take_or_load_in_flight_lifecycle(&parent_context.session_id, &bridge.tool_call_id)
+                .await
+            {
+                let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await;
+            }
+            self.discard_in_flight_lifecycle(&bridge.tool_call_id).await;
+        }
     }
 
     async fn spawn_workflow_subagent_bridge(
@@ -497,6 +647,53 @@ impl DefraSessionHook {
         loop {
             let now = chrono::Utc::now();
             if now >= parent_context.request_deadline_at {
+                // A child can complete in the last poll window; prefer that real
+                // completion over recording 'dead' on the deadline edge.
+                if let Some(row) =
+                    load_child_terminal_row(&self.node, &bridge.child_request_id).await?
+                {
+                    if child_request_completed(&row) {
+                        if let Some(edge) = try_load_authorized_child_edge(
+                            &self.node,
+                            parent_context,
+                            &bridge.child_request_id,
+                        )
+                        .await?
+                        {
+                            if let Some(final_response) =
+                                load_child_final_response(&self.node, &edge).await?
+                            {
+                                if edge.lifecycle_state == "running" {
+                                    if let Some(mut lifecycle) = self
+                                        .take_or_load_in_flight_lifecycle(
+                                            &parent_context.session_id,
+                                            &bridge.tool_call_id,
+                                        )
+                                        .await?
+                                    {
+                                        let _ = lifecycle
+                                            .bridge_complete(final_response.clone())
+                                            .await?;
+                                    }
+                                }
+                                self.discard_in_flight_lifecycle(&bridge.tool_call_id).await;
+                                return Ok(WorkflowOutcome {
+                                    task_id: workflow_task_id(index, spec),
+                                    child_request_id: bridge.child_request_id.clone(),
+                                    behavior_id: spec.behavior_id.clone(),
+                                    status: "completed".to_string(),
+                                    ok: true,
+                                    final_response: Some(final_response),
+                                    error: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Genuinely timed out: terminalize the bridge (propagate a failed
+                // mutation rather than silently leaving a `running` row — the
+                // durable barrier gate also refuses synthesis on any non-terminal
+                // fan-out bridge).
                 if let Some(mut lifecycle) = self
                     .take_or_load_in_flight_lifecycle(
                         &parent_context.session_id,
@@ -504,8 +701,9 @@ impl DefraSessionHook {
                     )
                     .await?
                 {
-                    let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await;
+                    let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await?;
                 }
+                self.discard_in_flight_lifecycle(&bridge.tool_call_id).await;
                 return Ok(WorkflowOutcome {
                     task_id: workflow_task_id(index, spec),
                     child_request_id: bridge.child_request_id.clone(),

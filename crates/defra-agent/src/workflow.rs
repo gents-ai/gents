@@ -5,7 +5,13 @@ use serde::Deserialize;
 pub(crate) const FAN_OUT_AND_SYNTHESIZE_TOOL_NAME: &str = "fan_out_and_synthesize";
 pub(crate) const WORKFLOW_ROLE_FAN_OUT_CHILD: &str = "fan_out_child";
 pub(crate) const WORKFLOW_ROLE_SYNTHESIS: &str = "synthesis";
-pub(crate) const MAX_FAN_OUT_TASKS: usize = 8;
+
+/// Fan-out width cap (D6: `1 <= N <= maxBackgroundedPerParent`). This is the
+/// SAME quantity as the runtime backgrounded-per-parent ceiling, because fan-out
+/// children are background bridges counted against that cap — derived from it so
+/// the two cannot silently drift.
+pub(crate) const MAX_FAN_OUT_TASKS: usize =
+    crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 
 /// Persisted bridge states that count as terminal for workflow barriers.
 pub const WORKFLOW_TERMINAL_TOOL_STATES: &[&str] =

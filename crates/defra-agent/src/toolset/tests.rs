@@ -244,6 +244,94 @@ async fn fan_out_and_synthesize_definition_bounds_width() {
     );
 }
 
+// Fail-closed `validate()` is the load-bearing N-bound/target gate (the schema
+// `minItems`/`maxItems` are only advisory hints a model can ignore). Exercise it
+// through the public `call`, which runs `validate()` before refusing execution.
+#[tokio::test]
+async fn fan_out_and_synthesize_validate_rejects_bad_args() {
+    use crate::llm::tool::Tool;
+    use crate::workflow::{FanOutAndSynthesizeArgs, FanOutTask};
+
+    let tool = super::orchestration::FanOutAndSynthesizeTool::new(SubagentToolConfig {
+        targets: subagent_targets("research"),
+        spawn_enabled: true,
+        steering_enabled: false,
+        background_enabled: true,
+        default_await_mode: AwaitMode::Foreground,
+        allow_cross_deployment: false,
+    });
+
+    let task = |prompt: &str, target: Option<&str>| FanOutTask {
+        id: None,
+        target: target.map(ToOwned::to_owned),
+        prompt: prompt.to_string(),
+    };
+    let base = || FanOutAndSynthesizeArgs {
+        target: Some("research".to_string()),
+        synthesis_target: Some("research".to_string()),
+        synthesis_prompt: "synthesize".to_string(),
+        tasks: vec![task("q1", None)],
+    };
+    let err = |args: FanOutAndSynthesizeArgs| {
+        let tool = tool.clone();
+        async move {
+            Tool::call(&tool, args)
+                .await
+                .expect_err("must reject")
+                .to_string()
+        }
+    };
+
+    // width 0 (empty tasks)
+    let mut a = base();
+    a.tasks.clear();
+    assert!(err(a).await.contains("invalid_tool_arguments"));
+
+    // width > MAX_FAN_OUT_TASKS
+    let mut a = base();
+    a.tasks = (0..crate::workflow::MAX_FAN_OUT_TASKS + 1)
+        .map(|i| task(&format!("q{i}"), None))
+        .collect();
+    assert!(err(a).await.contains("invalid_tool_arguments"));
+
+    // no default target and a task without its own target
+    let mut a = base();
+    a.target = None;
+    a.tasks = vec![task("q1", None)];
+    assert!(err(a).await.contains("/target"));
+
+    // empty task prompt
+    let mut a = base();
+    a.tasks = vec![task("   ", None)];
+    assert!(err(a).await.contains("/tasks/0/prompt"));
+
+    // disallowed target
+    let mut a = base();
+    a.tasks = vec![task("q1", Some("intruder"))];
+    assert!(err(a).await.contains("tool_not_allowed"));
+
+    // missing synthesis_target
+    let mut a = base();
+    a.synthesis_target = None;
+    assert!(err(a).await.contains("/synthesis_target"));
+
+    // empty synthesis_prompt
+    let mut a = base();
+    a.synthesis_prompt = "  ".to_string();
+    assert!(err(a).await.contains("/synthesis_prompt"));
+
+    // happy path: validation passes, so the hook-managed tool refuses execution
+    // with service_unavailable (NOT an argument error).
+    let ok_err = Tool::call(&tool, base())
+        .await
+        .expect_err("hook-managed")
+        .to_string();
+    assert!(
+        ok_err.contains("service_unavailable"),
+        "valid args must pass validation and hit the hook-managed guard, got: {ok_err}"
+    );
+}
+
 #[test]
 fn native_tool_backgroundable_capability_is_explicit() {
     let root = temp_root("defra-agent-backgroundable-capability");

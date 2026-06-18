@@ -1,3 +1,15 @@
+//! Workflow-orchestration tool surface (#378).
+//!
+//! Cut 1 ships only `fan_out_and_synthesize`. The other three primitives
+//! (`pipeline`, `verify`, `loop_until_done`) are intentionally NOT stubbed as a
+//! common `OrchestrationPrimitive` trait yet: a trait with a single
+//! implementation adds an abstraction (and dead `#[allow(dead_code)]` stub
+//! types) with no consumer, which the codebase avoids. The real shared seam is
+//! [`build_orchestration_tools`]/[`orchestration_tool_names`] (and the
+//! `OrchestrationToolConfig` gate); cuts 2–4 introduce the trait when there is a
+//! second implementation to factor against. This deviation from plan Task 1.4
+//! Step 2 / design D8 is deliberate and recorded in the plan's self-review.
+
 use anyhow::anyhow;
 
 use crate::llm::tool::{Tool, ToolDefinition};

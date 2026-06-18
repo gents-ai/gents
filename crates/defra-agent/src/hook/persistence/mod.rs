@@ -43,7 +43,7 @@ use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Trun
 
 use super::{non_empty, DefraSessionHook, TranscriptTurnState};
 
-const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
+pub(crate) const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubagentTargetHost {
