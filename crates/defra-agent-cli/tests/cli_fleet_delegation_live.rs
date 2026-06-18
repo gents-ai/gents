@@ -301,6 +301,10 @@ const WORKFLOW_SYNTHESIZER_PROMPT: &str = r#"You are a synthesizer. You are give
 
 const FLEET_SYNTHESIZER_BEHAVIOR_ID: &str = "fleet-synthesizer";
 const FLEET_SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
+/// A separate, deliberately MINIMAL tool selection for the synthesizer — no
+/// orchestration, no spawn, no targets — so the synthesis child is a leaf and
+/// cannot recurse into fan_out_and_synthesize or spawn_subagent.
+const FLEET_SYNTHESIZER_SELECTION_ID: &str = "fleet-synthesizer-tools";
 /// A behavior id that exists on NO node — used to fault-inject one researcher.
 const FLEET_MISSING_BEHAVIOR_ID: &str = "fleet-missing-behavior";
 /// A model name that no backend serves — makes a CLAIMED child fail at inference
@@ -433,6 +437,8 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     assert_synthesis_consumed_reports(&coord.graphql, &group, &reports).await?;
     // Cut-1 invariant: synthesis ran locally on the coordinator.
     assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+    // The synthesizer is a leaf: it did not recurse into spawn/orchestration.
+    assert_synthesis_is_leaf(&coord.graphql, &group).await?;
     // No-crosswise held THROUGH the run: the fan-out did not induce a
     // researcher<->researcher data-plane edge (re-checked post-convergence, not
     // only at setup).
@@ -482,9 +488,11 @@ async fn configure_fleet_workflow_behaviors(
     fs::write(&coord_prompt, WORKFLOW_COORDINATOR_PROMPT)?;
     configure_behavior_prompt(coord, &coord_prompt, "Fleet Workflow Coordinator")?;
 
-    // Local synthesizer behavior on the coordinator's own DID/deployment.
+    // Local synthesizer behavior on the coordinator's own DID/deployment, bound to
+    // its OWN minimal (no-orchestration, no-spawn) tool selection so it is a leaf.
     let synth_prompt = root.join("wf-synthesizer-system-prompt.txt");
     fs::write(&synth_prompt, WORKFLOW_SYNTHESIZER_PROMPT)?;
+    configure_synthesizer_tool_selection(coord)?;
     configure_synthesizer_behavior(coord, &synth_prompt)?;
 
     let sub_prompt = root.join("wf-researcher-system-prompt.txt");
@@ -503,6 +511,41 @@ async fn configure_fleet_workflow_behaviors(
     }
 
     configure_workflow_coordinator_targets(coord, subagents, fault)?;
+    Ok(())
+}
+
+/// A minimal leaf tool selection for the synthesizer: orchestration OFF, spawn
+/// OFF, no targets, no meta-tools, no defra-query. The synthesis child therefore
+/// cannot recurse.
+fn configure_synthesizer_tool_selection(coord: &FleetNode) -> Result<()> {
+    run_cli_json(
+        &coord.home,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--selection-id",
+            FLEET_SYNTHESIZER_SELECTION_ID,
+            "--display-name",
+            "Fleet Synthesizer Tools (leaf)",
+            "--orchestration-enabled",
+            "false",
+            "--subagent-spawn-enabled",
+            "false",
+            "--subagent-background-enabled",
+            "false",
+            "--subagent-allow-cross-deployment",
+            "false",
+            "--enable-meta-tools",
+            "false",
+            "--enable-defra-query",
+            "false",
+        ],
+    )?;
     Ok(())
 }
 
@@ -533,7 +576,7 @@ fn configure_synthesizer_behavior(coord: &FleetNode, prompt_path: &Path) -> Resu
             "--model-name",
             &coord.model_name,
             "--tool-selection-id",
-            &coord.tool_selection_id,
+            FLEET_SYNTHESIZER_SELECTION_ID,
             "--inference-profile-id",
             &coord.inference_profile_id,
         ],
@@ -648,8 +691,10 @@ async fn try_load_converged_group(
     last: &mut String,
 ) -> Result<Option<WorkflowGroup>> {
     let escaped_session = escape_graphql_string(session_id);
+    // limit: 2 (not 1) so a SECOND orchestration call is visible — with limit: 1
+    // the `<= 1` check below would be vacuously true.
     let orch_query = format!(
-        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ tool_call_id lifecycle_state }} }}"#
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 2) {{ tool_call_id lifecycle_state }} }}"#
     );
     let orch = graphql_query(coord_graphql, &orch_query).await?;
     let orch_rows = orch
@@ -810,6 +855,9 @@ async fn assert_fan_out_completed_on_remote_deployments(
             req.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
             "fan-out child {child_request_id} (on {did}) did not complete on the coordinator's replicated view"
         );
+        // Prove it genuinely RAN on the owning remote node — query that node's OWN
+        // db, not just the coordinator's replicated view.
+        assert_child_ran_on_owning_node(subagents, child_request_id, &did, "completed").await?;
         // The remote child's ANSWER must replicate back (the round-trip the whole
         // feature depends on). A real replication race would surface here.
         let report =
@@ -935,6 +983,89 @@ async fn assert_synthesis_ran_locally(
         did == coord_did,
         "synthesis ran on {did}, must be local on the coordinator {coord_did}"
     );
+    Ok(())
+}
+
+/// Prove the synthesizer is a LEAF: no AgentRequest is caused by the synthesis
+/// child, so it did not recurse into fan_out_and_synthesize / spawn_subagent
+/// (the synthesizer is bound to a no-orchestration, no-spawn tool selection).
+async fn assert_synthesis_is_leaf(coord_graphql: &str, group: &WorkflowGroup) -> Result<()> {
+    let child_request_id = group
+        .synthesis
+        .child_request_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("synthesis bridge missing child_request_id"))?;
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}) {{ request_id }} }}"#
+    );
+    let resp = graphql_query(coord_graphql, &query).await?;
+    let spawned = resp
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    anyhow::ensure!(
+        spawned == 0,
+        "synthesizer must be a leaf (no recursion), but it spawned {spawned} child request(s)"
+    );
+    Ok(())
+}
+
+/// Prove a child request genuinely RAN on its owning remote node — query that
+/// node's OWN GraphQL (not the coordinator's replicated view) and assert the
+/// request exists there with the expected DID and terminal state.
+async fn assert_child_ran_on_owning_node(
+    subagents: &[FleetNode],
+    child_request_id: &str,
+    expected_did: &str,
+    expected_state: &str,
+) -> Result<()> {
+    let node = subagents
+        .iter()
+        .find(|s| s.agent_did == expected_did)
+        .ok_or_else(|| anyhow!("no fleet node owns DID {expected_did}"))?;
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did lifecycle_state }} }}"#
+    );
+    let resp = graphql_query(&node.graphql, &query).await?;
+    let req = resp.pointer("/data/AgentRequest/0").ok_or_else(|| {
+        anyhow!("child {child_request_id} not present on its owning node {expected_did}'s OWN db — it did not run there")
+    })?;
+    anyhow::ensure!(
+        req.get("agent_did").and_then(Value::as_str) == Some(expected_did),
+        "child {child_request_id} on node {expected_did} has the wrong agent_did"
+    );
+    anyhow::ensure!(
+        req.get("lifecycle_state").and_then(Value::as_str) == Some(expected_state),
+        "child {child_request_id} on node {expected_did} is not {expected_state} locally"
+    );
+    Ok(())
+}
+
+/// Prove a child request was NOT materialized on ANY fleet node (the unclaimed
+/// path: no remote daemon ever created it).
+async fn assert_child_materialized_nowhere(
+    subagents: &[FleetNode],
+    child_request_id: &str,
+) -> Result<()> {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ request_id }} }}"#
+    );
+    for node in subagents {
+        let resp = graphql_query(&node.graphql, &query).await?;
+        let present = resp
+            .pointer("/data/AgentRequest/0")
+            .and_then(|r| r.get("request_id"))
+            .is_some();
+        anyhow::ensure!(
+            !present,
+            "unclaimed child {child_request_id} was materialized on node {} — it should exist nowhere",
+            node.agent_did
+        );
+    }
     Ok(())
 }
 
@@ -1077,6 +1208,13 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
         "dead bridge must terminalize at the spawn timeout (fast), lived {}s — engine fix regressed?",
         dead_lifetime.num_seconds()
     );
+    // Unclaimed path: the child was materialized on NO fleet node (no remote
+    // daemon ever created it) — proven against each node's OWN db.
+    let dead_crid = dead
+        .child_request_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("dead bridge missing child_request_id"))?;
+    assert_child_materialized_nowhere(subagents, dead_crid).await?;
 
     // The synthesizer's input must carry a STRUCTURED FAILURE record for the dead
     // researcher (D10) AND the three surviving reports (data flow over survivors).
@@ -1129,6 +1267,7 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     );
 
     assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+    assert_synthesis_is_leaf(&coord.graphql, &group).await?;
 
     // Despite the failure, the orchestrator request COMPLETES with a non-empty
     // answer (the user gets a result, not an error).
@@ -1286,17 +1425,24 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     let child = graphql_query(
         &coord.graphql,
         &format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did lifecycle_state }} }}"#
         ),
     )
     .await?;
-    let child_state = child
-        .pointer("/data/AgentRequest/0/lifecycle_state")
-        .and_then(Value::as_str);
+    let child_req = child
+        .pointer("/data/AgentRequest/0")
+        .ok_or_else(|| anyhow!("failed child not visible on coordinator"))?;
+    let child_state = child_req.get("lifecycle_state").and_then(Value::as_str);
     anyhow::ensure!(
         child_state == Some("failed"),
         "materialized-failure: the failed researcher's child must exist on the coordinator with lifecycle_state 'failed' (got {child_state:?}) — proving it was claimed then failed, not unclaimed"
     );
+    // And it actually ran on its OWNING remote node (its own db), with "failed".
+    let failed_did = child_req
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("failed child missing agent_did"))?;
+    assert_child_ran_on_owning_node(subagents, failed_crid, failed_did, "failed").await?;
 
     // Speed: the materialized child fails at inference promptly (not the request
     // deadline) — bounded well under it.
@@ -1356,6 +1502,7 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     );
 
     assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+    assert_synthesis_is_leaf(&coord.graphql, &group).await?;
 
     let parent_terminal =
         wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
@@ -1397,15 +1544,23 @@ async fn wait_for_workflow_finished(
         if Instant::now() >= deadline {
             bail!("workflow did not finish on the coordinator within {timeout:?}; last: {last}");
         }
+        // limit: 2 so a second orchestration call is visible (the uniqueness
+        // assert below is vacuous under limit: 1).
         let orch_query = format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ tool_call_id lifecycle_state }} }}"#
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 2) {{ tool_call_id lifecycle_state }} }}"#
         );
         let orch = graphql_query(coord_graphql, &orch_query).await?;
-        if let Some(orch_row) = orch
+        let orch_rows = orch
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-        {
+            .cloned()
+            .unwrap_or_default();
+        anyhow::ensure!(
+            orch_rows.len() <= 1,
+            "expected exactly one fan_out_and_synthesize call, saw {}",
+            orch_rows.len()
+        );
+        if let Some(orch_row) = orch_rows.first() {
             let orch_state = orch_row.get("lifecycle_state").and_then(Value::as_str);
             let group_id = orch_row
                 .get("tool_call_id")
@@ -1437,6 +1592,11 @@ async fn wait_for_workflow_finished(
                     .filter(|b| b.workflow_role.as_deref() == Some("synthesis"))
                     .cloned()
                     .collect();
+                anyhow::ensure!(
+                    synthesis.len() == 1,
+                    "expected exactly one synthesis bridge, saw {}",
+                    synthesis.len()
+                );
                 let synthesis = synthesis.into_iter().next().ok_or_else(|| {
                     anyhow!("workflow finished (orch={orch_state:?}) with no synthesis bridge")
                 })?;

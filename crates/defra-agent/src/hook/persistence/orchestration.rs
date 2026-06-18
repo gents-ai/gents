@@ -89,8 +89,9 @@ impl DefraSessionHook {
             parent_context.request_deadline_at,
         );
 
-        if let Some((failure_class, payload)) =
-            self.validate_workflow_invocation(&parent_context, &parsed)
+        if let Some((failure_class, payload)) = self
+            .validate_workflow_invocation(&parent_context, &parsed)
+            .await
         {
             lifecycle.spawn_failed(failure_class, &payload).await?;
             return Ok(self.skip_tool_result(FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, payload));
@@ -121,7 +122,48 @@ impl DefraSessionHook {
         Ok(self.skip_tool_result(FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, result))
     }
 
-    fn validate_workflow_invocation(
+    /// Fail-fast guard for LOCAL workflow targets (mirrors the spawn path's #377
+    /// check in message_spawn): a local target whose behavior no longer exists
+    /// would otherwise have an orphan child written that can never be claimed,
+    /// hanging the workflow until the parent deadline. Reject cleanly instead. On
+    /// a DB error we warn and proceed (same as the spawn path) rather than fail.
+    async fn local_target_behavior_guard(
+        &self,
+        parent_context: &ParentSubagentContext,
+        resolved: &SubagentTarget,
+        pointer: &str,
+    ) -> Option<(FailureClass, String)> {
+        if self.subagent_target_host(resolved) != SubagentTargetHost::Local {
+            return None;
+        }
+        match load_agent_behavior(&self.node, &resolved.behavior_id).await {
+            Ok(None) => Some((
+                FailureClass::ServiceUnavailable,
+                tool_not_allowed_payload(
+                    FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
+                    pointer,
+                    &resolved.name,
+                    format!(
+                        "target '{}' refers to behavior '{}' which no longer exists; it may have \
+                         been removed after this session started",
+                        resolved.name, resolved.behavior_id
+                    ),
+                    context_allowed_target_names(parent_context),
+                ),
+            )),
+            Ok(Some(_)) => None,
+            Err(error) => {
+                tracing::warn!(
+                    behavior_id = %resolved.behavior_id,
+                    %error,
+                    "workflow guard: failed to verify local target behavior existence; proceeding"
+                );
+                None
+            }
+        }
+    }
+
+    async fn validate_workflow_invocation(
         &self,
         parent_context: &ParentSubagentContext,
         args: &crate::workflow::FanOutAndSynthesizeArgs,
@@ -240,6 +282,13 @@ impl DefraSessionHook {
                 "foreground cross-deployment synthesis is not supported in cut 1; use a local synthesis target",
             )));
         }
+        // Local synthesis target: its behavior must still exist (fail-fast #377).
+        if let Some(failure) = self
+            .local_target_behavior_guard(parent_context, synthesis_target, "/synthesis_target")
+            .await
+        {
+            return Some(failure);
+        }
 
         let default_target = args
             .target
@@ -272,6 +321,12 @@ impl DefraSessionHook {
                         context_allowed_target_names(parent_context),
                     ),
                 ));
+            }
+            if let Some(failure) = self
+                .local_target_behavior_guard(parent_context, resolved, "/target")
+                .await
+            {
+                return Some(failure);
             }
         }
         for (index, task) in args.tasks.iter().enumerate() {
@@ -326,6 +381,16 @@ impl DefraSessionHook {
                         context_allowed_target_names(parent_context),
                     ),
                 ));
+            }
+            if let Some(failure) = self
+                .local_target_behavior_guard(
+                    parent_context,
+                    resolved,
+                    &format!("/tasks/{index}/target"),
+                )
+                .await
+            {
+                return Some(failure);
             }
         }
 
