@@ -290,6 +290,7 @@ const FLEET_SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct WorkflowBridgeRow {
+    tool_call_id: String,
     lifecycle_state: Option<String>,
     workflow_role: Option<String>,
     started_at: Option<String>,
@@ -331,6 +332,9 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
         dump_fleet_logs(&fleet);
         return Err(error);
     }
+    // No-crosswise isolation: researchers pair with the coordinator, never with
+    // each other (same property the delegation test asserts).
+    assert_no_subagent_data_plane_edges(subagents).await?;
 
     configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents).await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
@@ -384,8 +388,16 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
         }
     };
 
+    // Coordinator-side ordering sanity (parsed timestamps).
     assert_workflow_barrier(&group)?;
-    assert_fan_out_spanned_remote_deployments(&coord.graphql, &group, subagents).await?;
+    // Remote round-trip: all four researchers COMPLETED on distinct remote
+    // deployments and their answers replicated back to the coordinator.
+    let reports =
+        assert_fan_out_completed_on_remote_deployments(&coord.graphql, &group, subagents).await?;
+    // Data flow: the four replicated reports actually reached the synthesizer.
+    assert_synthesis_consumed_reports(&coord.graphql, &group, &reports).await?;
+    // Cut-1 invariant: synthesis ran locally on the coordinator.
+    assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
 
     let parent_terminal =
         wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
@@ -400,6 +412,17 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     anyhow::ensure!(
         !parent_answer.trim().is_empty(),
         "orchestrator must return a non-empty synthesized answer"
+    );
+    // Content-grounded: the synthesized answer must reference the fan-out subject
+    // matter (the four planets), so a non-empty failure paragraph cannot pass.
+    let lowered = parent_answer.to_lowercase();
+    let planets = ["mercury", "venus", "earth", "mars"]
+        .iter()
+        .filter(|p| lowered.contains(*p))
+        .count();
+    anyhow::ensure!(
+        planets >= 3,
+        "synthesized answer must reference the researched planets (>=3/4); got {planets}: {parent_answer:?}"
     );
 
     drop(fleet);
@@ -568,11 +591,19 @@ async fn try_load_converged_group(
         r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ tool_call_id lifecycle_state }} }}"#
     );
     let orch = graphql_query(coord_graphql, &orch_query).await?;
-    let Some(orch_row) = orch
+    let orch_rows = orch
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
+        .cloned()
+        .unwrap_or_default();
+    // Exactly one orchestration call: a second would mean the model did not
+    // follow the one-call contract and the group keying would be ambiguous.
+    anyhow::ensure!(
+        orch_rows.len() <= 1,
+        "expected exactly one fan_out_and_synthesize call, saw {}",
+        orch_rows.len()
+    );
+    let Some(orch_row) = orch_rows.first() else {
         *last = "no fan_out_and_synthesize tool call yet".to_string();
         return Ok(None);
     };
@@ -581,6 +612,10 @@ async fn try_load_converged_group(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let orch_state = orch_row
+        .get("lifecycle_state")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let escaped_group = escape_graphql_string(&group_id);
     let bridges_query = format!(
         r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, workflow_group_id: {{ _eq: "{escaped_group}" }} }}, order: {{ started_at: ASC }}) {{ tool_call_id lifecycle_state workflow_role started_at completed_at child_request_id }} }}"#
@@ -605,66 +640,89 @@ async fn try_load_converged_group(
         .filter(|b| b.workflow_role.as_deref() == Some("synthesis"))
         .cloned()
         .collect();
+    let is_completed = |b: &WorkflowBridgeRow| b.lifecycle_state.as_deref() == Some("completed");
+    let fan_out_completed = fan_out.iter().filter(|b| is_completed(b)).count();
+    let synthesis_completed = synthesis.iter().filter(|b| is_completed(b)).count();
     *last = format!(
-        "fan_out={} (terminal {}), synthesis={} (terminal {})",
+        "orch={orch_state:?}; fan_out={} (completed {}), synthesis={} (completed {})",
         fan_out.len(),
-        fan_out
-            .iter()
-            .filter(|b| is_workflow_terminal(b.lifecycle_state.as_deref()))
-            .count(),
+        fan_out_completed,
         synthesis.len(),
-        synthesis
-            .iter()
-            .filter(|b| is_workflow_terminal(b.lifecycle_state.as_deref()))
-            .count(),
+        synthesis_completed,
     );
-    let all_fan_out_terminal = fan_out.len() == 4
-        && fan_out
-            .iter()
-            .all(|b| is_workflow_terminal(b.lifecycle_state.as_deref()));
-    let synthesis_terminal =
-        synthesis.len() == 1 && is_workflow_terminal(synthesis[0].lifecycle_state.as_deref());
-    if all_fan_out_terminal && synthesis_terminal {
+    // Happy-path capstone: all four fan-out researchers AND the synthesizer must
+    // genuinely COMPLETE (not merely reach a terminal state — a failed/dead child
+    // is a real failure here, per D10 the engine would still synthesize, but the
+    // capstone must prove the success round-trip).
+    let all_completed = fan_out.len() == 4
+        && fan_out_completed == 4
+        && synthesis.len() == 1
+        && synthesis_completed == 1;
+    if all_completed {
         return Ok(Some(WorkflowGroup {
             group_id,
             fan_out,
             synthesis: synthesis.into_iter().next().expect("one synthesis"),
         }));
     }
+    // Fail FAST rather than waiting out the deadline: once the orchestration tool
+    // call is terminal the whole workflow has finished, so if it did not all
+    // complete, a researcher or the synthesizer failed — surface it loudly.
+    if is_workflow_terminal(orch_state.as_deref()) {
+        bail!(
+            "workflow finished but not all parts completed (happy-path capstone requires 4/4 \
+             fan-out + synthesis all 'completed'): {last}"
+        );
+    }
     Ok(None)
 }
 
-/// Barrier-completeness, projection-side, over the coordinator's durable rows:
-/// the synthesis bridge starts only after every fan-out bridge has completed.
+/// Coordinator-side ordering check: the synthesis bridge's `started_at` is not
+/// before the latest fan-out `completed_at`. NOTE: all three timestamps are the
+/// coordinator's own wall clock, written by one sequential engine path, so this
+/// is a monotonicity sanity guard — the real barrier proof is the Lean theorem +
+/// the durable-row gate in cut 1; the multinode round-trip is proven by the
+/// completion + data-flow fences below. Timestamps are PARSED (not string-
+/// compared) so a Z-form vs +00:00-form write cannot cause a lexical false-fail,
+/// and every fan-out bridge must carry a completed_at.
 fn assert_workflow_barrier(group: &WorkflowGroup) -> Result<()> {
-    let max_fan_out_completed = group
-        .fan_out
-        .iter()
-        .filter_map(|b| b.completed_at.clone())
-        .max()
-        .ok_or_else(|| anyhow!("fan-out bridges missing completed_at"))?;
-    let synthesis_started = group
+    let mut max_completed: Option<chrono::DateTime<chrono::FixedOffset>> = None;
+    for bridge in &group.fan_out {
+        let raw = bridge
+            .completed_at
+            .as_deref()
+            .ok_or_else(|| anyhow!("fan-out bridge missing completed_at"))?;
+        let parsed = chrono::DateTime::parse_from_rfc3339(raw)
+            .with_context(|| format!("parsing fan-out completed_at {raw:?}"))?;
+        max_completed = Some(max_completed.map_or(parsed, |m| m.max(parsed)));
+    }
+    let max_completed = max_completed.ok_or_else(|| anyhow!("group has no fan-out bridges"))?;
+    let synth_raw = group
         .synthesis
         .started_at
-        .clone()
+        .as_deref()
         .ok_or_else(|| anyhow!("synthesis bridge missing started_at"))?;
+    let synth_started = chrono::DateTime::parse_from_rfc3339(synth_raw)
+        .with_context(|| format!("parsing synthesis started_at {synth_raw:?}"))?;
     anyhow::ensure!(
-        synthesis_started >= max_fan_out_completed,
-        "barrier violated: synthesis started {synthesis_started} before the last fan-out completed {max_fan_out_completed}"
+        synth_started >= max_completed,
+        "barrier violated: synthesis started {synth_started} before the last fan-out completed {max_completed}"
     );
     Ok(())
 }
 
-/// Prove the fan-out genuinely spanned the remote deployments: each fan-out
-/// child request (replicated back to the coordinator) is owned by a distinct
-/// subagent DID, none of them the coordinator.
-async fn assert_fan_out_spanned_remote_deployments(
+/// Prove the remote round-trip: every fan-out child ran to COMPLETION on a
+/// distinct remote deployment AND its answer replicated back to the coordinator.
+/// Returns each child's replicated report so the data-flow fence can confirm it
+/// reached the synthesizer.
+async fn assert_fan_out_completed_on_remote_deployments(
     coord_graphql: &str,
     group: &WorkflowGroup,
     subagents: &[FleetNode],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let remote_dids: HashSet<&str> = subagents.iter().map(|s| s.agent_did.as_str()).collect();
     let mut seen = HashSet::new();
+    let mut reports = Vec::new();
     for bridge in &group.fan_out {
         let child_request_id = bridge
             .child_request_id
@@ -672,25 +730,115 @@ async fn assert_fan_out_spanned_remote_deployments(
             .ok_or_else(|| anyhow!("fan-out bridge missing child_request_id"))?;
         let escaped = escape_graphql_string(child_request_id);
         let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }} }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did lifecycle_state }} }}"#
         );
         let resp = graphql_query(coord_graphql, &query).await?;
-        let did = resp
-            .pointer("/data/AgentRequest/0/agent_did")
+        let req = resp.pointer("/data/AgentRequest/0").ok_or_else(|| {
+            anyhow!("fan-out child {child_request_id} not visible on coordinator")
+        })?;
+        let did = req
+            .get("agent_did")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("fan-out child {child_request_id} not visible on coordinator"))?
+            .ok_or_else(|| anyhow!("fan-out child {child_request_id} missing agent_did"))?
             .to_string();
         anyhow::ensure!(
             remote_dids.contains(did.as_str()),
             "fan-out child {child_request_id} ran on {did}, not a remote researcher deployment"
         );
+        anyhow::ensure!(
+            req.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
+            "fan-out child {child_request_id} (on {did}) did not complete on the coordinator's replicated view"
+        );
+        // The remote child's ANSWER must replicate back (the round-trip the whole
+        // feature depends on). A real replication race would surface here.
+        let report =
+            wait_for_assistant_answer(coord_graphql, child_request_id, Duration::from_secs(60))
+                .await?;
+        anyhow::ensure!(
+            !report.trim().is_empty(),
+            "fan-out child {child_request_id} (on {did}) produced no replicated answer on the coordinator"
+        );
         seen.insert(did);
+        reports.push(report);
     }
     anyhow::ensure!(
         seen.len() == subagents.len(),
         "fan-out should span all {} remote deployments, saw {}",
         subagents.len(),
         seen.len()
+    );
+    Ok(reports)
+}
+
+/// Data-flow fence: prove the four REMOTE researcher reports actually reached the
+/// synthesizer. The synthesis bridge's `args` carry the prompt the runtime built
+/// (synthesis_prompt + the JSON of every fan-out outcome). A distinctive
+/// alphanumeric chunk of each report must appear in it (robust to JSON escaping).
+async fn assert_synthesis_consumed_reports(
+    coord_graphql: &str,
+    group: &WorkflowGroup,
+    reports: &[String],
+) -> Result<()> {
+    let escaped = escape_graphql_string(&group.synthesis.tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ args }} }}"#
+    );
+    let resp = graphql_query(coord_graphql, &query).await?;
+    let args = resp
+        .pointer("/data/AgentToolCall/0/args")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("synthesis bridge args not found"))?
+        .to_string();
+    let alnum = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let args_alnum = alnum(&args);
+    for (i, report) in reports.iter().enumerate() {
+        let r = alnum(report);
+        let chars: Vec<char> = r.chars().collect();
+        anyhow::ensure!(
+            chars.len() >= 80,
+            "researcher #{i} report too short to fence ({} alnum chars)",
+            chars.len()
+        );
+        let start = chars.len() / 4;
+        let chunk: String = chars[start..start + 80].iter().collect();
+        anyhow::ensure!(
+            args_alnum.contains(&chunk),
+            "synthesis input did not contain researcher #{i}'s replicated report (chunk {chunk:?})"
+        );
+    }
+    Ok(())
+}
+
+/// The synthesis child must run LOCALLY on the coordinator (cut-1 invariant:
+/// cross-deployment synthesis is rejected). Asserts its replicated AgentRequest
+/// is owned by the coordinator's DID.
+async fn assert_synthesis_ran_locally(
+    coord_graphql: &str,
+    group: &WorkflowGroup,
+    coord_did: &str,
+) -> Result<()> {
+    let child_request_id = group
+        .synthesis
+        .child_request_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("synthesis bridge missing child_request_id"))?;
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }} }}"#
+    );
+    let resp = graphql_query(coord_graphql, &query).await?;
+    let did = resp
+        .pointer("/data/AgentRequest/0/agent_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("synthesis child not visible on coordinator"))?;
+    anyhow::ensure!(
+        did == coord_did,
+        "synthesis ran on {did}, must be local on the coordinator {coord_did}"
     );
     Ok(())
 }
