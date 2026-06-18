@@ -301,6 +301,8 @@ const WORKFLOW_SYNTHESIZER_PROMPT: &str = r#"You are a synthesizer. You are give
 
 const FLEET_SYNTHESIZER_BEHAVIOR_ID: &str = "fleet-synthesizer";
 const FLEET_SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
+/// A behavior id that exists on NO node — used to fault-inject one researcher.
+const FLEET_MISSING_BEHAVIOR_ID: &str = "fleet-missing-behavior";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct WorkflowBridgeRow {
@@ -350,7 +352,7 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     // each other (same property the delegation test asserts).
     assert_no_subagent_data_plane_edges(subagents).await?;
 
-    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents).await?;
+    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, false).await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
         .await?;
     for subagent in subagents {
@@ -455,6 +457,7 @@ async fn configure_fleet_workflow_behaviors(
     root: &Path,
     coord: &FleetNode,
     subagents: &[FleetNode],
+    broken_last: bool,
 ) -> Result<()> {
     let coord_prompt = root.join("wf-coordinator-system-prompt.txt");
     fs::write(&coord_prompt, WORKFLOW_COORDINATOR_PROMPT)?;
@@ -476,7 +479,7 @@ async fn configure_fleet_workflow_behaviors(
         configure_subagent_target_gate(subagent)?;
     }
 
-    configure_workflow_coordinator_targets(coord, subagents)?;
+    configure_workflow_coordinator_targets(coord, subagents, broken_last)?;
     Ok(())
 }
 
@@ -521,6 +524,7 @@ fn configure_synthesizer_behavior(coord: &FleetNode, prompt_path: &Path) -> Resu
 fn configure_workflow_coordinator_targets(
     coord: &FleetNode,
     subagents: &[FleetNode],
+    broken_last: bool,
 ) -> Result<()> {
     let mut args = vec![
         "config".to_string(),
@@ -543,18 +547,34 @@ fn configure_workflow_coordinator_targets(
         "--subagent-allow-cross-deployment".to_string(),
         "true".to_string(),
         "--cross-deployment-spawn-timeout-seconds".to_string(),
-        "180".to_string(),
+        // D10: a short spawn timeout so the broken researcher's unclaimed child is
+        // declared dead quickly (the 3 healthy ones are claimed in seconds, well
+        // within this window). Happy path keeps the generous default.
+        if broken_last {
+            "30".to_string()
+        } else {
+            "180".to_string()
+        },
         "--enable-meta-tools".to_string(),
         "false".to_string(),
         "--enable-defra-query".to_string(),
         "false".to_string(),
     ];
+    let last = subagents.len().saturating_sub(1);
     for (index, subagent) in subagents.iter().enumerate() {
+        // D10 fault injection: point the LAST researcher's target at a behavior
+        // that does not exist on its node, so its child fails (the workflow must
+        // still synthesize over the survivors).
+        let behavior_id = if broken_last && index == last {
+            FLEET_MISSING_BEHAVIOR_ID
+        } else {
+            subagent.behavior_id.as_str()
+        };
         args.push("--subagent-target".to_string());
         args.push(subagent_target_entry(
             &format!("researcher-{}", index + 1),
             &subagent.agent_did,
-            &subagent.behavior_id,
+            behavior_id,
             Some(format!("Remote fleet researcher {}", index + 1)),
         ));
     }
@@ -893,6 +913,256 @@ async fn assert_synthesis_ran_locally(
         "synthesis ran on {did}, must be local on the coordinator {coord_did}"
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cut 5 — D10 partial-failure: the fleet workflow must tolerate one dead
+// researcher (synthesize over the survivors, parent still completes).
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
+    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow D10 e2e");
+        return Ok(());
+    }
+    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    assert_endpoint_reachable(&endpoint).await?;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let (coord, subagents) = fleet
+        .split_first()
+        .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
+
+    establish_reconciler_pairing(coord, subagents).await?;
+    if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "wf-d10-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error);
+    }
+
+    // broken_last = true: researcher-4's target points at a behavior that does
+    // not exist on its node, so its child fails. The other three succeed.
+    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, true).await?;
+    wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
+        .await?;
+    for subagent in subagents {
+        wait_for_runtime_quiescence(
+            &subagent.graphql,
+            &subagent.agent_did,
+            2,
+            Duration::from_secs(6),
+        )
+        .await?;
+    }
+
+    let parent_prompt = "Use the research fleet via workflow orchestration: ask researcher-1 for one fact about Mercury, researcher-2 about Venus, researcher-3 about Earth, and researcher-4 about Mars, then synthesize a one-paragraph summary of whatever findings came back.";
+    let submit = run_cli_json(
+        &coord.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--behavior-id",
+            &coord.behavior_id,
+            "--content",
+            parent_prompt,
+            "--no-wait",
+        ],
+    )?;
+    let parent_request_id = required_output_string(&submit, "request_id")?;
+    let parent_session_id = required_output_string(&submit, "session_id")?;
+
+    // Wait until the workflow FINISHED (the orchestration tool call terminalized)
+    // — for D10 we do NOT require all fan-out to complete.
+    let group = match wait_for_workflow_finished(
+        &coord.graphql,
+        &parent_session_id,
+        Duration::from_secs(360),
+    )
+    .await
+    {
+        Ok(group) => group,
+        Err(error) => {
+            dump_fleet_doc_state(&fleet).await;
+            persist_fleet_logs(&fleet, "wf-d10-fail");
+            dump_fleet_logs(&fleet);
+            return Err(error);
+        }
+    };
+
+    // D10: exactly one fan-out researcher FAILED, the other three COMPLETED, and
+    // synthesis still ran (over the partial set) and COMPLETED.
+    let completed = group
+        .fan_out
+        .iter()
+        .filter(|b| b.lifecycle_state.as_deref() == Some("completed"))
+        .count();
+    let failed = group.fan_out.len() - completed;
+    anyhow::ensure!(
+        group.fan_out.len() == 4 && completed == 3 && failed == 1,
+        "D10 expected 3 completed + 1 failed fan-out bridge; got {completed} completed, {failed} non-completed of {}",
+        group.fan_out.len()
+    );
+    anyhow::ensure!(
+        group.synthesis.lifecycle_state.as_deref() == Some("completed"),
+        "synthesis must complete over the partial-failure set"
+    );
+
+    // The synthesizer's input must carry a STRUCTURED FAILURE record for the dead
+    // researcher (D10) AND the three surviving reports (data flow over survivors).
+    let synth_args = fetch_tool_call_args(&coord.graphql, &group.synthesis.tool_call_id).await?;
+    // The outcomes are a nested JSON string inside `args`, so the inner quotes are
+    // escaped — compare on the alnum projection (which strips escaping/whitespace):
+    // a healthy outcome folds to "oktrue", the dead one to "okfalse".
+    let args_alnum = alnum_lower(&synth_args);
+    anyhow::ensure!(
+        args_alnum.contains("okfalse"),
+        "synthesis input must contain a structured failure record (ok:false) for the dead researcher: {synth_args}"
+    );
+    let mut survivor_reports = 0;
+    for bridge in &group.fan_out {
+        if bridge.lifecycle_state.as_deref() != Some("completed") {
+            continue;
+        }
+        let crid = bridge
+            .child_request_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("completed fan-out bridge missing child_request_id"))?;
+        let report = alnum_lower(&message_answer_text(
+            &wait_for_assistant_answer(&coord.graphql, crid, Duration::from_secs(60)).await?,
+        ));
+        if report.chars().count() >= 24 {
+            anyhow::ensure!(
+                args_alnum.contains(&report),
+                "surviving researcher report did not reach the synthesizer"
+            );
+            survivor_reports += 1;
+        }
+    }
+    anyhow::ensure!(
+        survivor_reports == 3,
+        "expected all 3 surviving reports in the synthesis input, fenced {survivor_reports}"
+    );
+
+    assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+
+    // Despite the failure, the orchestrator request COMPLETES with a non-empty
+    // answer (the user gets a result, not an error).
+    let parent_terminal =
+        wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
+            .await?;
+    assert_eq!(
+        parent_terminal, "completed",
+        "orchestrator must still complete despite one failed researcher (D10)"
+    );
+    let parent_answer =
+        wait_for_assistant_answer(&coord.graphql, &parent_request_id, Duration::from_secs(60))
+            .await?;
+    anyhow::ensure!(
+        !parent_answer.trim().is_empty(),
+        "orchestrator must return a non-empty answer over the partial results"
+    );
+
+    drop(fleet);
+    Ok(())
+}
+
+/// Wait until the workflow has FINISHED on the coordinator: the single
+/// `fan_out_and_synthesize` orchestration call is terminal, with its four
+/// fan-out bridges and one synthesis bridge present (terminal-completed counts
+/// are asserted by the caller; D10 does not require all to complete).
+async fn wait_for_workflow_finished(
+    coord_graphql: &str,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<WorkflowGroup> {
+    let escaped_session = escape_graphql_string(session_id);
+    let deadline = Instant::now() + timeout;
+    let mut last = "starting".to_string();
+    loop {
+        if Instant::now() >= deadline {
+            bail!("workflow did not finish on the coordinator within {timeout:?}; last: {last}");
+        }
+        let orch_query = format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ tool_call_id lifecycle_state }} }}"#
+        );
+        let orch = graphql_query(coord_graphql, &orch_query).await?;
+        if let Some(orch_row) = orch
+            .pointer("/data/AgentToolCall")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+        {
+            let orch_state = orch_row.get("lifecycle_state").and_then(Value::as_str);
+            let group_id = orch_row
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if is_workflow_terminal(orch_state) {
+                let escaped_group = escape_graphql_string(&group_id);
+                let bridges_query = format!(
+                    r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session}" }}, workflow_group_id: {{ _eq: "{escaped_group}" }} }}, order: {{ started_at: ASC }}) {{ tool_call_id lifecycle_state workflow_role started_at completed_at child_request_id }} }}"#
+                );
+                let bridges_resp = graphql_query(coord_graphql, &bridges_query).await?;
+                let bridges: Vec<WorkflowBridgeRow> = bridges_resp
+                    .pointer("/data/AgentToolCall")
+                    .and_then(Value::as_array)
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| serde_json::from_value(r.clone()).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let fan_out: Vec<WorkflowBridgeRow> = bridges
+                    .iter()
+                    .filter(|b| b.workflow_role.as_deref() == Some("fan_out_child"))
+                    .cloned()
+                    .collect();
+                let synthesis: Vec<WorkflowBridgeRow> = bridges
+                    .iter()
+                    .filter(|b| b.workflow_role.as_deref() == Some("synthesis"))
+                    .cloned()
+                    .collect();
+                let synthesis = synthesis.into_iter().next().ok_or_else(|| {
+                    anyhow!("workflow finished (orch={orch_state:?}) with no synthesis bridge")
+                })?;
+                return Ok(WorkflowGroup {
+                    group_id,
+                    fan_out,
+                    synthesis,
+                });
+            }
+            last = format!("orch={orch_state:?} (not terminal)");
+        } else {
+            last = "no fan_out_and_synthesize tool call yet".to_string();
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+}
+
+/// Fetch a tool call's persisted `args` (the runtime-built prompt/input).
+async fn fetch_tool_call_args(coord_graphql: &str, tool_call_id: &str) -> Result<String> {
+    let escaped = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ args }} }}"#
+    );
+    let resp = graphql_query(coord_graphql, &query).await?;
+    Ok(resp
+        .pointer("/data/AgentToolCall/0/args")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 async fn bring_up_fleet(

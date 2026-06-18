@@ -366,6 +366,7 @@ impl DefraSessionHook {
                 WorkflowBridge {
                     tool_call_id: row.tool_call_id.clone(),
                     child_request_id: row.child_request_id.clone().unwrap_or_default(),
+                    unclaimed_deadline_at: None,
                 }
             } else {
                 match self
@@ -460,6 +461,9 @@ impl DefraSessionHook {
             WorkflowBridge {
                 tool_call_id: row.tool_call_id.clone(),
                 child_request_id: row.child_request_id.clone().unwrap_or_default(),
+                // Adopted on reclaim: the durable row already carries lifecycle;
+                // fall back to the request-deadline bound for the in-memory await.
+                unclaimed_deadline_at: None,
             }
         } else {
             self.spawn_workflow_subagent_bridge(
@@ -570,14 +574,20 @@ impl DefraSessionHook {
             child_request_id.clone(),
         );
         lifecycle.set_workflow_group(workflow_group_id, workflow_role);
-        if await_mode == AwaitMode::Background {
-            lifecycle.set_unclaimed_deadline_at(Some(
-                chrono::Utc::now()
-                    + chrono::Duration::seconds(
-                        effective_context_cross_deployment_spawn_timeout_seconds(parent_context),
-                    ),
-            ));
-        }
+        // A background (cross-deployment) child that is never CLAIMED by its
+        // remote node must not hold the barrier open until the whole parent
+        // request deadline — it goes dead at the spawn timeout, mirroring the
+        // regular background-subagent path.
+        let unclaimed_deadline_at = if await_mode == AwaitMode::Background {
+            let deadline = chrono::Utc::now()
+                + chrono::Duration::seconds(
+                    effective_context_cross_deployment_spawn_timeout_seconds(parent_context),
+                );
+            lifecycle.set_unclaimed_deadline_at(Some(deadline));
+            Some(deadline)
+        } else {
+            None
+        };
         lifecycle.start_running().await?;
         self.in_flight_lifecycles
             .lock()
@@ -586,6 +596,7 @@ impl DefraSessionHook {
         Ok(WorkflowBridge {
             tool_call_id,
             child_request_id,
+            unclaimed_deadline_at,
         })
     }
 
@@ -678,6 +689,34 @@ impl DefraSessionHook {
             )
             .await?
             else {
+                // Unclaimed past the spawn timeout: the remote node never
+                // materialized this child (dead node / unresolvable target), so
+                // declare it dead now instead of holding the barrier open until
+                // the full parent request deadline. The barrier then proceeds over
+                // the structured failure (D10).
+                if bridge.unclaimed_deadline_at.is_some_and(|dl| now >= dl) {
+                    if let Some(mut lifecycle) = self
+                        .take_or_load_in_flight_lifecycle(
+                            &parent_context.session_id,
+                            &bridge.tool_call_id,
+                        )
+                        .await?
+                    {
+                        let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await?;
+                    }
+                    self.discard_in_flight_lifecycle(&bridge.tool_call_id).await;
+                    return Ok(WorkflowOutcome {
+                        task_id: workflow_task_id(index, spec),
+                        child_request_id: bridge.child_request_id.clone(),
+                        behavior_id: spec.behavior_id.clone(),
+                        status: "dead".to_string(),
+                        ok: false,
+                        final_response: None,
+                        error: Some(
+                            "cross-deployment child not claimed before spawn timeout".to_string(),
+                        ),
+                    });
+                }
                 let remaining = (parent_context.request_deadline_at - now)
                     .to_std()
                     .unwrap_or(Duration::from_millis(0));
@@ -755,6 +794,9 @@ impl DefraSessionHook {
 struct WorkflowBridge {
     tool_call_id: String,
     child_request_id: String,
+    /// For a background (cross-deployment) child: the instant after which an
+    /// UNCLAIMED child (no remote node materialized it) is declared dead.
+    unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn workflow_task_id(index: usize, spec: &WorkflowSpawnSpec) -> String {
