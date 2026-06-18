@@ -1,10 +1,9 @@
 use super::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::defra_node::EmbeddedNode;
-use crate::graphql::escape_graphql_string;
 use crate::workflow::{
-    workflow_barrier_projection_legal, WORKFLOW_ROLE_FAN_OUT_CHILD, WORKFLOW_ROLE_SYNTHESIS,
+    fan_out_barrier_satisfied, load_workflow_group_bridges, WORKFLOW_ROLE_FAN_OUT_CHILD,
+    WORKFLOW_ROLE_SYNTHESIS,
 };
 
 #[derive(Debug, Clone)]
@@ -14,68 +13,6 @@ struct WorkflowSpawnSpec {
     agent_did: String,
     behavior_id: String,
     prompt: String,
-}
-
-/// A persisted workflow bridge row, read back from `AgentToolCall` by
-/// `workflow_group_id`. This is the durable projection the barrier is proven
-/// over (`workflow_barrier_projection_legal`) and the source for idempotent
-/// adoption on a parent reclaim mid-barrier.
-#[derive(Debug, Clone, Deserialize)]
-struct WorkflowGroupBridgeRow {
-    tool_call_id: String,
-    #[serde(default)]
-    child_request_id: Option<String>,
-    #[serde(default)]
-    workflow_role: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-}
-
-impl WorkflowGroupBridgeRow {
-    fn is_role(&self, role: &str) -> bool {
-        self.workflow_role.as_deref() == Some(role)
-    }
-}
-
-/// Load every persisted bridge row in one workflow group (the durable barrier
-/// projection surface). Ordered by `started_at` so adopted fan-out indices are
-/// stable across a reclaim.
-async fn load_workflow_group_bridges(
-    node: &EmbeddedNode,
-    session_id: &str,
-    workflow_group_id: &str,
-) -> anyhow::Result<Vec<WorkflowGroupBridgeRow>> {
-    let escaped_session = escape_graphql_string(session_id);
-    let escaped_group = escape_graphql_string(workflow_group_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session}" }},
-                    workflow_group_id: {{ _eq: "{escaped_group}" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
-                tool_call_id
-                child_request_id
-                workflow_role
-                lifecycle_state
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading workflow group bridges for group {workflow_group_id} failed: {:?}",
-            response.errors
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -400,10 +337,17 @@ impl DefraSessionHook {
         // Idempotent adoption (reclaim safety): a parent reclaim mid-barrier
         // must not double-spawn the group. Adopt any bridges already persisted
         // under this `workflow_group_id`; spawn only the missing slots.
+        //
+        // Cut-1 limitations (accepted, fail-safe): adopted fan-out rows are
+        // aligned to specs positionally over an `started_at ASC` order — ties are
+        // impossible today because spawns are sequential round-trips, and the
+        // downstream barrier gate count-check (`fan_out_barrier_satisfied`) fails
+        // closed on any misalignment, so a wrong alignment cannot admit synthesis.
+        // A persisted slot index (deterministic key) is a cut-2 hardening.
         let existing =
             load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
                 .await?;
-        let existing_fan_out: Vec<&WorkflowGroupBridgeRow> = existing
+        let existing_fan_out: Vec<&crate::workflow::WorkflowBridgeRow> = existing
             .iter()
             .filter(|row| row.is_role(WORKFLOW_ROLE_FAN_OUT_CHILD))
             .collect();
@@ -460,22 +404,24 @@ impl DefraSessionHook {
         // surface `Proofs/Workflow/FanOut.lean` and the conformance fence are
         // stated over). The per-bridge await above terminalizes each bridge; this
         // re-reads persisted state so a best-effort/deadline path that left a
-        // bridge non-terminal can never reach synthesis.
-        let durable_fan_out_states: Vec<String> =
+        // bridge non-terminal can never reach synthesis. Fail-CLOSED: the gate
+        // requires exactly `fan_out_bridges.len()` fan-out rows all terminal, so a
+        // NULL lifecycle_state or an unexpected/missing row refuses synthesis
+        // rather than passing open.
+        let durable_rows =
             load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
-                .await?
-                .into_iter()
+                .await?;
+        if !fan_out_barrier_satisfied(&durable_rows, fan_out_bridges.len()) {
+            let states: Vec<_> = durable_rows
+                .iter()
                 .filter(|row| row.is_role(WORKFLOW_ROLE_FAN_OUT_CHILD))
-                .filter_map(|row| row.lifecycle_state)
+                .map(|row| row.lifecycle_state.clone())
                 .collect();
-        if !workflow_barrier_projection_legal(
-            durable_fan_out_states.iter().map(String::as_str),
-            true,
-        ) {
             anyhow::bail!(
-                "workflow barrier not satisfied for group {workflow_group_id}: fan-out bridges \
-                 are not all terminal in durable rows ({durable_fan_out_states:?}); refusing to \
-                 spawn synthesis"
+                "workflow barrier not satisfied for group {workflow_group_id}: expected \
+                 {} fan-out bridges all terminal in durable rows, got {states:?}; refusing to \
+                 spawn synthesis",
+                fan_out_bridges.len()
             );
         }
 
