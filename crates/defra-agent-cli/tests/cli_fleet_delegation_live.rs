@@ -303,6 +303,22 @@ const FLEET_SYNTHESIZER_BEHAVIOR_ID: &str = "fleet-synthesizer";
 const FLEET_SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
 /// A behavior id that exists on NO node — used to fault-inject one researcher.
 const FLEET_MISSING_BEHAVIOR_ID: &str = "fleet-missing-behavior";
+/// A model name that no backend serves — makes a CLAIMED child fail at inference
+/// (the materialized-then-failed D10 path, distinct from the unclaimed path).
+const FLEET_BAD_MODEL: &str = "nonexistent-model-d10-fault";
+
+/// Which fault (if any) to inject into the fleet workflow for a D10 test.
+#[derive(Clone, Copy, PartialEq)]
+enum WorkflowFault {
+    /// All researchers healthy (happy-path capstone).
+    Healthy,
+    /// The last researcher's target names a behavior that exists on no node, so
+    /// its child is never CLAIMED and dies at the spawn timeout (unclaimed path).
+    UnclaimedTarget,
+    /// The last researcher's behavior exists (its child is CLAIMED/materialized)
+    /// but uses a bad model, so it FAILS at inference (materialized-failure path).
+    MaterializedFailure,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct WorkflowBridgeRow {
@@ -352,7 +368,8 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     // each other (same property the delegation test asserts).
     assert_no_subagent_data_plane_edges(subagents).await?;
 
-    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, false).await?;
+    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, WorkflowFault::Healthy)
+        .await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
         .await?;
     for subagent in subagents {
@@ -459,7 +476,7 @@ async fn configure_fleet_workflow_behaviors(
     root: &Path,
     coord: &FleetNode,
     subagents: &[FleetNode],
-    broken_last: bool,
+    fault: WorkflowFault,
 ) -> Result<()> {
     let coord_prompt = root.join("wf-coordinator-system-prompt.txt");
     fs::write(&coord_prompt, WORKFLOW_COORDINATOR_PROMPT)?;
@@ -472,16 +489,20 @@ async fn configure_fleet_workflow_behaviors(
 
     let sub_prompt = root.join("wf-researcher-system-prompt.txt");
     fs::write(&sub_prompt, WORKFLOW_RESEARCHER_PROMPT)?;
+    let last = subagents.len().saturating_sub(1);
     for (index, subagent) in subagents.iter().enumerate() {
-        configure_behavior_prompt(
-            subagent,
-            &sub_prompt,
-            &format!("Fleet Workflow Researcher {}", index + 1),
-        )?;
+        let display = format!("Fleet Workflow Researcher {}", index + 1);
+        // MaterializedFailure: give the LAST researcher a bad model so its child is
+        // claimed/materialized but fails at inference.
+        if fault == WorkflowFault::MaterializedFailure && index == last {
+            configure_behavior_prompt_with_model(subagent, &sub_prompt, &display, FLEET_BAD_MODEL)?;
+        } else {
+            configure_behavior_prompt(subagent, &sub_prompt, &display)?;
+        }
         configure_subagent_target_gate(subagent)?;
     }
 
-    configure_workflow_coordinator_targets(coord, subagents, broken_last)?;
+    configure_workflow_coordinator_targets(coord, subagents, fault)?;
     Ok(())
 }
 
@@ -526,7 +547,7 @@ fn configure_synthesizer_behavior(coord: &FleetNode, prompt_path: &Path) -> Resu
 fn configure_workflow_coordinator_targets(
     coord: &FleetNode,
     subagents: &[FleetNode],
-    broken_last: bool,
+    fault: WorkflowFault,
 ) -> Result<()> {
     let mut args = vec![
         "config".to_string(),
@@ -550,12 +571,12 @@ fn configure_workflow_coordinator_targets(
         "true".to_string(),
         "--cross-deployment-spawn-timeout-seconds".to_string(),
         // The spawn timeout is the CLAIM window for healthy children (they claim in
-        // seconds), so both paths run it tight. D10 goes tighter still so the
-        // broken researcher's unclaimed child is declared dead promptly.
-        if broken_last {
-            "30".to_string()
-        } else {
+        // seconds), so all paths run it tight. Fault injections go tighter still so
+        // an unclaimed child is declared dead promptly.
+        if fault == WorkflowFault::Healthy {
             "60".to_string()
+        } else {
+            "30".to_string()
         },
         "--enable-meta-tools".to_string(),
         "false".to_string(),
@@ -564,10 +585,10 @@ fn configure_workflow_coordinator_targets(
     ];
     let last = subagents.len().saturating_sub(1);
     for (index, subagent) in subagents.iter().enumerate() {
-        // D10 fault injection: point the LAST researcher's target at a behavior
-        // that does not exist on its node, so its child fails (the workflow must
-        // still synthesize over the survivors).
-        let behavior_id = if broken_last && index == last {
+        // UnclaimedTarget fault: point the LAST researcher's target at a behavior
+        // that exists on no node, so its child is never claimed. (MaterializedFailure
+        // keeps the real behavior id — the failure happens at inference, not here.)
+        let behavior_id = if fault == WorkflowFault::UnclaimedTarget && index == last {
             FLEET_MISSING_BEHAVIOR_ID
         } else {
             subagent.behavior_id.as_str()
@@ -950,9 +971,15 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
         return Err(error);
     }
 
-    // broken_last = true: researcher-4's target points at a behavior that does
-    // not exist on its node, so its child fails. The other three succeed.
-    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, true).await?;
+    // UnclaimedTarget: researcher-4's target points at a behavior that exists on
+    // no node, so its child is never claimed. The other three succeed.
+    configure_fleet_workflow_behaviors(
+        tempdir.path(),
+        coord,
+        subagents,
+        WorkflowFault::UnclaimedTarget,
+    )
+    .await?;
     wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
         .await?;
     for subagent in subagents {
@@ -1118,6 +1145,228 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     // Grounded on SURVIVORS: the answer must reference the surviving planets
     // (researcher-4/Mars is the injected fault), so a non-empty failure paragraph
     // cannot pass and the parent provably synthesized over the partial results.
+    let lowered = parent_answer.to_lowercase();
+    let survivors_named = ["mercury", "venus", "earth"]
+        .iter()
+        .filter(|p| lowered.contains(*p))
+        .count();
+    anyhow::ensure!(
+        survivors_named >= 2,
+        "answer must reference the surviving planets (>=2 of mercury/venus/earth); got {survivors_named}: {parent_answer:?}"
+    );
+
+    drop(fleet);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cut 5 — D10 MATERIALIZED failure: a researcher whose child IS claimed
+// (behavior exists, deployment materializes it) but FAILS at inference. This
+// exercises the OTHER engine failure path (project_child_terminal ->
+// bridge_failure), distinct from the unclaimed-dead path above.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
+    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!(
+            "DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e"
+        );
+        return Ok(());
+    }
+    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    assert_endpoint_reachable(&endpoint).await?;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let (coord, subagents) = fleet
+        .split_first()
+        .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
+
+    establish_reconciler_pairing(coord, subagents).await?;
+    if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "wf-d10-mat-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error);
+    }
+
+    // MaterializedFailure: researcher-4's behavior EXISTS (its child is claimed)
+    // but uses a bad model, so it fails at inference. The other three succeed.
+    configure_fleet_workflow_behaviors(
+        tempdir.path(),
+        coord,
+        subagents,
+        WorkflowFault::MaterializedFailure,
+    )
+    .await?;
+    wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
+        .await?;
+    for subagent in subagents {
+        wait_for_runtime_quiescence(
+            &subagent.graphql,
+            &subagent.agent_did,
+            2,
+            Duration::from_secs(6),
+        )
+        .await?;
+    }
+
+    let parent_prompt = "Use the research fleet via workflow orchestration: ask researcher-1 for one fact about Mercury, researcher-2 about Venus, researcher-3 about Earth, and researcher-4 about Mars, then synthesize a one-paragraph summary of whatever findings came back.";
+    let submit = run_cli_json(
+        &coord.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--behavior-id",
+            &coord.behavior_id,
+            "--content",
+            parent_prompt,
+            "--no-wait",
+        ],
+    )?;
+    let parent_request_id = required_output_string(&submit, "request_id")?;
+    let parent_session_id = required_output_string(&submit, "session_id")?;
+
+    let group = match wait_for_workflow_finished(
+        &coord.graphql,
+        &parent_session_id,
+        Duration::from_secs(180),
+    )
+    .await
+    {
+        Ok(group) => group,
+        Err(error) => {
+            dump_fleet_doc_state(&fleet).await;
+            persist_fleet_logs(&fleet, "wf-d10-mat-fail");
+            dump_fleet_logs(&fleet);
+            return Err(error);
+        }
+    };
+
+    // 3 completed + 1 failed fan-out, synthesis completed over the partial set.
+    let completed = group
+        .fan_out
+        .iter()
+        .filter(|b| b.lifecycle_state.as_deref() == Some("completed"))
+        .count();
+    anyhow::ensure!(
+        group.fan_out.len() == 4 && completed == 3,
+        "expected 3 completed + 1 failed fan-out bridge; got {completed} completed of {}",
+        group.fan_out.len()
+    );
+    anyhow::ensure!(
+        group.synthesis.lifecycle_state.as_deref() == Some("completed"),
+        "synthesis must complete over the partial-failure set"
+    );
+
+    let failed_bridge = group
+        .fan_out
+        .iter()
+        .find(|b| b.lifecycle_state.as_deref() != Some("completed"))
+        .ok_or_else(|| anyhow!("expected one non-completed fan-out bridge"))?;
+
+    // DISTINGUISHING ASSERTION (vs the unclaimed-dead path): the failed
+    // researcher's child MATERIALIZED — its AgentRequest exists on the coordinator
+    // with lifecycle_state "failed". In the unclaimed path no such request exists.
+    let failed_crid = failed_bridge
+        .child_request_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("failed bridge missing child_request_id"))?;
+    let escaped = escape_graphql_string(failed_crid);
+    let child = graphql_query(
+        &coord.graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+        ),
+    )
+    .await?;
+    let child_state = child
+        .pointer("/data/AgentRequest/0/lifecycle_state")
+        .and_then(Value::as_str);
+    anyhow::ensure!(
+        child_state == Some("failed"),
+        "materialized-failure: the failed researcher's child must exist on the coordinator with lifecycle_state 'failed' (got {child_state:?}) — proving it was claimed then failed, not unclaimed"
+    );
+
+    // Speed: the materialized child fails at inference promptly (not the request
+    // deadline) — bounded well under it.
+    if let (Some(started), Some(done)) = (
+        failed_bridge.started_at.as_deref(),
+        failed_bridge.completed_at.as_deref(),
+    ) {
+        let lifetime = chrono::DateTime::parse_from_rfc3339(done)?
+            - chrono::DateTime::parse_from_rfc3339(started)?;
+        anyhow::ensure!(
+            lifetime.num_seconds() < 150,
+            "failed bridge should terminalize promptly, lived {}s",
+            lifetime.num_seconds()
+        );
+    }
+
+    // Synthesis input: exactly 3 healthy + 1 failed outcome, the failure surfaced
+    // as a "failed" status (not "dead"), and all 3 survivor reports present.
+    let synth_args = fetch_tool_call_args(&coord.graphql, &group.synthesis.tool_call_id).await?;
+    let args_alnum = alnum_lower(&synth_args);
+    let oktrue = args_alnum.matches("oktrue").count();
+    let okfalse = args_alnum.matches("okfalse").count();
+    anyhow::ensure!(
+        oktrue == 3 && okfalse == 1,
+        "synthesis input must carry exactly 3 oktrue + 1 okfalse; got {oktrue} / {okfalse}"
+    );
+    anyhow::ensure!(
+        args_alnum.contains("statusfailed"),
+        "the failed researcher's outcome must carry status 'failed' (materialized path): {synth_args}"
+    );
+    let mut survivor_reports = 0;
+    for bridge in &group.fan_out {
+        if bridge.lifecycle_state.as_deref() != Some("completed") {
+            continue;
+        }
+        let crid = bridge
+            .child_request_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("completed fan-out bridge missing child_request_id"))?;
+        let report = alnum_lower(&message_answer_text(
+            &wait_for_assistant_answer(&coord.graphql, crid, Duration::from_secs(60)).await?,
+        ));
+        anyhow::ensure!(
+            report.chars().count() >= 24,
+            "surviving researcher report too short to fence ({} alnum chars)",
+            report.chars().count()
+        );
+        anyhow::ensure!(
+            args_alnum.contains(&report),
+            "surviving researcher report did not reach the synthesizer"
+        );
+        survivor_reports += 1;
+    }
+    anyhow::ensure!(
+        survivor_reports == 3,
+        "expected all 3 surviving reports in the synthesis input, fenced {survivor_reports}"
+    );
+
+    assert_synthesis_ran_locally(&coord.graphql, &group, &coord.agent_did).await?;
+
+    let parent_terminal =
+        wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(120))
+            .await?;
+    assert_eq!(
+        parent_terminal, "completed",
+        "orchestrator must still complete despite one inference-failed researcher (D10)"
+    );
+    let parent_answer =
+        wait_for_assistant_answer(&coord.graphql, &parent_request_id, Duration::from_secs(60))
+            .await?;
     let lowered = parent_answer.to_lowercase();
     let survivors_named = ["mercury", "venus", "earth"]
         .iter()
@@ -1716,6 +1965,17 @@ fn configure_behavior_prompt(
     prompt_path: &Path,
     display_name: &str,
 ) -> Result<()> {
+    configure_behavior_prompt_with_model(node, prompt_path, display_name, &node.model_name)
+}
+
+/// Like `configure_behavior_prompt`, but with an explicit model name — used to
+/// inject a bad model (FLEET_BAD_MODEL) so a CLAIMED child fails at inference.
+fn configure_behavior_prompt_with_model(
+    node: &FleetNode,
+    prompt_path: &Path,
+    display_name: &str,
+    model_name: &str,
+) -> Result<()> {
     run_cli_json(
         &node.home,
         &[
@@ -1737,7 +1997,7 @@ fn configure_behavior_prompt(
             "--backend-id",
             &node.backend_id,
             "--model-name",
-            &node.model_name,
+            model_name,
             "--tool-selection-id",
             &node.tool_selection_id,
             "--inference-profile-id",
