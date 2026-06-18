@@ -255,7 +255,8 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
 
     // Every fan-out child must have returned a SUBSTANTIVE report (not a
     // one-liner) — this task forces real per-city research the synthesizer must
-    // actually consume.
+    // actually consume. Keep each report to verify it reaches the synthesizer.
+    let mut fan_out_reports = Vec::new();
     for (i, row) in fan_out.iter().enumerate() {
         let crid = row.child_request_id.as_deref().expect("fan-out child id");
         let report = answer_text(&fetch_answer(db.node.as_ref(), crid).await);
@@ -268,6 +269,7 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
             "fan-out researcher #{i} ({crid}) must return a substantive report, got {} chars",
             report.trim().chars().count()
         );
+        fan_out_reports.push(report);
     }
 
     // EXACTLY what the synthesis coordinator received as input — the runtime
@@ -276,6 +278,44 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     let synthesis_input = fetch_tool_call_args(db.node.as_ref(), &synthesis[0].tool_call_id).await;
     eprintln!(
         "[workflow-live] ══ SYNTHESIS COORDINATOR INPUT (what the runtime fed it) ══\n{synthesis_input}\n"
+    );
+
+    // DATA-FLOW FENCE: the synthesis prompt must actually carry every
+    // researcher's report. Compare on alphanumeric-only text so JSON escaping
+    // (\n, \") and whitespace differences don't cause false negatives.
+    let alnum = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let synth_alnum = alnum(&synthesis_input);
+    assert!(
+        synthesis_input.contains("Fan-out outcomes"),
+        "synthesis input must delimit the structured fan-out outcomes block"
+    );
+    for (i, report) in fan_out_reports.iter().enumerate() {
+        let r = alnum(report);
+        // A distinctive 80-char run from the middle of the report must appear
+        // verbatim (modulo escaping) in what the synthesizer was handed.
+        let chars: Vec<char> = r.chars().collect();
+        let start = chars.len() / 4;
+        let chunk: String = chars[start..(start + 80).min(chars.len())].iter().collect();
+        assert!(
+            synth_alnum.contains(&chunk),
+            "synthesis input must contain researcher #{i}'s report content; missing chunk: {chunk:?}"
+        );
+    }
+    // Polish verification: the trimmed payload carries no lineage UUID, and the
+    // text-only render leaks no chain-of-thought / message envelope.
+    assert!(
+        !synthesis_input.contains("child_request_id"),
+        "synthesis payload must be trimmed (no lineage UUIDs)"
+    );
+    assert!(
+        !synthesis_input.contains("\\\"role\\\":\\\"assistant\\\"")
+            && !synthesis_input.contains("Reasoning"),
+        "synthesis input must carry clean report text, not message envelopes or reasoning traces"
     );
 
     // The synthesis child must have produced a substantive synthesized analysis.

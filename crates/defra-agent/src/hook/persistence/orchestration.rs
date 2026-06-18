@@ -18,7 +18,14 @@ struct WorkflowSpawnSpec {
 #[derive(Debug, Clone, Serialize)]
 struct WorkflowOutcome {
     task_id: String,
+    // Lineage retained for diagnostics but kept OUT of the synthesis payload:
+    // the synthesizer only needs the task label, the outcome status, and the
+    // report text — a UUID and the internal behavior id are noise in its prompt.
+    #[serde(skip_serializing)]
+    #[allow(dead_code)]
     child_request_id: String,
+    #[serde(skip_serializing)]
+    #[allow(dead_code)]
     behavior_id: String,
     status: String,
     ok: bool,

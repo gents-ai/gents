@@ -2034,6 +2034,23 @@ fn render_assistant_message_text(content: &str) -> Result<String> {
         anyhow::bail!("materialized child response is not an assistant message");
     };
 
+    // A materialized final response handed to a waiting parent (a subagent
+    // bridge result, or a workflow fan-out outcome fed to the synthesizer) should
+    // be the assistant's ANSWER TEXT — never its chain-of-thought. Render only
+    // `Text` content; drop reasoning/tool-call/image items so no provider's
+    // reasoning trace can leak into a downstream prompt.
+    let text_parts: Vec<String> = content
+        .iter()
+        .filter_map(|item| match item {
+            AssistantContent::Text(Text { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    if !text_parts.is_empty() {
+        return Ok(text_parts.join("\n"));
+    }
+    // Rare: a final message with no text content. Fall back to the full
+    // serialization rather than returning an empty answer.
     let mut parts = Vec::new();
     for item in content.iter() {
         match item {
