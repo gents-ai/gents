@@ -270,6 +270,14 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         );
     }
 
+    // EXACTLY what the synthesis coordinator received as input — the runtime
+    // builds this programmatically (synthesis_prompt + the JSON of every fan-out
+    // outcome). Inspecting it verifies the inter-stage data flow is clean.
+    let synthesis_input = fetch_tool_call_args(db.node.as_ref(), &synthesis[0].tool_call_id).await;
+    eprintln!(
+        "[workflow-live] ══ SYNTHESIS COORDINATOR INPUT (what the runtime fed it) ══\n{synthesis_input}\n"
+    );
+
     // The synthesis child must have produced a substantive synthesized analysis.
     let synthesis_crid = synthesis[0]
         .child_request_id
