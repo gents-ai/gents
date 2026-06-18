@@ -238,6 +238,58 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
     }
 
+    // ---- The actual DATA the workflow produced (not just the structure) ------
+    // Show how the model authored the workflow: the single orchestration tool
+    // call carries the fan-out task prompts + synthesis target/prompt as args.
+    let authored = fetch_tool_call_args(db.node.as_ref(), &group_id).await;
+    eprintln!("[workflow-live] orchestrator authored fan_out_and_synthesize args:\n{authored}");
+
+    // Every fan-out child must have returned non-empty research data.
+    for (i, row) in fan_out.iter().enumerate() {
+        let crid = row.child_request_id.as_deref().expect("fan-out child id");
+        let answer = fetch_answer(db.node.as_ref(), crid).await;
+        eprintln!("[workflow-live] fan-out researcher #{i} answer: {answer:?}");
+        assert!(
+            !answer.trim().is_empty(),
+            "fan-out researcher #{i} ({crid}) must return a non-empty answer"
+        );
+    }
+
+    // The synthesis child must have produced a non-empty synthesized report.
+    let synthesis_crid = synthesis[0]
+        .child_request_id
+        .as_deref()
+        .expect("synthesis child id");
+    let report = fetch_answer(db.node.as_ref(), synthesis_crid).await;
+    eprintln!("[workflow-live] SYNTHESIZED REPORT:\n{report}");
+    assert!(
+        !report.trim().is_empty(),
+        "synthesis child ({synthesis_crid}) must return a non-empty synthesized report"
+    );
+    // Soft signal that synthesis actually reasoned over the fan-out data — the
+    // three capitals should surface. Never hard-fail on model wording.
+    let lowered = report.to_lowercase();
+    let hits = ["paris", "berlin", "rome"]
+        .iter()
+        .filter(|city| lowered.contains(*city))
+        .count();
+    if hits >= 2 {
+        eprintln!("[workflow-live] SOFT-OK: synthesized report references {hits}/3 capitals");
+    } else {
+        eprintln!(
+            "[workflow-live] SOFT-WARN: synthesized report referenced only {hits}/3 capitals: {report:?}"
+        );
+    }
+
+    // The synthesized report must flow back as the orchestrator's final answer
+    // (D5: synthesis returns to the orchestrator continuation).
+    let final_answer = fetch_answer(db.node.as_ref(), request_id).await;
+    eprintln!("[workflow-live] ORCHESTRATOR FINAL ANSWER:\n{final_answer}");
+    assert!(
+        !final_answer.trim().is_empty(),
+        "orchestrator final answer must be non-empty (synthesis must return to the parent)"
+    );
+
     agent.shutdown().await;
     Ok(())
 }
@@ -320,6 +372,70 @@ async fn fetch_request_lineage(node: &EmbeddedNode, request_id: &str) -> Option<
     );
     let resp = node.execute(&query).await;
     first_optional_row::<ChildLineageRow>(&resp, "AgentRequest")
+}
+
+/// Fetch the assistant answer for a request: prefer the `AgentResponse` content,
+/// fall back to the latest assistant `AgentMessage` on the request's session.
+async fn fetch_answer(node: &EmbeddedNode, request_id: &str) -> String {
+    let request = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(filter: {{ request_id: {{ _eq: "{request}" }} }}, limit: 1) {{
+                content
+                session_id
+            }}
+        }}"#
+    );
+    #[derive(Debug, Deserialize)]
+    struct RespRow {
+        content: Option<String>,
+        session_id: Option<String>,
+    }
+    let resp = node.execute(&query).await;
+    let row = first_optional_row::<RespRow>(&resp, "AgentResponse");
+    if let Some(content) = row.as_ref().and_then(|r| r.content.clone()) {
+        if !content.trim().is_empty() {
+            return content;
+        }
+    }
+    let Some(session_id) = row.and_then(|r| r.session_id).filter(|s| !s.is_empty()) else {
+        return String::new();
+    };
+    let session = escape_graphql_string(&session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session}" }}, role: {{ _eq: "assistant" }} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{ content }}
+        }}"#
+    );
+    #[derive(Debug, Deserialize)]
+    struct MsgRow {
+        content: String,
+    }
+    let resp = node.execute(&query).await;
+    first_optional_row::<MsgRow>(&resp, "AgentMessage")
+        .map(|m| m.content)
+        .unwrap_or_default()
+}
+
+/// Fetch the raw `args` the model emitted for the orchestration tool call — the
+/// runtime-authored "workflow" (fan-out task prompts + synthesis target/prompt).
+async fn fetch_tool_call_args(node: &EmbeddedNode, tool_call_id: &str) -> String {
+    let tcid = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tcid}" }} }}, limit: 1) {{ args }} }}"#
+    );
+    #[derive(Debug, Deserialize)]
+    struct ArgsRow {
+        args: Option<String>,
+    }
+    let resp = node.execute(&query).await;
+    first_optional_row::<ArgsRow>(&resp, "AgentToolCall")
+        .and_then(|r| r.args)
+        .unwrap_or_default()
 }
 
 async fn assert_endpoint_reachable(endpoint: &str) {
