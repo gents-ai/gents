@@ -88,37 +88,82 @@ unified surface.
 
 ### B. Wire-API selection becomes document-driven
 
-Add a per-backend `wire_api` field to the `InferenceBackend` document:
-`responses` | `chat_completions` | `auto` (default `auto`).
+The Responses-vs-Chat-Completions choice **only exists for OpenAI-style wire** — Anthropic
+(native Messages) and Gemini (native generateContent) each have exactly one wire shape with
+no toggle. So the field is named and scoped accordingly: a per-backend **`openai_wire_api`**
+field on the `InferenceBackend` document, `responses` | `chat_completions` | `auto`
+(default `auto`), governing only OpenAI-style backends.
 
-- Resolves "fallback fate": the Chat-Completions path is **kept and tested**, not deprecated
-  — but selected per-backend in the control plane, not via a global toggle.
-- `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` is **demoted** to a deprecated global default-override
-  (still honored, documented sunset, covered by a regression test). `cfg(test)` continues to
-  default to Chat Completions.
+Per-provider semantics (explicit for every committed provider, no undefined cases):
+
+| Provider kind | `openai_wire_api` honored? | Effective wire |
+|---|---|---|
+| `OpenAiCompatible` | yes | `responses` / `chat_completions` / probe-resolved `auto` |
+| `OpenRouter` | ignored (validated: warn if set) | always Chat Completions (rig has no Responses) |
+| `ChatGptCodex` (OAuth) | ignored (validated) | always Responses (OAuth path) |
+| `Anthropic` | ignored (validated) | native Messages |
+| `Gemini` | ignored (validated) | native generateContent |
+
+Setting `openai_wire_api` on a provider that ignores it is a **config-validation warning**,
+not a silent no-op.
+
+- **Resolves "fallback fate":** the Chat-Completions path is **kept and tested**, selected
+  per-backend in the control plane, not via a global toggle.
+- **Effective-value threading.** Today selection hangs off provider kind plus the global env
+  in `agent/runtime/context.rs:135` and `rendered_request.rs:31`. The resolved effective
+  `openai_wire_api` must be carried onto `AgentBehavior` (alongside `backend_provider_kind`)
+  at reconcile time and *both* of those call sites switched to read it — so the rendered-
+  request projection and the runtime client choice agree on one resolved value.
+- `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` is **demoted** to a deprecated global default for
+  backends whose field is unset/`auto` (still honored, documented sunset, regression-tested).
+  `cfg(test)` continues to default to Chat Completions.
 - The backend probe (already hits `/models`, carries `probe_status`/`last_probe`) is extended
   to detect `/v1/responses`. `auto` resolves via the probe result.
-- When a backend can't serve the selected/`auto` Responses path, emit a **clean actionable
-  error naming the field to set** (`wire_api: chat_completions`) — never a silent failure on
-  the ollama default stack.
+- When an OpenAI-style backend can't serve the selected/`auto` Responses path, emit a **clean
+  actionable error naming the field to set** (`openai_wire_api: chat_completions`) — never a
+  silent failure on the ollama default stack.
 
-CLI/preset surface (`cli/args.rs`): presets set a sensible `wire_api` default
-(`openai`→`responses`, `ollama`→`auto`, etc.); `backend set --wire-api` and
-`init --wire-api` expose it.
+CLI/preset surface (`cli/args.rs`): presets set a sensible default (`openai`→`responses`,
+`ollama`→`auto`, etc.); `backend set --openai-wire-api` and `init --openai-wire-api` expose it.
 
 ### C. Record/replay test harness (keystone)
 
-A recording/replaying `HttpClientExt` wrapper injected **beneath rig** (the same seam
-`SessionTaggingHttpClient` and `ChatGptCodexHttpClient` already extend). Because it sits
-below rig's decoder, it captures the **raw HTTP request + SSE response bytes** — the true
-wire contract — and works for *every* rig provider for free.
+A recording/replaying `HttpClientExt` wrapper that captures **the bytes actually sent**,
+working for *every* rig provider for free.
 
-- **Record mode** (env-gated, live): dumps normalized request → response(SSE) pairs to
-  versioned fixture files under `tests/fixtures/providers/<provider>/`.
+**Composable transport (load-bearing).** The existing transport wrappers mutate requests
+before sending: `SessionTaggingHttpClient` injects headers
+(`inference_http.rs:155`) and `ChatGptCodexHttpClient` patches the request body
+(`chatgpt_codex.rs:117`). Each currently holds a *concrete* `inner`, so a recorder wrapped
+*outside* them would capture **pre-mutation** bytes — not true wire. The harness therefore
+requires these wrappers to become **generic over their inner transport** so the stack
+composes with the recorder innermost, closest to reqwest:
+`SessionTagging<ChatGptCodex<Recorder<Reqwest>>>`. The `Recorder` then sees exactly what
+leaves the process. This generic-ization of the two wrappers is explicit harness scope.
+
+**Redaction contract (mandatory, fixtures hold no secrets).** Because the recorder sits at
+true wire, every provider's credential is present at capture: Gemini puts the API key in the
+URL query (`?key=…` / `x-goog-api-key`), Anthropic uses `x-api-key`, OpenAI/OpenRouter use
+`Authorization: Bearer`, and ChatGPT-OAuth adds `ChatGPT-Account-ID` + bearer. The recorder
+applies a **redaction pass before anything touches disk**:
+- strip/placeholder a denylist of auth headers (`authorization`, `x-api-key`,
+  `x-goog-api-key`, `chatgpt-account-id`, …) and any `key=`/token query params;
+- redact bearer/OAuth material in bodies if present;
+- a **fixture-scanning test** greps every committed fixture for credential patterns and
+  fails CI if any match — secrets in `tests/fixtures/**` are a hard gate, not a review note.
+- **Response reasoning** is treated as *controlled test data* (it is model output, not a
+  secret) and recorded as-is; the redaction denylist targets credentials and request PII
+  only. This is stated so the policy is explicit, not assumed.
+
+- **Record mode** (env-gated, live): dumps redacted request → response(SSE) pairs to
+  versioned fixtures under `tests/fixtures/providers/<provider>/`.
 - **Replay mode** (default in CI): serves recorded responses by a normalized-request key,
   deterministic and offline. Request keying hashes the normalized wire request (model +
-  messages + tools + params, with volatile fields — session ids, timestamps — masked); a
-  multi-agent run produces many keyed entries, each matched independently.
+  messages + tools + params, with volatile fields — session ids, timestamps, redacted auth —
+  masked). Because identical requests recur across retries and across nodes, **each key maps
+  to an ordered multiset** (or carries a stable per-key ordinal): replay returns entries in
+  recorded order and asserts **every recorded entry is consumed exactly once** (no unmatched
+  request, no leftover fixture) — so a dropped or duplicated provider call fails replay.
 - Complementary to **#444** (which mocks at the `CompletionModel` trait seam for
   response-logic tests): HTTP-seam = wire fidelity; trait-seam = loop logic. Two layers.
 
@@ -157,24 +202,33 @@ were *looser*, that is a fidelity question, not a soundness one, and out of scop
 ## Implementation slices
 
 1. **Finish #339 ChatGPT-OAuth** on the proven `chatgpt_codex.rs` seam — real token
-   refresh / subscription handling — as the first concrete build. Capture its fixtures.
-2. **Record/replay `HttpClientExt` harness** (recorder + replayer + request keying),
-   proven on the OAuth/Responses path from slice 1.
-3. **Anthropic + Gemini native** providers (variant + builder + dispatch arm + render
+   refresh / subscription handling — as the first concrete build.
+2. **Effective `openai_wire_api` selection + clean Responses-fallback error.** Add the
+   field, thread the resolved effective value onto `AgentBehavior`, switch both selection
+   sites (`context.rs:135`, `rendered_request.rs:31`) to read it, demote the env var, extend
+   the probe, emit the actionable error. *Lands before fixtures* so the corpus is captured
+   against final selection behavior, not behavior we already know will change.
+3. **Composable recording transport + harness.** Generic-ize the transport wrappers,
+   add `Recorder<Reqwest>` (redaction pass + fixture-scan test + multiset replay keying),
+   proven on the OAuth/Responses path.
+4. **Anthropic + Gemini native** providers (variant + builder + dispatch arm + render
    variant + params). Generate fixtures by running the multi-node workflow e2e against each.
-4. **Per-backend `wire_api` field + probe + non-cryptic UX**; demote the env var; CLI/preset
-   plumbing; tests for both wire paths.
 5. **Matrix doc + #438 linkage + #492 rationale graduation**; conformance note for the Lean
    superset argument.
 
-Slices 1–2 are sequential (harness needs a proven path); 3 depends on 2; 4 is independent of
-3 and can land in parallel; 5 closes out.
+Order rationale: #339 first (proven seam); wire-api settles selection behavior *before* any
+fixture is frozen; the harness needs a settled path to record; Anthropic/Gemini depend on the
+harness for their corpus; docs close out.
 
 ## Risks & open questions
 
 - **Request-key stability across providers.** The normalized-request hash must mask volatile
   fields without masking semantically-meaningful ones. Mis-keying → replay misses. Resolve in
-  slice 2 with a per-provider normalization spec and a "no unmatched request in replay" assert.
+  the harness slice with a per-provider normalization spec, multiset-per-key ordering, and the
+  "every recorded entry consumed exactly once" assert.
+- **Secret leakage into fixtures.** Mitigated by the mandatory redaction pass + CI fixture-scan
+  gate (§C); the scan is the backstop if a new provider introduces a credential the denylist
+  doesn't yet cover — add the pattern and the scan stays green.
 - **Fixture churn.** Provider wire shapes drift; live re-capture (tier in C) is the refresh
   path. Fixtures are versioned and reviewed as contract changes.
 - **OAuth refresh in CI.** #339's live tier needs real credentials; CI runs replay-only. Live
