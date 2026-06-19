@@ -61,6 +61,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         target.provider_kind,
         &target.endpoint,
         target.api_key.as_deref(),
+        None,
     )
     .await?;
 

@@ -155,16 +155,49 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "degraded"
     };
 
-    let chatgpt_auth_check = match defra_agent::chatgpt_codex::resolve_codex_home(None) {
-        Ok(home) => match defra_agent::chatgpt_codex::resolve_chatgpt_auth(&home).await {
-            Ok(_) => json!({ "ok": true, "codex_home": home.display().to_string() }),
-            Err(problem) => json!({
-                "ok": false,
-                "codex_home": home.display().to_string(),
-                "guidance": defra_agent::chatgpt_codex::classify_chatgpt_auth_error(&home, &problem),
-            }),
-        },
-        Err(error) => json!({ "ok": false, "error": error.to_string() }),
+    let chatgpt_provider = defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let chatgpt_auth_check = match crate::commands::codex_auth_probe::load_oauth_credential(
+        &access,
+        &agent_did,
+        chatgpt_provider,
+    )
+    .await
+    {
+        Ok(Some(credential)) if credential.access_token_expires_at > chrono::Utc::now() => {
+            json!({
+                "ok": true,
+                "credential_id": credential.credential_id,
+                "provider": credential.provider,
+                "account_id": credential.account_id,
+                "chatgpt_plan_type": credential.chatgpt_plan_type,
+                "expires_at": credential.access_token_expires_at,
+            })
+        }
+        Ok(Some(credential)) => json!({
+            "ok": false,
+            "credential_id": credential.credential_id,
+            "provider": credential.provider,
+            "expires_at": credential.access_token_expires_at,
+            "guidance": defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+                &agent_did,
+                chatgpt_provider,
+                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Expired,
+            ),
+        }),
+        Ok(None) => json!({
+            "ok": false,
+            "provider": chatgpt_provider,
+            "guidance": defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+                &agent_did,
+                chatgpt_provider,
+                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Missing,
+            ),
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "provider": chatgpt_provider,
+            "error": error.to_string(),
+        }),
     };
 
     let mut output = json!({

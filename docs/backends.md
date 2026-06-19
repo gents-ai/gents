@@ -6,41 +6,65 @@
 
 ## ChatGPT subscription (ChatGptCodex, OAuth)
 
-Use your existing ChatGPT/Codex subscription instead of an API key.
+Use a ChatGPT/Codex subscription instead of an API key. The credential is stored
+as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
+(`chatgpt-codex`), not in `~/.codex`.
 
 ### Setup
 
-1. Sign in with the Codex CLI (`codex login`) so credentials exist in your Codex home.
-2. Configure a backend with `provider_kind = ChatGptCodex`.
-3. Verify: `defra-agent codex-auth-probe` (prints account, plan, and reachable models).
+1. Configure a backend with `provider_kind = ChatGptCodex`.
+2. Sign in and write the credential document:
 
-### Credential home: `CODEX_HOME` vs `DEFRA_CODEX_HOME`
+   ```sh
+   defra-agent codex-login --agent-did did:key:...
+   ```
 
-- The Codex CLI reads/writes `CODEX_HOME` (default `~/.codex`).
-- Defra Agent reads `DEFRA_CODEX_HOME` first, then falls back to `~/.codex`.
-- **Defra Agent does not create, relocate, or clobber your Codex credentials.**
-  It does, however, perform Codex's normal proactive token refresh, which updates
-  the managed token in the configured store - the same write the Codex CLI makes.
-  Your login is never replaced or moved; only the refreshed token is persisted.
+   Add `--device-auth` for headless login, and `--graphql` to write to a running
+   node instead of the local home.
+3. Verify:
+
+   ```sh
+   defra-agent codex-auth-probe --agent-did did:key:...
+   ```
+
+### Credential storage
+
+- `defra-agent codex-login` uses Codex's OAuth flow with an ephemeral in-memory
+  store, then writes the resulting access token, refresh token, id token, account
+  id, plan, FedRAMP flag, and expiry into `OAuthCredential`.
+- The runtime reads `OAuthCredential` for the behavior's `agent_did`; it does not
+  read `CODEX_HOME`, `DEFRA_CODEX_HOME`, or `~/.codex` for ChatGPT backend auth.
+- v1 stores token fields as plaintext document fields, matching the current
+  `InferenceBackend.api_key` precedent. Filtered replication must scope the
+  credential to the owning `agent_did`; encrypted token fields are the next slice.
 
 ### Fleet / remote
 
-- A remote/fleet node needs its **own** credential home that is **readable and
-  writable by the runtime user** (token refresh persists the renewed token to the
-  store, so a read-only home will eventually fail on expiry); it does not share
-  the operator's laptop `~/.codex`. Set `DEFRA_CODEX_HOME` on the node to a home
-  provisioned with ChatGPT OAuth credentials.
-- The Codex *frontend* (the `defra-agent codex` TUI) and the *server* credential
-  home are independent: a remote frontend connecting to a node does not require
-  the node to share the frontend's `CODEX_HOME`.
+- OAuth refresh rotates the refresh token, so only the owner node for the
+  `(agent_did, behavior)` should refresh and write the document. Replicas can use
+  the current access token and receive the rotated document through replication.
+- When replicating credentials, use an agent-scoped filter such as
+  `OAuthCredential:agent_did=did:key:...`; do not include `OAuthCredential` in an
+  unfiltered config replicator.
+- The single-node/local demo path treats the local runtime as the owner.
+- A remote frontend (`defra-agent codex`) does not need local ChatGPT credentials;
+  the server-side runtime uses the replicated `OAuthCredential` document.
 
 ### Token refresh
 
-- The OAuth bearer is refreshed **per request** via Codex's `AuthManager`, so
-  long-running sessions do not fail on token expiry. Near-expiry tokens are
-  proactively refreshed and persisted to the managed store (Codex's own behavior).
+- The ChatGPT HTTP client asks a `DbCredentialBearer` for a bearer before every
+  request.
+- If the access token is near expiry and this runtime is the owner, it posts the
+  refresh token to OpenAI's token endpoint, writes the rotated tokens back to
+  `OAuthCredential`, then sends the request.
+- If the provider rejects a token with 401/403, `codex-auth-probe` and runtime
+  errors tell the operator to rerun `defra-agent codex-login`.
 
 ### Diagnostics
 
-- Missing, wrong-mode (API-key), or expired credentials produce actionable errors
-  from `codex-auth-probe` and `diagnose`, naming the home and the `codex login` fix.
+- `defra-agent codex-auth-probe` reads the credential document, refreshes it if
+  needed, probes `/models`, and prints account, plan, expiry, and reachable
+  models.
+- `defra-agent diagnose` reports `checks.chatgpt_auth` as structured JSON with
+  `credential_id` and `expires_at`, or an actionable `defra-agent codex-login`
+  guidance string when the document is missing or expired.

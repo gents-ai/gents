@@ -172,7 +172,9 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 });
             }
         };
-        match discover_backend_models(&client, provider_kind, &endpoint, api_key.as_deref()).await {
+        match discover_backend_models(&client, provider_kind, &endpoint, api_key.as_deref(), None)
+            .await
+        {
             Ok(models) => {
                 discovered_models = models;
                 let missing_models = required_models

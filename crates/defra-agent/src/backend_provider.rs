@@ -95,6 +95,7 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
+    chatgpt_credential: Option<&crate::chatgpt_codex::OAuthCredential>,
 ) -> Result<Vec<String>> {
     let endpoint = if kind == BackendProviderKind::ChatGptCodex {
         crate::chatgpt_codex::normalize_endpoint(endpoint)
@@ -106,23 +107,17 @@ pub async fn discover_models(
     async {
         let mut request = client.get(&models_url);
         if kind == BackendProviderKind::ChatGptCodex {
-            let (_codex_home, auth) = match crate::chatgpt_codex::load_default_chatgpt_auth().await
-            {
-                Ok(auth) => auth,
-                Err(error) => {
-                    tracing::Span::current().record("failure_class", "auth");
-                    return Err(error);
-                }
+            let Some(credential) = chatgpt_credential else {
+                tracing::Span::current().record("failure_class", "auth");
+                anyhow::bail!(
+                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `defra-agent codex-login` for the agent DID first"
+                );
             };
-            let access_token = match auth.get_token() {
-                Ok(token) => token,
-                Err(error) => {
-                    tracing::Span::current().record("failure_class", "auth");
-                    return Err(error).context("ChatGPT Codex auth did not expose a bearer token");
-                }
-            };
-            request = request.bearer_auth(access_token);
-            let headers = match crate::chatgpt_codex::build_chatgpt_codex_headers(&auth) {
+            request = request.bearer_auth(&credential.access_token);
+            let headers = match crate::chatgpt_codex::build_chatgpt_codex_headers(
+                credential.account_id.as_deref(),
+                credential.is_fedramp,
+            ) {
                 Ok(headers) => headers,
                 Err(error) => {
                     tracing::Span::current().record("failure_class", "auth");
@@ -234,6 +229,7 @@ mod tests {
             BackendProviderKind::OpenAiCompatible,
             &format!("{endpoint}/v1/"),
             Some("sk-test"),
+            None,
         )
         .await
         .expect("model discovery should succeed");
@@ -262,6 +258,7 @@ mod tests {
             &Client::new(),
             BackendProviderKind::OpenAiCompatible,
             &endpoint,
+            None,
             None,
         )
         .await

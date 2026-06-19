@@ -1,51 +1,37 @@
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, fmt::Formatter};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use codex_login::{
-    default_client::default_headers, AuthCredentialsStoreMode, AuthManager, CodexAuth,
-};
+use chrono::{DateTime, Duration, Utc};
+use codex_login::default_client::default_headers;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
+use defra_agent_protocol::row::OAuthCredentialRow;
+use defra_node::EmbeddedNode;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
     Response, StreamingResponse,
 };
 use rig::wasm_compat::WasmCompatSend;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
-pub const DEFRA_CODEX_HOME_ENV: &str = "DEFRA_CODEX_HOME";
+pub const CHATGPT_CODEX_PROVIDER: &str = "chatgpt-codex";
+const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled";
+const REFRESH_SKEW: Duration = Duration::minutes(5);
 
 pub fn default_backend_endpoint() -> &'static str {
     CHATGPT_CODEX_BASE_URL
 }
 
-pub fn resolve_codex_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    if let Ok(path) = std::env::var(DEFRA_CODEX_HOME_ENV) {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
-    }
-    dirs::home_dir()
-        .map(|home| home.join(".codex"))
-        .context("could not determine home directory for default ~/.codex")
-}
-
 /// A user-actionable classification of why ChatGPT OAuth could not be used.
 #[derive(Debug, Clone)]
 pub enum ChatGptAuthProblem {
-    /// No Codex credentials found in the resolved home.
+    /// No matching OAuthCredential document exists.
     Missing,
-    /// Credentials exist but are not ChatGPT OAuth (for example, an API key).
-    ///
-    /// `found_mode` is the stringified Codex auth mode. Keeping it local avoids
-    /// adding a direct dependency just to expose that transitive enum.
+    /// A credential exists but is not usable for ChatGPT OAuth.
     WrongMode { found_mode: String },
     /// Credentials are ChatGPT OAuth but the token is expired or revoked.
     Expired,
@@ -54,73 +40,90 @@ pub enum ChatGptAuthProblem {
 }
 
 /// Render an actionable, multi-line message for a ChatGPT auth failure.
-pub fn classify_chatgpt_auth_error(codex_home: &Path, problem: &ChatGptAuthProblem) -> String {
-    let home = codex_home.display();
+pub fn classify_chatgpt_auth_error(
+    agent_did: &str,
+    provider: &str,
+    problem: &ChatGptAuthProblem,
+) -> String {
     match problem {
         ChatGptAuthProblem::Missing => format!(
-            "No Codex credentials found in {home}.\n\
-             To use the ChatGPT subscription backend, sign in with the Codex CLI \
-             (`codex login`), or point DEFRA_CODEX_HOME at a home that already has \
-             ChatGPT OAuth credentials."
+            "No OAuthCredential document found for agent {agent_did} and provider {provider}.\n\
+             To use the ChatGPT subscription backend, run \
+             `defra-agent codex-login --agent-did {agent_did}`."
         ),
         ChatGptAuthProblem::WrongMode { found_mode } => format!(
-            "Credentials in {home} are {found_mode}, but the ChatGPT subscription \
-             backend needs ChatGPT OAuth.\n\
-             Run `codex login` to establish a ChatGPT session, or select an \
-             API-key backend instead."
+            "OAuthCredential for agent {agent_did} and provider {provider} is {found_mode}, \
+             but the ChatGPT subscription backend needs an enabled ChatGPT OAuth credential.\n\
+             Run `defra-agent codex-login --agent-did {agent_did}` or select an API-key backend."
         ),
         ChatGptAuthProblem::Expired => format!(
-            "ChatGPT OAuth credentials in {home} are expired or revoked.\n\
-             Re-authenticate with `codex login` to refresh the session."
+            "ChatGPT OAuth credential for agent {agent_did} and provider {provider} is expired or revoked.\n\
+             Re-authenticate with `defra-agent codex-login --agent-did {agent_did}`."
         ),
         ChatGptAuthProblem::Other(detail) => {
-            format!("ChatGPT auth in {home} could not be used: {detail}")
+            format!(
+                "ChatGPT OAuth credential for agent {agent_did} and provider {provider} could not be used: {detail}"
+            )
         }
     }
 }
 
-/// Build an AuthManager for `codex_home` and resolve usable ChatGPT OAuth,
-/// classifying the failure precisely so callers can give actionable guidance.
-///
-/// `AuthManager::auth()` may proactively refresh and persist the managed token
-/// using Codex's normal behavior, so this is not a read-only operation.
-pub async fn resolve_chatgpt_auth(
-    codex_home: &Path,
-) -> std::result::Result<(Arc<AuthManager>, CodexAuth), ChatGptAuthProblem> {
-    let manager = Arc::new(
-        AuthManager::new(
-            codex_home.to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::Auto,
-            /*chatgpt_base_url*/ None,
-        )
-        .await,
-    );
-    // `auth()` attempts a proactive refresh. On permanent refresh failure it
-    // logs and returns the stale auth, so ask the manager for that failure too.
-    let auth = manager.auth().await.ok_or(ChatGptAuthProblem::Missing)?;
-    if !auth.is_chatgpt_auth() {
-        return Err(ChatGptAuthProblem::WrongMode {
-            found_mode: format!("{:?}", auth.auth_mode()),
-        });
-    }
-    if manager.refresh_failure_for_auth(&auth).is_some() {
-        return Err(ChatGptAuthProblem::Expired);
-    }
-    Ok((manager, auth))
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthCredential {
+    #[serde(default)]
+    pub doc_id: Option<String>,
+    pub credential_id: String,
+    pub agent_did: String,
+    pub provider: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub chatgpt_plan_type: Option<String>,
+    pub is_fedramp: bool,
+    pub access_token_expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub last_refresh: Option<DateTime<Utc>>,
+    pub enabled: bool,
 }
 
-pub async fn load_chatgpt_auth(codex_home: PathBuf) -> Result<CodexAuth> {
-    let (_, auth) = resolve_chatgpt_auth(&codex_home)
-        .await
-        .map_err(|problem| anyhow::anyhow!(classify_chatgpt_auth_error(&codex_home, &problem)))?;
-    Ok(auth)
-}
-
-pub async fn load_default_chatgpt_auth() -> Result<(PathBuf, CodexAuth)> {
-    let codex_home = resolve_codex_home(None)?;
-    let auth = load_chatgpt_auth(codex_home.clone()).await?;
-    Ok((codex_home, auth))
+impl OAuthCredential {
+    pub fn from_login_token_data(
+        agent_did: impl Into<String>,
+        provider: impl Into<String>,
+        token_data: &codex_login::TokenData,
+        now: DateTime<Utc>,
+    ) -> Self {
+        let agent_did = agent_did.into();
+        let provider = provider.into();
+        let id_claims =
+            crate::chatgpt_oauth_refresh::decode_id_token_claims(&token_data.id_token.raw_jwt);
+        let access_token_expires_at =
+            crate::chatgpt_oauth_refresh::jwt_expiration(&token_data.access_token)
+                .or(id_claims.expires_at)
+                .unwrap_or_else(|| now + Duration::hours(1));
+        Self {
+            doc_id: None,
+            credential_id: oauth_credential_id(&agent_did, &provider),
+            agent_did,
+            provider,
+            access_token: token_data.access_token.clone(),
+            refresh_token: token_data.refresh_token.clone(),
+            id_token: Some(token_data.id_token.raw_jwt.clone()),
+            account_id: token_data.account_id.clone().or(id_claims.account_id),
+            chatgpt_plan_type: token_data
+                .id_token
+                .get_chatgpt_plan_type_raw()
+                .or(id_claims.plan_type),
+            is_fedramp: token_data.id_token.is_fedramp_account() || id_claims.is_fedramp,
+            access_token_expires_at,
+            last_refresh: Some(now),
+            enabled: true,
+        }
+    }
 }
 
 pub fn normalize_endpoint(endpoint: &str) -> String {
@@ -132,14 +135,138 @@ pub fn normalize_endpoint(endpoint: &str) -> String {
     }
 }
 
-pub fn build_chatgpt_codex_headers(auth: &CodexAuth) -> Result<HeaderMap> {
+pub fn oauth_credential_id(agent_did: &str, provider: &str) -> String {
+    format!("{provider}:{agent_did}")
+}
+
+pub fn oauth_credential_query(agent_did: &str, provider: &str) -> String {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let provider = crate::graphql::escape_graphql_string(provider);
+    format!(
+        r#"query {{
+            OAuthCredential(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    provider: {{ _eq: "{provider}" }},
+                    enabled: {{ _eq: true }}
+                }},
+                limit: 1
+            ) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
+    let credential_id = crate::graphql::escape_graphql_string(credential_id);
+    format!(
+        r#"query {{
+            OAuthCredential(
+                filter: {{ credential_id: {{ _eq: "{credential_id}" }} }},
+                limit: 1
+            ) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String {
+    let input = oauth_credential_input(credential);
+    let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
+    format!(
+        r#"mutation {{
+            upsert_OAuthCredential(
+                filter: {{ credential_id: {{ _eq: "{credential_id}" }} }},
+                add: {{
+                    credential_id: "{credential_id}",
+                    {input}
+                }},
+                update: {{
+                    {input}
+                }}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
+pub async fn lookup_oauth_credential(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    provider: &str,
+) -> Result<Option<OAuthCredential>> {
+    let response = node
+        .execute(&oauth_credential_query(agent_did, provider))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying OAuthCredential returned errors: {:?}",
+            response.errors
+        );
+    }
+    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .transpose()
+}
+
+pub async fn lookup_oauth_credential_by_id(
+    node: &EmbeddedNode,
+    credential_id: &str,
+) -> Result<Option<OAuthCredential>> {
+    let response = node
+        .execute(&oauth_credential_by_id_query(credential_id))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying OAuthCredential returned errors: {:?}",
+            response.errors
+        );
+    }
+    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .transpose()
+}
+
+pub async fn upsert_oauth_credential(
+    node: &EmbeddedNode,
+    credential: &OAuthCredential,
+) -> Result<String> {
+    let response = node
+        .execute(&oauth_credential_upsert_mutation(credential))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "upserting OAuthCredential returned errors: {:?}",
+            response.errors
+        );
+    }
+    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+}
+
+pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
+    defra_agent_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
+        .into_iter()
+        .map(oauth_credential_from_value)
+        .collect()
+}
+
+pub fn build_chatgpt_codex_headers(
+    account_id: Option<&str>,
+    is_fedramp: bool,
+) -> Result<HeaderMap> {
     let mut headers = default_headers();
-    if let Some(account_id) = auth.get_account_id() {
-        let account_id = HeaderValue::from_str(&account_id)
+    if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
+        let account_id = HeaderValue::from_str(account_id)
             .context("ChatGPT account id could not be encoded as an HTTP header")?;
         headers.insert("ChatGPT-Account-ID", account_id);
     }
-    if auth.is_fedramp_account() {
+    if is_fedramp {
         headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
     }
     headers.insert(
@@ -149,34 +276,246 @@ pub fn build_chatgpt_codex_headers(auth: &CodexAuth) -> Result<HeaderMap> {
     Ok(headers)
 }
 
+fn oauth_credential_input(credential: &OAuthCredential) -> String {
+    let field = |name: &str, value: &str| {
+        format!(
+            r#"{name}: "{}""#,
+            crate::graphql::escape_graphql_string(value)
+        )
+    };
+    let datetime_field = |name: &str, value: Option<DateTime<Utc>>| {
+        value
+            .map(|value| {
+                format!(
+                    r#"{name}: "{}""#,
+                    value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                )
+            })
+            .unwrap_or_else(|| format!("{name}: null"))
+    };
+    [
+        field("agent_did", &credential.agent_did),
+        field("provider", &credential.provider),
+        field("access_token", &credential.access_token),
+        field("refresh_token", &credential.refresh_token),
+        defra_agent_protocol::graphql::nullable_string_field(
+            "id_token",
+            credential.id_token.as_deref(),
+        ),
+        defra_agent_protocol::graphql::nullable_string_field(
+            "account_id",
+            credential.account_id.as_deref(),
+        ),
+        defra_agent_protocol::graphql::nullable_string_field(
+            "chatgpt_plan_type",
+            credential.chatgpt_plan_type.as_deref(),
+        ),
+        format!(
+            "is_fedramp: {}",
+            defra_agent_protocol::graphql::graphql_bool_literal(credential.is_fedramp)
+        ),
+        datetime_field(
+            "access_token_expires_at",
+            Some(credential.access_token_expires_at),
+        ),
+        datetime_field("last_refresh", credential.last_refresh),
+        format!(
+            "enabled: {}",
+            defra_agent_protocol::graphql::graphql_bool_literal(credential.enabled)
+        ),
+    ]
+    .join(",\n                    ")
+}
+
+fn oauth_credential_from_value(value: Value) -> Result<OAuthCredential> {
+    let row: OAuthCredentialRow =
+        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+    let access_token = required(row.access_token, "access_token")?;
+    let refresh_token = required(row.refresh_token, "refresh_token")?;
+    Ok(OAuthCredential {
+        doc_id: row.doc_id,
+        credential_id: row.credential_id,
+        agent_did: required(row.agent_did, "agent_did")?,
+        provider: required(row.provider, "provider")?,
+        access_token,
+        refresh_token,
+        id_token: clean_optional(row.id_token),
+        account_id: clean_optional(row.account_id),
+        chatgpt_plan_type: clean_optional(row.chatgpt_plan_type),
+        is_fedramp: row.is_fedramp.unwrap_or(false),
+        access_token_expires_at: parse_required_datetime(
+            row.access_token_expires_at,
+            "access_token_expires_at",
+        )?,
+        last_refresh: parse_optional_datetime(row.last_refresh, "last_refresh")?,
+        enabled: row.enabled.unwrap_or(true),
+    })
+}
+
+fn required(value: Option<String>, field: &str) -> Result<String> {
+    clean_optional(value).ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(value)
+    })
+}
+
+fn parse_required_datetime(value: Option<String>, field: &str) -> Result<DateTime<Utc>> {
+    parse_optional_datetime(value, field)?
+        .ok_or_else(|| anyhow::anyhow!("OAuthCredential missing {field}"))
+}
+
+fn parse_optional_datetime(value: Option<String>, field: &str) -> Result<Option<DateTime<Utc>>> {
+    value
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|value| value.with_timezone(&Utc))
+                .with_context(|| format!("parsing OAuthCredential {field} timestamp {value}"))
+        })
+        .transpose()
+}
+
+fn token_is_fresh(expires_at: DateTime<Utc>) -> bool {
+    Utc::now() + REFRESH_SKEW < expires_at
+}
+
 /// Supplies a current OAuth bearer, refreshing it as needed.
 pub trait BearerSource: Send + Sync {
     fn current_bearer(&self) -> impl Future<Output = Result<String>> + Send;
 }
 
-/// Production [`BearerSource`] backed by Codex's [`AuthManager`], whose `auth()`
-/// proactively refreshes a near-expiry managed token before returning it.
-#[derive(Clone)]
-pub struct AuthManagerBearer(pub Arc<AuthManager>);
+#[derive(Debug, Clone)]
+struct CachedToken {
+    access_token: String,
+    access_token_expires_at: DateTime<Utc>,
+}
 
-impl BearerSource for AuthManagerBearer {
-    async fn current_bearer(&self) -> Result<String> {
-        let auth = self
-            .0
-            .auth()
-            .await
-            .context("no Codex ChatGPT auth available")?;
-        if !auth.is_chatgpt_auth() {
+pub struct DbCredentialBearer {
+    node: Arc<EmbeddedNode>,
+    agent_did: String,
+    provider: String,
+    credential_id: String,
+    http: reqwest::Client,
+    cache: Mutex<Option<CachedToken>>,
+    refresh_lock: Mutex<()>,
+    is_owner: bool,
+}
+
+impl DbCredentialBearer {
+    pub fn new(
+        node: Arc<EmbeddedNode>,
+        agent_did: impl Into<String>,
+        provider: impl Into<String>,
+        credential_id: impl Into<String>,
+        is_owner: bool,
+    ) -> Self {
+        Self {
+            node,
+            agent_did: agent_did.into(),
+            provider: provider.into(),
+            credential_id: credential_id.into(),
+            http: reqwest::Client::new(),
+            cache: Mutex::new(None),
+            refresh_lock: Mutex::new(()),
+            is_owner,
+        }
+    }
+
+    async fn load_credential(&self) -> Result<OAuthCredential> {
+        let credential = lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(classify_chatgpt_auth_error(
+                    &self.agent_did,
+                    &self.provider,
+                    &ChatGptAuthProblem::Missing,
+                ))
+            })?;
+        if !credential.enabled {
             anyhow::bail!(
-                "Codex auth changed to {:?}; ChatGPT OAuth is required",
-                auth.auth_mode()
+                "{}",
+                classify_chatgpt_auth_error(
+                    &self.agent_did,
+                    &self.provider,
+                    &ChatGptAuthProblem::WrongMode {
+                        found_mode: "disabled".to_string(),
+                    },
+                )
             );
         }
-        if self.0.refresh_failure_for_auth(&auth).is_some() {
-            anyhow::bail!("ChatGPT OAuth credentials are expired or revoked");
+        Ok(credential)
+    }
+
+    async fn cache_token(&self, credential: &OAuthCredential) {
+        let mut cache = self.cache.lock().await;
+        *cache = Some(CachedToken {
+            access_token: credential.access_token.clone(),
+            access_token_expires_at: credential.access_token_expires_at,
+        });
+    }
+
+    fn auth_error(&self, problem: &ChatGptAuthProblem) -> anyhow::Error {
+        anyhow::anyhow!(classify_chatgpt_auth_error(
+            &self.agent_did,
+            &self.provider,
+            problem,
+        ))
+    }
+}
+
+impl BearerSource for DbCredentialBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        if let Some(cached) = self.cache.lock().await.clone() {
+            if token_is_fresh(cached.access_token_expires_at) {
+                return Ok(cached.access_token);
+            }
         }
-        auth.get_token()
-            .context("ChatGPT auth did not expose a bearer token")
+
+        let _guard = self.refresh_lock.lock().await;
+
+        if let Some(cached) = self.cache.lock().await.clone() {
+            if token_is_fresh(cached.access_token_expires_at) {
+                return Ok(cached.access_token);
+            }
+        }
+
+        let mut credential = self.load_credential().await?;
+        if token_is_fresh(credential.access_token_expires_at) {
+            self.cache_token(&credential).await;
+            return Ok(credential.access_token);
+        }
+
+        if !self.is_owner {
+            self.cache_token(&credential).await;
+            return Ok(credential.access_token);
+        }
+
+        let refreshed = crate::chatgpt_oauth_refresh::refresh_chatgpt_token(
+            &credential.refresh_token,
+            &self.http,
+        )
+        .await
+        .map_err(|problem| self.auth_error(&problem))?;
+        credential.access_token = refreshed.access_token;
+        credential.refresh_token = refreshed.refresh_token;
+        if refreshed.id_token.is_some() {
+            credential.id_token = refreshed.id_token;
+        }
+        if refreshed.account_id.is_some() {
+            credential.account_id = refreshed.account_id;
+        }
+        if refreshed.plan_type.is_some() {
+            credential.chatgpt_plan_type = refreshed.plan_type;
+        }
+        credential.is_fedramp = refreshed.is_fedramp || credential.is_fedramp;
+        credential.access_token_expires_at = refreshed.access_token_expires_at;
+        credential.last_refresh = Some(Utc::now());
+        upsert_oauth_credential(self.node.as_ref(), &credential).await?;
+        self.cache_token(&credential).await;
+        Ok(credential.access_token)
     }
 }
 
@@ -548,15 +887,32 @@ fn content_text(content: &Value) -> Option<String> {
 }
 
 pub async fn build_responses_client(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient<AuthManagerBearer>>> {
-    let codex_home = resolve_codex_home(None)?;
-    let (manager, auth) = resolve_chatgpt_auth(&codex_home)
+) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient<DbCredentialBearer>>> {
+    let provider = CHATGPT_CODEX_PROVIDER;
+    let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
         .await
-        .map_err(|problem| anyhow::anyhow!(classify_chatgpt_auth_error(&codex_home, &problem)))?;
-    let headers = build_chatgpt_codex_headers(&auth)?;
+        .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(classify_chatgpt_auth_error(
+                agent_did,
+                provider,
+                &ChatGptAuthProblem::Missing,
+            ))
+        })?;
+    let headers =
+        build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    let http = ChatGptCodexHttpClient::new(Arc::new(AuthManagerBearer(manager)));
+    let bearer = DbCredentialBearer::new(
+        node,
+        agent_did,
+        provider,
+        credential.credential_id.clone(),
+        /*is_owner*/ true,
+    );
+    let http = ChatGptCodexHttpClient::new(Arc::new(bearer));
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,
@@ -586,37 +942,43 @@ mod tests {
 
     #[test]
     fn classifies_missing_auth_with_login_guidance() {
-        let home = Path::new("/tmp/codex-home");
-        let msg = classify_chatgpt_auth_error(home, &ChatGptAuthProblem::Missing);
+        let msg = classify_chatgpt_auth_error(
+            "did:key:zAgent",
+            CHATGPT_CODEX_PROVIDER,
+            &ChatGptAuthProblem::Missing,
+        );
 
-        assert!(msg.contains("/tmp/codex-home"), "names the home: {msg}");
+        assert!(msg.contains("did:key:zAgent"), "names the agent DID: {msg}");
         assert!(
-            msg.contains("codex login"),
+            msg.contains("defra-agent codex-login"),
             "tells the user how to fix it: {msg}"
         );
     }
 
     #[test]
     fn classifies_wrong_mode_naming_found_mode() {
-        let home = Path::new("/tmp/codex-home");
         let msg = classify_chatgpt_auth_error(
-            home,
+            "did:key:zAgent",
+            CHATGPT_CODEX_PROVIDER,
             &ChatGptAuthProblem::WrongMode {
-                found_mode: "ApiKey".to_string(),
+                found_mode: "disabled".to_string(),
             },
         );
 
         assert!(msg.contains("ChatGPT"), "asks for ChatGPT OAuth: {msg}");
-        assert!(msg.contains("ApiKey"), "names what was found: {msg}");
+        assert!(msg.contains("disabled"), "names what was found: {msg}");
     }
 
     #[test]
     fn classifies_expired_with_reauth_guidance() {
-        let home = Path::new("/tmp/codex-home");
-        let msg = classify_chatgpt_auth_error(home, &ChatGptAuthProblem::Expired);
+        let msg = classify_chatgpt_auth_error(
+            "did:key:zAgent",
+            CHATGPT_CODEX_PROVIDER,
+            &ChatGptAuthProblem::Expired,
+        );
 
         assert!(msg.to_lowercase().contains("expired"), "{msg}");
-        assert!(msg.contains("codex login"), "{msg}");
+        assert!(msg.contains("defra-agent codex-login"), "{msg}");
     }
 
     #[tokio::test]

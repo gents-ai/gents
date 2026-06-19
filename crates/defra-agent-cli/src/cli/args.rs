@@ -58,7 +58,9 @@ pub(crate) enum Command {
         after_help = CODEX_AFTER_HELP
     )]
     Codex(CodexArgs),
-    #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
+    #[command(about = "Sign in with ChatGPT and store OAuth credentials in DefraDB")]
+    CodexLogin(CodexLoginArgs),
+    #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
@@ -168,19 +170,38 @@ pub(crate) struct NativeFsRunnerArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
-    #[arg(
-        long,
-        env = "DEFRA_CODEX_HOME",
-        value_name = "CODEX_HOME",
-        help = "Codex home directory to read. Defaults to ~/.codex"
-    )]
-    pub(crate) codex_home: Option<PathBuf>,
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
     #[arg(
         long,
         default_value_t = 20,
         help = "Maximum number of model slugs to print"
     )]
     pub(crate) max_models: usize,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexLoginArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
+    #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
+    pub(crate) device_auth: bool,
+    #[arg(long, help = "OAuth issuer override for testing")]
+    pub(crate) issuer: Option<String>,
+    #[arg(long, help = "OAuth client ID override for testing")]
+    pub(crate) client_id: Option<String>,
 }
 
 #[derive(clap::Args)]
