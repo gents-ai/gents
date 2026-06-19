@@ -12,7 +12,8 @@ use crate::config_writes::{
 use crate::print_json;
 use crate::shared::*;
 use crate::{
-    normalize_optional_string, post_graphql, BackendResolutionMode, EXPORT_INFERENCE_BACKEND_FIELDS,
+    normalize_optional_string, post_graphql, resolve_agent_did, BackendResolutionMode,
+    EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
 pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
@@ -56,12 +57,20 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .timeout(Duration::from_secs(5))
         .build()
         .context("building backend discovery client")?;
+    // For ChatGptCodex the bearer is an OAuthCredential document, not an api_key. Read-only:
+    // discovery never refreshes (the owning runtime is the single refresh writer); if the stored
+    // access token is expired the /models call surfaces an actionable 401.
+    let chatgpt_credential = if target.provider_kind == BackendProviderKind::ChatGptCodex {
+        load_chatgpt_credential_for_discovery(&args).await?
+    } else {
+        None
+    };
     let discovered_models = discover_backend_models(
         &client,
         target.provider_kind,
         &target.endpoint,
         target.api_key.as_deref(),
-        None,
+        chatgpt_credential.as_ref(),
     )
     .await?;
 
@@ -76,6 +85,27 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     });
     print_json(&output)?;
     Ok(())
+}
+
+/// Load the ChatGptCodex OAuth credential document for model discovery. Returns `None` when no
+/// credential exists yet (the discovery primitive then emits actionable `codex-login` guidance).
+async fn load_chatgpt_credential_for_discovery(
+    args: &BackendDiscoverModelsArgs,
+) -> Result<Option<defra_agent::chatgpt_codex::OAuthCredential>> {
+    let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
+        anyhow::bail!(
+            "--graphql is required to discover models for a ChatGptCodex backend: its OAuth \
+             credential is a DefraDB document. Run `defra-agent codex-login` first if needed."
+        );
+    };
+    let agent_did = resolve_agent_did(None, args.agent_did.as_deref())?;
+    let access = ConfigAccess::Graphql(graphql);
+    crate::commands::codex_auth_probe::load_oauth_credential(
+        &access,
+        &agent_did,
+        defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+    )
+    .await
 }
 
 async fn resolve_backend_discovery_target(

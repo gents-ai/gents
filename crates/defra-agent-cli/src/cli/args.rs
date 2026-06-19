@@ -1642,6 +1642,11 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the probe API key")]
     pub(crate) api_key_env_var: Option<String>,
+    #[arg(
+        long,
+        help = "Agent DID owning the ChatGptCodex OAuth credential (defaults to the local agent). Only used for ChatGptCodex backends, whose bearer is a DefraDB document rather than an api_key"
+    )]
+    pub(crate) agent_did: Option<String>,
 }
 
 #[derive(clap::Args)]
