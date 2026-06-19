@@ -18,7 +18,15 @@ struct ModelSummary {
 
 pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let codex_home = defra_agent::chatgpt_codex::resolve_codex_home(args.codex_home)?;
-    let auth = defra_agent::chatgpt_codex::load_chatgpt_auth(codex_home.clone()).await?;
+    let (_manager, auth) = match defra_agent::chatgpt_codex::resolve_chatgpt_auth(&codex_home).await
+    {
+        Ok(resolved) => resolved,
+        Err(problem) => {
+            let guidance =
+                defra_agent::chatgpt_codex::classify_chatgpt_auth_error(&codex_home, &problem);
+            anyhow::bail!("{guidance}");
+        }
+    };
 
     let account_email = auth
         .get_account_email()
@@ -60,6 +68,13 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
         .context("failed to read models response from ChatGPT Codex backend")?;
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            let guidance = defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+                &codex_home,
+                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Expired,
+            );
+            bail!("models request failed with HTTP {status}: {body}\n{guidance}");
+        }
         bail!("models request failed with HTTP {status}: {body}");
     }
     let ModelsResponse { models } =
@@ -88,4 +103,27 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn probe_missing_home_is_actionable() {
+        let tmp = std::env::temp_dir().join("defra-codex-probe-missing-xyz");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let args = CodexAuthProbeArgs {
+            codex_home: Some(tmp.clone()),
+            max_models: 5,
+        };
+        let err = codex_auth_probe(args)
+            .await
+            .expect_err("no auth in empty home");
+        let msg = format!("{err:#}");
+
+        assert!(msg.contains("codex login"), "actionable: {msg}");
+    }
 }

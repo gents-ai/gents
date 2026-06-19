@@ -155,6 +155,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "degraded"
     };
 
+    let chatgpt_auth_check = match defra_agent::chatgpt_codex::resolve_codex_home(None) {
+        Ok(home) => match defra_agent::chatgpt_codex::resolve_chatgpt_auth(&home).await {
+            Ok(_) => json!({ "ok": true, "codex_home": home.display().to_string() }),
+            Err(problem) => json!({
+                "ok": false,
+                "codex_home": home.display().to_string(),
+                "guidance": defra_agent::chatgpt_codex::classify_chatgpt_auth_error(&home, &problem),
+            }),
+        },
+        Err(error) => json!({ "ok": false, "error": error.to_string() }),
+    };
+
     let mut output = json!({
         "status": status,
         "home": home_dir,
@@ -173,6 +185,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "agent_principal_present": principal_present,
             "default_behavior": default_behavior_check,
             "tool_ceiling": tool_ceiling_check,
+            "chatgpt_auth": chatgpt_auth_check,
             "backends": backend_reports,
             "p2p": {
                 "ok": p2p_ok,

@@ -1,7 +1,9 @@
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::{fmt, fmt::Formatter};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use codex_login::{
     default_client::default_headers, AuthCredentialsStoreMode, AuthManager, CodexAuth,
@@ -35,29 +37,83 @@ pub fn resolve_codex_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
         .context("could not determine home directory for default ~/.codex")
 }
 
-pub async fn load_chatgpt_auth(codex_home: PathBuf) -> Result<CodexAuth> {
-    let auth_manager = AuthManager::new(
-        codex_home.clone(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::Auto,
-        /*chatgpt_base_url*/ None,
-    )
-    .await;
+/// A user-actionable classification of why ChatGPT OAuth could not be used.
+#[derive(Debug, Clone)]
+pub enum ChatGptAuthProblem {
+    /// No Codex credentials found in the resolved home.
+    Missing,
+    /// Credentials exist but are not ChatGPT OAuth (for example, an API key).
+    ///
+    /// `found_mode` is the stringified Codex auth mode. Keeping it local avoids
+    /// adding a direct dependency just to expose that transitive enum.
+    WrongMode { found_mode: String },
+    /// Credentials are ChatGPT OAuth but the token is expired or revoked.
+    Expired,
+    /// Anything else, with the underlying message.
+    Other(String),
+}
 
-    // `auth()` follows Codex behavior and may refresh near-expiry managed tokens.
-    let auth = auth_manager
-        .auth()
-        .await
-        .with_context(|| format!("no Codex auth found in {}", codex_home.display()))?;
-
-    if !auth.is_chatgpt_auth() {
-        bail!(
-            "expected ChatGPT OAuth auth in {}, found {:?}",
-            codex_home.display(),
-            auth.auth_mode()
-        );
+/// Render an actionable, multi-line message for a ChatGPT auth failure.
+pub fn classify_chatgpt_auth_error(codex_home: &Path, problem: &ChatGptAuthProblem) -> String {
+    let home = codex_home.display();
+    match problem {
+        ChatGptAuthProblem::Missing => format!(
+            "No Codex credentials found in {home}.\n\
+             To use the ChatGPT subscription backend, sign in with the Codex CLI \
+             (`codex login`), or point DEFRA_CODEX_HOME at a home that already has \
+             ChatGPT OAuth credentials."
+        ),
+        ChatGptAuthProblem::WrongMode { found_mode } => format!(
+            "Credentials in {home} are {found_mode}, but the ChatGPT subscription \
+             backend needs ChatGPT OAuth.\n\
+             Run `codex login` to establish a ChatGPT session, or select an \
+             API-key backend instead."
+        ),
+        ChatGptAuthProblem::Expired => format!(
+            "ChatGPT OAuth credentials in {home} are expired or revoked.\n\
+             Re-authenticate with `codex login` to refresh the session."
+        ),
+        ChatGptAuthProblem::Other(detail) => {
+            format!("ChatGPT auth in {home} could not be used: {detail}")
+        }
     }
+}
 
+/// Build an AuthManager for `codex_home` and resolve usable ChatGPT OAuth,
+/// classifying the failure precisely so callers can give actionable guidance.
+///
+/// `AuthManager::auth()` may proactively refresh and persist the managed token
+/// using Codex's normal behavior, so this is not a read-only operation.
+pub async fn resolve_chatgpt_auth(
+    codex_home: &Path,
+) -> std::result::Result<(Arc<AuthManager>, CodexAuth), ChatGptAuthProblem> {
+    let manager = Arc::new(
+        AuthManager::new(
+            codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::Auto,
+            /*chatgpt_base_url*/ None,
+        )
+        .await,
+    );
+    // `auth()` attempts a proactive refresh. On permanent refresh failure it
+    // logs and returns the stale auth, so ask the manager for that failure too.
+    let auth = manager.auth().await.ok_or(ChatGptAuthProblem::Missing)?;
+    if !auth.is_chatgpt_auth() {
+        return Err(ChatGptAuthProblem::WrongMode {
+            found_mode: format!("{:?}", auth.auth_mode()),
+        });
+    }
+    if manager.refresh_failure_for_auth(&auth).is_some() {
+        return Err(ChatGptAuthProblem::Expired);
+    }
+    Ok((manager, auth))
+}
+
+pub async fn load_chatgpt_auth(codex_home: PathBuf) -> Result<CodexAuth> {
+    let (_, auth) = resolve_chatgpt_auth(&codex_home)
+        .await
+        .map_err(|problem| anyhow::anyhow!(classify_chatgpt_auth_error(&codex_home, &problem)))?;
     Ok(auth)
 }
 
@@ -93,18 +149,103 @@ pub fn build_chatgpt_codex_headers(auth: &CodexAuth) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ChatGptCodexHttpClient {
-    inner: ReqwestClient,
+/// Supplies a current OAuth bearer, refreshing it as needed.
+pub trait BearerSource: Send + Sync {
+    fn current_bearer(&self) -> impl Future<Output = Result<String>> + Send;
 }
 
-impl ChatGptCodexHttpClient {
-    fn inject_required_instructions<T>(req: Request<T>) -> Request<Bytes>
-    where
-        T: Into<Bytes>,
-    {
+/// Production [`BearerSource`] backed by Codex's [`AuthManager`], whose `auth()`
+/// proactively refreshes a near-expiry managed token before returning it.
+#[derive(Clone)]
+pub struct AuthManagerBearer(pub Arc<AuthManager>);
+
+impl BearerSource for AuthManagerBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        let auth = self
+            .0
+            .auth()
+            .await
+            .context("no Codex ChatGPT auth available")?;
+        if !auth.is_chatgpt_auth() {
+            anyhow::bail!(
+                "Codex auth changed to {:?}; ChatGPT OAuth is required",
+                auth.auth_mode()
+            );
+        }
+        if self.0.refresh_failure_for_auth(&auth).is_some() {
+            anyhow::bail!("ChatGPT OAuth credentials are expired or revoked");
+        }
+        auth.get_token()
+            .context("ChatGPT auth did not expose a bearer token")
+    }
+}
+
+pub struct ChatGptCodexHttpClient<S: BearerSource> {
+    inner: ReqwestClient,
+    bearer: Option<Arc<S>>,
+}
+
+impl<S: BearerSource> Clone for ChatGptCodexHttpClient<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            bearer: self.bearer.clone(),
+        }
+    }
+}
+
+impl<S: BearerSource> fmt::Debug for ChatGptCodexHttpClient<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChatGptCodexHttpClient")
+            .field("inner", &self.inner)
+            .field("bearer_configured", &self.bearer.is_some())
+            .finish()
+    }
+}
+
+impl<S: BearerSource> Default for ChatGptCodexHttpClient<S> {
+    fn default() -> Self {
+        Self {
+            inner: ReqwestClient::default(),
+            bearer: None,
+        }
+    }
+}
+
+impl<S: BearerSource> ChatGptCodexHttpClient<S> {
+    pub fn new(bearer: Arc<S>) -> Self {
+        Self {
+            inner: ReqwestClient::default(),
+            bearer: Some(bearer),
+        }
+    }
+
+    async fn fresh_auth_header(&self) -> http_client::Result<HeaderValue> {
+        let bearer = self.bearer.as_ref().ok_or_else(|| {
+            http_client::Error::Instance(
+                anyhow::anyhow!("ChatGptCodexHttpClient used without a configured BearerSource")
+                    .into(),
+            )
+        })?;
+        let token = bearer
+            .current_bearer()
+            .await
+            .map_err(|error| http_client::Error::Instance(error.into()))?;
+        HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
+    }
+
+    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
+        let req = Self::inject_required_instructions(req);
+        let value = self.fresh_auth_header().await?;
+        let (mut parts, body) = req.into_parts();
+        parts.headers.insert("authorization", value);
+        Ok(Request::from_parts(parts, body))
+    }
+
+    fn inject_required_instructions(req: Request<Bytes>) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
-        let mut body = body.into();
+        let mut body = body;
         if parts.uri.path().ends_with("/responses") {
             if let Some(patched) = patch_instructions_body(&body) {
                 body = patched;
@@ -112,9 +253,17 @@ impl ChatGptCodexHttpClient {
         }
         Request::from_parts(parts, body)
     }
+
+    #[cfg(test)]
+    pub async fn prepare_for_test(
+        &self,
+        req: Request<Bytes>,
+    ) -> http_client::Result<Request<Bytes>> {
+        self.prepare(req).await
+    }
 }
 
-impl HttpClientExt for ChatGptCodexHttpClient {
+impl<S: BearerSource + 'static> HttpClientExt for ChatGptCodexHttpClient<S> {
     fn send<T, U>(
         &self,
         req: Request<T>,
@@ -125,8 +274,13 @@ impl HttpClientExt for ChatGptCodexHttpClient {
         U: WasmCompatSend + 'static,
     {
         let inner = self.inner.clone();
-        let req = Self::inject_required_instructions(req);
-        async move { send_reqwest(inner, req).await }
+        let this = self.clone();
+        let (parts, body) = req.into_parts();
+        let req = Request::from_parts(parts, body.into());
+        async move {
+            let req = this.prepare(req).await?;
+            send_reqwest(inner, req).await
+        }
     }
 
     fn send_multipart<U>(
@@ -138,7 +292,14 @@ impl HttpClientExt for ChatGptCodexHttpClient {
         U: WasmCompatSend + 'static,
     {
         let inner = self.inner.clone();
-        async move { HttpClientExt::send_multipart(&inner, req).await }
+        let this = self.clone();
+        async move {
+            let value = this.fresh_auth_header().await?;
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("authorization", value);
+            let req = Request::from_parts(parts, body);
+            HttpClientExt::send_multipart(&inner, req).await
+        }
     }
 
     fn send_streaming<T>(
@@ -149,8 +310,13 @@ impl HttpClientExt for ChatGptCodexHttpClient {
         T: Into<Bytes>,
     {
         let inner = self.inner.clone();
-        let req = Self::inject_required_instructions(req);
-        async move { HttpClientExt::send_streaming(&inner, req).await }
+        let this = self.clone();
+        let (parts, body) = req.into_parts();
+        let req = Request::from_parts(parts, body.into());
+        async move {
+            let req = this.prepare(req).await?;
+            HttpClientExt::send_streaming(&inner, req).await
+        }
     }
 }
 
@@ -383,20 +549,18 @@ fn content_text(content: &Value) -> Option<String> {
 
 pub async fn build_responses_client(
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient>> {
-    let (codex_home, auth) = load_default_chatgpt_auth().await?;
-    let access_token = auth.get_token().with_context(|| {
-        format!(
-            "ChatGPT auth in {} did not expose a bearer token",
-            codex_home.display()
-        )
-    })?;
+) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient<AuthManagerBearer>>> {
+    let codex_home = resolve_codex_home(None)?;
+    let (manager, auth) = resolve_chatgpt_auth(&codex_home)
+        .await
+        .map_err(|problem| anyhow::anyhow!(classify_chatgpt_auth_error(&codex_home, &problem)))?;
     let headers = build_chatgpt_codex_headers(&auth)?;
     let endpoint = normalize_endpoint(endpoint);
+    let http = ChatGptCodexHttpClient::new(Arc::new(AuthManagerBearer(manager)));
     crate::inference_http::build_openai_responses_client(
-        &access_token,
+        "chatgpt-oauth-managed",
         &endpoint,
-        ChatGptCodexHttpClient::default(),
+        http,
         headers,
     )
     .context("building ChatGPT Codex Responses client")
@@ -405,6 +569,86 @@ pub async fn build_responses_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingBearer {
+        token: String,
+        calls: AtomicUsize,
+    }
+
+    impl BearerSource for CountingBearer {
+        async fn current_bearer(&self) -> Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.token.clone())
+        }
+    }
+
+    #[test]
+    fn classifies_missing_auth_with_login_guidance() {
+        let home = Path::new("/tmp/codex-home");
+        let msg = classify_chatgpt_auth_error(home, &ChatGptAuthProblem::Missing);
+
+        assert!(msg.contains("/tmp/codex-home"), "names the home: {msg}");
+        assert!(
+            msg.contains("codex login"),
+            "tells the user how to fix it: {msg}"
+        );
+    }
+
+    #[test]
+    fn classifies_wrong_mode_naming_found_mode() {
+        let home = Path::new("/tmp/codex-home");
+        let msg = classify_chatgpt_auth_error(
+            home,
+            &ChatGptAuthProblem::WrongMode {
+                found_mode: "ApiKey".to_string(),
+            },
+        );
+
+        assert!(msg.contains("ChatGPT"), "asks for ChatGPT OAuth: {msg}");
+        assert!(msg.contains("ApiKey"), "names what was found: {msg}");
+    }
+
+    #[test]
+    fn classifies_expired_with_reauth_guidance() {
+        let home = Path::new("/tmp/codex-home");
+        let msg = classify_chatgpt_auth_error(home, &ChatGptAuthProblem::Expired);
+
+        assert!(msg.to_lowercase().contains("expired"), "{msg}");
+        assert!(msg.contains("codex login"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn injects_fresh_bearer_on_each_request() {
+        let bearer = Arc::new(CountingBearer {
+            token: "tok-123".to_string(),
+            calls: AtomicUsize::new(0),
+        });
+        let client = ChatGptCodexHttpClient::new(bearer.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://example.com/v1/responses")
+            .header("authorization", "Bearer STALE")
+            .body(Bytes::from_static(b"{}"))
+            .unwrap();
+
+        let prepared = client.prepare_for_test(req).await.unwrap();
+        let auth = prepared
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(auth, "Bearer tok-123", "stale bearer was replaced");
+        assert_eq!(
+            bearer.calls.load(Ordering::SeqCst),
+            1,
+            "refreshed once per request"
+        );
+    }
 
     #[test]
     fn patches_rig_responses_body_for_chatgpt_codex() {
