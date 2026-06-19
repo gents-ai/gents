@@ -184,6 +184,14 @@
       gap: var(--space-5);
     }
 
+    .fleet-brand {
+      align-items: flex-start;
+    }
+
+    .fleet-brand h1 {
+      font-size: 22px;
+    }
+
     .fleet-local-runtime,
     .fleet-discovery-row,
     .fleet-add-form,
@@ -199,6 +207,11 @@
 
     .fleet-header-actions {
       justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .fleet-empty-card {
+      width: min(100%, calc(100vw - 24px));
     }
 
     .fleet-local-runtime .primary-button,

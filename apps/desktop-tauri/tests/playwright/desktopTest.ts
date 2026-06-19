@@ -8,6 +8,7 @@ export type HarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "long-content"
+  | "operations-rich"
   | "active-turn"
   | "cascade-turn";
 
@@ -18,28 +19,31 @@ type DesktopFixtures = {
 };
 
 export const test = base.extend<DesktopFixtures>({
-  browserLogs: async ({ page }, use, testInfo) => {
-    const logs: string[] = [];
-    page.on("console", (message) => {
-      logs.push(`[console:${message.type()}] ${message.text()}`);
-    });
-    page.on("pageerror", (error) => {
-      logs.push(`[pageerror] ${error.stack ?? error.message}`);
-    });
-
-    await use(logs);
-
-    const unexpected = logs.filter(
-      (line) => line.startsWith("[pageerror]") || line.startsWith("[console:error]"),
-    );
-    if (testInfo.status !== testInfo.expectedStatus || unexpected.length > 0) {
-      await testInfo.attach("browser-console.log", {
-        body: logs.join("\n") || "(no browser console output)",
-        contentType: "text/plain",
+  browserLogs: [
+    async ({ page }, use, testInfo) => {
+      const logs: string[] = [];
+      page.on("console", (message) => {
+        logs.push(`[console:${message.type()}] ${message.text()}`);
       });
-    }
-    expect(unexpected).toEqual([]);
-  },
+      page.on("pageerror", (error) => {
+        logs.push(`[pageerror] ${error.stack ?? error.message}`);
+      });
+
+      await use(logs);
+
+      const unexpected = logs.filter(
+        (line) => line.startsWith("[pageerror]") || line.startsWith("[console:error]"),
+      );
+      if (testInfo.status !== testInfo.expectedStatus || unexpected.length > 0) {
+        await testInfo.attach("browser-console.log", {
+          body: logs.join("\n") || "(no browser console output)",
+          contentType: "text/plain",
+        });
+      }
+      expect(unexpected).toEqual([]);
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };
@@ -60,6 +64,19 @@ export async function gotoHarness(page: Page, scenario: HarnessScenario = "defau
       )
       .first(),
   ).toBeVisible();
+}
+
+export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
+  const params = new URLSearchParams({ backend: "live" });
+  if (bridgeUrl) {
+    params.set("bridgeUrl", bridgeUrl);
+  }
+  await page.goto(`/tests/ui-harness/harness.html?${params.toString()}`);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-desktop-ui-harness-backend",
+    "live",
+  );
 }
 
 export async function openChat(page: Page) {
@@ -145,6 +162,53 @@ export async function adjacentDuplicateTranscriptRows(page: Page) {
       }
       return duplicates;
     });
+}
+
+export async function expectNoPageHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => {
+    const documentWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body?.scrollWidth ?? 0,
+    );
+    return {
+      documentWidth,
+      viewportWidth: window.innerWidth,
+      offenders: Array.from(
+        document.querySelectorAll(
+          [
+            ".app-shell",
+            ".workspace",
+            ".chat-workspace",
+            ".chat-main",
+            ".config-workspace",
+            ".fleet-dashboard",
+            ".fleet-empty",
+            ".operations-rail",
+          ].join(", "),
+        ),
+      )
+        .map((element) => {
+          const htmlElement = element as HTMLElement;
+          const style = window.getComputedStyle(htmlElement);
+          return {
+            selector:
+              htmlElement.getAttribute("data-testid") ??
+              htmlElement.className.toString() ??
+              htmlElement.tagName,
+            clientWidth: htmlElement.clientWidth,
+            scrollWidth: htmlElement.scrollWidth,
+            overflowX: style.overflowX,
+          };
+        })
+        .filter((entry) => {
+          const scrollDelta = entry.scrollWidth - entry.clientWidth;
+          return scrollDelta > 2 && entry.overflowX === "visible";
+        }),
+    };
+  });
+
+  expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth + 2);
+  expect(overflow.offenders).toEqual([]);
 }
 
 export async function captureStableScreenshot(

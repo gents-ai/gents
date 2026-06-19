@@ -6,20 +6,24 @@ import { setDesktopApiAdapterForTests } from "../../src/lib/desktop-api";
 import { setDesktopClientUpdatedListenerFactoryForTests } from "../../src/lib/desktop-events";
 import { setDesktopShellTimingConfigForTests } from "../../src/hooks/useDesktopShell";
 import { createDesktopUiHarness } from "./desktopHarness";
+import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
 
-const scenario = new URLSearchParams(window.location.search).get("scenario");
-const {
-  adapter,
-  listenerFactory,
-  scenario: resolvedScenario,
-} = createDesktopUiHarness({
-  scenario,
-});
+const params = new URLSearchParams(window.location.search);
+const backend = params.get("backend") === "live" ? "live" : "deterministic";
+const harness =
+  backend === "live"
+    ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })
+    : createDesktopUiHarness({ scenario: params.get("scenario") });
 
-document.documentElement.dataset.desktopUiHarnessScenario = resolvedScenario;
+document.documentElement.dataset.desktopUiHarnessBackend = backend;
+document.documentElement.dataset.desktopUiHarnessScenario =
+  "scenario" in harness ? harness.scenario : "live";
+if ("bridgeUrl" in harness && harness.bridgeUrl) {
+  document.documentElement.dataset.desktopUiHarnessBridgeUrl = harness.bridgeUrl;
+}
 
-setDesktopApiAdapterForTests(adapter);
-setDesktopClientUpdatedListenerFactoryForTests(listenerFactory);
+setDesktopApiAdapterForTests(harness.adapter);
+setDesktopClientUpdatedListenerFactoryForTests(harness.listenerFactory);
 setDesktopShellTimingConfigForTests({
   clientRestartBackoffMs: 1,
   clientRestartMaxAttempts: 2,

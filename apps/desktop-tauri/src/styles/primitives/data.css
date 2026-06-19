@@ -79,4 +79,13 @@
   .lede.compact {
     max-width: 42rem;
   }
+
+  @media (max-width: 760px) {
+    .facts,
+    .grid-2,
+    .grid-3,
+    .table-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 }

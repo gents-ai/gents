@@ -7,7 +7,7 @@
   body,
   #root {
     margin: 0;
-    min-width: 1180px;
+    min-width: 0;
     height: 100vh;
     overflow: hidden;
   }

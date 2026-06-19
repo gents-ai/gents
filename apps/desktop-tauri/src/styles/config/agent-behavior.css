@@ -138,4 +138,24 @@
   .behavior-system-prompt {
     min-height: 320px;
   }
+
+  @media (max-width: 760px) {
+    .agent-install-facts,
+    .behavior-link-grid,
+    .behavior-state-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .agent-name-row,
+    .behavior-key-row {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .agent-name-row h3,
+    .behavior-key-row h3 {
+      font-size: 18px;
+      white-space: normal;
+    }
+  }
 }

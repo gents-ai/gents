@@ -9,6 +9,8 @@ mod support;
 mod adapter_projection_external_fixtures;
 #[path = "e2e_runtime/agent_behavior_migration.rs"]
 mod agent_behavior_migration;
+#[path = "e2e_runtime/defradb_time_travel.rs"]
+mod defradb_time_travel;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
 #[path = "e2e_runtime/event_source_subscription_factory_smoke.rs"]
