@@ -161,8 +161,10 @@ applies a **redaction pass before anything touches disk**:
   deterministic and offline. Request keying hashes the normalized wire request (model +
   messages + tools + params, with volatile fields — session ids, timestamps, redacted auth —
   masked). Because identical requests recur across retries and across nodes, **each key maps
-  to an ordered multiset** (or carries a stable per-key ordinal): replay returns entries in
-  recorded order and asserts **every recorded entry is consumed exactly once** (no unmatched
+  to an ordered multiset whose entries carry a stable per-key ordinal assigned at record time**
+  — the ordinal is the ordering source, *not* wall-clock arrival order, so multi-node replay is
+  deterministic regardless of how concurrent calls interleave at replay. Replay serves entries
+  in ordinal order and asserts **every recorded entry is consumed exactly once** (no unmatched
   request, no leftover fixture) — so a dropped or duplicated provider call fails replay.
 - Complementary to **#444** (which mocks at the `CompletionModel` trait seam for
   response-logic tests): HTTP-seam = wire fidelity; trait-seam = loop logic. Two layers.
@@ -189,9 +191,10 @@ fixture corpus is named there as the #438 conformance contract.
 
 `PromptAssembly` is provider-agnostic: it models the universal tool-call active-block
 contract and proves `sanitize` sound (T1), fixpoint (T2/T3/T5), and split-stable (T4). The
-strict active-block validity it enforces is a **superset** of the Anthropic / Gemini /
-OpenAI tool-pairing requirements (all reject a tool-result that doesn't immediately close
-its announcing turn). Adding providers changes no legal transition, no invariant, and not
+strict active-block validity it enforces **implies each committed provider's tool-pairing
+requirement** (Anthropic / Gemini / OpenAI all reject a tool-result that doesn't immediately
+close its announcing turn — `ProviderValid` is the stricter predicate, so anything it accepts
+they accept). Adding providers changes no legal transition, no invariant, and not
 *what the model is fed* (every provider consumes the same sanitized native message family).
 
 Therefore: **no new theorems.** Add a conformance note/assertion that each committed
