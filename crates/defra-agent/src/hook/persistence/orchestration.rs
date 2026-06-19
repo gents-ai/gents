@@ -6,6 +6,43 @@ use crate::workflow::{
     WORKFLOW_ROLE_SYNTHESIS,
 };
 
+/// A typed rejection raised from inside the workflow RUN path (e.g. the spawn-time
+/// local-behavior guard) so the dispatch can persist the correct
+/// `tool_failure_class` instead of the generic `External`. Carried through
+/// `anyhow` and recovered via `downcast_ref`.
+#[derive(Debug)]
+struct WorkflowSpawnRejected {
+    failure_class: FailureClass,
+    payload: String,
+}
+
+impl std::fmt::Display for WorkflowSpawnRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "workflow spawn rejected ({:?})", self.failure_class)
+    }
+}
+
+impl std::error::Error for WorkflowSpawnRejected {}
+
+/// Map a workflow RUN-path error to the `(tool_failure_class, payload)` the
+/// dispatch persists. A typed `WorkflowSpawnRejected` (e.g. the spawn-time
+/// local-behavior guard) carries its own class so trace/projection/retry see the
+/// right `tool_failure_class`; everything else is genuinely `External`.
+fn classify_workflow_run_error(error: &anyhow::Error) -> (FailureClass, String) {
+    match error.downcast_ref::<WorkflowSpawnRejected>() {
+        Some(rejected) => (rejected.failure_class, rejected.payload.clone()),
+        None => (
+            FailureClass::External,
+            service_unavailable_payload(
+                FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
+                "/",
+                format!("fan_out_and_synthesize failed: {error:#}"),
+                true,
+            ),
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct WorkflowSpawnSpec {
     task_id: Option<String>,
@@ -108,13 +145,8 @@ impl DefraSessionHook {
                 result
             }
             Err(error) => {
-                let payload = service_unavailable_payload(
-                    FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
-                    "/",
-                    format!("fan_out_and_synthesize failed: {error:#}"),
-                    true,
-                );
-                lifecycle.fail(&payload, FailureClass::External).await?;
+                let (failure_class, payload) = classify_workflow_run_error(&error);
+                lifecycle.fail(&payload, failure_class).await?;
                 payload
             }
         };
@@ -622,12 +654,30 @@ impl DefraSessionHook {
         if let Some(target) = resolve_context_target(parent_context, &spec.target_name) {
             if self.subagent_target_host(target) == SubagentTargetHost::Local {
                 match load_agent_behavior(&self.node, &spec.behavior_id).await {
-                    Ok(None) => anyhow::bail!(
-                        "local workflow target '{}' refers to behavior '{}' which no longer \
-                         exists; it may have been removed after this session started",
-                        spec.target_name,
-                        spec.behavior_id
-                    ),
+                    Ok(None) => {
+                        // Typed rejection so the dispatch persists
+                        // `serviceUnavailable` (matching the invocation-time guard
+                        // and the normal spawn path), NOT the generic `external`.
+                        let pointer = if workflow_role == WORKFLOW_ROLE_SYNTHESIS {
+                            "/synthesis_target"
+                        } else {
+                            "/tasks"
+                        };
+                        return Err(anyhow::Error::new(WorkflowSpawnRejected {
+                            failure_class: FailureClass::ServiceUnavailable,
+                            payload: tool_not_allowed_payload(
+                                FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
+                                pointer,
+                                &spec.target_name,
+                                format!(
+                                    "target '{}' refers to behavior '{}' which no longer exists; \
+                                     it may have been removed after this session started",
+                                    spec.target_name, spec.behavior_id
+                                ),
+                                context_allowed_target_names(parent_context),
+                            ),
+                        }));
+                    }
                     Ok(Some(_)) => {}
                     Err(error) => tracing::warn!(
                         behavior_id = %spec.behavior_id,
@@ -893,4 +943,30 @@ fn workflow_task_id(index: usize, spec: &WorkflowSpawnSpec) -> String {
         .clone()
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| format!("{}:{index}", spec.target_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the spawn-time local-behavior guard: a missing local target
+    /// at spawn time must persist `serviceUnavailable` (matching the invocation
+    /// guard and the normal spawn path), NOT the generic `external` of the
+    /// catch-all run-error handler — `tool_failure_class` drives
+    /// trace/projection/retry semantics.
+    #[test]
+    fn workflow_spawn_rejection_classifies_as_service_unavailable() {
+        let rejected = anyhow::Error::new(WorkflowSpawnRejected {
+            failure_class: FailureClass::ServiceUnavailable,
+            payload: "synthesis-target-gone".to_string(),
+        });
+        let (class, payload) = classify_workflow_run_error(&rejected);
+        assert_eq!(class, FailureClass::ServiceUnavailable);
+        assert_eq!(payload, "synthesis-target-gone");
+
+        // A generic run-path error remains External.
+        let generic = anyhow::anyhow!("inference backend exploded");
+        let (class, _) = classify_workflow_run_error(&generic);
+        assert_eq!(class, FailureClass::External);
+    }
 }

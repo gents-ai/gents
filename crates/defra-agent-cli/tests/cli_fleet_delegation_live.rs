@@ -1544,6 +1544,232 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Cut 5 — local synthesizer deleted MID-RUN (between fan-out and synthesis):
+// proves the spawn-time TOCTOU guard fires, no synthesis child is written, and
+// the orchestration tool call fails with the correct `serviceUnavailable`
+// failure class (not the generic `external`).
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+async fn five_process_workflow_synthesizer_deleted_midrun_live() -> Result<()> {
+    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow mid-run-delete e2e");
+        return Ok(());
+    }
+    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    assert_endpoint_reachable(&endpoint).await?;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let (coord, subagents) = fleet
+        .split_first()
+        .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
+
+    establish_reconciler_pairing(coord, subagents).await?;
+    if let Err(error) = wait_for_fleet_pairing(coord, subagents).await {
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "wf-midrun-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error);
+    }
+
+    // Healthy config: the synthesizer EXISTS at invocation (so the invocation-time
+    // guard passes); we delete it while fan-out runs.
+    configure_fleet_workflow_behaviors(tempdir.path(), coord, subagents, WorkflowFault::Healthy)
+        .await?;
+    wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
+        .await?;
+    for subagent in subagents {
+        wait_for_runtime_quiescence(
+            &subagent.graphql,
+            &subagent.agent_did,
+            2,
+            Duration::from_secs(6),
+        )
+        .await?;
+    }
+
+    let parent_prompt = "Use the research fleet via workflow orchestration: ask researcher-1 for one fact about Mercury, researcher-2 about Venus, researcher-3 about Earth, and researcher-4 about Mars, then synthesize a one-paragraph summary comparing the four planets.";
+    let submit = run_cli_json(
+        &coord.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &coord.graphql,
+            "--agent-did",
+            &coord.agent_did,
+            "--behavior-id",
+            &coord.behavior_id,
+            "--content",
+            parent_prompt,
+            "--no-wait",
+        ],
+    )?;
+    let parent_request_id = required_output_string(&submit, "request_id")?;
+    let parent_session_id = required_output_string(&submit, "session_id")?;
+
+    // Wait until fan-out has STARTED (a fan_out_child bridge exists) — the
+    // invocation-time guard has already passed — then delete the synthesizer.
+    // Fan-out runs for many seconds before the barrier, so synthesis has not yet
+    // spawned: the deletion lands in that window and the spawn-time guard fires.
+    wait_for_fan_out_started(&coord.graphql, &parent_session_id, Duration::from_secs(120)).await?;
+    delete_behavior_doc(&coord.graphql, FLEET_SYNTHESIZER_BEHAVIOR_ID).await?;
+    // Confirm it is actually gone before relying on the guard.
+    anyhow::ensure!(
+        !behavior_exists(&coord.graphql, FLEET_SYNTHESIZER_BEHAVIOR_ID).await?,
+        "synthesizer behavior should be deleted"
+    );
+
+    // The orchestration tool call must terminalize FAILED with serviceUnavailable.
+    let (state, failure_class) = wait_for_orchestration_terminal(
+        &coord.graphql,
+        &parent_session_id,
+        Duration::from_secs(180),
+    )
+    .await?;
+    anyhow::ensure!(
+        state != "completed",
+        "orchestration must not complete when the synthesizer is deleted mid-run (got {state})"
+    );
+    anyhow::ensure!(
+        failure_class.as_deref() == Some("serviceUnavailable"),
+        "deleted local synthesis target must fail as serviceUnavailable, got {failure_class:?}"
+    );
+
+    // No synthesis child was ever written (the guard returns before the bridge).
+    let synth_bridges = graphql_query(
+        &coord.graphql,
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, workflow_role: {{ _eq: "synthesis" }} }}) {{ tool_call_id }} }}"#,
+            escape_graphql_string(&parent_session_id)
+        ),
+    )
+    .await?;
+    let synth_count = synth_bridges
+        .pointer("/data/AgentToolCall")
+        .and_then(Value::as_array)
+        .map(|r| r.len())
+        .unwrap_or(0);
+    anyhow::ensure!(
+        synth_count == 0,
+        "no synthesis bridge should be written when the synthesizer is gone, saw {synth_count}"
+    );
+
+    // The parent request terminalizes PROMPTLY (not hung to the deadline) — the
+    // tool failure is returned to the model, which handles it and finishes the
+    // turn, so "completed" here is correct: the fast terminalization is the
+    // property, not the parent's terminal state.
+    let _ = wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(60))
+        .await?;
+
+    drop(fleet);
+    Ok(())
+}
+
+/// Wait until at least one fan-out child bridge exists (fan-out has begun).
+async fn wait_for_fan_out_started(
+    coord_graphql: &str,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let escaped = escape_graphql_string(session_id);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let resp = graphql_query(
+            coord_graphql,
+            &format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped}" }}, workflow_role: {{ _eq: "fan_out_child" }} }}, limit: 1) {{ tool_call_id }} }}"#
+            ),
+        )
+        .await?;
+        if resp.pointer("/data/AgentToolCall/0").is_some() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "fan-out did not start within {timeout:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Wait until the orchestration tool call is terminal; return (lifecycle_state,
+/// tool_failure_class).
+async fn wait_for_orchestration_terminal(
+    coord_graphql: &str,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<(String, Option<String>)> {
+    let escaped = escape_graphql_string(session_id);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let resp = graphql_query(
+            coord_graphql,
+            &format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped}" }}, tool_name: {{ _eq: "fan_out_and_synthesize" }} }}, limit: 1) {{ lifecycle_state tool_failure_class }} }}"#
+            ),
+        )
+        .await?;
+        if let Some(row) = resp.pointer("/data/AgentToolCall/0") {
+            let state = row.get("lifecycle_state").and_then(Value::as_str);
+            if is_workflow_terminal(state) {
+                return Ok((
+                    state.unwrap_or_default().to_string(),
+                    row.get("tool_failure_class")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                ));
+            }
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "orchestration did not terminalize within {timeout:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Delete an AgentBehavior document (so `load_agent_behavior` returns None).
+async fn delete_behavior_doc(graphql: &str, behavior_id: &str) -> Result<()> {
+    let escaped = escape_graphql_string(behavior_id);
+    let resp = graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{ delete_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+        ),
+    )
+    .await?;
+    let deleted = resp
+        .pointer("/data/delete_AgentBehavior")
+        .and_then(Value::as_array)
+        .map(|r| r.len())
+        .unwrap_or(0);
+    anyhow::ensure!(
+        deleted >= 1,
+        "expected to delete behavior {behavior_id}, deleted {deleted}"
+    );
+    Ok(())
+}
+
+async fn behavior_exists(graphql: &str, behavior_id: &str) -> Result<bool> {
+    let escaped = escape_graphql_string(behavior_id);
+    let resp = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ behavior_id }} }}"#
+        ),
+    )
+    .await?;
+    Ok(resp.pointer("/data/AgentBehavior/0").is_some())
+}
+
 /// Wait until the workflow has FINISHED on the coordinator: the single
 /// `fan_out_and_synthesize` orchestration call is terminal, with its four
 /// fan-out bridges and one synthesis bridge present (terminal-completed counts
