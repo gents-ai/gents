@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use chrono::{Duration, Utc};
 use serde::Deserialize;
 
 use crate::cli::args::CodexAuthProbeArgs;
@@ -40,7 +39,11 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
                 &defra_agent::chatgpt_codex::ChatGptAuthProblem::Missing,
             ))
         })?;
-    let credential = refresh_oauth_credential_if_needed(&access, credential).await?;
+    // Read-only: the probe NEVER refreshes the token. Refreshing here would make the probe a
+    // second, uncoordinated writer of the rotating refresh token (concurrent with the owning
+    // runtime), which the provider's reuse-detection would treat as a leak and REVOKE the
+    // credential. If the stored access token is expired, the /models call below 401s and we
+    // surface actionable guidance; the owning runtime is the single writer that refreshes.
 
     let backend_url = defra_agent::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
@@ -142,45 +145,6 @@ pub(crate) async fn load_oauth_credential(
         .into_iter()
         .next()
         .transpose()
-}
-
-pub(crate) async fn refresh_oauth_credential_if_needed(
-    access: &ConfigAccess,
-    mut credential: defra_agent::chatgpt_codex::OAuthCredential,
-) -> Result<defra_agent::chatgpt_codex::OAuthCredential> {
-    if Utc::now() + Duration::minutes(5) < credential.access_token_expires_at {
-        return Ok(credential);
-    }
-    let refreshed = defra_agent::chatgpt_oauth_refresh::refresh_chatgpt_token(
-        &credential.refresh_token,
-        &reqwest::Client::new(),
-    )
-    .await
-    .map_err(|problem| {
-        anyhow::anyhow!(defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
-            &credential.agent_did,
-            &credential.provider,
-            &problem,
-        ))
-    })?;
-    credential.access_token = refreshed.access_token;
-    credential.refresh_token = refreshed.refresh_token;
-    if refreshed.id_token.is_some() {
-        credential.id_token = refreshed.id_token;
-    }
-    if refreshed.account_id.is_some() {
-        credential.account_id = refreshed.account_id;
-    }
-    if refreshed.plan_type.is_some() {
-        credential.chatgpt_plan_type = refreshed.plan_type;
-    }
-    credential.is_fedramp = refreshed.is_fedramp || credential.is_fedramp;
-    credential.access_token_expires_at = refreshed.access_token_expires_at;
-    credential.last_refresh = Some(Utc::now());
-    access
-        .execute(&defra_agent::chatgpt_codex::oauth_credential_upsert_mutation(&credential))
-        .await?;
-    Ok(credential)
 }
 
 fn normalize_provider(provider: &str) -> String {

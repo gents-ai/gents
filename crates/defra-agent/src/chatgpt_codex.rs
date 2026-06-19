@@ -387,19 +387,15 @@ pub trait BearerSource: Send + Sync {
     fn current_bearer(&self) -> impl Future<Output = Result<String>> + Send;
 }
 
-#[derive(Debug, Clone)]
-struct CachedToken {
-    access_token: String,
-    access_token_expires_at: DateTime<Utc>,
-}
-
 pub struct DbCredentialBearer {
     node: Arc<EmbeddedNode>,
     agent_did: String,
     provider: String,
     credential_id: String,
     http: reqwest::Client,
-    cache: Mutex<Option<CachedToken>>,
+    /// In-memory authoritative credential. Holds any refresh token rotated at the provider but
+    /// not yet persisted, so it is the source of truth for a subsequent in-process refresh.
+    cache: Mutex<Option<OAuthCredential>>,
     refresh_lock: Mutex<()>,
     is_owner: bool,
 }
@@ -449,12 +445,33 @@ impl DbCredentialBearer {
         Ok(credential)
     }
 
-    async fn cache_token(&self, credential: &OAuthCredential) {
-        let mut cache = self.cache.lock().await;
-        *cache = Some(CachedToken {
-            access_token: credential.access_token.clone(),
-            access_token_expires_at: credential.access_token_expires_at,
-        });
+    async fn cached(&self) -> Option<OAuthCredential> {
+        self.cache.lock().await.clone()
+    }
+
+    async fn cache_credential(&self, credential: &OAuthCredential) {
+        *self.cache.lock().await = Some(credential.clone());
+    }
+
+    /// Persist the credential with bounded retry. Called only after a successful provider
+    /// refresh, where the in-memory cache already holds the rotated token — so a persist failure
+    /// degrades to "serve from memory + log", never to stranding a consumed refresh token.
+    async fn persist_with_retry(&self, credential: &OAuthCredential) -> Result<()> {
+        let mut last_error = None;
+        let mut delay_ms = 200u64;
+        for attempt in 0..3u32 {
+            match upsert_oauth_credential(self.node.as_ref(), credential).await {
+                Ok(_) => return Ok(()),
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt + 1 < 3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                    }
+                }
+            }
+        }
+        Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
     }
 
     fn auth_error(&self, problem: &ChatGptAuthProblem) -> anyhow::Error {
@@ -466,55 +483,90 @@ impl DbCredentialBearer {
     }
 }
 
+/// Copy refreshed token material onto the credential, preserving prior optional fields when the
+/// refresh response omits them.
+fn apply_refreshed_tokens(
+    credential: &mut OAuthCredential,
+    refreshed: crate::chatgpt_oauth_refresh::RefreshedTokens,
+) {
+    credential.access_token = refreshed.access_token;
+    credential.refresh_token = refreshed.refresh_token;
+    if refreshed.id_token.is_some() {
+        credential.id_token = refreshed.id_token;
+    }
+    if refreshed.account_id.is_some() {
+        credential.account_id = refreshed.account_id;
+    }
+    if refreshed.plan_type.is_some() {
+        credential.chatgpt_plan_type = refreshed.plan_type;
+    }
+    credential.is_fedramp = refreshed.is_fedramp || credential.is_fedramp;
+    credential.access_token_expires_at = refreshed.access_token_expires_at;
+    credential.last_refresh = Some(Utc::now());
+}
+
 impl BearerSource for DbCredentialBearer {
     async fn current_bearer(&self) -> Result<String> {
-        if let Some(cached) = self.cache.lock().await.clone() {
-            if token_is_fresh(cached.access_token_expires_at) {
-                return Ok(cached.access_token);
+        if let Some(cred) = self.cached().await {
+            if token_is_fresh(cred.access_token_expires_at) {
+                return Ok(cred.access_token);
             }
         }
 
         let _guard = self.refresh_lock.lock().await;
 
-        if let Some(cached) = self.cache.lock().await.clone() {
-            if token_is_fresh(cached.access_token_expires_at) {
-                return Ok(cached.access_token);
+        // Re-check under the lock: another turn may have refreshed while we waited.
+        if let Some(cred) = self.cached().await {
+            if token_is_fresh(cred.access_token_expires_at) {
+                return Ok(cred.access_token);
             }
         }
 
-        let mut credential = self.load_credential().await?;
+        // Authoritative base: the in-memory credential (which may hold a rotated-but-not-yet-
+        // persisted refresh token) wins over the DB; fall back to the DB on a cold cache.
+        let mut credential = match self.cached().await {
+            Some(cred) => cred,
+            None => {
+                let cred = self.load_credential().await?;
+                self.cache_credential(&cred).await;
+                cred
+            }
+        };
         if token_is_fresh(credential.access_token_expires_at) {
-            self.cache_token(&credential).await;
             return Ok(credential.access_token);
         }
 
         if !self.is_owner {
-            self.cache_token(&credential).await;
+            // Non-owner nodes never refresh: a second writer racing the owner with the same
+            // refresh token triggers provider reuse-detection and revokes the credential. They
+            // serve the latest replicated token and rely on the owner's write-back.
             return Ok(credential.access_token);
         }
 
+        // Owner refresh. The provider ROTATES the refresh token here: once this returns 200 the
+        // old refresh token is consumed and `refreshed` is the ONLY source of truth for it.
         let refreshed = crate::chatgpt_oauth_refresh::refresh_chatgpt_token(
             &credential.refresh_token,
             &self.http,
         )
         .await
         .map_err(|problem| self.auth_error(&problem))?;
-        credential.access_token = refreshed.access_token;
-        credential.refresh_token = refreshed.refresh_token;
-        if refreshed.id_token.is_some() {
-            credential.id_token = refreshed.id_token;
+        apply_refreshed_tokens(&mut credential, refreshed);
+
+        // Make the rotated credential the in-memory source of truth BEFORE persisting, so a
+        // write failure can never strand the consumed refresh token and force a reuse-revoking
+        // re-refresh on the next request.
+        self.cache_credential(&credential).await;
+        if let Err(error) = self.persist_with_retry(&credential).await {
+            tracing::error!(
+                agent_did = %self.agent_did,
+                credential_id = %self.credential_id,
+                %error,
+                "failed to persist rotated ChatGPT OAuth token to DefraDB after retries; serving \
+                 the rotated token from memory. It must be re-persisted before this process exits \
+                 or the rotated refresh token will be lost."
+            );
         }
-        if refreshed.account_id.is_some() {
-            credential.account_id = refreshed.account_id;
-        }
-        if refreshed.plan_type.is_some() {
-            credential.chatgpt_plan_type = refreshed.plan_type;
-        }
-        credential.is_fedramp = refreshed.is_fedramp || credential.is_fedramp;
-        credential.access_token_expires_at = refreshed.access_token_expires_at;
-        credential.last_refresh = Some(Utc::now());
-        upsert_oauth_credential(self.node.as_ref(), &credential).await?;
-        self.cache_token(&credential).await;
         Ok(credential.access_token)
     }
 }
