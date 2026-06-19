@@ -4,11 +4,11 @@
 
 **Goal:** Make the `ChatGptCodex` (ChatGPT-subscription-over-OAuth) backend production-usable: refresh the OAuth bearer per request so long sessions don't 401, turn auth failures into actionable CLI errors, and document the fleet/remote credential-home behavior.
 
-**Architecture:** Today `chatgpt_codex::build_responses_client` reads `CodexAuth::get_token()` **once** and bakes a static bearer into the rig client (`context.rs:203`, `oneshot.rs:139`); a long multi-turn loop outlives the token and 401s. We introduce a `BearerSource` trait whose `Arc<AuthManager>` impl calls `auth().await` per request (which proactively refreshes near-expiry), hold it inside a generic `ChatGptCodexHttpClient<S>`, and overwrite the `Authorization` header on every outbound request — `send`, `send_streaming`, and `send_multipart`. Auth errors are classified into precise missing / wrong-mode / expired problems with setup guidance, surfaced by the existing `codex auth-probe` and `diagnose` commands. No DefraDB/schema/Lean change — this is auth plumbing on an existing seam.
+**Architecture:** Today `chatgpt_codex::build_responses_client` reads `CodexAuth::get_token()` **once** and bakes a static bearer into the rig client (`context.rs:203`, `oneshot.rs:139`); a long multi-turn loop outlives the token and 401s. We introduce a `BearerSource` trait whose `Arc<AuthManager>` impl calls `auth().await` per request (which proactively refreshes near-expiry), hold it inside a generic `ChatGptCodexHttpClient<S>`, and overwrite the `Authorization` header on every outbound request — `send`, `send_streaming`, and `send_multipart`. Auth errors are classified into precise missing / wrong-mode / expired problems with setup guidance, surfaced by the existing `codex-auth-probe` and `diagnose` commands. No DefraDB/schema/Lean change — this is auth plumbing on an existing seam.
 
 **Key constraint discovered in rig:** `rig::providers::openai::Client::builder().build()` requires `H: Default + HttpClientExt` (`rig-core/src/client/mod.rs:602`, with `:624` `http_client.unwrap_or_default()`) — even when `.http_client()` supplies an instance, the **type** must impl `Default`. So `ChatGptCodexHttpClient<S>` carries `bearer: Option<Arc<S>>` and a hand-written `Default` impl (no `S: Default` bound); the existing `build_openai_responses_client` helper is reused unchanged.
 
-**Tech Stack:** Rust, `codex-login` (`AuthManager`, `CodexAuth`, `AuthMode`, `RefreshTokenError`), rig-core `HttpClientExt`, anyhow, tokio.
+**Tech Stack:** Rust, `codex-login` (`AuthManager`, `CodexAuth`, `AuthCredentialsStoreMode`; `refresh_failure_for_auth` for expiry detection), rig-core `HttpClientExt`, anyhow, tokio. (No dependency on `codex-app-server-protocol` — `AuthMode` is never named; wrong-mode is stringified.)
 
 ## Global Constraints
 
@@ -250,10 +250,18 @@ impl BearerSource for AuthManagerBearer {
 Replace the existing `ChatGptCodexHttpClient` definition (the `#[derive(Clone, Debug, Default)] struct { inner: ReqwestClient }`) and its `inject_required_instructions` helper with a generic form. Note `bearer: Option<Arc<S>>` + the manual `Default` (deriving `Default` would wrongly require `S: Default`):
 
 ```rust
-#[derive(Clone)]
 pub struct ChatGptCodexHttpClient<S: BearerSource> {
     inner: ReqwestClient,
     bearer: Option<Arc<S>>,
+}
+
+// Manual Clone: `#[derive(Clone)]` would wrongly require `S: Clone`. We only
+// clone the `Arc`, so no bound on `S` is needed. (The HttpClientExt impl and
+// rig both clone this client; the test fake `CountingBearer` is not Clone.)
+impl<S: BearerSource> Clone for ChatGptCodexHttpClient<S> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone(), bearer: self.bearer.clone() }
+    }
 }
 
 // Manual Default: needed so the type satisfies rig's `H: Default` build bound,
@@ -432,15 +440,23 @@ pub async fn resolve_chatgpt_auth(
         )
         .await,
     );
+    // `auth()` attempts a proactive refresh; on failure it LOGS and returns the
+    // STALE auth rather than erroring. So we must separately ask the manager
+    // whether the last refresh for this auth failed permanently (expired/revoked).
     let auth = manager.auth().await.ok_or(ChatGptAuthProblem::Missing)?;
     if !auth.is_chatgpt_auth() {
         return Err(ChatGptAuthProblem::WrongMode {
             found_mode: format!("{:?}", auth.auth_mode()),
         });
     }
+    if manager.refresh_failure_for_auth(&auth).is_some() {
+        return Err(ChatGptAuthProblem::Expired);
+    }
     Ok((manager, auth))
 }
 ```
+
+> `refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError>` is a real `AuthManager` method (`codex-rs/login/src/auth/manager.rs:1413`). We only test `.is_some()`, so no new type import is needed.
 
 - [ ] **Step 2: Rebuild `build_responses_client` on top of it**
 
@@ -492,7 +508,7 @@ git commit -m "feat(codex): precise auth resolution + refreshing Responses clien
 
 ---
 
-## Task 4: Actionable diagnostics in `codex auth-probe`
+## Task 4: Actionable diagnostics in `codex-auth-probe`
 
 **Files:**
 - Modify: `crates/defra-agent-cli/src/commands/codex_auth_probe.rs`
@@ -546,32 +562,38 @@ if !status.is_success() {
 Run: `cargo build -p defra-agent-cli`
 Expected: PASS.
 
-- [ ] **Step 4: Test the message wiring with a missing home**
+- [ ] **Step 4: Test the message wiring with a missing home (in-file unit test)**
 
-Add `crates/defra-agent-cli/tests/codex_auth_probe_messages.rs`:
+`defra-agent-cli` is **bin-only** (`Cargo.toml:7` `autobins = false`, a single `[[bin]]`), so a `tests/*.rs` integration test cannot `use defra_agent_cli::...` — there is no library target. Add the test **inside** `codex_auth_probe.rs` instead, where `codex_auth_probe` and `CodexAuthProbeArgs` are in scope without any visibility change:
 
 ```rust
-// Runs the probe against a guaranteed-empty home and asserts the actionable
-// guidance is present in the error.
-#[tokio::test]
-async fn probe_missing_home_is_actionable() {
-    let tmp = std::env::temp_dir().join("defra-codex-probe-missing-xyz");
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::args::CodexAuthProbeArgs;
 
-    let args = defra_agent_cli::cli::args::CodexAuthProbeArgs {
-        codex_home: Some(tmp.clone()),
-        max_models: 5,
-    };
-    let err = defra_agent_cli::commands::codex_auth_probe::codex_auth_probe(args)
-        .await
-        .expect_err("no auth in empty home");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("codex login"), "actionable: {msg}");
+    // Resolving auth in a guaranteed-empty home yields Missing -> actionable guidance,
+    // and returns BEFORE any network call.
+    #[tokio::test]
+    async fn probe_missing_home_is_actionable() {
+        let tmp = std::env::temp_dir().join("defra-codex-probe-missing-xyz");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let args = CodexAuthProbeArgs {
+            codex_home: Some(tmp.clone()),
+            max_models: 5,
+        };
+        let err = codex_auth_probe(args)
+            .await
+            .expect_err("no auth in empty home");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("codex login"), "actionable: {msg}");
+    }
 }
 ```
 
-> If `CodexAuthProbeArgs` / `codex_auth_probe` are not `pub` to the test crate, either mark them `pub(crate)` + add an integration shim, or convert this to a `#[cfg(test)]` unit test inside `codex_auth_probe.rs`. Confirm `max_models`'s exact field name/type in `args.rs` (it is referenced at `codex_auth_probe.rs:76`).
+> Confirm `CodexAuthProbeArgs`'s exact fields in `args.rs:170` (`codex_home: Option<PathBuf>`, `max_models` — referenced at `codex_auth_probe.rs:76`). If `DEFRA_CODEX_HOME` is set in the dev environment it overrides the explicit arg only when the arg is `None`; here `codex_home: Some(tmp)` wins (`resolve_codex_home` returns the explicit path first), so the test is hermetic.
 
 - [ ] **Step 5: Run**
 
@@ -581,7 +603,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/defra-agent-cli/src/commands/codex_auth_probe.rs crates/defra-agent-cli/tests/codex_auth_probe_messages.rs
+git add crates/defra-agent-cli/src/commands/codex_auth_probe.rs
 git commit -m "feat(codex): actionable auth-probe diagnostics for missing/expired (#339)"
 ```
 
@@ -614,7 +636,7 @@ Use your existing ChatGPT/Codex subscription instead of an API key.
 ### Setup
 1. Sign in with the Codex CLI (`codex login`) so credentials exist in your Codex home.
 2. Configure a backend with `provider_kind = ChatGptCodex`.
-3. Verify: `defra-agent codex auth-probe` (prints account, plan, and reachable models).
+3. Verify: `defra-agent codex-auth-probe` (prints account, plan, and reachable models).
 
 ### Credential home: `CODEX_HOME` vs `DEFRA_CODEX_HOME`
 - The Codex CLI reads/writes `CODEX_HOME` (default `~/.codex`).
@@ -625,7 +647,9 @@ Use your existing ChatGPT/Codex subscription instead of an API key.
   Your login is never replaced or moved; only the refreshed token is persisted.
 
 ### Fleet / remote
-- A remote/fleet node needs its **own** readable credential home; it does not
+- A remote/fleet node needs its **own** credential home that is **readable and
+  writable by the runtime user** (token refresh persists the renewed token to the
+  store, so a read-only home will eventually fail on expiry); it does not
   share the operator's laptop `~/.codex`. Set `DEFRA_CODEX_HOME` on the node to a
   home provisioned with ChatGPT OAuth credentials.
 - The Codex *frontend* (the `defra-agent codex` TUI) and the *server* credential
@@ -639,7 +663,7 @@ Use your existing ChatGPT/Codex subscription instead of an API key.
 
 ### Diagnostics
 - Missing, wrong-mode (API-key), or expired credentials produce actionable errors
-  from `codex auth-probe` and `diagnose`, naming the home and the `codex login` fix.
+  from `codex-auth-probe` and `diagnose`, naming the home and the `codex login` fix.
 ```
 
 - [ ] **Step 2: Add a structured `chatgpt_auth` check to `diagnose`**
@@ -706,7 +730,7 @@ Expected: clean (no new warnings from the changed files).
 - [ ] **Step 3: Manual acceptance against #339 criteria**
 
 Confirm each #339 acceptance criterion by inspection/run:
-- A user with a Codex subscription can select `ChatGptCodex` and it works predictably → `codex auth-probe` succeeds and a turn completes without a mid-session 401 (per-request refresh, Task 2/3).
+- A user with a Codex subscription can select `ChatGptCodex` and it works predictably → `codex-auth-probe` succeeds and a turn completes without a mid-session 401 (per-request refresh, Task 2/3).
 - Remote/fleet works without sharing the frontend credential home → documented in `docs/backends.md` (Task 5); runtime reads `DEFRA_CODEX_HOME`.
 - Missing/wrong-mode/expired auth produces actionable CLI errors → Task 4 + Task 1 classifier.
 
