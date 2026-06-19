@@ -14,14 +14,14 @@ permissions:
   contents: write
 
 env:
-  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  # The workspace release profile uses fat LTO + one codegen unit. That has
-  # repeatedly OOM-killed the self-hosted Linux release runners during the final
-  # link, especially on spark. Keep Linux artifacts optimized, but use the same
-  # lower-memory ThinLTO shape as the local install profile.
-  CARGO_PROFILE_RELEASE_LTO: "thin"
+  # The workspace release profile uses fat LTO + one codegen unit, which holds
+  # the whole dependency graph in memory at link time and OOM-kills the
+  # self-hosted Linux runners. LTO and build parallelism are set per-arch in the
+  # matrix below: workstation-1 (x86_64) has ample RAM and uses ThinLTO; the
+  # sparks (aarch64) serve a resident model and have only a few GB free, so they
+  # disable LTO and cap parallelism.
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
   RUST_BACKTRACE: "1"
 
@@ -36,9 +36,18 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner_arch: X64
             runner_label: workstation-1
+            # ~228 GB free; ThinLTO links comfortably.
+            release_lto: "thin"
+            cargo_jobs: "8"
           - target: aarch64-unknown-linux-gnu
             runner_arch: ARM64
             runner_label: spark
+            # spark-1/2 serve the resident d4f vLLM model in unified memory,
+            # leaving only ~7-9 GB free. Disable LTO and cap parallelism so the
+            # link fits. Cross-compiling on workstation-1 is the tracked
+            # long-term fix (see the build-flavors epic).
+            release_lto: "off"
+            cargo_jobs: "2"
     runs-on:
       - self-hosted
       - Linux
@@ -48,6 +57,8 @@ jobs:
     env:
       GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
       TARGET_TRIPLE: ${{ matrix.target }}
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto }}
+      CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
 
     steps:
       - uses: actions/checkout@v4
@@ -92,7 +103,7 @@ jobs:
             echo "::error::Expected native ${TARGET_TRIPLE} runner, got ${host_triple}."
             exit 1
           fi
-          cargo build -p defra-agent-cli --release
+          make release-cli
           file target/release/defra-agent
 
       - name: Verify binary
@@ -112,23 +123,13 @@ jobs:
           set -euo pipefail
 
           artifact_basename="defra-agent-${TARGET_TRIPLE}"
-          package_parent="${RUNNER_TEMP}/package"
-          package_root="${package_parent}/${artifact_basename}"
           dist_dir="${RUNNER_TEMP}/dist"
+          rm -rf "${dist_dir}"
+
+          make dist-cli DIST_DIR="${dist_dir}"
+
           tarball="${dist_dir}/${artifact_basename}.tar.gz"
           checksum_file="${tarball}.sha256"
-
-          rm -rf "${package_parent}" "${dist_dir}"
-          mkdir -p "${package_root}" "${dist_dir}"
-          cp target/release/defra-agent "${package_root}/defra-agent"
-          chmod 0755 "${package_root}/defra-agent"
-
-          tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
-          (
-            cd "${dist_dir}"
-            sha256sum "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
-          )
-
           echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
           echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"

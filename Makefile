@@ -19,6 +19,11 @@ help:
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
 	@echo
+	@echo "Release (CI calls these; TARGET=<triple> optional, defaults to host):"
+	@echo "  make release-cli           Build the release CLI (full features)"
+	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
+	@echo "  make dist-cli              Build + package $(DIST_DIR)/defra-agent-<triple>.tar.gz(+sha256)"
+	@echo
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
@@ -58,6 +63,36 @@ build-desktop:
 
 build-desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run build
+
+# ---- Release / packaging ----
+# Produces the Linux release artifacts; the release workflow calls these so CI
+# and local builds run the same commands. LTO, codegen-units and build
+# parallelism are controlled by the caller's environment
+# (CARGO_PROFILE_RELEASE_LTO, CARGO_BUILD_JOBS) — per-arch memory tuning lives
+# in .github/workflows/release-linux.yml, not here.
+TARGET ?=
+DIST_DIR ?= dist
+CARGO_TARGET_FLAG := $(if $(TARGET),--target $(TARGET),)
+TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { print $$2 }'))
+RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/defra-agent
+RELEASE_ARTIFACT := defra-agent-$(TARGET_TRIPLE)
+
+.PHONY: release-cli release-cli-headless dist-cli
+release-cli:
+	$(CARGO) build -p defra-agent-cli --release $(CARGO_TARGET_FLAG)
+
+release-cli-headless:
+	$(CARGO) build -p defra-agent-cli --release --no-default-features $(CARGO_TARGET_FLAG)
+
+dist-cli: release-cli
+	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
+	@mkdir -p "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
+	cp "$(RELEASE_BIN)" "$(DIST_DIR)/$(RELEASE_ARTIFACT)/defra-agent"
+	chmod 0755 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/defra-agent"
+	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz" "$(RELEASE_ARTIFACT)"
+	cd "$(DIST_DIR)" && sha256sum "$(RELEASE_ARTIFACT).tar.gz" > "$(RELEASE_ARTIFACT).tar.gz.sha256"
+	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
+	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
 
 .PHONY: fmt fmt-check check-cli-headless proofs
 fmt:
