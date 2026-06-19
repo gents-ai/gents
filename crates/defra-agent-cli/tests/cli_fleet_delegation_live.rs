@@ -972,16 +972,24 @@ async fn assert_synthesis_ran_locally(
         .ok_or_else(|| anyhow!("synthesis bridge missing child_request_id"))?;
     let escaped = escape_graphql_string(child_request_id);
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }} }}"#
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did behavior_id }} }}"#
     );
     let resp = graphql_query(coord_graphql, &query).await?;
-    let did = resp
-        .pointer("/data/AgentRequest/0/agent_did")
-        .and_then(Value::as_str)
+    let req = resp
+        .pointer("/data/AgentRequest/0")
         .ok_or_else(|| anyhow!("synthesis child not visible on coordinator"))?;
+    let did = req
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("synthesis child missing agent_did"))?;
     anyhow::ensure!(
         did == coord_did,
         "synthesis ran on {did}, must be local on the coordinator {coord_did}"
+    );
+    // And under the dedicated synthesizer behavior — not the coordinator's own.
+    anyhow::ensure!(
+        req.get("behavior_id").and_then(Value::as_str) == Some(FLEET_SYNTHESIZER_BEHAVIOR_ID),
+        "synthesis ran under the wrong behavior (expected {FLEET_SYNTHESIZER_BEHAVIOR_ID})"
     );
     Ok(())
 }
@@ -1027,7 +1035,7 @@ async fn assert_child_ran_on_owning_node(
         .ok_or_else(|| anyhow!("no fleet node owns DID {expected_did}"))?;
     let escaped = escape_graphql_string(child_request_id);
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did lifecycle_state }} }}"#
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did behavior_id lifecycle_state }} }}"#
     );
     let resp = graphql_query(&node.graphql, &query).await?;
     let req = resp.pointer("/data/AgentRequest/0").ok_or_else(|| {
@@ -1037,6 +1045,12 @@ async fn assert_child_ran_on_owning_node(
         req.get("agent_did").and_then(Value::as_str) == Some(expected_did),
         "child {child_request_id} on node {expected_did} has the wrong agent_did"
     );
+    // Same DID is not enough — it must have run under the CONFIGURED behavior.
+    anyhow::ensure!(
+        req.get("behavior_id").and_then(Value::as_str) == Some(node.behavior_id.as_str()),
+        "child {child_request_id} on node {expected_did} ran under the wrong behavior (expected {})",
+        node.behavior_id
+    );
     anyhow::ensure!(
         req.get("lifecycle_state").and_then(Value::as_str) == Some(expected_state),
         "child {child_request_id} on node {expected_did} is not {expected_state} locally"
@@ -1044,17 +1058,18 @@ async fn assert_child_ran_on_owning_node(
     Ok(())
 }
 
-/// Prove a child request was NOT materialized on ANY fleet node (the unclaimed
-/// path: no remote daemon ever created it).
+/// Prove a child request was NOT materialized on ANY fleet node — pass the full
+/// fleet (coordinator included) so the unclaimed path is proven everywhere, not
+/// just on the remote researchers.
 async fn assert_child_materialized_nowhere(
-    subagents: &[FleetNode],
+    nodes: &[FleetNode],
     child_request_id: &str,
 ) -> Result<()> {
     let escaped = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ request_id }} }}"#
     );
-    for node in subagents {
+    for node in nodes {
         let resp = graphql_query(&node.graphql, &query).await?;
         let present = resp
             .pointer("/data/AgentRequest/0")
@@ -1208,13 +1223,14 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
         "dead bridge must terminalize at the spawn timeout (fast), lived {}s — engine fix regressed?",
         dead_lifetime.num_seconds()
     );
-    // Unclaimed path: the child was materialized on NO fleet node (no remote
-    // daemon ever created it) — proven against each node's OWN db.
+    // Unclaimed path: the child was materialized on NO fleet node (coordinator
+    // INCLUDED, not just the remote researchers) — proven against each node's OWN
+    // db.
     let dead_crid = dead
         .child_request_id
         .as_deref()
         .ok_or_else(|| anyhow!("dead bridge missing child_request_id"))?;
-    assert_child_materialized_nowhere(subagents, dead_crid).await?;
+    assert_child_materialized_nowhere(&fleet, dead_crid).await?;
 
     // The synthesizer's input must carry a STRUCTURED FAILURE record for the dead
     // researcher (D10) AND the three surviving reports (data flow over survivors).

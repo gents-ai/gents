@@ -613,6 +613,30 @@ impl DefraSessionHook {
         spec: &WorkflowSpawnSpec,
         await_mode: AwaitMode,
     ) -> anyhow::Result<WorkflowBridge> {
+        // Fail-fast re-check at the ACTUAL spawn point (TOCTOU): a LOCAL target's
+        // behavior can be deleted between invocation-time validation and here —
+        // e.g. while fan-out runs, before synthesis is spawned. Writing the bridge
+        // would orphan a child that is never claimed and hang the workflow to the
+        // parent deadline. Mirror message_spawn's #377 guard; warn-and-proceed on a
+        // DB error rather than fail.
+        if let Some(target) = resolve_context_target(parent_context, &spec.target_name) {
+            if self.subagent_target_host(target) == SubagentTargetHost::Local {
+                match load_agent_behavior(&self.node, &spec.behavior_id).await {
+                    Ok(None) => anyhow::bail!(
+                        "local workflow target '{}' refers to behavior '{}' which no longer \
+                         exists; it may have been removed after this session started",
+                        spec.target_name,
+                        spec.behavior_id
+                    ),
+                    Ok(Some(_)) => {}
+                    Err(error) => tracing::warn!(
+                        behavior_id = %spec.behavior_id,
+                        %error,
+                        "workflow spawn guard: failed to verify local target behavior; proceeding"
+                    ),
+                }
+            }
+        }
         let child_request_id = uuid::Uuid::new_v4().to_string();
         let tool_call_id = uuid::Uuid::new_v4().to_string();
         let bridge_args = serde_json::json!({
