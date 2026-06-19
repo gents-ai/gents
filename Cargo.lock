@@ -6698,7 +6698,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "defra-agent"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acp",
  "agent-tool-call-lifecycle-v1-to-v2-lens",
@@ -6753,7 +6753,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acp",
  "anyhow",
@@ -6804,7 +6804,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6817,7 +6817,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6845,7 +6845,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-tauri"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6873,7 +6873,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-lean-contract"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -6882,7 +6882,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-protocol"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6901,7 +6901,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-schemas"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "defra-core"
@@ -6961,7 +6961,7 @@ dependencies = [
 
 [[package]]
 name = "defra-native-fs-runner"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "glob",
