@@ -452,6 +452,8 @@ export function createDesktopUiHarness(
         compactionThreshold: request.compactionThreshold,
         enabled: request.enabled ?? true,
         isDefault: behaviorId === deployment.defaultBehaviorId,
+        skillRefs: request.skillRefs,
+        skillExcludes: request.skillExcludes,
       };
       deployment = {
         ...deployment,
@@ -461,6 +463,37 @@ export function createDesktopUiHarness(
           behaviorId,
           nextBehavior,
         ),
+      };
+      return snapshot();
+    },
+    async saveSkillConfig(request) {
+      const skillId = request.skillId.trim() || `skill-${requestSeq}`;
+      const name = request.name.trim() || skillId;
+      deployment = {
+        ...deployment,
+        skills: upsertBy(deployment.skills ?? [], "skillId", skillId, {
+          ...request,
+          skillId,
+          agentDid: request.agentDid || deployment.agentDid,
+          scope: request.scope || "behavior",
+          name,
+          displayName: request.displayName?.trim() || name,
+          enabled: request.enabled ?? true,
+          createdAt: STARTED_AT,
+        }),
+      };
+      return snapshot();
+    },
+    async deleteSkillConfig(request) {
+      const skillId = request.skillId.trim();
+      deployment = {
+        ...deployment,
+        skills: (deployment.skills ?? []).filter((skill) => skill.skillId !== skillId),
+        behaviors: deployment.behaviors.map((behavior) => ({
+          ...behavior,
+          skillRefs: (behavior.skillRefs ?? []).filter((id) => id !== skillId),
+          skillExcludes: (behavior.skillExcludes ?? []).filter((id) => id !== skillId),
+        })),
       };
       return snapshot();
     },
@@ -1031,6 +1064,8 @@ function createDeployment(): DeploymentView {
         compactionThreshold: 0.75,
         enabled: true,
         isDefault: true,
+        skillRefs: ["host-diagnostics"],
+        skillExcludes: [],
       },
       {
         behaviorId: "ops",
@@ -1044,6 +1079,8 @@ function createDeployment(): DeploymentView {
         compactionThreshold: 0.75,
         enabled: true,
         isDefault: false,
+        skillRefs: [],
+        skillExcludes: [],
       },
     ],
     inferenceBackends: [
@@ -1115,6 +1152,33 @@ function createDeployment(): DeploymentView {
         status: "healthy",
         version: "0.1.0",
         updatedAt: STARTED_AT,
+      },
+    ],
+    skills: [
+      {
+        skillId: "host-diagnostics",
+        agentDid: AGENT_DID,
+        scope: "behavior",
+        name: "Host diagnostics",
+        description: "Inspect host health and write a concise operational report.",
+        instructions: "Inspect host health, telemetry freshness, and recent errors.",
+        toolRefs: ["mcp-observability.inspect_host", "mcp-observability.query_logs"],
+        displayName: "Host diagnostics",
+        enabled: true,
+        createdAt: STARTED_AT,
+      },
+      {
+        skillId: "fleet-summary",
+        agentDid: AGENT_DID,
+        scope: "principal",
+        name: "Fleet summary",
+        description: "Summarize fleet state for operator handoff.",
+        instructions:
+          "Compare backend health, silent hosts, and posted steward status.",
+        toolRefs: ["mcp-observability.fleet_status"],
+        displayName: "Fleet summary",
+        enabled: true,
+        createdAt: STARTED_AT,
       },
     ],
     tasks: [

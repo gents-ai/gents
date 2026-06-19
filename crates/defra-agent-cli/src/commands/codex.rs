@@ -8,19 +8,27 @@
 //! owns tool gating — the tool preset chosen at `init` is the real
 //! permission boundary.
 
-use std::io::IsTerminal;
-use std::time::Duration;
+#[cfg(feature = "codex-tui")]
+use std::{io::IsTerminal, time::Duration};
 
-use anyhow::{anyhow, bail, Context, Result};
+#[cfg(feature = "codex-tui")]
+use anyhow::{anyhow, Context};
+use anyhow::{bail, Result};
+#[cfg(feature = "codex-tui")]
 use clap::Parser;
+#[cfg(feature = "codex-tui")]
 use codex_arg0::Arg0DispatchPaths;
+#[cfg(feature = "codex-tui")]
 use codex_tui::{Cli as CodexTuiCli, ExitReason, RemoteAppServerEndpoint};
+#[cfg(feature = "codex-tui")]
 use tokio::net::TcpStream;
 
 use crate::cli::args::CodexArgs;
 
+#[cfg(feature = "codex-tui")]
 const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[cfg(feature = "codex-tui")]
 pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("`defra-agent codex` is interactive and needs a terminal; use `defra-agent chat` for scripted turns");
@@ -50,11 +58,20 @@ pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
     }
 }
 
+#[cfg(not(feature = "codex-tui"))]
+pub(crate) async fn codex(_args: CodexArgs) -> Result<()> {
+    bail!(
+        "`defra-agent codex` was built without the `codex-tui` feature; rebuild with default features or connect an external Codex client to the running shim"
+    )
+}
+
+#[cfg(feature = "codex-tui")]
 fn resolve_endpoint(remote: &str) -> Result<RemoteAppServerEndpoint> {
     codex_tui::resolve_remote_addr(remote)
         .map_err(|error| anyhow!("invalid --remote address {remote:?}: {error}"))
 }
 
+#[cfg(feature = "codex-tui")]
 fn build_tui_cli(args: &CodexArgs) -> CodexTuiCli {
     let mut cli = CodexTuiCli::parse_from(["codex"]);
     cli.dangerously_bypass_approvals_and_sandbox = true;
@@ -63,6 +80,7 @@ fn build_tui_cli(args: &CodexArgs) -> CodexTuiCli {
     cli
 }
 
+#[cfg(feature = "codex-tui")]
 async fn probe_shim(endpoint: &RemoteAppServerEndpoint) -> Result<()> {
     let Some(authority) = probe_authority(endpoint) else {
         return Ok(());
@@ -82,6 +100,7 @@ async fn probe_shim(endpoint: &RemoteAppServerEndpoint) -> Result<()> {
 /// Host:port to TCP-probe before launching the TUI, when the endpoint names
 /// one explicitly. Endpoints without a probeable authority (unix sockets,
 /// portless URLs) skip the probe and let the TUI surface connect errors.
+#[cfg(feature = "codex-tui")]
 fn probe_authority(endpoint: &RemoteAppServerEndpoint) -> Option<String> {
     let RemoteAppServerEndpoint::WebSocket { websocket_url, .. } = endpoint else {
         return None;
@@ -98,7 +117,7 @@ fn probe_authority(endpoint: &RemoteAppServerEndpoint) -> Option<String> {
     Some(authority.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "codex-tui"))]
 mod tests {
     use super::*;
 

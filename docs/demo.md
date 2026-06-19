@@ -69,6 +69,8 @@ cargo install --profile dev-install --locked --path crates/defra-agent-cli
 ```
 
 That installs the `defra-agent` binary into `~/.cargo/bin`.
+For a headless build without the embedded Codex TUI, add
+`--no-default-features`; the server shim and `chat` command still build.
 
 ## 3. Initialize the agent
 
