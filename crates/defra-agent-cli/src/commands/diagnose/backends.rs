@@ -172,32 +172,44 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 });
             }
         };
-        match discover_backend_models(&client, provider_kind, &endpoint, api_key.as_deref(), None)
+        // ChatGptCodex model discovery needs the OAuthCredential document, which this probe does
+        // not load (no GraphQL/agent context here). Skip it rather than report a false failure —
+        // credential health is covered by the dedicated `checks.chatgpt_auth`, and models are
+        // listed by `codex-auth-probe` / `backend discover-models`.
+        if provider_kind != BackendProviderKind::ChatGptCodex {
+            match discover_backend_models(
+                &client,
+                provider_kind,
+                &endpoint,
+                api_key.as_deref(),
+                None,
+            )
             .await
-        {
-            Ok(models) => {
-                discovered_models = models;
-                let missing_models = required_models
-                    .iter()
-                    .filter(|model| {
-                        !discovered_models
-                            .iter()
-                            .any(|candidate| candidate == *model)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !missing_models.is_empty() {
-                    ok = false;
-                    error = Some(format!(
-                        "backend {} is missing required models: {}",
-                        backend_id,
-                        missing_models.join(", ")
-                    ));
+            {
+                Ok(models) => {
+                    discovered_models = models;
+                    let missing_models = required_models
+                        .iter()
+                        .filter(|model| {
+                            !discovered_models
+                                .iter()
+                                .any(|candidate| candidate == *model)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !missing_models.is_empty() {
+                        ok = false;
+                        error = Some(format!(
+                            "backend {} is missing required models: {}",
+                            backend_id,
+                            missing_models.join(", ")
+                        ));
+                    }
                 }
-            }
-            Err(request_error) => {
-                ok = false;
-                error = Some(format!("backend discovery failed: {}", request_error));
+                Err(request_error) => {
+                    ok = false;
+                    error = Some(format!("backend discovery failed: {}", request_error));
+                }
             }
         }
     }

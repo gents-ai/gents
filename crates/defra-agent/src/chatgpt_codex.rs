@@ -543,6 +543,20 @@ impl BearerSource for DbCredentialBearer {
             return Ok(credential.access_token);
         }
 
+        // Owner is about to mint a new token. Re-load from DefraDB first so a credential disabled
+        // after the cache warmed stops serving (load_credential bails when `enabled` is false),
+        // and so an externally-refreshed token is adopted. Take the DB copy when it is at least as
+        // fresh; keep the in-memory copy only when it is strictly ahead — i.e. a prior persist
+        // failed and the cache still holds the not-yet-written rotated refresh token.
+        let db_credential = self.load_credential().await?;
+        if db_credential.access_token_expires_at >= credential.access_token_expires_at {
+            credential = db_credential;
+            if token_is_fresh(credential.access_token_expires_at) {
+                self.cache_credential(&credential).await;
+                return Ok(credential.access_token);
+            }
+        }
+
         // Owner refresh. The provider ROTATES the refresh token here: once this returns 200 the
         // old refresh token is consumed and `refreshed` is the ONLY source of truth for it.
         let refreshed = crate::chatgpt_oauth_refresh::refresh_chatgpt_token(

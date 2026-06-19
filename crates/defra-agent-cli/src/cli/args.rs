@@ -1647,6 +1647,11 @@ pub(crate) struct BackendDiscoverModelsArgs {
         help = "Agent DID owning the ChatGptCodex OAuth credential (defaults to the local agent). Only used for ChatGptCodex backends, whose bearer is a DefraDB document rather than an api_key"
     )]
     pub(crate) agent_did: Option<String>,
+    #[arg(
+        long,
+        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.defra-agent). Pass --agent-did instead to target a specific agent"
+    )]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
