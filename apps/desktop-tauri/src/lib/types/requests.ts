@@ -71,6 +71,8 @@ export type ToolSelectionSaveRequest = {
   crossDeploymentSpawnTimeoutSeconds?: number | null;
   enableMemory?: boolean | null;
   enableSessionHistoryTool?: boolean | null;
+  enableContextBudget?: boolean | null;
+  enableDefraQuery?: boolean | null;
 };
 
 export type ToolServiceSaveRequest = {

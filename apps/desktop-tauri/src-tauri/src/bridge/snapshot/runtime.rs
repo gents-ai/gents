@@ -182,6 +182,8 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                         .cross_deployment_spawn_timeout_seconds,
                     enable_memory: row.enable_memory,
                     enable_session_history_tool: row.enable_session_history_tool,
+                    enable_context_budget: row.enable_context_budget,
+                    enable_defra_query: row.enable_defra_query,
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));

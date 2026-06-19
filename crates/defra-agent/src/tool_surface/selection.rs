@@ -113,6 +113,8 @@ pub struct ToolSelection {
     pub enable_memory: bool,
     /// Enable the narrower `sessions` convenience tool for recent session history.
     pub enable_session_history_tool: bool,
+    /// Enable the read-only `context_budget` context-budget inspection tool.
+    pub enable_context_budget: bool,
     /// Enable the read-only `defra_query` structured query tool.
     pub enable_defra_query: bool,
     /// Optional allowlist of collections `defra_query` may read. Empty = all.
@@ -135,6 +137,7 @@ impl Default for ToolSelection {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -177,6 +180,7 @@ impl ToolSelection {
             orchestration_enabled: selection.orchestration_enabled.unwrap_or(false),
             enable_memory: selection.enable_memory.unwrap_or(false),
             enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
+            enable_context_budget: selection.enable_context_budget.unwrap_or(true),
             enable_defra_query: selection.enable_defra_query.unwrap_or(true),
             defra_query_collections: selection
                 .defra_query_collections

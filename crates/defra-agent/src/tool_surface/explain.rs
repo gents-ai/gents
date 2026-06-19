@@ -275,11 +275,13 @@ fn explain_builtin_reads(
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
-    builder.include_many("built_in_read", [CONTEXT_BUDGET_TOOL_NAME.to_string()]);
-    builder.warn(
-        "unmanaged_builtin_read_tools",
-        "context_budget is always included; it has no ToolSelection field and is not clamped by ToolCeiling.",
-    );
+    if surface.enable_context_budget {
+        builder.include_many("built_in_read", [CONTEXT_BUDGET_TOOL_NAME.to_string()]);
+    } else if config.context_budget_requested() {
+        builder.unavailable("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
+    } else {
+        builder.exclude("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
+    }
 
     // The `sessions` history tool is opt-in via the ToolSelection
     // `enable_session_history_tool` field (default off), so report it as

@@ -84,6 +84,8 @@ export type ToolSelectionView = {
   crossDeploymentSpawnTimeoutSeconds?: number | null;
   enableMemory?: boolean | null;
   enableSessionHistoryTool?: boolean | null;
+  enableContextBudget?: boolean | null;
+  enableDefraQuery?: boolean | null;
 };
 
 export type ToolServiceRegistryView = {

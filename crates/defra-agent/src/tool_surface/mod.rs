@@ -44,6 +44,7 @@ pub struct ToolSurface {
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
     pub(super) enable_session_history_tool: bool,
+    pub(super) enable_context_budget: bool,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
     pub(super) write_tools: Vec<WriteToolDecl>,
@@ -125,7 +126,9 @@ impl ToolSurface {
         if self.enable_memory {
             names.push(MEMORY_TOOL_NAME.to_string());
         }
-        names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
+        if self.enable_context_budget {
+            names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
+        }
         if self.enable_session_history_tool {
             names.push(SESSION_HISTORY_TOOL_NAME.to_string());
         }
@@ -171,10 +174,12 @@ impl ToolSurface {
                 runtime.agent_did.clone(),
             ));
         }
-        tools.push(build_context_budget_tool(
-            runtime.node.clone(),
-            runtime.agent_did.clone(),
-        ));
+        if self.enable_context_budget {
+            tools.push(build_context_budget_tool(
+                runtime.node.clone(),
+                runtime.agent_did.clone(),
+            ));
+        }
         if self.enable_session_history_tool {
             tools.push(build_session_history_tool(
                 runtime.node.clone(),
@@ -240,6 +245,7 @@ impl std::fmt::Debug for ToolSurface {
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
+            .field("enable_context_budget", &self.enable_context_budget)
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)

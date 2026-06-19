@@ -1352,6 +1352,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_session_history_tool: Option<bool>,
     #[arg(
         long,
+        help = "Enable or disable the context_budget tool: --enable-context-budget true|false. Omit to leave the existing document setting unchanged (default is enabled)"
+    )]
+    pub(crate) enable_context_budget: Option<bool>,
+    #[arg(
+        long,
         help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
     )]
     pub(crate) enable_defra_query: Option<bool>,
@@ -2589,6 +2594,19 @@ mod tests {
         );
         assert_eq!(
             parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn enable_context_budget_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_context_budget, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-context-budget", "false"]).enable_context_budget,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-context-budget", "true"]).enable_context_budget,
             Some(true)
         );
     }

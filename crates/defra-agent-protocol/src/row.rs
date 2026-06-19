@@ -631,6 +631,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub enable_session_history_tool: Option<bool>,
     #[serde(default)]
+    pub enable_context_budget: Option<bool>,
+    #[serde(default)]
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,

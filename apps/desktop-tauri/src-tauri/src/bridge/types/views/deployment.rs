@@ -111,6 +111,8 @@ pub(crate) struct ToolSelectionView {
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_memory: Option<bool>,
     pub enable_session_history_tool: Option<bool>,
+    pub enable_context_budget: Option<bool>,
+    pub enable_defra_query: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
