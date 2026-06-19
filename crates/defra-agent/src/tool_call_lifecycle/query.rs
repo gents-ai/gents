@@ -86,6 +86,8 @@ struct ToolCallRow {
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
     unclaimed_deadline_at: Option<String>,
+    workflow_group_id: Option<String>,
+    workflow_role: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -122,6 +124,8 @@ impl ToolCallLifecycle {
                     cancel_policy
                     child_request_id
                     unclaimed_deadline_at
+                    workflow_group_id
+                    workflow_role
                 }}
             }}"#
         );
@@ -215,6 +219,8 @@ impl ToolCallLifecycle {
             cancel_policy,
             child_request_id,
             unclaimed_deadline_at,
+            workflow_group_id: row.workflow_group_id.filter(|value| !value.is_empty()),
+            workflow_role: row.workflow_role.filter(|value| !value.is_empty()),
         }))
     }
 }

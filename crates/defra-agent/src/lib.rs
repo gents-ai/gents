@@ -72,6 +72,7 @@ pub mod trace_export;
 pub(crate) mod trigger_engine;
 pub mod truncation;
 pub mod watcher;
+pub mod workflow;
 
 pub use collection::Collection;
 

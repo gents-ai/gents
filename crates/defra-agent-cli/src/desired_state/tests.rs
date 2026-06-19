@@ -281,6 +281,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         defra_query_collections: Vec::new(),
         subagent_targets: Vec::new(),
         subagent_spawn_enabled: false,
+        orchestration_enabled: false,
         subagent_steering_enabled: false,
         subagent_background_enabled: false,
         subagent_default_await_mode: None,
@@ -396,6 +397,7 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
     let mut selection = sample_tool_selection("default-tools");
     selection.subagent_targets = vec!["researcher".to_string()];
     selection.subagent_spawn_enabled = true;
+    selection.orchestration_enabled = true;
     selection.subagent_steering_enabled = true;
     selection.subagent_background_enabled = true;
     selection.subagent_default_await_mode = Some("background".to_string());
@@ -411,6 +413,7 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
         json!(["researcher"])
     );
     assert_eq!(exported_selection["subagent_spawn_enabled"], json!(true));
+    assert_eq!(exported_selection["orchestration_enabled"], json!(true));
     assert_eq!(exported_selection["subagent_steering_enabled"], json!(true));
     assert_eq!(
         exported_selection["subagent_background_enabled"],
@@ -437,6 +440,7 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
         vec!["researcher".to_string()]
     );
     assert!(round_tripped_selection.subagent_spawn_enabled);
+    assert!(round_tripped_selection.orchestration_enabled);
     assert!(round_tripped_selection.subagent_steering_enabled);
     assert!(round_tripped_selection.subagent_background_enabled);
     assert_eq!(

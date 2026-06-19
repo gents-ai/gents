@@ -1380,6 +1380,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) subagent_spawn_enabled: Option<bool>,
     #[arg(
         long,
+        help = "Enable or disable workflow orchestration tools: --orchestration-enabled true|false. Omit to preserve existing setting"
+    )]
+    pub(crate) orchestration_enabled: Option<bool>,
+    #[arg(
+        long,
         help = "Enable or disable subagent steering tools: --subagent-steering-enabled true|false. Omit to preserve existing setting"
     )]
     pub(crate) subagent_steering_enabled: Option<bool>,
@@ -2664,6 +2669,7 @@ mod tests {
         assert!(omitted.subagent_targets.is_empty());
         assert!(!omitted.clear_subagent_targets);
         assert_eq!(omitted.subagent_spawn_enabled, None);
+        assert_eq!(omitted.orchestration_enabled, None);
         assert_eq!(omitted.subagent_steering_enabled, None);
         assert_eq!(omitted.subagent_background_enabled, None);
         assert_eq!(omitted.subagent_allow_cross_deployment, None);
@@ -2673,6 +2679,8 @@ mod tests {
             "--subagent-target",
             r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker","description":"worker"}"#,
             "--subagent-spawn-enabled",
+            "true",
+            "--orchestration-enabled",
             "true",
             "--subagent-steering-enabled",
             "true",
@@ -2685,6 +2693,7 @@ mod tests {
         ]);
         assert_eq!(configured.subagent_targets.len(), 1);
         assert_eq!(configured.subagent_spawn_enabled, Some(true));
+        assert_eq!(configured.orchestration_enabled, Some(true));
         assert_eq!(configured.subagent_steering_enabled, Some(true));
         assert_eq!(configured.subagent_background_enabled, Some(false));
         assert_eq!(configured.subagent_allow_cross_deployment, Some(true));

@@ -65,6 +65,11 @@ const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":10}}
 ]"#;
 
+const ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_group_id","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":11}}
+]"#;
+
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}},
@@ -89,6 +94,10 @@ const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
 
 const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
+]"#;
+
+const ADD_TOOL_SELECTION_ORCHESTRATION_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"orchestration_enabled","Kind":2}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
@@ -468,6 +477,29 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         }
     }
 
+    active_atc_collection = node
+        .get_collection("AgentToolCall")
+        .context("reload AgentToolCall collection after R5 patch")?;
+    if let Some(ref cv) = active_atc_collection {
+        if collection_has_field(cv, "workflow_group_id") {
+            tracing::debug!("AgentToolCall already has workflow fields; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v5 = node
+                .patch_collection("AgentToolCall", ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH)
+                .await
+                .context("patch_collection AgentToolCall workflow group fields")?;
+            node.set_active_collection_version(&v5.version_id)
+                .await
+                .context("set_active_collection_version AgentToolCall workflow fields")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v5 = %v5.version_id,
+                "AgentToolCall patched with workflow group fields"
+            );
+        }
+    }
+
     // 2. AgentRequest — independent idempotency check.
     let ar_collection = node
         .get_collection("AgentRequest")
@@ -600,6 +632,25 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 pre = %pre_version_id,
                 v7 = %v7.version_id,
                 "ToolSelection patched with subagent default await mode"
+            );
+            active_version = v7;
+        }
+
+        if collection_has_field(&active_version, "orchestration_enabled") {
+            tracing::debug!("ToolSelection already has orchestration flag; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v8 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_ORCHESTRATION_PATCH)
+                .await
+                .context("patch_collection ToolSelection orchestration flag")?;
+            node.set_active_collection_version(&v8.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection orchestration flag")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v8 = %v8.version_id,
+                "ToolSelection patched with orchestration flag"
             );
         }
     } else {
@@ -1682,10 +1733,12 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_SUBAGENT_PATCH,
             ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH,
             ADD_AGENT_TOOL_CALL_R5_PATCH,
+            ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
             ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
+            ADD_TOOL_SELECTION_ORCHESTRATION_PATCH,
             ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
             ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
             ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH,

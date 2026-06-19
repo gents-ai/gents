@@ -16,7 +16,7 @@ use crate::tool_call_lifecycle::{
 };
 use crate::truncation::TruncationLimits;
 
-mod persistence;
+pub(crate) mod persistence;
 #[cfg(test)]
 mod tests;
 

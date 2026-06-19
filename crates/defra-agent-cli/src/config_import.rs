@@ -1872,6 +1872,7 @@ mod lean_apply_write_boundary_tests {
             defra_query_collections: Vec::new(),
             subagent_targets: Vec::new(),
             subagent_spawn_enabled: false,
+            orchestration_enabled: false,
             subagent_steering_enabled: false,
             subagent_background_enabled: false,
             subagent_default_await_mode: None,
