@@ -221,14 +221,23 @@ as `refresh_token_reused`). Therefore:
   prevents reuse-revocation. This constraint is stated in `docs/backends.md` and asserted in the
   refresh path (a non-owner never calls `refresh_chatgpt_token`).
 
-### B. Plaintext at rest is a bounded, scheduled exposure
+### B. The exposure delta is replication, not plaintext-at-rest
 
-A refresh token in a plaintext **replicating** doc is more exposed than `0600 ~/.codex/auth.json`.
-Mitigations shipped in this slice:
-- `OAuthCredential` replicates ONLY to its `agent_did` via filtered replication from day one
-  (never an open broadcast).
-- Encryption is a **named next slice** (§Fast-follow), not an afterthought — the field set is
-  designed so the token columns can become ciphertext without a schema reshape.
+Plaintext-at-rest is **parity with the status quo**: `~/.codex/auth.json` already stores the same
+access + refresh tokens unencrypted (just `0600`, single-machine). So storing them plaintext in
+the doc is not a regression in *at-rest* posture. The genuinely new surface is that the credential
+now lives in a **replicating** store and can leave the originating machine. The v1 bar is therefore
+"no worse than `~/.codex`":
+- **Don't broadcast it.** `OAuthCredential` replicates ONLY to its `agent_did` via filtered
+  replication from day one — never an open broadcast. On a single-node demo it never leaves the box.
+- **Don't let it escape sideways.** The token must not reach logs, traces, the rendered-request
+  projection, config export/import, or unguarded GraphQL reads (the `defra_query` field guard).
+  Those are leaks *beyond* the accepted at-rest plaintext and are in scope to prevent now.
+
+Encryption is a **named next slice** (§Fast-follow) precisely because it addresses the *distribution*
+surface — on-wire confidentiality + at-rest-on-peer + DID-gated decryption — which is what changes
+once the secret replicates. It is not fixing a plaintext regression (there isn't one). The field set
+is designed so the token columns can become ciphertext without a schema reshape.
 
 ## Fast-follow (next slice, not this one)
 
