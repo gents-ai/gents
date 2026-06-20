@@ -9,6 +9,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
+  timeout: 900_000,
   workers: 1,
   reporter: process.env.CI
     ? [["list"], ["html", { outputFolder: "playwright-live-report", open: "never" }]]

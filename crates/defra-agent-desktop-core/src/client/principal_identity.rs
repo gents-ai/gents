@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use crypto::Key;
+use defra_agent::identity::{AgentIdentity, ServiceAccount};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
@@ -95,6 +96,40 @@ impl PrincipalIdentity {
             .sign(payload)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("signing payload as {}", self.did))
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentIdentity for PrincipalIdentity {
+    fn did(&self) -> &str {
+        &self.did
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        PrincipalIdentity::sign(self, payload)
+    }
+
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+        let (key_type, public_key_bytes) = if did == self.did {
+            (crypto::KeyType::Ed25519, self.public_key_bytes.clone())
+        } else if did.starts_with("did:key:") {
+            crypto::parse_did_key(did)
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("parsing did:key public key from DID {did}"))?
+        } else {
+            anyhow::bail!("no public key registered for DID {did}");
+        };
+
+        let public_key = crypto::public_key_from_bytes(key_type, &public_key_bytes)
+            .map_err(anyhow::Error::from)?;
+        public_key
+            .verify(payload, signature)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("verifying payload for {did}"))
+    }
+
+    fn service_account(&self) -> Option<&ServiceAccount> {
+        None
     }
 }
 

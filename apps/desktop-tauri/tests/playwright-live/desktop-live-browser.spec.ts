@@ -23,25 +23,40 @@ test.describe("desktop live browser smoke", () => {
 
     await page.locator('[data-testid^="fleet-chat-name-"]').first().click();
     await expect(page.getByTestId("composer-input")).toBeVisible();
+    const deployment = await firstDeployment(liveRunner);
+    const previousRequestIds = new Set(
+      deployment.conversations
+        .map((conversation) => conversation.latestRequestId)
+        .filter((requestId): requestId is string => Boolean(requestId)),
+    );
 
     await page
       .getByTestId("composer-input")
       .fill("Reply with a short desktop live browser smoke confirmation.");
     await page.getByTestId("composer-send").click();
 
+    const submitted = await waitForSubmittedRequest(liveRunner, {
+      agentDid: deployment.agentDid,
+      previousRequestIds,
+    });
+    const completedSession = await liveRunner.waitForRequestCompletion(submitted);
+    if (completedSession.turnState !== "completed") {
+      const diagnostics = await liveRunner.fetchRequestDiagnostics(
+        submitted.sessionId,
+        submitted.requestId,
+      );
+      throw new Error(
+        `live browser smoke request ended ${completedSession.turnState}; diagnostics=${JSON.stringify(diagnostics)}`,
+      );
+    }
+
     await expect
       .poll(
-        async () => {
-          const deployment = (await liveRunner.fetchSnapshot()).client?.deployments[0];
-          return deployment?.conversations[0]?.turnState ?? "missing";
-        },
-        { timeout: 600_000 },
+        async () =>
+          page.locator('[data-testid="transcript-panel"] .message-card').count(),
+        { timeout: 30_000 },
       )
-      .toBe("completed");
-
-    await expect(
-      page.locator('[data-testid="transcript-panel"] .message-card'),
-    ).toHaveCount(2, { timeout: 30_000 });
+      .toBeGreaterThanOrEqual(2);
 
     await page.getByRole("button", { name: /open operations drawer/i }).click();
     await expect(page.getByRole("complementary", { name: "Operations" })).toBeVisible();
@@ -49,9 +64,59 @@ test.describe("desktop live browser smoke", () => {
 
     await page.getByRole("button", { name: "Configure" }).click();
     await expect(page.locator(".config-workspace")).toBeVisible();
+    await page.getByTestId("config-tab-backends").click();
     await expect(page.getByTestId("backend-save")).toBeVisible();
   });
 });
+
+async function firstDeployment(runner: LiveBridgeRunner) {
+  const deployment = (await runner.fetchSnapshot()).client?.deployments[0];
+  if (!deployment) {
+    throw new Error("live browser smoke expected one deployment");
+  }
+  return deployment;
+}
+
+async function waitForSubmittedRequest(
+  runner: LiveBridgeRunner,
+  expected: {
+    agentDid: string;
+    previousRequestIds: Set<string>;
+  },
+) {
+  let request: { agentDid: string; requestId: string; sessionId: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        const deployment = await findDeployment(runner, expected.agentDid);
+        const conversation = deployment?.conversations.find(
+          (candidate) =>
+            candidate.latestRequestId &&
+            !expected.previousRequestIds.has(candidate.latestRequestId),
+        );
+        if (conversation?.latestRequestId) {
+          request = {
+            agentDid: deployment.agentDid,
+            requestId: conversation.latestRequestId,
+            sessionId: conversation.sessionId,
+          };
+        }
+        return Boolean(request);
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  return request!;
+}
+
+async function findDeployment(runner: LiveBridgeRunner, agentDid: string) {
+  const snapshot = await runner.fetchSnapshot();
+  return (
+    snapshot.client?.deployments.find(
+      (deployment) => deployment.agentDid === agentDid,
+    ) ?? snapshot.client?.deployments[0]
+  );
+}
 
 function liveOptionsFromEnv(): LiveBridgeRunnerOptions {
   return {

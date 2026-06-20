@@ -7,6 +7,7 @@ mod bridge {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bridge/types.rs"));
     }
     pub mod commands {
+        #![allow(dead_code, unused_imports)]
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/bridge/commands.rs"

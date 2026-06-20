@@ -97,5 +97,8 @@ npm --prefix apps/desktop-tauri run test:ui:live:e2e
 ```
 
 It starts the existing `bridge_runner`, serves the React shell in Chromium, and
-uses the live bridge HTTP adapter. It should stay in manual or live-smoke
-workflows until it has enough stability history.
+uses the live bridge HTTP adapter. By default, the browser smoke uses a local
+OpenAI-compatible mock inference endpoint so the runtime path is deterministic.
+Pass `-- --inference-url <url> --model-name <model>` or set the live backend env
+vars when the goal is to validate a real provider. This should stay in manual or
+live-smoke workflows until it has enough stability history.

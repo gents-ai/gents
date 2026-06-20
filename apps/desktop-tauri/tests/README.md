@@ -15,7 +15,9 @@ The desktop test stack has three layers:
 - `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.
 - `npm run test:ui:visual` runs golden screenshot checks for stable shell states.
 - `npm run test:ui:live:e2e` runs the live browser-to-runtime smoke path through
-  `bridge_runner`.
+  `bridge_runner`. It uses a local OpenAI-compatible mock inference endpoint by
+  default; pass `-- --inference-url <url> --model-name <model>` or set the live
+  backend env vars to exercise a real provider.
 
 The browser harness also has an explicit live-backend seam:
 
@@ -24,9 +26,8 @@ The browser harness also has an explicit live-backend seam:
 ```
 
 That mode swaps the deterministic adapter for the bridge-runner HTTP adapter.
-It is only a bootstrap contract today; the live Playwright project should start
-`LiveBridgeRunner`, pass its `baseUrl` as `bridgeUrl`, and stay out of the fast
-PR-gating browser job until it is stable.
+The live Playwright project starts `LiveBridgeRunner`, passes its `baseUrl` as
+`bridgeUrl`, and stays out of the fast PR-gating browser job until it is stable.
 
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.

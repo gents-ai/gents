@@ -195,11 +195,12 @@ export function MessageList({
 
   return (
     <>
-      {timelineItems.map((item) => {
+      {timelineItems.map((item, index) => {
+        const timelineKey = `${item.kind}-${item.itemKey}-${index}`;
         switch (item.kind) {
           case "userMessage":
             return (
-              <div className="turn-block" key={item.itemKey}>
+              <div className="turn-block" key={timelineKey}>
                 <article className="message-card">
                   <div className="message-role">user</div>
                   <div className="message-content">
@@ -219,7 +220,7 @@ export function MessageList({
               item.sequence != null &&
               item.sequence === responseMaterializedSequence;
             return (
-              <div className="turn-block" key={item.itemKey}>
+              <div className="turn-block" key={timelineKey}>
                 <article className="message-card">
                   <div className="message-role">
                     assistant
@@ -242,13 +243,13 @@ export function MessageList({
           }
           case "toolGroup":
             return (
-              <div className="turn-block" key={item.itemKey}>
+              <div className="turn-block" key={timelineKey}>
                 <ToolGroups tools={item.tools} />
               </div>
             );
           case "pendingUserTurn":
             return (
-              <div className="turn-block" key={item.itemKey}>
+              <div className="turn-block" key={timelineKey}>
                 <article className="message-card pending-card">
                   <div className="message-role">user</div>
                   <div className="message-content">
@@ -264,7 +265,7 @@ export function MessageList({
               return null;
             }
             return (
-              <article className="message-card" key={item.itemKey}>
+              <article className="message-card" key={timelineKey}>
                 <div className="message-role">
                   assistant
                   {responseCancelCause != null ? (
