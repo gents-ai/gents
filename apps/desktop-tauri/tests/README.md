@@ -1,5 +1,8 @@
 # Desktop UI test layers
 
+See [QA.md](./QA.md) for the desktop UI QA sweep, artifact review, and bug
+issue workflow.
+
 The desktop test stack has three layers:
 
 - `npm run test:ui:unit` runs Vitest and Testing Library against component and
@@ -9,6 +12,10 @@ The desktop test stack has three layers:
   in-memory adapter, so it is the fast browser regression gate.
 - `npm run test:ui:fuzz` runs Bombadil against the same deterministic browser
   harness and checks persistent shell invariants under random interaction.
+- `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.
+- `npm run test:ui:visual` runs golden screenshot checks for stable shell states.
+- `npm run test:ui:live:e2e` runs the live browser-to-runtime smoke path through
+  `bridge_runner`.
 
 The browser harness also has an explicit live-backend seam:
 
