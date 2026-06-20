@@ -50,6 +50,7 @@ Review:
 - `apps/desktop-tauri/test-results`
 - `apps/desktop-tauri/playwright-report`
 - Bombadil output path printed by `tests/bombadil/run-bombadil.mjs`
+- `README.md` inside each Bombadil output directory for inspect/reproduce commands
 - browser console attachments on Playwright failure
 - traces before screenshots when diagnosing interaction failures
 
@@ -77,6 +78,7 @@ What should happen instead.
 - Command:
 - Scenario / viewport:
 - Artifact:
+- Bombadil reproduce:
 
 ## Notes
 
