@@ -276,25 +276,31 @@ pub fn build_chatgpt_codex_headers(
     if is_fedramp {
         headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
     }
-    // The ChatGPT Codex backend gates model availability on the advertised Codex client
-    // `version`: an old/unknown version is offered a restricted (often empty) model set
-    // (e.g. gpt-5.5 -> "requires a newer version of Codex"). Advertise a recent supported Codex
-    // CLI version rather than defra-agent's own crate version. Overridable when the floor moves.
-    let version = std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string());
+    // The ChatGPT Codex backend gates model availability on the advertised Codex client version
+    // (an old/unknown version gets a restricted, often empty, model set — and gpt-5.5 -> "requires
+    // a newer version of Codex"). See `chatgpt_codex_client_version`.
     headers.insert(
         "version",
-        HeaderValue::from_str(&version)
+        HeaderValue::from_str(&chatgpt_codex_client_version())
             .context("ChatGPT Codex client version could not be encoded as an HTTP header")?,
     );
     Ok(headers)
 }
 
-/// Codex CLI version advertised to the ChatGPT Codex backend (model-availability gate). Track a
-/// recent supported version; override at runtime with [`CHATGPT_CODEX_CLIENT_VERSION_ENV`].
+/// Codex CLI version advertised to the ChatGPT Codex backend — used for BOTH the request `version`
+/// header and the `/models` `client_version` query param, since the backend gates model
+/// availability on it. Advertise a recent supported Codex CLI version rather than defra-agent's
+/// own crate version (which the backend treats as ancient and rejects everything). Override at
+/// runtime with `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` when the supported floor moves.
+pub fn chatgpt_codex_client_version() -> String {
+    std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
+}
+
+/// Default recent supported Codex CLI version (see [`chatgpt_codex_client_version`]).
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "DEFRA_CHATGPT_CODEX_CLIENT_VERSION";
 

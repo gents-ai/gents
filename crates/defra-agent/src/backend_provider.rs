@@ -129,7 +129,12 @@ pub async fn discover_models(
                     request = request.header(name, value);
                 }
             }
-            request = request.query(&[("client_version", env!("CARGO_PKG_VERSION"))]);
+            // Must match the request `version` header: /models gates the returned model set on
+            // the advertised Codex client version (defra-agent's own version returns an empty set).
+            request = request.query(&[(
+                "client_version",
+                crate::chatgpt_codex::chatgpt_codex_client_version(),
+            )]);
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
         }

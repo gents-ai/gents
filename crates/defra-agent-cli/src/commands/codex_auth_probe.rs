@@ -49,7 +49,10 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
-        .query(&[("client_version", env!("CARGO_PKG_VERSION"))])
+        .query(&[(
+            "client_version",
+            defra_agent::chatgpt_codex::chatgpt_codex_client_version(),
+        )])
         .bearer_auth(&credential.access_token);
     for (name, value) in defra_agent::chatgpt_codex::build_chatgpt_codex_headers(
         credential.account_id.as_deref(),
