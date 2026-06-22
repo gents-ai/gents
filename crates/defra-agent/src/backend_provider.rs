@@ -272,6 +272,64 @@ mod tests {
         assert_eq!(models, vec!["codex-mini-latest"]);
     }
 
+    #[tokio::test]
+    async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
+        let (endpoint, requests) =
+            spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-5.5"}]}"#).await;
+        let credential = crate::chatgpt_codex::OAuthCredential {
+            doc_id: None,
+            credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: Some("acct_123".to_string()),
+            chatgpt_plan_type: Some("plus".to_string()),
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+        };
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::ChatGptCodex,
+            &endpoint,
+            None,
+            Some(&credential),
+        )
+        .await
+        .expect("ChatGPT Codex model discovery should succeed");
+
+        assert_eq!(models, vec!["gpt-5.5"]);
+        let requests = requests.lock().expect("requests lock");
+        let request = requests.first().expect("captured request");
+        let version = crate::chatgpt_codex::chatgpt_codex_client_version();
+        assert!(
+            request.starts_with(&format!("GET /models?client_version={version} ")),
+            "Codex /models should advertise client_version query param: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("version: {}", version).to_ascii_lowercase()),
+            "Codex /models should advertise matching version header: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream, application/json"),
+            "Codex /models should send Codex Accept header: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer access-token"),
+            "Codex /models should send OAuth bearer: {request}"
+        );
+    }
+
     async fn spawn_model_discovery_server(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await

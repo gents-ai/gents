@@ -752,13 +752,19 @@ impl<S: BearerSource + 'static> HttpClientExt for ChatGptCodexHttpClient<S> {
             // The Codex backend returns a 200 SSE stream but omits the `Content-Type` header.
             // rig's SSE reader requires `text/event-stream` and otherwise fails with "Invalid
             // content type was returned". The body IS SSE (the non-streaming path parses it as
-            // such), so force the header before rig validates it.
-            response.headers_mut().insert(
-                "content-type",
-                HeaderValue::from_static("text/event-stream"),
-            );
+            // such), so provide the missing header while preserving any backend-supplied value.
+            ensure_event_stream_content_type(response.headers_mut());
             Ok(response)
         }
+    }
+}
+
+fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
+    if !headers.contains_key("content-type") {
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
     }
 }
 
@@ -1148,6 +1154,9 @@ mod tests {
     fn patches_rig_responses_body_for_chatgpt_codex() {
         let body = json!({
             "model": "gpt-5.2",
+            "max_output_tokens": 2048,
+            "temperature": 0.2,
+            "top_p": 0.9,
             "input": [
                 {
                     "type": "message",
@@ -1162,6 +1171,25 @@ mod tests {
                     "content": [
                         { "type": "input_text", "text": "Say pong." }
                     ]
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "defra_query",
+                    "strict": true,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "collection": { "type": "string" },
+                            "filter": { "type": "object" }
+                        },
+                        "required": ["collection", "filter"]
+                    }
+                },
+                {
+                    "type": "function",
+                    "name": "read_file"
                 }
             ]
         });
@@ -1181,6 +1209,77 @@ mod tests {
             .unwrap()
             .iter()
             .all(|item| item.get("role").and_then(Value::as_str) != Some("system")));
+        for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
+            assert!(
+                patched.get(*unsupported).is_none(),
+                "unsupported Codex param {unsupported} should be stripped: {patched}"
+            );
+        }
+        let tools = patched.get("tools").and_then(Value::as_array).unwrap();
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool.get("strict") == Some(&Value::Bool(false))),
+            "Codex function tools should match Codex CLI strict:false: {tools:?}"
+        );
+        assert_eq!(
+            tools[0]
+                .get("parameters")
+                .and_then(|parameters| parameters.get("required"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2),
+            "strict:false shaping should not rewrite tool schemas"
+        );
+    }
+
+    #[test]
+    fn chatgpt_codex_headers_advertise_codex_version_and_sse_accept() {
+        let headers = build_chatgpt_codex_headers(Some("acct_123"), true).unwrap();
+
+        assert_eq!(
+            headers.get("version").and_then(|value| value.to_str().ok()),
+            Some(chatgpt_codex_client_version().as_str())
+        );
+        assert_eq!(
+            headers.get("accept").and_then(|value| value.to_str().ok()),
+            Some("text/event-stream, application/json")
+        );
+        assert_eq!(
+            headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("acct_123")
+        );
+        assert_eq!(
+            headers
+                .get("x-openai-fedramp")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn event_stream_content_type_is_added_only_when_missing() {
+        let mut missing = HeaderMap::new();
+        ensure_event_stream_content_type(&mut missing);
+        assert_eq!(
+            missing
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let mut present = HeaderMap::new();
+        present.insert("content-type", HeaderValue::from_static("application/json"));
+        ensure_event_stream_content_type(&mut present);
+        assert_eq!(
+            present
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+            "backend-supplied content type should not be overwritten"
+        );
     }
 
     #[test]
