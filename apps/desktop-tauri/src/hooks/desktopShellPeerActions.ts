@@ -7,6 +7,7 @@ import {
   repairP2P,
   startDesktopClient,
 } from "../lib/desktop-api";
+import { formatPeerConnectionError } from "../lib/peerConnectionErrors";
 import type { DesktopClientSnapshot, PeerAddRequest } from "../lib/types";
 
 type PeerActionParams = {
@@ -51,8 +52,9 @@ export function createDesktopShellPeerActions({
       setSelectedAgentDid(summary.agentDid);
       return summary;
     } catch (err) {
-      setError(String(err));
-      throw err;
+      const message = formatPeerConnectionError(err, "local-runtime");
+      setError(message);
+      throw new Error(message);
     } finally {
       setStarting(false);
       setAddingPeer(false);
@@ -73,8 +75,9 @@ export function createDesktopShellPeerActions({
       setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
-      setError(String(err));
-      throw err;
+      const message = formatPeerConnectionError(err, "add-peer");
+      setError(message);
+      throw new Error(message);
     } finally {
       setStarting(false);
       setAddingPeer(false);
@@ -86,8 +89,9 @@ export function createDesktopShellPeerActions({
     try {
       return await fetchPeerStatus(serverAddress);
     } catch (err) {
-      setError(String(err));
-      throw err;
+      const message = formatPeerConnectionError(err, "peer-status");
+      setError(message);
+      throw new Error(message);
     }
   }
 
@@ -99,8 +103,9 @@ export function createDesktopShellPeerActions({
       setSnapshot(next);
       return next;
     } catch (err) {
-      setError(String(err));
-      throw err;
+      const message = formatPeerConnectionError(err, "repair-p2p");
+      setError(message);
+      throw new Error(message);
     } finally {
       setRepairingP2P(false);
     }

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 
+import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import type { PeerAddRequest } from "../../lib/types";
 import { parsePeerConnectionJson } from "./peerConnectionImport";
 
@@ -70,7 +71,7 @@ export function AddPeerForm({
       setImportStatus("Fetched /status");
       return request;
     } catch (error) {
-      setImportStatus(String(error));
+      setImportStatus(formatPeerConnectionError(error, "peer-status"));
       throw error;
     } finally {
       setFetchingStatus(false);
