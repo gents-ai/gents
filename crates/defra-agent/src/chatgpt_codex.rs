@@ -261,6 +261,13 @@ pub fn build_chatgpt_codex_headers(
     is_fedramp: bool,
 ) -> Result<HeaderMap> {
     let mut headers = default_headers();
+    // The Codex backend selects the SSE response format from the Accept header. Without it the
+    // streaming response carries no `Content-Type: text/event-stream`, and rig's SSE reader
+    // rejects it ("Invalid content type was returned"). Match the real Codex CLI's Accept value.
+    headers.insert(
+        "Accept",
+        HeaderValue::from_static("text/event-stream, application/json"),
+    );
     if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
         let account_id = HeaderValue::from_str(account_id)
             .context("ChatGPT account id could not be encoded as an HTTP header")?;
@@ -735,7 +742,16 @@ impl<S: BearerSource + 'static> HttpClientExt for ChatGptCodexHttpClient<S> {
         let req = Request::from_parts(parts, body.into());
         async move {
             let req = this.prepare(req).await?;
-            HttpClientExt::send_streaming(&inner, req).await
+            let mut response = HttpClientExt::send_streaming(&inner, req).await?;
+            // The Codex backend returns a 200 SSE stream but omits the `Content-Type` header.
+            // rig's SSE reader requires `text/event-stream` and otherwise fails with "Invalid
+            // content type was returned". The body IS SSE (the non-streaming path parses it as
+            // such), so force the header before rig validates it.
+            response.headers_mut().insert(
+                "content-type",
+                HeaderValue::from_static("text/event-stream"),
+            );
+            Ok(response)
         }
     }
 }
@@ -818,6 +834,21 @@ fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
         if let Some(object) = value.as_object_mut() {
             if object.remove(*unsupported).is_some() {
                 changed = true;
+            }
+        }
+    }
+    // rig hardcodes `strict: true` on Responses function tools and rewrites each tool's `required`
+    // to list every property, which OpenAI's strict validation then rejects for tools with
+    // optional params (e.g. defra_query's `filter`/`limit`): "Invalid schema ... Extra required
+    // key". The real Codex CLI sends `strict: false` for all tools, and the Codex backend does not
+    // require strict mode — so force it off here, matching codex.
+    if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools {
+            if let Some(object) = tool.as_object_mut() {
+                if object.get("strict") != Some(&Value::Bool(false)) {
+                    object.insert("strict".to_string(), Value::Bool(false));
+                    changed = true;
+                }
             }
         }
     }
