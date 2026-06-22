@@ -1,7 +1,8 @@
 # Desktop UI test layers
 
 See [QA.md](./QA.md) for the desktop UI QA sweep, artifact review, and bug
-issue workflow.
+issue workflow. See [NATIVE_QA.md](./NATIVE_QA.md) for the native macOS/Tauri
+app smoke layer.
 
 The desktop test stack has three layers:
 
@@ -18,6 +19,7 @@ The desktop test stack has three layers:
   `bridge_runner`. It uses a local OpenAI-compatible mock inference endpoint by
   default; pass `-- --inference-url <url> --model-name <model>` or set the live
   backend env vars to exercise a real provider.
+- `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
 The browser harness also has an explicit live-backend seam:
 
