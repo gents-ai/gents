@@ -269,12 +269,27 @@ pub fn build_chatgpt_codex_headers(
     if is_fedramp {
         headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
     }
+    // The ChatGPT Codex backend gates model availability on the advertised Codex client
+    // `version`: an old/unknown version is offered a restricted (often empty) model set
+    // (e.g. gpt-5.5 -> "requires a newer version of Codex"). Advertise a recent supported Codex
+    // CLI version rather than defra-agent's own crate version. Overridable when the floor moves.
+    let version = std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string());
     headers.insert(
         "version",
-        HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+        HeaderValue::from_str(&version)
+            .context("ChatGPT Codex client version could not be encoded as an HTTP header")?,
     );
     Ok(headers)
 }
+
+/// Codex CLI version advertised to the ChatGPT Codex backend (model-availability gate). Track a
+/// recent supported version; override at runtime with [`CHATGPT_CODEX_CLIENT_VERSION_ENV`].
+const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
+const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "DEFRA_CHATGPT_CODEX_CLIENT_VERSION";
 
 fn oauth_credential_input(credential: &OAuthCredential) -> String {
     let field = |name: &str, value: &str| {
@@ -796,11 +811,25 @@ fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
         value["stream"] = Value::Bool(true);
         changed = true;
     }
+    // The ChatGPT Codex Responses endpoint rejects parameters the standard OpenAI Responses API
+    // accepts (e.g. `max_output_tokens` -> HTTP 400 "Unsupported parameter"). Strip the ones it
+    // does not support; the runtime sets them generically from the inference profile.
+    for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
+        if let Some(object) = value.as_object_mut() {
+            if object.remove(*unsupported).is_some() {
+                changed = true;
+            }
+        }
+    }
     if !changed {
         return None;
     }
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
+
+/// Top-level request parameters the ChatGPT Codex Responses endpoint rejects (it is stricter than
+/// the standard OpenAI Responses API). Stripped from every Codex request body.
+const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] = &["max_output_tokens", "temperature", "top_p"];
 
 fn first_system_text(input: &Value) -> Option<String> {
     match input {
