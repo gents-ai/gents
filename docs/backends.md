@@ -27,6 +27,32 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
    defra-agent codex-auth-probe --agent-did did:key:...
    ```
 
+### Models
+
+- **Default:** the `chatgpt-codex` preset defaults the model to **`gpt-5.5`**, so
+  `defra-agent init --backend-preset chatgpt-codex` works without `--model-name`.
+- **Use plain `gpt-5.x` slugs, not `-codex` variants.** A ChatGPT subscription serves
+  models like `gpt-5.5`; the `-codex` variants (`gpt-5.2-codex`, …) return
+  *"not supported when using Codex with a ChatGPT account"*.
+- **List your account's models:**
+
+  ```sh
+  defra-agent config backend discover-models \
+    --graphql <url> --backend-id <id> --agent-did did:key:...
+  ```
+
+  The returned set is what the account can actually use — it is gated server-side by
+  plan and by the advertised Codex client version (see below). An empty list usually
+  means a stale client version.
+- **Change the model:** pass `--model-name <slug>` to `init`, or update the behavior
+  with `defra-agent config behavior set --backend-id <id> --model-name <slug>`.
+- **Client version gate.** The backend gates model availability on the Codex client
+  version defra-agent advertises (currently `0.138.0`, on both the request `version`
+  header and the `/models` `client_version` query param). If a newer floor is required,
+  set `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` — one knob moves it everywhere.
+- **Reasoning effort** is currently fixed at `medium`; per-behavior effort selection
+  (e.g. `xhigh`) is tracked in #540.
+
 ### Credential storage
 
 - `defra-agent codex-login` uses Codex's OAuth flow with an ephemeral in-memory

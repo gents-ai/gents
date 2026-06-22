@@ -42,6 +42,10 @@ const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
+/// Default model for the ChatGptCodex preset. ChatGPT subscriptions serve plain `gpt-5.x` slugs
+/// (not `-codex` variants); see `docs/backends.md`. List the account's models with
+/// `defra-agent config backend discover-models`.
+const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";

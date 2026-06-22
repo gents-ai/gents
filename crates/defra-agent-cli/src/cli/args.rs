@@ -764,11 +764,8 @@ impl BackendPresetArg {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
-            Self::GenericOpenAiCompatible
-            | Self::OpenAi
-            | Self::OpenRouter
-            | Self::ChatGptCodex
-            | Self::Vllm => None,
+            Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
+            Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
         }
     }
 
