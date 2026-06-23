@@ -613,12 +613,12 @@ impl BearerSource for DbCredentialBearer {
     }
 }
 
-pub struct ChatGptCodexHttpClient<S: BearerSource> {
-    inner: ReqwestClient,
+pub struct ChatGptCodexHttpClient<S: BearerSource, H = ReqwestClient> {
+    inner: H,
     bearer: Option<Arc<S>>,
 }
 
-impl<S: BearerSource> Clone for ChatGptCodexHttpClient<S> {
+impl<S: BearerSource, H: Clone> Clone for ChatGptCodexHttpClient<S, H> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -627,7 +627,7 @@ impl<S: BearerSource> Clone for ChatGptCodexHttpClient<S> {
     }
 }
 
-impl<S: BearerSource> fmt::Debug for ChatGptCodexHttpClient<S> {
+impl<S: BearerSource, H: fmt::Debug> fmt::Debug for ChatGptCodexHttpClient<S, H> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChatGptCodexHttpClient")
             .field("inner", &self.inner)
@@ -636,19 +636,28 @@ impl<S: BearerSource> fmt::Debug for ChatGptCodexHttpClient<S> {
     }
 }
 
-impl<S: BearerSource> Default for ChatGptCodexHttpClient<S> {
+impl<S: BearerSource, H: Default> Default for ChatGptCodexHttpClient<S, H> {
     fn default() -> Self {
         Self {
-            inner: ReqwestClient::default(),
+            inner: H::default(),
             bearer: None,
         }
     }
 }
 
-impl<S: BearerSource> ChatGptCodexHttpClient<S> {
+impl<S: BearerSource> ChatGptCodexHttpClient<S, ReqwestClient> {
     pub fn new(bearer: Arc<S>) -> Self {
         Self {
             inner: ReqwestClient::default(),
+            bearer: Some(bearer),
+        }
+    }
+}
+
+impl<S: BearerSource, H> ChatGptCodexHttpClient<S, H> {
+    pub fn with_inner(bearer: Arc<S>, inner: H) -> Self {
+        Self {
+            inner,
             bearer: Some(bearer),
         }
     }
@@ -696,7 +705,11 @@ impl<S: BearerSource> ChatGptCodexHttpClient<S> {
     }
 }
 
-impl<S: BearerSource + 'static> HttpClientExt for ChatGptCodexHttpClient<S> {
+impl<S, H> HttpClientExt for ChatGptCodexHttpClient<S, H>
+where
+    S: BearerSource + 'static,
+    H: Clone + HttpClientExt + fmt::Debug + 'static,
+{
     fn send<T, U>(
         &self,
         req: Request<T>,
@@ -712,7 +725,7 @@ impl<S: BearerSource + 'static> HttpClientExt for ChatGptCodexHttpClient<S> {
         let req = Request::from_parts(parts, body.into());
         async move {
             let req = this.prepare(req).await?;
-            send_reqwest(inner, req).await
+            send_inner(inner, req).await
         }
     }
 
@@ -768,45 +781,27 @@ fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
     }
 }
 
-async fn send_reqwest<U>(
-    inner: ReqwestClient,
+async fn send_inner<H, U>(
+    inner: H,
     req: Request<Bytes>,
 ) -> http_client::Result<Response<LazyBody<U>>>
 where
+    H: HttpClientExt,
     U: From<Bytes>,
     U: WasmCompatSend + 'static,
 {
     let is_responses_request = req.uri().path().ends_with("/responses");
     let request_body = req.body().clone();
-    let (parts, body) = req.into_parts();
-    let response = inner
-        .request(parts.method, parts.uri.to_string())
-        .headers(parts.headers)
-        .body(body)
-        .send()
-        .await
-        .map_err(|error| http_client::Error::Instance(error.into()))?;
+    let response = HttpClientExt::send::<Bytes, Bytes>(&inner, req).await?;
 
     let status = response.status();
     let headers = response.headers().clone();
-    if !status.is_success() {
-        return Err(http_client::Error::InvalidStatusCodeWithMessage(
-            status,
-            response.text().await.unwrap_or_default(),
-        ));
-    }
-
+    let response_body = response.into_body().await?;
     let body = if is_responses_request {
-        let text = response
-            .text()
-            .await
-            .map_err(|error| http_client::Error::Instance(error.into()))?;
+        let text = String::from_utf8_lossy(&response_body);
         synthesize_completion_response(&request_body, &text)
     } else {
-        response
-            .bytes()
-            .await
-            .map_err(|error| http_client::Error::Instance(error.into()))?
+        response_body
     };
 
     let mut response_builder = Response::builder().status(status);
