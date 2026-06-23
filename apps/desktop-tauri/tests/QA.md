@@ -94,11 +94,17 @@ The live browser path is intentionally outside the fast PR gate:
 
 ```bash
 npm --prefix apps/desktop-tauri run test:ui:live:e2e
+npm --prefix apps/desktop-tauri run test:ui:live:e2e:real -- \
+  --inference-url <url> \
+  --model-name <model> \
+  --api-key-env-var OPENAI_API_KEY
 ```
 
 It starts the existing `bridge_runner`, serves the React shell in Chromium, and
 uses the live bridge HTTP adapter. By default, the browser smoke uses a local
 OpenAI-compatible mock inference endpoint so the runtime path is deterministic.
-Pass `-- --inference-url <url> --model-name <model>` or set the live backend env
-vars when the goal is to validate a real provider. This should stay in manual or
-live-smoke workflows until it has enough stability history.
+Use `test:ui:live:e2e:real` or pass `--require-real-inference` when the goal is
+to validate a real provider and accidentally falling back to the mock would hide
+the failure. The `Live Smoke` workflow exposes manual `inference_endpoint` and
+`model_name` inputs for the same path. This should stay in manual or live-smoke
+workflows until it has enough stability history.

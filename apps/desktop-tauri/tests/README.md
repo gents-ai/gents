@@ -19,6 +19,9 @@ The desktop test stack has three layers:
   `bridge_runner`. It uses a local OpenAI-compatible mock inference endpoint by
   default; pass `-- --inference-url <url> --model-name <model>` or set the live
   backend env vars to exercise a real provider.
+- `npm run test:ui:live:e2e:real` runs the same live browser-to-runtime smoke
+  path, but refuses to fall back to the mock endpoint. Use this when validating
+  a real inference provider or the `live-smoke.yml` manual workflow inputs.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
 The browser harness also has an explicit live-backend seam:
@@ -33,3 +36,19 @@ The live Playwright project starts `LiveBridgeRunner`, passes its `baseUrl` as
 
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.
+
+Real-provider live browser examples:
+
+```bash
+OPENAI_API_KEY=... npm run test:ui:live:e2e:real -- \
+  --inference-url https://api.openai.com/v1 \
+  --model-name gpt-4.1-mini \
+  --api-key-env-var OPENAI_API_KEY
+
+DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL=http://workstation-1:8000/v1 \
+DEFRA_AGENT_TAURI_LIVE_MODEL_NAME=MiniMax-M2.7-NVFP4 \
+npm run test:ui:live:e2e:real
+```
+
+The GitHub `Live Smoke` workflow exposes `inference_endpoint` and `model_name`
+manual inputs and runs the live browser job with those values.

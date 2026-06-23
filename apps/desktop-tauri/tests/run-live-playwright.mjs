@@ -21,9 +21,23 @@ function takeFlag(argv, name) {
   return null;
 }
 
+function takeSwitch(argv, name) {
+  const index = argv.indexOf(name);
+  if (index === -1) {
+    return false;
+  }
+  argv.splice(index, 1);
+  return true;
+}
+
+function truthy(value) {
+  return value === "1" || value === "true";
+}
+
 const DEFAULT_MOCK_MODEL_NAME = "desktop-live-browser-mock";
 
 const argv = [...process.argv.slice(2)];
+const requireRealInference = takeSwitch(argv, "--require-real-inference");
 const inferenceUrl = takeFlag(argv, "--inference-url");
 const modelName = takeFlag(argv, "--model-name");
 const provider = takeFlag(argv, "--provider");
@@ -50,10 +64,23 @@ const configuredModelName =
   modelName ??
   env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ??
   env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL;
+const mustUseRealInference =
+  requireRealInference || truthy(env.DEFRA_AGENT_TAURI_LIVE_REQUIRE_REAL_INFERENCE);
 let resolvedInferenceUrl = configuredInferenceUrl;
 let resolvedModelName = configuredModelName;
 
-if (!resolvedInferenceUrl && !env.OPENROUTER_API_KEY) {
+if (mustUseRealInference && !resolvedInferenceUrl && !env.OPENROUTER_API_KEY) {
+  throw new Error(
+    [
+      "live Playwright real-inference mode requires a backend.",
+      "Pass --inference-url <url> --model-name <model>,",
+      "set DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL/DEFRA_AGENT_TAURI_LIVE_MODEL_NAME,",
+      "or set OPENROUTER_API_KEY for the OpenRouter fallback.",
+    ].join(" "),
+  );
+}
+
+if (!mustUseRealInference && !resolvedInferenceUrl && !env.OPENROUTER_API_KEY) {
   mockInference = await startMockInference(
     resolvedModelName ?? DEFAULT_MOCK_MODEL_NAME,
   );

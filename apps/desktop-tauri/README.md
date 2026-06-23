@@ -143,6 +143,8 @@ npm run test:live:chat
 npm run test:live:config
 npm run test:live:operations
 npm run test:live:interrupt
+npm run test:ui:live:e2e
+npm run test:ui:live:e2e:real -- --inference-url <url> --model-name <model>
 ```
 
 Remote fleet smoke:
@@ -152,7 +154,9 @@ npm run smoke:remote-fleet
 ```
 
 The live tests expect real runtime connectivity and should be treated as manual
-or release validation, not the default fast correctness gate.
+or release validation, not the default fast correctness gate. The browser live
+smoke uses mock inference by default; use `test:ui:live:e2e:real` when a real
+provider must be exercised and mock fallback would hide a staging problem.
 
 Native macOS/Tauri smoke coverage is intentionally smaller than the browser
 matrix. See [tests/NATIVE_QA.md](./tests/NATIVE_QA.md) for the app-window,
