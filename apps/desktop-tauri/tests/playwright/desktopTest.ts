@@ -215,11 +215,13 @@ export async function captureStableScreenshot(
   page: Page,
   testInfo: TestInfo,
   name: string,
-) {
+): Promise<{ attachmentName: string; path: string }> {
   const path = testInfo.outputPath(`${name}.png`);
   await page.screenshot({ fullPage: true, path });
-  await testInfo.attach(`${name}.png`, {
+  const attachmentName = `${name}.png`;
+  await testInfo.attach(attachmentName, {
     path,
     contentType: "image/png",
   });
+  return { attachmentName, path };
 }

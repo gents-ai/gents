@@ -61,6 +61,9 @@ Review:
 
 Stable screenshots from `test:ui:screenshots` are diagnostic artifacts. Visual
 baseline checks from `test:ui:visual` are the golden-snapshot layer.
+The stable screenshot suite also attaches `desktop-screenshot-review.md` for
+each viewport, listing the state, scenario, attachment name, artifact path, and
+bug-issue details to copy into GitHub.
 
 ## Bug Issue Format
 

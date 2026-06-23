@@ -41,6 +41,8 @@ The `Desktop UI QA Sweep` GitHub workflow is the artifact-producing review
 loop for the deterministic browser layer. It can be run manually or by its
 weekday schedule and uploads screenshots, visual reports, Playwright traces, and
 Bombadil output for review even on successful runs.
+Stable screenshot runs attach `desktop-screenshot-review.md` per viewport so
+downloaded artifacts have a review index and bug-issue checklist.
 
 Real-provider live browser examples:
 
