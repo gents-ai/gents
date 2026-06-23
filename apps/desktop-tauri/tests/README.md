@@ -37,6 +37,11 @@ The live Playwright project starts `LiveBridgeRunner`, passes its `baseUrl` as
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.
 
+The `Desktop UI QA Sweep` GitHub workflow is the artifact-producing review
+loop for the deterministic browser layer. It can be run manually or by its
+weekday schedule and uploads screenshots, visual reports, Playwright traces, and
+Bombadil output for review even on successful runs.
+
 Real-provider live browser examples:
 
 ```bash
