@@ -23,6 +23,8 @@ mod peer_pairing_desired_query;
 mod projection_acp_policy_lifecycle;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
+#[path = "e2e_runtime/provider_fixture_replay.rs"]
+mod provider_fixture_replay;
 #[path = "e2e_runtime/runtime_observability.rs"]
 mod runtime_observability;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]
@@ -34,4 +36,16 @@ mod tool_call_migration;
 fn provider_wire_fixtures_do_not_contain_credentials() {
     provider_fixture_redaction::provider_wire_fixtures_do_not_contain_credentials()
         .expect("provider wire fixtures should be redacted");
+}
+
+#[test]
+fn provider_wire_fixture_replay_consumes_every_recorded_exchange_once() {
+    provider_fixture_replay::provider_wire_fixture_replay_consumes_every_recorded_exchange_once()
+        .expect("provider wire fixture replay should consume all exchanges");
+}
+
+#[test]
+fn provider_wire_fixture_replay_rejects_unmatched_and_leftover_requests() {
+    provider_fixture_replay::provider_wire_fixture_replay_rejects_unmatched_and_leftover_requests()
+        .expect("provider wire fixture replay should reject unmatched and leftover requests");
 }
