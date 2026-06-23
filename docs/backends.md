@@ -1,8 +1,43 @@
 # Backends
 
-> This page is the home for the committed backend support matrix (#509). It
-> starts with the ChatGPT-subscription (OAuth) backend; provider rows are added
-> as #509 lands each one.
+This page is the committed backend support matrix for defra-agent. It tracks
+which providers are supported, which wire API each provider uses, what request
+and response shaping defra-agent applies, and whether a provider has an offline
+wire fixture replay fence.
+
+The runtime owns provider-input assembly before any provider-specific client is
+called. Provider-specific shaping should stay small, explicit, and tested at the
+HTTP seam because live provider bugs tend to appear in headers, unsupported
+parameters, response content types, and tool schema details rather than in the
+agent loop itself.
+
+## Support Matrix
+
+| Provider kind | Wire API | Auth | Streaming | Tools | Reasoning | Request shaping | Response shaping | Fixture status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `OpenAiCompatible` | OpenAI Responses by default; Chat Completions fallback for compatible local servers | API key or local/no-auth | SSE | Function tools through rig | `reasoning.effort` plus local `chat_template_kwargs.enable_thinking` default | Adds cache-scope `user` when available; OpenAI-style params pass through | Standard rig OpenAI handling | Planned by #545 |
+| `ChatGptCodex` | ChatGPT Codex Responses endpoint | `OAuthCredential` document, refreshed by owner runtime | SSE | Function tools, forced `strict: false` to match Codex CLI | `reasoning.effort` currently fixed at `medium` | Strips unsupported `max_output_tokens`, `temperature`, `top_p`; injects instructions/store/stream defaults; adds Codex `version` and `Accept` headers | Adds missing `Content-Type: text/event-stream` only when the backend omits it; synthesizes completion body from SSE for non-streaming probes | Unit-pinned in #530; replay corpus planned by #545 |
+| `OpenRouter` | Chat Completions | API key | SSE | Function tools through rig | Provider-dependent | Adds OpenRouter provider preference `require_parameters: true` | Standard rig OpenRouter handling | Planned by #545 |
+| local OpenAI-compatible servers | Responses or Chat Completions depending on server support | Usually none/local key | SSE varies by server | Function tools when server supports them | Reasoning parser support varies; `enable_thinking` is sent for vLLM-style servers | Same as `OpenAiCompatible`; operators may need Chat Completions fallback for servers without `/v1/responses` | Standard rig OpenAI handling | Planned by #545 |
+
+## Wire Fixture Policy
+
+Provider fixture replay is tracked in #545. Recorded fixtures live under
+`crates/defra-agent/tests/fixtures/providers/` and must be safe to commit.
+
+Rules:
+
+- No access tokens, refresh tokens, API keys, account ids, or bearer strings in
+  fixtures.
+- Redaction happens before writing fixtures to disk.
+- Fixture replay should assert every recorded request is consumed exactly once.
+- Fixture refresh is a live/operator action; CI should replay committed fixtures
+  offline.
+
+The fixture directory has a regression test that scans committed fixture files
+for common credential patterns. The scanner is intentionally conservative: if a
+new provider introduces another credential shape, add it to the scanner before
+committing fixtures.
 
 ## ChatGPT subscription (ChatGptCodex, OAuth)
 
@@ -52,6 +87,20 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
   set `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` — one knob moves it everywhere.
 - **Reasoning effort** is currently fixed at `medium`; per-behavior effort selection
   (e.g. `xhigh`) is tracked in #540.
+
+### Wire-shaping guarantees
+
+The ChatGPT Codex path is stricter than hosted OpenAI Responses in several
+places. Regression tests pin these details:
+
+- unsupported top-level params are stripped: `max_output_tokens`, `temperature`,
+  `top_p`
+- function tools are sent as `strict: false`
+- the Codex client version is sourced from one accessor and used for both the
+  request `version` header and `/models?client_version=...`
+- `Accept: text/event-stream, application/json` is sent
+- a missing SSE `Content-Type` is filled as `text/event-stream`, while a
+  backend-supplied content type is preserved
 
 ### Credential storage
 
