@@ -157,6 +157,9 @@ The live tests expect real runtime connectivity and should be treated as manual
 or release validation, not the default fast correctness gate. The browser live
 smoke uses mock inference by default; use `test:ui:live:e2e:real` when a real
 provider must be exercised and mock fallback would hide a staging problem.
+The `Live Smoke` workflow uploads the browser smoke summary, request diagnostics,
+and final screenshot even when the job passes so successful staging runs can be
+reviewed later.
 
 Native macOS/Tauri smoke coverage is intentionally smaller than the browser
 matrix. See [tests/NATIVE_QA.md](./tests/NATIVE_QA.md) for the app-window,

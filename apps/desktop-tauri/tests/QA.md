@@ -123,4 +123,5 @@ workflows until it has enough stability history. Successful live browser runs
 attach `desktop-live-browser-smoke.md`,
 `desktop-live-browser-diagnostics.json`, and `desktop-live-browser-final.png`
 so reviewers can see which runtime request completed and inspect the projected
-desktop/remote diagnostics without rerunning the smoke.
+desktop/remote diagnostics without rerunning the smoke. The workflow uploads
+those artifacts even on successful runs.

@@ -263,7 +263,7 @@ jobs:
         run: npm run test:ui:live:e2e
 
       - name: Upload live desktop browser artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-live-browser-artifacts
