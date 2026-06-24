@@ -44,6 +44,14 @@ jobs:
         working-directory: apps/desktop-tauri
         run: npm run build
 
+      - name: Run desktop unit tests
+        working-directory: apps/desktop-tauri
+        run: npm run test:ui:unit
+
+      - name: Run desktop browser journeys
+        working-directory: apps/desktop-tauri
+        run: npm run test:ui:e2e
+
       - name: Capture deterministic desktop screenshots
         working-directory: apps/desktop-tauri
         run: npm run test:ui:screenshots

@@ -46,10 +46,10 @@ make desktop-ui-fuzz-long
 ```
 
 The GitHub `Desktop UI QA Sweep` workflow runs the same review lane on a
-schedule and by manual dispatch. It captures deterministic screenshots, checks
-desktop/laptop/narrow visual baselines, runs a longer Bombadil sweep, and
-uploads `test-results` plus Playwright reports even when the job passes so
-artifacts can be reviewed.
+schedule and by manual dispatch. It runs unit tests and deterministic browser
+journeys, captures screenshots, checks desktop/laptop/narrow visual baselines,
+runs a longer Bombadil sweep, and uploads `test-results` plus Playwright reports
+even when the job passes so artifacts can be reviewed.
 
 Review:
 
