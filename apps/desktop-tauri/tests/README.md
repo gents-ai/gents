@@ -34,6 +34,8 @@ The browser harness also has an explicit live-backend seam:
 That mode swaps the deterministic adapter for the bridge-runner HTTP adapter.
 The live Playwright project starts `LiveBridgeRunner`, passes its `baseUrl` as
 `bridgeUrl`, and stays out of the fast PR-gating browser job until it is stable.
+Successful live browser runs attach a markdown smoke summary, request
+diagnostics JSON, and a final browser screenshot to the Playwright output.
 
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.

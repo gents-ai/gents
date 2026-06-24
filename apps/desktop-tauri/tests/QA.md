@@ -119,4 +119,8 @@ Use `test:ui:live:e2e:real` or pass `--require-real-inference` when the goal is
 to validate a real provider and accidentally falling back to the mock would hide
 the failure. The `Live Smoke` workflow exposes manual `inference_endpoint` and
 `model_name` inputs for the same path. This should stay in manual or live-smoke
-workflows until it has enough stability history.
+workflows until it has enough stability history. Successful live browser runs
+attach `desktop-live-browser-smoke.md`,
+`desktop-live-browser-diagnostics.json`, and `desktop-live-browser-final.png`
+so reviewers can see which runtime request completed and inspect the projected
+desktop/remote diagnostics without rerunning the smoke.
