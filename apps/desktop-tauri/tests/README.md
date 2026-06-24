@@ -14,7 +14,8 @@ The desktop test stack has three layers:
 - `npm run test:ui:fuzz` runs Bombadil against the same deterministic browser
   harness and checks persistent shell invariants under random interaction.
 - `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.
-- `npm run test:ui:visual` runs golden screenshot checks for stable shell states.
+- `npm run test:ui:visual` runs golden screenshot checks for stable shell
+  states across desktop, laptop, and narrow viewports.
 - `npm run test:ui:live:e2e` runs the live browser-to-runtime smoke path through
   `bridge_runner`. It uses a local OpenAI-compatible mock inference endpoint by
   default; pass `-- --inference-url <url> --model-name <model>` or set the live
@@ -41,8 +42,10 @@ The `Desktop UI QA Sweep` GitHub workflow is the artifact-producing review
 loop for the deterministic browser layer. It can be run manually or by its
 weekday schedule and uploads screenshots, visual reports, Playwright traces, and
 Bombadil output for review even on successful runs.
-Stable screenshot runs attach `desktop-screenshot-review.md` per viewport so
-downloaded artifacts have a review index and bug-issue checklist.
+Stable screenshot and visual baseline runs cover the standard desktop, laptop,
+and narrow viewport set. Screenshot runs also attach
+`desktop-screenshot-review.md` per viewport so downloaded artifacts have a
+review index and bug-issue checklist.
 
 Real-provider live browser examples:
 

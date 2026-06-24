@@ -47,8 +47,9 @@ make desktop-ui-fuzz-long
 
 The GitHub `Desktop UI QA Sweep` workflow runs the same review lane on a
 schedule and by manual dispatch. It captures deterministic screenshots, checks
-visual baselines, runs a longer Bombadil sweep, and uploads `test-results` plus
-Playwright reports even when the job passes so artifacts can be reviewed.
+desktop/laptop/narrow visual baselines, runs a longer Bombadil sweep, and
+uploads `test-results` plus Playwright reports even when the job passes so
+artifacts can be reviewed.
 
 Review:
 
@@ -60,7 +61,8 @@ Review:
 - traces before screenshots when diagnosing interaction failures
 
 Stable screenshots from `test:ui:screenshots` are diagnostic artifacts. Visual
-baseline checks from `test:ui:visual` are the golden-snapshot layer.
+baseline checks from `test:ui:visual` are the golden-snapshot layer. Both cover
+the standard desktop, laptop, and narrow viewport set.
 The stable screenshot suite also attaches `desktop-screenshot-review.md` for
 each viewport, listing the state, scenario, attachment name, artifact path, and
 bug-issue details to copy into GitHub.
