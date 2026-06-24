@@ -6,6 +6,7 @@ import {
   expect,
   gotoLiveHarness,
   test,
+  type Page,
   type TestInfo,
 } from "../playwright/desktopTest";
 
@@ -25,82 +26,107 @@ test.describe("desktop live browser smoke", () => {
   test("drives Chromium through the live bridge and runtime", async ({
     page,
   }, testInfo) => {
-    expect(runner).toBeTruthy();
-    const liveRunner = runner!;
+    const liveRunner = runner;
+    let submitted: SubmittedRequest | null = null;
+    let diagnostics: RequestDiagnosticsBundle | null = null;
 
-    await gotoLiveHarness(page, liveRunner.baseUrl);
-    await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
+    try {
+      expect(liveRunner).toBeTruthy();
+      if (!liveRunner) {
+        throw new Error("live browser smoke runner was not initialized");
+      }
 
-    await page.locator('[data-testid^="fleet-chat-name-"]').first().click();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
-    const deployment = await firstDeployment(liveRunner);
-    const previousRequestIds = new Set(
-      deployment.conversations
-        .map((conversation) => conversation.latestRequestId)
-        .filter((requestId): requestId is string => Boolean(requestId)),
-    );
+      await gotoLiveHarness(page, liveRunner.baseUrl);
+      await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
-    await page
-      .getByTestId("composer-input")
-      .fill("Reply with a short desktop live browser smoke confirmation.");
-    await page.getByTestId("composer-send").click();
+      await page.locator('[data-testid^="fleet-chat-name-"]').first().click();
+      await expect(page.getByTestId("composer-input")).toBeVisible();
+      const deployment = await firstDeployment(liveRunner);
+      const previousRequestIds = new Set(
+        deployment.conversations
+          .map((conversation) => conversation.latestRequestId)
+          .filter((requestId): requestId is string => Boolean(requestId)),
+      );
 
-    const submitted = await waitForSubmittedRequest(liveRunner, {
-      agentDid: deployment.agentDid,
-      previousRequestIds,
-    });
-    const completedSession = await liveRunner.waitForRequestCompletion(submitted);
-    if (completedSession.turnState !== "completed") {
-      const diagnostics = await liveRunner.fetchRequestDiagnostics(
+      await page
+        .getByTestId("composer-input")
+        .fill("Reply with a short desktop live browser smoke confirmation.");
+      await page.getByTestId("composer-send").click();
+
+      submitted = await waitForSubmittedRequest(liveRunner, {
+        agentDid: deployment.agentDid,
+        previousRequestIds,
+      });
+      const completedSession = await liveRunner.waitForRequestCompletion(submitted);
+      if (completedSession.turnState !== "completed") {
+        diagnostics = await liveRunner.fetchRequestDiagnostics(
+          submitted.sessionId,
+          submitted.requestId,
+        );
+        throw new Error(
+          `live browser smoke request ended ${completedSession.turnState}`,
+        );
+      }
+
+      const transcriptRows = page.locator(
+        '[data-testid="transcript-panel"] .message-card',
+      );
+      await expect
+        .poll(async () => transcriptRows.count(), { timeout: 30_000 })
+        .toBeGreaterThanOrEqual(2);
+      const transcriptRowCount = await transcriptRows.count();
+
+      await page.getByRole("button", { name: /open operations drawer/i }).click();
+      await expect(
+        page.getByRole("complementary", { name: "Operations" }),
+      ).toBeVisible();
+      await expect(page.getByRole("tab", { name: /Backends/ })).toBeVisible();
+
+      await page.getByRole("button", { name: "Configure" }).click();
+      await expect(page.locator(".config-workspace")).toBeVisible();
+      await page.getByTestId("config-tab-backends").click();
+      await expect(page.getByTestId("backend-save")).toBeVisible();
+
+      diagnostics = await liveRunner.fetchRequestDiagnostics(
         submitted.sessionId,
         submitted.requestId,
       );
-      throw new Error(
-        `live browser smoke request ended ${completedSession.turnState}; diagnostics=${JSON.stringify(diagnostics)}`,
-      );
+      await attachLiveSmokeEvidence(testInfo, {
+        bridgeUrl: liveRunner.baseUrl,
+        deploymentLabel: liveRunner.deploymentLabel,
+        agentDid: liveRunner.agentDid,
+        toolRoot: liveRunner.toolRoot,
+        sessionId: submitted.sessionId,
+        requestId: submitted.requestId,
+        turnState: completedSession.turnState,
+        transcriptRows: transcriptRowCount,
+        diagnostics,
+      });
+
+      await attachPageScreenshot(page, testInfo, "desktop-live-browser-final.png");
+    } catch (error) {
+      if (liveRunner) {
+        await attachLiveSmokeFailureEvidence(testInfo, page, {
+          error,
+          runner: liveRunner,
+          submitted,
+          diagnostics:
+            diagnostics ??
+            (submitted
+              ? await tryFetchRequestDiagnostics(liveRunner, submitted)
+              : null),
+        });
+      }
+      throw error;
     }
-
-    const transcriptRows = page.locator(
-      '[data-testid="transcript-panel"] .message-card',
-    );
-    await expect
-      .poll(async () => transcriptRows.count(), { timeout: 30_000 })
-      .toBeGreaterThanOrEqual(2);
-    const transcriptRowCount = await transcriptRows.count();
-
-    await page.getByRole("button", { name: /open operations drawer/i }).click();
-    await expect(page.getByRole("complementary", { name: "Operations" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: /Backends/ })).toBeVisible();
-
-    await page.getByRole("button", { name: "Configure" }).click();
-    await expect(page.locator(".config-workspace")).toBeVisible();
-    await page.getByTestId("config-tab-backends").click();
-    await expect(page.getByTestId("backend-save")).toBeVisible();
-
-    const diagnostics = await liveRunner.fetchRequestDiagnostics(
-      submitted.sessionId,
-      submitted.requestId,
-    );
-    await attachLiveSmokeEvidence(testInfo, {
-      bridgeUrl: liveRunner.baseUrl,
-      deploymentLabel: liveRunner.deploymentLabel,
-      agentDid: liveRunner.agentDid,
-      toolRoot: liveRunner.toolRoot,
-      sessionId: submitted.sessionId,
-      requestId: submitted.requestId,
-      turnState: completedSession.turnState,
-      transcriptRows: transcriptRowCount,
-      diagnostics,
-    });
-
-    const finalScreenshot = testInfo.outputPath("desktop-live-browser-final.png");
-    await page.screenshot({ fullPage: true, path: finalScreenshot });
-    await testInfo.attach("desktop-live-browser-final.png", {
-      path: finalScreenshot,
-      contentType: "image/png",
-    });
   });
 });
+
+type SubmittedRequest = {
+  agentDid: string;
+  requestId: string;
+  sessionId: string;
+};
 
 type LiveSmokeEvidence = {
   bridgeUrl: string;
@@ -112,6 +138,13 @@ type LiveSmokeEvidence = {
   turnState: string;
   transcriptRows: number;
   diagnostics: RequestDiagnosticsBundle;
+};
+
+type LiveSmokeFailureEvidence = {
+  error: unknown;
+  runner: LiveBridgeRunner;
+  submitted: SubmittedRequest | null;
+  diagnostics: RequestDiagnosticsBundle | null;
 };
 
 async function attachLiveSmokeEvidence(
@@ -134,6 +167,68 @@ async function attachLiveSmokeEvidence(
     path: summaryPath,
     contentType: "text/markdown",
   });
+}
+
+async function attachLiveSmokeFailureEvidence(
+  testInfo: TestInfo,
+  page: Page,
+  evidence: LiveSmokeFailureEvidence,
+) {
+  const screenshotAttached = await tryAttachPageScreenshot(
+    page,
+    testInfo,
+    "desktop-live-browser-failure.png",
+  );
+
+  if (evidence.diagnostics) {
+    const diagnosticsPath = testInfo.outputPath(
+      "desktop-live-browser-failure-diagnostics.json",
+    );
+    await writeFile(
+      diagnosticsPath,
+      `${JSON.stringify(evidence.diagnostics, null, 2)}\n`,
+    );
+    await testInfo.attach("desktop-live-browser-failure-diagnostics.json", {
+      path: diagnosticsPath,
+      contentType: "application/json",
+    });
+  }
+
+  const summaryPath = testInfo.outputPath("desktop-live-browser-failure.md");
+  await writeFile(
+    summaryPath,
+    liveSmokeFailureSummary({ ...evidence, screenshotAttached }),
+  );
+  await testInfo.attach("desktop-live-browser-failure.md", {
+    path: summaryPath,
+    contentType: "text/markdown",
+  });
+}
+
+async function attachPageScreenshot(
+  page: Page,
+  testInfo: TestInfo,
+  attachmentName: string,
+) {
+  const path = testInfo.outputPath(attachmentName);
+  await page.screenshot({ fullPage: true, path });
+  await testInfo.attach(attachmentName, {
+    path,
+    contentType: "image/png",
+  });
+}
+
+async function tryAttachPageScreenshot(
+  page: Page,
+  testInfo: TestInfo,
+  attachmentName: string,
+) {
+  try {
+    await attachPageScreenshot(page, testInfo, attachmentName);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function liveSmokeSummary(evidence: LiveSmokeEvidence) {
@@ -162,6 +257,66 @@ function liveSmokeSummary(evidence: LiveSmokeEvidence) {
     "- `desktop-live-browser-final.png`",
     "",
   ].join("\n");
+}
+
+function liveSmokeFailureSummary(
+  evidence: LiveSmokeFailureEvidence & { screenshotAttached: boolean },
+) {
+  return [
+    "# Desktop Live Browser Smoke Failure",
+    "",
+    `Deployment: \`${evidence.runner.deploymentLabel}\``,
+    `Bridge URL: \`${evidence.runner.baseUrl}\``,
+    `Agent DID: \`${evidence.runner.agentDid}\``,
+    `Tool root: \`${evidence.runner.toolRoot}\``,
+    "",
+    "| Field | Value |",
+    "| --- | --- |",
+    `| Session | \`${evidence.submitted?.sessionId ?? "not submitted"}\` |`,
+    `| Request | \`${evidence.submitted?.requestId ?? "not submitted"}\` |`,
+    `| Error | \`${formatLiveSmokeError(evidence.error)}\` |`,
+    `| Diagnostics attached | \`${evidence.diagnostics ? "yes" : "no"}\` |`,
+    "",
+    "Artifacts:",
+    "",
+    evidence.screenshotAttached
+      ? "- `desktop-live-browser-failure.png`"
+      : "- failure screenshot was unavailable",
+    evidence.diagnostics
+      ? "- `desktop-live-browser-failure-diagnostics.json`"
+      : "- no request diagnostics were available",
+    "",
+  ].join("\n");
+}
+
+function formatLiveSmokeError(error: unknown) {
+  const message =
+    error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+  return sanitizeMarkdownCell(message).slice(0, 2_000);
+}
+
+function sanitizeMarkdownCell(value: string) {
+  return value
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-REDACTED")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer REDACTED")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "'")
+    .trim();
+}
+
+async function tryFetchRequestDiagnostics(
+  runner: LiveBridgeRunner,
+  submitted: SubmittedRequest,
+) {
+  try {
+    return await runner.fetchRequestDiagnostics(
+      submitted.sessionId,
+      submitted.requestId,
+    );
+  } catch {
+    return null;
+  }
 }
 
 async function firstDeployment(runner: LiveBridgeRunner) {
