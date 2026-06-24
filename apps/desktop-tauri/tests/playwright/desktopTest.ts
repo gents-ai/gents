@@ -47,6 +47,7 @@ export const test = base.extend<DesktopFixtures>({
 });
 
 export { expect };
+export type { TestInfo };
 
 export async function gotoHarness(page: Page, scenario: HarnessScenario = "default") {
   await page.goto(`/tests/ui-harness/harness.html?scenario=${scenario}`);

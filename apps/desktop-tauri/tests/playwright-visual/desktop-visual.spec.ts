@@ -1,13 +1,12 @@
 import { writeFile } from "node:fs/promises";
 
-import type { TestInfo } from "@playwright/test";
-
 import {
   expect,
   gotoHarness,
   openChat,
   openConfig,
   test,
+  type TestInfo,
 } from "../playwright/desktopTest";
 
 type VisualReviewEntry = {

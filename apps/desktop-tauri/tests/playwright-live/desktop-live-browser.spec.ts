@@ -1,10 +1,13 @@
 import { writeFile } from "node:fs/promises";
 
-import type { TestInfo } from "@playwright/test";
-
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import type { RequestDiagnosticsBundle } from "../live-bridge-runner";
-import { expect, gotoLiveHarness, test } from "../playwright/desktopTest";
+import {
+  expect,
+  gotoLiveHarness,
+  test,
+  type TestInfo,
+} from "../playwright/desktopTest";
 
 test.describe.configure({ mode: "serial" });
 
