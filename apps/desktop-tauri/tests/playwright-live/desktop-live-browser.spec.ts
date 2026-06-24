@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import type { RequestDiagnosticsBundle } from "../live-bridge-runner";
+import type { DeploymentView } from "../../src/lib/types";
 import {
   liveSmokeFailureSummary,
   liveSmokeSummary,
@@ -227,7 +228,7 @@ async function tryFetchRequestDiagnostics(
   }
 }
 
-async function firstDeployment(runner: LiveBridgeRunner) {
+async function firstDeployment(runner: LiveBridgeRunner): Promise<DeploymentView> {
   const deployment = (await runner.fetchSnapshot()).client?.deployments[0];
   if (!deployment) {
     throw new Error("live browser smoke expected one deployment");
@@ -270,12 +271,17 @@ async function waitForSubmittedRequest(
   return request!;
 }
 
-async function findDeployment(runner: LiveBridgeRunner, agentDid: string) {
+async function findDeployment(
+  runner: LiveBridgeRunner,
+  agentDid: string,
+): Promise<DeploymentView | null> {
   const snapshot = await runner.fetchSnapshot();
   return (
     snapshot.client?.deployments.find(
       (deployment) => deployment.agentDid === agentDid,
-    ) ?? snapshot.client?.deployments[0]
+    ) ??
+    snapshot.client?.deployments[0] ??
+    null
   );
 }
 
