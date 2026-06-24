@@ -66,6 +66,8 @@ the standard desktop, laptop, and narrow viewport set.
 The stable screenshot suite also attaches `desktop-screenshot-review.md` for
 each viewport, listing the state, scenario, attachment name, artifact path, and
 bug-issue details to copy into GitHub.
+The visual baseline suite attaches `desktop-visual-review.md` for each viewport
+project, listing the asserted stable states and snapshot names.
 
 ## Bug Issue Format
 

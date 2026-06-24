@@ -45,7 +45,9 @@ Bombadil output for review even on successful runs.
 Stable screenshot and visual baseline runs cover the standard desktop, laptop,
 and narrow viewport set. Screenshot runs also attach
 `desktop-screenshot-review.md` per viewport so downloaded artifacts have a
-review index and bug-issue checklist.
+review index and bug-issue checklist. Visual runs attach
+`desktop-visual-review.md` per viewport project with the asserted stable states
+and snapshot names.
 
 Real-provider live browser examples:
 
