@@ -21,6 +21,7 @@ Equivalent Makefile shortcuts:
 make build-desktop-ui
 make desktop-ui-unit
 make desktop-ui-e2e
+make desktop-ui-invariants
 make desktop-ui-fuzz
 ```
 
@@ -41,6 +42,7 @@ Equivalent Makefile shortcuts:
 
 ```bash
 make desktop-ui-qa-sweep
+make desktop-ui-screenshots
 make desktop-ui-visual
 make desktop-ui-fuzz-long
 ```

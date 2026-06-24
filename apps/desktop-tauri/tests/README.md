@@ -25,6 +25,10 @@ The desktop test stack has three layers:
   a real inference provider or the `live-smoke.yml` manual workflow inputs.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
+Root Makefile shortcuts mirror the common commands, including
+`make desktop-ui-invariants` and `make desktop-ui-screenshots` for focused
+browser QA passes.
+
 The browser harness also has an explicit live-backend seam:
 
 ```text
