@@ -247,7 +247,10 @@ async function waitForSubmittedRequest(
     .poll(
       async () => {
         const deployment = await findDeployment(runner, expected.agentDid);
-        const conversation = deployment?.conversations.find(
+        if (!deployment) {
+          return false;
+        }
+        const conversation = deployment.conversations.find(
           (candidate) =>
             candidate.latestRequestId &&
             !expected.previousRequestIds.has(candidate.latestRequestId),
