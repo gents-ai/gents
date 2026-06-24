@@ -14,7 +14,7 @@
     "test:ui:unit": "vitest run",
     "test:ui:e2e": "playwright test",
     "test:ui:invariants": "playwright test tests/playwright/desktop-invariants.spec.ts",
-    "test:ui:screenshots": "playwright test tests/playwright/desktop-screenshots.spec.ts",
+    "test:ui:screenshots": "playwright test -c playwright.screenshots.config.ts",
     "test:ui:visual": "playwright test -c playwright.visual.config.ts",
     "test:ui:visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots",
     "test:ui:fuzz": "node ./tests/bombadil/run-bombadil.mjs",

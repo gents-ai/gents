@@ -7,7 +7,7 @@ import {
   openChat,
   openConfig,
   test,
-} from "./desktopTest";
+} from "../playwright/desktopTest";
 
 type ScreenshotReviewEntry = {
   state: string;

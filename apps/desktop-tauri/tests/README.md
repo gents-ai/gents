@@ -11,6 +11,10 @@ The desktop test stack has three layers:
 - `npm run test:ui:e2e` runs Playwright in Chromium against
   `tests/ui-harness/harness.html`. By default this uses the deterministic
   in-memory adapter, so it is the fast browser regression gate.
+- `npm run test:ui:screenshots` runs the stable screenshot artifact capture
+  lane. It is separate from `test:ui:e2e` so journey checks and screenshot
+  artifacts can be run independently. It uses
+  `playwright.screenshots.config.ts`.
 - `npm run test:ui:fuzz` runs Bombadil against the same deterministic browser
   harness and checks persistent shell invariants under random interaction.
 - `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.

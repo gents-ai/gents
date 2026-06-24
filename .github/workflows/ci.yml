@@ -194,3 +194,4 @@ jobs:
           path: |
             apps/desktop-tauri/test-results
             apps/desktop-tauri/playwright-report
+            apps/desktop-tauri/playwright-screenshots-report

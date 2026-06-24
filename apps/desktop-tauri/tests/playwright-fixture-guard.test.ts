@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const PLAYWRIGHT_DIRS = [
   join(process.cwd(), "tests", "playwright"),
   join(process.cwd(), "tests", "playwright-live"),
+  join(process.cwd(), "tests", "playwright-screenshots"),
   join(process.cwd(), "tests", "playwright-visual"),
 ];
 
