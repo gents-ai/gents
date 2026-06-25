@@ -21,6 +21,7 @@ Equivalent Makefile shortcuts:
 make build-desktop-ui
 make desktop-ui-unit
 make desktop-ui-e2e
+make desktop-ui-invariants
 make desktop-ui-fuzz
 ```
 
@@ -41,9 +42,16 @@ Equivalent Makefile shortcuts:
 
 ```bash
 make desktop-ui-qa-sweep
+make desktop-ui-screenshots
 make desktop-ui-visual
 make desktop-ui-fuzz-long
 ```
+
+The GitHub `Desktop UI QA Sweep` workflow runs the same review lane on a
+schedule and by manual dispatch. It runs unit tests and deterministic browser
+journeys, captures screenshots, checks desktop/laptop/narrow visual baselines,
+runs a longer Bombadil sweep, and uploads `test-results` plus Playwright reports
+even when the job passes so artifacts can be reviewed.
 
 Review:
 
@@ -55,7 +63,13 @@ Review:
 - traces before screenshots when diagnosing interaction failures
 
 Stable screenshots from `test:ui:screenshots` are diagnostic artifacts. Visual
-baseline checks from `test:ui:visual` are the golden-snapshot layer.
+baseline checks from `test:ui:visual` are the golden-snapshot layer. Both cover
+the standard desktop, laptop, and narrow viewport set.
+The stable screenshot suite also attaches `desktop-screenshot-review.md` for
+each viewport, listing the state, scenario, attachment name, artifact path, and
+bug-issue details to copy into GitHub.
+The visual baseline suite attaches `desktop-visual-review.md` for each viewport
+project, listing the asserted stable states and snapshot names.
 
 ## Bug Issue Format
 
@@ -94,11 +108,22 @@ The live browser path is intentionally outside the fast PR gate:
 
 ```bash
 npm --prefix apps/desktop-tauri run test:ui:live:e2e
+npm --prefix apps/desktop-tauri run test:ui:live:e2e:real -- \
+  --inference-url <url> \
+  --model-name <model> \
+  --api-key-env-var OPENAI_API_KEY
 ```
 
 It starts the existing `bridge_runner`, serves the React shell in Chromium, and
 uses the live bridge HTTP adapter. By default, the browser smoke uses a local
 OpenAI-compatible mock inference endpoint so the runtime path is deterministic.
-Pass `-- --inference-url <url> --model-name <model>` or set the live backend env
-vars when the goal is to validate a real provider. This should stay in manual or
-live-smoke workflows until it has enough stability history.
+Use `test:ui:live:e2e:real` or pass `--require-real-inference` when the goal is
+to validate a real provider and accidentally falling back to the mock would hide
+the failure. The `Live Smoke` workflow exposes manual `inference_endpoint` and
+`model_name` inputs for the same path. This should stay in manual or live-smoke
+workflows until it has enough stability history. Successful live browser runs
+attach `desktop-live-browser-smoke.md`,
+`desktop-live-browser-diagnostics.json`, and `desktop-live-browser-final.png`
+so reviewers can see which runtime request completed and inspect the projected
+desktop/remote diagnostics without rerunning the smoke. The workflow uploads
+those artifacts even on successful runs.

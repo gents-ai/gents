@@ -1,23 +1,24 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = Number(process.env.DESKTOP_UI_VISUAL_PORT ?? 1423);
-const baseURL = process.env.DESKTOP_UI_VISUAL_BASE_URL ?? `http://127.0.0.1:${port}`;
+const port = Number(process.env.DESKTOP_UI_SCREENSHOT_PORT ?? 1425);
+const baseURL =
+  process.env.DESKTOP_UI_SCREENSHOT_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
-  testDir: "./tests/playwright-visual",
-  outputDir: "./test-results/playwright-visual",
-  fullyParallel: false,
+  testDir: "./tests/playwright-screenshots",
+  outputDir: "./test-results/playwright-screenshots",
+  fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: 0,
-  workers: 1,
+  retries: process.env.CI ? 1 : 0,
+  workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI
-    ? [["list"], ["html", { outputFolder: "playwright-visual-report", open: "never" }]]
+    ? [
+        ["list"],
+        ["html", { outputFolder: "playwright-screenshots-report", open: "never" }],
+      ]
     : "list",
   expect: {
     timeout: 10_000,
-    toHaveScreenshot: {
-      maxDiffPixelRatio: 0.01,
-    },
   },
   use: {
     baseURL,
@@ -25,6 +26,7 @@ export default defineConfig({
     navigationTimeout: 30_000,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
+    video: "retain-on-failure",
   },
   webServer: {
     command: `node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
@@ -34,21 +36,21 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium-visual-desktop",
+      name: "chromium-screenshots-desktop",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
       },
     },
     {
-      name: "chromium-visual-laptop",
+      name: "chromium-screenshots-laptop",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
       },
     },
     {
-      name: "chromium-visual-narrow",
+      name: "chromium-screenshots-narrow",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },

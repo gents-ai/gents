@@ -28,6 +28,7 @@ env:
   DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
   DEFRA_AGENT_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
   DEFRA_AGENT_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  DEFRA_AGENT_TAURI_LIVE_REQUIRE_REAL_INFERENCE: "1"
   AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
 
 jobs:
@@ -262,7 +263,7 @@ jobs:
         run: npm run test:ui:live:e2e
 
       - name: Upload live desktop browser artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-live-browser-artifacts

@@ -11,15 +11,27 @@ The desktop test stack has three layers:
 - `npm run test:ui:e2e` runs Playwright in Chromium against
   `tests/ui-harness/harness.html`. By default this uses the deterministic
   in-memory adapter, so it is the fast browser regression gate.
+- `npm run test:ui:screenshots` runs the stable screenshot artifact capture
+  lane. It is separate from `test:ui:e2e` so journey checks and screenshot
+  artifacts can be run independently. It uses
+  `playwright.screenshots.config.ts`.
 - `npm run test:ui:fuzz` runs Bombadil against the same deterministic browser
   harness and checks persistent shell invariants under random interaction.
 - `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.
-- `npm run test:ui:visual` runs golden screenshot checks for stable shell states.
+- `npm run test:ui:visual` runs golden screenshot checks for stable shell
+  states across desktop, laptop, and narrow viewports.
 - `npm run test:ui:live:e2e` runs the live browser-to-runtime smoke path through
   `bridge_runner`. It uses a local OpenAI-compatible mock inference endpoint by
   default; pass `-- --inference-url <url> --model-name <model>` or set the live
   backend env vars to exercise a real provider.
+- `npm run test:ui:live:e2e:real` runs the same live browser-to-runtime smoke
+  path, but refuses to fall back to the mock endpoint. Use this when validating
+  a real inference provider or the `live-smoke.yml` manual workflow inputs.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
+
+Root Makefile shortcuts mirror the common commands, including
+`make desktop-ui-invariants` and `make desktop-ui-screenshots` for focused
+browser QA passes.
 
 The browser harness also has an explicit live-backend seam:
 
@@ -30,6 +42,36 @@ The browser harness also has an explicit live-backend seam:
 That mode swaps the deterministic adapter for the bridge-runner HTTP adapter.
 The live Playwright project starts `LiveBridgeRunner`, passes its `baseUrl` as
 `bridgeUrl`, and stays out of the fast PR-gating browser job until it is stable.
+Successful live browser runs attach a markdown smoke summary, request
+diagnostics JSON, and a final browser screenshot to the Playwright output.
 
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.
+
+The `Desktop UI QA Sweep` GitHub workflow is the artifact-producing review
+loop for the deterministic browser layer. It can be run manually or by its
+weekday schedule and runs unit tests, browser journeys, screenshots, visual
+baselines, and longer Bombadil. It uploads screenshots, visual reports,
+Playwright traces, and Bombadil output for review even on successful runs.
+Stable screenshot and visual baseline runs cover the standard desktop, laptop,
+and narrow viewport set. Screenshot runs also attach
+`desktop-screenshot-review.md` per viewport so downloaded artifacts have a
+review index and bug-issue checklist. Visual runs attach
+`desktop-visual-review.md` per viewport project with the asserted stable states
+and snapshot names.
+
+Real-provider live browser examples:
+
+```bash
+OPENAI_API_KEY=... npm run test:ui:live:e2e:real -- \
+  --inference-url https://api.openai.com/v1 \
+  --model-name gpt-4.1-mini \
+  --api-key-env-var OPENAI_API_KEY
+
+DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL=http://workstation-1:8000/v1 \
+DEFRA_AGENT_TAURI_LIVE_MODEL_NAME=MiniMax-M2.7-NVFP4 \
+npm run test:ui:live:e2e:real
+```
+
+The GitHub `Live Smoke` workflow exposes `inference_endpoint` and `model_name`
+manual inputs and runs the live browser job with those values.
