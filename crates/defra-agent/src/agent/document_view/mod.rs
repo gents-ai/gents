@@ -9,6 +9,7 @@ pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 use std::collections::HashMap;
 
 use crate::backend_registry::InferenceBackend;
+use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
     AgentBehavior, AgentPrincipal, EventTrigger, InferenceProfile, Schedule, SkillDocument, Task,
     ToolSelectionDocument,
@@ -28,6 +29,9 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
+    /// OAuth credentials for this agent, keyed by `credential_id`. Used to gate availability of
+    /// backends (e.g. ChatGptCodex) that need a credential before a behavior can start.
+    pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
     pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
     pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
     pub(crate) event_triggers: HashMap<String, DocumentRecord<EventTrigger>>,
@@ -123,6 +127,30 @@ impl DocumentRuntimeView {
             (record.doc_id == doc_id).then_some(backend_id.clone())
         });
         key.is_some_and(|backend_id| self.backends.remove(&backend_id).is_some())
+    }
+
+    fn has_oauth_credential_doc_id(&self, doc_id: &str) -> bool {
+        self.oauth_credentials
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
+
+    fn remove_oauth_credential_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self
+            .oauth_credentials
+            .iter()
+            .find_map(|(credential_id, record)| {
+                (record.doc_id == doc_id).then_some(credential_id.clone())
+            });
+        key.is_some_and(|credential_id| self.oauth_credentials.remove(&credential_id).is_some())
+    }
+
+    /// True when an enabled OAuth credential exists for `provider` (the agent is implicit — the
+    /// view is loaded per-agent). Used to gate behavior availability for credential-backed backends.
+    pub(super) fn has_enabled_oauth_credential(&self, provider: &str) -> bool {
+        self.oauth_credentials
+            .values()
+            .any(|record| record.value.provider == provider && record.value.enabled)
     }
 
     fn remove_task_by_doc_id(&mut self, doc_id: &str) -> bool {

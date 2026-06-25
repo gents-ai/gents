@@ -199,15 +199,18 @@ impl RuntimeContext {
                 .await
             }
             BackendProviderKind::ChatGptCodex => {
-                let client =
-                    crate::chatgpt_codex::build_responses_client(&behavior.backend_endpoint)
-                        .await
-                        .with_context(|| {
-                            format!(
-                            "building ChatGPT Codex completion client for behavior {} against {}",
-                            behavior.behavior_id, behavior.backend_endpoint
-                        )
-                        })?;
+                let client = crate::chatgpt_codex::build_responses_client(
+                    self.node.clone(),
+                    behavior.agent_did(),
+                    &behavior.backend_endpoint,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "building ChatGPT Codex completion client for behavior {} against {}",
+                        behavior.behavior_id, behavior.backend_endpoint
+                    )
+                })?;
                 self.run_behavior_with_client(
                     behavior,
                     request_rx,

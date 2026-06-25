@@ -367,6 +367,14 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
         if backend.probe_status == HEALTHY_PROBE_STATUS {
             continue;
         }
+        if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex {
+            tracing::info!(
+                backend_id = %backend.backend_id,
+                endpoint = %backend.endpoint,
+                "startup backend probe: skipping ChatGPT Codex backend because OAuthCredential is agent-scoped"
+            );
+            continue;
+        }
         async {
             let api_key = backend.resolved_api_key();
             match crate::backend_provider::discover_models(
@@ -374,6 +382,7 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
                 backend.provider_kind,
                 &backend.endpoint,
                 api_key.as_deref(),
+                None,
             )
             .await
             {

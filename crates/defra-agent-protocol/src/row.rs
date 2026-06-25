@@ -664,6 +664,35 @@ pub struct InferenceBackendRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OAuthCredentialRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    pub credential_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub chatgpt_plan_type: Option<String>,
+    #[serde(default)]
+    pub is_fedramp: Option<bool>,
+    #[serde(default)]
+    pub access_token_expires_at: Option<String>,
+    #[serde(default)]
+    pub last_refresh: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceProfileRow {
     pub profile_id: String,
     #[serde(default)]

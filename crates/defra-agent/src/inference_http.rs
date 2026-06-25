@@ -91,11 +91,15 @@ where
 /// inner reqwest client. When there is no active session context (e.g. one-shot
 /// calls outside the daemon scope) the request is passed through unchanged.
 #[derive(Clone, Debug, Default)]
-pub struct SessionTaggingHttpClient {
-    inner: ReqwestClient,
+pub struct SessionTaggingHttpClient<H = ReqwestClient> {
+    inner: H,
 }
 
-impl SessionTaggingHttpClient {
+impl<H> SessionTaggingHttpClient<H> {
+    pub fn new(inner: H) -> Self {
+        Self { inner }
+    }
+
     fn tag<T>(req: Request<T>) -> Request<Bytes>
     where
         T: Into<Bytes>,
@@ -152,7 +156,10 @@ impl SessionTaggingHttpClient {
     }
 }
 
-impl HttpClientExt for SessionTaggingHttpClient {
+impl<H> HttpClientExt for SessionTaggingHttpClient<H>
+where
+    H: Clone + HttpClientExt + 'static,
+{
     fn send<T, U>(
         &self,
         req: Request<T>,
@@ -164,7 +171,7 @@ impl HttpClientExt for SessionTaggingHttpClient {
     {
         let inner = self.inner.clone();
         let req = Self::tag(req);
-        async move { HttpClientExt::send(&inner, req).await }
+        async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
     }
 
     fn send_multipart<U>(
@@ -228,10 +235,15 @@ mod tests {
     }
 
     #[test]
+    fn session_tagging_client_can_wrap_inner_transport() {
+        let _wrapped = SessionTaggingHttpClient::new(ReqwestClient::default());
+    }
+
+    #[test]
     fn tag_is_noop_without_session_context() {
         // Outside any admission scope there is no session id to attach.
         let req = Request::new(Bytes::from_static(b""));
-        let tagged = SessionTaggingHttpClient::tag(req);
+        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag(req);
         assert!(
             !tagged.headers().contains_key(SESSION_ID_HEADER),
             "x-session-id must not be set when there is no active session context"
@@ -241,7 +253,7 @@ mod tests {
     #[test]
     fn tag_adds_valid_trace_context_headers() {
         let req = Request::new(Bytes::from_static(b""));
-        let tagged = SessionTaggingHttpClient::tag_with_trace_context_headers(
+        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag_with_trace_context_headers(
             req,
             HashMap::from([
                 (

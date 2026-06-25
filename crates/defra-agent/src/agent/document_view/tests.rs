@@ -1365,3 +1365,219 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     assert_eq!(resolved.prompt_template, "hello");
     assert!(resolved.output_schema_ref.is_none());
 }
+
+async fn bind_default_behavior_chatgpt_backend(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+) {
+    let bootstrap = crate::ensure_agent_principal(node, agent_did)
+        .await
+        .unwrap();
+    let escaped_backend_id = escape_graphql_string(backend_id);
+    let mutation = format!(
+        r#"mutation {{
+            upsert_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
+                add: {{
+                    backend_id: "{escaped_backend_id}",
+                    name: "{escaped_backend_id}",
+                    provider_kind: "ChatGptCodex",
+                    endpoint: "https://chatgpt.com/backend-api/codex",
+                    max_concurrent: 1,
+                    enabled: true,
+                    models: ["gpt-5.2"],
+                    probe_status: "healthy"
+                }},
+                update: {{
+                    name: "{escaped_backend_id}",
+                    provider_kind: "ChatGptCodex",
+                    enabled: true,
+                    probe_status: "healthy"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "upsert ChatGptCodex InferenceBackend failed: {:?}",
+        response.errors
+    );
+
+    let mut default_behavior =
+        crate::load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
+            .await
+            .unwrap()
+            .expect("default behavior document");
+    default_behavior.backend_id = Some(backend_id.to_string());
+    crate::upsert_agent_behavior(node, &default_behavior)
+        .await
+        .unwrap();
+}
+
+async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_did: &str) {
+    let credential = crate::chatgpt_codex::OAuthCredential {
+        doc_id: None,
+        credential_id: crate::chatgpt_codex::oauth_credential_id(
+            agent_did,
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        ),
+        agent_did: agent_did.to_string(),
+        provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        access_token: "access-token".to_string(),
+        refresh_token: "refresh-token".to_string(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+    };
+    let mutation = crate::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "upsert OAuthCredential failed: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-chatgpt-nocred"));
+    bind_default_behavior_chatgpt_backend(node.as_ref(), identity.did(), "backend-chatgpt-nocred")
+        .await;
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+
+    assert!(
+        !snapshot.behaviors.contains_key(&default_behavior_id),
+        "a ChatGptCodex behavior without an OAuthCredential must not be runnable (it would hang \
+         startup readiness building the client)"
+    );
+    let reason = snapshot
+        .unavailable_behaviors
+        .get(&default_behavior_id)
+        .expect("behavior should be reported unavailable");
+    assert!(
+        reason.contains("codex-login"),
+        "unavailable reason should point at codex-login: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-chatgpt-cred"));
+    bind_default_behavior_chatgpt_backend(node.as_ref(), identity.did(), "backend-chatgpt-cred")
+        .await;
+    insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+
+    assert!(
+        snapshot.behaviors.contains_key(&default_behavior_id),
+        "a ChatGptCodex behavior with an enabled OAuthCredential must be runnable; unavailable: {:?}",
+        snapshot.unavailable_behaviors
+    );
+}
+
+#[tokio::test]
+async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-chatgpt-apply"));
+    bind_default_behavior_chatgpt_backend(node.as_ref(), identity.did(), "backend-chatgpt-apply")
+        .await;
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    let before =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+    assert!(
+        !before.behaviors.contains_key(&default_behavior_id),
+        "behavior must start unavailable without a credential"
+    );
+
+    // Runtime codex-login: create the credential, then drive the incremental control update.
+    let credential = crate::chatgpt_codex::OAuthCredential {
+        doc_id: None,
+        credential_id: crate::chatgpt_codex::oauth_credential_id(
+            identity.did(),
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        ),
+        agent_did: identity.did().to_string(),
+        provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        access_token: "access-token".to_string(),
+        refresh_token: "refresh-token".to_string(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+    };
+    let doc_id = crate::chatgpt_codex::upsert_oauth_credential(node.as_ref(), &credential)
+        .await
+        .expect("upsert credential");
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "OAuthCredential",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .expect("apply control update");
+    assert_eq!(
+        outcome,
+        ControlUpdateOutcome::Applied,
+        "creating an OAuthCredential must drive a reconcile"
+    );
+
+    let after = resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+        .await
+        .expect("snapshot");
+    assert!(
+        after.behaviors.contains_key(&default_behavior_id),
+        "behavior must become runnable once the credential exists; unavailable: {:?}",
+        after.unavailable_behaviors
+    );
+}

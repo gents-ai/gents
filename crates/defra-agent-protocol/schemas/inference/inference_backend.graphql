@@ -7,7 +7,7 @@ type InferenceBackend {
     # Optional raw API key for local or operator-managed deployments.
     api_key: String
     # Optional environment-variable reference for the backend API key.
-    # Credentials are not stored directly in DefraDB documents.
+    # Raw API-key backends can use this instead of storing the key in the document.
     api_key_env_var: String
     max_concurrent: Int
     max_queue_depth: Int

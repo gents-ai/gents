@@ -58,7 +58,9 @@ pub(crate) enum Command {
         after_help = CODEX_AFTER_HELP
     )]
     Codex(CodexArgs),
-    #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
+    #[command(about = "Sign in with ChatGPT and store OAuth credentials in DefraDB")]
+    CodexLogin(CodexLoginArgs),
+    #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
@@ -168,19 +170,38 @@ pub(crate) struct NativeFsRunnerArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
-    #[arg(
-        long,
-        env = "DEFRA_CODEX_HOME",
-        value_name = "CODEX_HOME",
-        help = "Codex home directory to read. Defaults to ~/.codex"
-    )]
-    pub(crate) codex_home: Option<PathBuf>,
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
     #[arg(
         long,
         default_value_t = 20,
         help = "Maximum number of model slugs to print"
     )]
     pub(crate) max_models: usize,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexLoginArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
+    #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
+    pub(crate) device_auth: bool,
+    #[arg(long, help = "OAuth issuer override for testing")]
+    pub(crate) issuer: Option<String>,
+    #[arg(long, help = "OAuth client ID override for testing")]
+    pub(crate) client_id: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -456,6 +477,13 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
     pub(crate) codex_shim_poll_ms: u64,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = P2pTransportArg::Iroh,
+        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
+    )]
+    pub(crate) p2p_transport: P2pTransportArg,
     #[arg(long)]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
@@ -743,11 +771,8 @@ impl BackendPresetArg {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
-            Self::GenericOpenAiCompatible
-            | Self::OpenAi
-            | Self::OpenRouter
-            | Self::ChatGptCodex
-            | Self::Vllm => None,
+            Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
+            Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
         }
     }
 
@@ -1621,6 +1646,16 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the probe API key")]
     pub(crate) api_key_env_var: Option<String>,
+    #[arg(
+        long,
+        help = "Agent DID owning the ChatGptCodex OAuth credential (defaults to the local agent). Only used for ChatGptCodex backends, whose bearer is a DefraDB document rather than an api_key"
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(
+        long,
+        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.defra-agent). Pass --agent-did instead to target a specific agent"
+    )]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

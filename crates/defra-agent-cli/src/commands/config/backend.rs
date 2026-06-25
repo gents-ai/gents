@@ -12,7 +12,8 @@ use crate::config_writes::{
 use crate::print_json;
 use crate::shared::*;
 use crate::{
-    normalize_optional_string, post_graphql, BackendResolutionMode, EXPORT_INFERENCE_BACKEND_FIELDS,
+    normalize_optional_string, post_graphql, resolve_agent_did, BackendResolutionMode,
+    EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
 pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
@@ -56,13 +57,38 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .timeout(Duration::from_secs(5))
         .build()
         .context("building backend discovery client")?;
-    let discovered_models = discover_backend_models(
+    // For ChatGptCodex the bearer is an OAuthCredential document, not an api_key. Read-only:
+    // discovery never refreshes (the owning runtime is the single refresh writer); if the stored
+    // access token is expired the /models call surfaces an actionable 401.
+    let is_chatgpt_codex = target.provider_kind == BackendProviderKind::ChatGptCodex;
+    let (chatgpt_credential, codex_agent_did) = if is_chatgpt_codex {
+        let (credential, agent_did) = load_chatgpt_credential_for_discovery(&args).await?;
+        (credential, Some(agent_did))
+    } else {
+        (None, None)
+    };
+    let discovered_models = match discover_backend_models(
         &client,
         target.provider_kind,
         &target.endpoint,
         target.api_key.as_deref(),
+        chatgpt_credential.as_ref(),
     )
-    .await?;
+    .await
+    {
+        Ok(models) => models,
+        // Mirror codex-auth-probe: on an auth-class failure for ChatGptCodex, append the
+        // re-login guidance the bare discovery error omits.
+        Err(error) if is_chatgpt_codex && discovery_error_is_auth(&error) => {
+            let guidance = defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+                codex_agent_did.as_deref().unwrap_or(""),
+                defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Expired,
+            );
+            anyhow::bail!("{error:#}\n{guidance}");
+        }
+        Err(error) => return Err(error),
+    };
 
     let output = json!({
         "backend_id": target.backend_id,
@@ -75,6 +101,41 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     });
     print_json(&output)?;
     Ok(())
+}
+
+/// Load the ChatGptCodex OAuth credential document for model discovery, returning the resolved
+/// owning agent DID alongside it. The credential is `None` when none exists yet (the discovery
+/// primitive then emits actionable `codex-login` guidance).
+async fn load_chatgpt_credential_for_discovery(
+    args: &BackendDiscoverModelsArgs,
+) -> Result<(Option<defra_agent::chatgpt_codex::OAuthCredential>, String)> {
+    let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
+        anyhow::bail!(
+            "--graphql is required to discover models for a ChatGptCodex backend: its OAuth \
+             credential is a DefraDB document. Run `defra-agent codex-login` first if needed."
+        );
+    };
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let access = ConfigAccess::Graphql(graphql);
+    let credential = crate::commands::codex_auth_probe::load_oauth_credential(
+        &access,
+        &agent_did,
+        defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+    )
+    .await?;
+    Ok((credential, agent_did))
+}
+
+/// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex
+/// discovery can append re-login guidance the bare error omits. Inspects the typed status carried
+/// by [`ModelDiscoveryHttpError`] rather than scraping the rendered message (which also contains the
+/// endpoint URL and response body, and could otherwise match "401"/"403" spuriously).
+fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<defra_agent::backend_provider::ModelDiscoveryHttpError>()
+            .is_some_and(|http| http.is_auth())
+    })
 }
 
 async fn resolve_backend_discovery_target(

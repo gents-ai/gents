@@ -42,11 +42,16 @@ const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
+/// Default model for the ChatGptCodex preset. ChatGPT subscriptions serve plain `gpt-5.x` slugs
+/// (not `-codex` variants); see `docs/backends.md`. List the account's models with
+/// `defra-agent config backend discover-models`.
+const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 1_800;
 const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
+const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -392,8 +397,16 @@ pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
 pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
     "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at";
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
+        .build()
+        .context("building tokio runtime")?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let argv = std::env::args().collect::<Vec<_>>();
     if let Some(warning) = cli::deprecations::deprecation_warning(&argv) {
         eprintln!("{warning}");
@@ -423,6 +436,7 @@ async fn main() -> Result<()> {
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
+        Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,

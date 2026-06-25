@@ -214,5 +214,33 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
 
+    // OAuthCredential create/update/disable changes which credential-backed behaviors can run, so a
+    // runtime `codex-login` (or a disable) must drive a reconcile: it flips a ChatGptCodex behavior
+    // between runnable and unavailable (see snapshot availability gating).
+    if let Some(credential) =
+        crate::chatgpt_codex::lookup_oauth_credential_by_doc_id(node, doc_id).await?
+    {
+        if credential.agent_did != agent_did {
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        let loaded_doc_id = credential
+            .doc_id
+            .clone()
+            .unwrap_or_else(|| doc_id.to_string());
+        view.remove_oauth_credential_by_doc_id(doc_id);
+        view.oauth_credentials.insert(
+            credential.credential_id.clone(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: credential,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_oauth_credential_doc_id(doc_id) {
+        view.remove_oauth_credential_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+
     Ok(ControlUpdateOutcome::Irrelevant)
 }
