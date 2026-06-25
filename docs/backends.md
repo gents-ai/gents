@@ -118,6 +118,11 @@ places. Regression tests pin these details:
 - OAuth refresh rotates the refresh token, so only the owner node for the
   `(agent_did, behavior)` should refresh and write the document. Replicas can use
   the current access token and receive the rotated document through replication.
+- Owner election across nodes is not yet wired: every runtime currently builds
+  the bearer as the owner, so the single-writer guarantee relies on the routing
+  model placing each `(agent_did, behavior)` on exactly one deployment. Do not
+  replicate an `OAuthCredential` to a second node that also runs the same
+  `(agent_did, behavior)` until owner derivation lands (a later slice).
 - When replicating credentials, use an agent-scoped filter such as
   `OAuthCredential:agent_did=did:key:...`; do not include `OAuthCredential` in an
   unfiltered config replicator.
@@ -128,18 +133,23 @@ places. Regression tests pin these details:
 ### Token refresh
 
 - The ChatGPT HTTP client asks a `DbCredentialBearer` for a bearer before every
-  request.
+  request. All clients for one `credential_id` share a single bearer (cache and
+  refresh lock) per process, so the rotating refresh token has exactly one
+  in-process writer.
 - If the access token is near expiry and this runtime is the owner, it posts the
   refresh token to OpenAI's token endpoint, writes the rotated tokens back to
   `OAuthCredential`, then sends the request.
-- If the provider rejects a token with 401/403, `codex-auth-probe` and runtime
-  errors tell the operator to rerun `defra-agent codex-login`.
+- If the provider rejects a live request with 401/403, the bearer is invalidated
+  so the next request forces a refresh rather than replaying a clock-fresh but
+  server-revoked token. Runtime errors still tell the operator to rerun
+  `defra-agent codex-login` when a refresh cannot recover.
 
 ### Diagnostics
 
-- `defra-agent codex-auth-probe` reads the credential document, refreshes it if
-  needed, probes `/models`, and prints account, plan, expiry, and reachable
-  models.
+- `defra-agent codex-auth-probe` reads the credential document (read-only; it
+  never refreshes — the owning runtime is the single refresh writer, so a second
+  writer would trip the provider's reuse-detection), probes `/models`, and prints
+  account, plan, expiry, and reachable models.
 - `defra-agent diagnose` reports `checks.chatgpt_auth` as structured JSON with
   `credential_id` and `expires_at`, or an actionable `defra-agent codex-login`
   guidance string when the document is missing or expired.

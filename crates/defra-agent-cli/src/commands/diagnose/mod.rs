@@ -163,7 +163,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     )
     .await
     {
-        Ok(Some(credential)) if credential.access_token_expires_at > chrono::Utc::now() => {
+        Ok(Some(credential))
+            if defra_agent::chatgpt_codex::token_is_fresh(credential.access_token_expires_at) =>
+        {
             json!({
                 "ok": true,
                 "credential_id": credential.credential_id,

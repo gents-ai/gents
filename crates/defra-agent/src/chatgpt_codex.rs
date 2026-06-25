@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{fmt, fmt::Formatter};
 
@@ -139,6 +140,16 @@ pub fn oauth_credential_id(agent_did: &str, provider: &str) -> String {
     format!("{provider}:{agent_did}")
 }
 
+/// Normalize a user-supplied provider string, defaulting blanks to [`CHATGPT_CODEX_PROVIDER`].
+pub fn normalize_provider(provider: &str) -> String {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        CHATGPT_CODEX_PROVIDER.to_string()
+    } else {
+        provider.to_string()
+    }
+}
+
 pub fn oauth_credential_query(agent_did: &str, provider: &str) -> String {
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
     let provider = crate::graphql::escape_graphql_string(provider);
@@ -173,7 +184,13 @@ pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
 }
 
 pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String {
-    let input = oauth_credential_input(credential);
+    let fields = oauth_credential_input_fields(credential);
+    let add_input = render_oauth_input(&fields, &[]);
+    // `agent_did` is `@immutable` and `credential_id` is the unique key. On this DefraDB pin the
+    // immutability check rejects re-sending an immutable field on a pre-existing document, so the
+    // `update` branch (re-login and per-request token rotation both land here) must omit it.
+    // `credential_id` is likewise only ever written in `add`. Mirrors session/conversation.rs.
+    let update_input = render_oauth_input(&fields, &["agent_did"]);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
@@ -181,10 +198,10 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
                 filter: {{ credential_id: {{ _eq: "{credential_id}" }} }},
                 add: {{
                     credential_id: "{credential_id}",
-                    {input}
+                    {add_input}
                 }},
                 update: {{
-                    {input}
+                    {update_input}
                 }}
             ) {{ _docID }}
         }}"#
@@ -304,7 +321,10 @@ pub fn chatgpt_codex_client_version() -> String {
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "DEFRA_CHATGPT_CODEX_CLIENT_VERSION";
 
-fn oauth_credential_input(credential: &OAuthCredential) -> String {
+/// Rendered `name: value` GraphQL input entries for an `OAuthCredential`, each paired with its
+/// field name so a caller can omit immutable keys (see [`oauth_credential_upsert_mutation`]).
+/// `credential_id` is intentionally absent — it is written literally in the `add` block only.
+fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static str, String)> {
     let field = |name: &str, value: &str| {
         format!(
             r#"{name}: "{}""#,
@@ -321,38 +341,74 @@ fn oauth_credential_input(credential: &OAuthCredential) -> String {
             })
             .unwrap_or_else(|| format!("{name}: null"))
     };
-    [
-        field("agent_did", &credential.agent_did),
-        field("provider", &credential.provider),
-        field("access_token", &credential.access_token),
-        field("refresh_token", &credential.refresh_token),
-        defra_agent_protocol::graphql::nullable_string_field(
+    vec![
+        ("agent_did", field("agent_did", &credential.agent_did)),
+        ("provider", field("provider", &credential.provider)),
+        (
+            "access_token",
+            field("access_token", &credential.access_token),
+        ),
+        (
+            "refresh_token",
+            field("refresh_token", &credential.refresh_token),
+        ),
+        (
             "id_token",
-            credential.id_token.as_deref(),
+            defra_agent_protocol::graphql::nullable_string_field(
+                "id_token",
+                credential.id_token.as_deref(),
+            ),
         ),
-        defra_agent_protocol::graphql::nullable_string_field(
+        (
             "account_id",
-            credential.account_id.as_deref(),
+            defra_agent_protocol::graphql::nullable_string_field(
+                "account_id",
+                credential.account_id.as_deref(),
+            ),
         ),
-        defra_agent_protocol::graphql::nullable_string_field(
+        (
             "chatgpt_plan_type",
-            credential.chatgpt_plan_type.as_deref(),
+            defra_agent_protocol::graphql::nullable_string_field(
+                "chatgpt_plan_type",
+                credential.chatgpt_plan_type.as_deref(),
+            ),
         ),
-        format!(
-            "is_fedramp: {}",
-            defra_agent_protocol::graphql::graphql_bool_literal(credential.is_fedramp)
+        (
+            "is_fedramp",
+            format!(
+                "is_fedramp: {}",
+                defra_agent_protocol::graphql::graphql_bool_literal(credential.is_fedramp)
+            ),
         ),
-        datetime_field(
+        (
             "access_token_expires_at",
-            Some(credential.access_token_expires_at),
+            datetime_field(
+                "access_token_expires_at",
+                Some(credential.access_token_expires_at),
+            ),
         ),
-        datetime_field("last_refresh", credential.last_refresh),
-        format!(
-            "enabled: {}",
-            defra_agent_protocol::graphql::graphql_bool_literal(credential.enabled)
+        (
+            "last_refresh",
+            datetime_field("last_refresh", credential.last_refresh),
+        ),
+        (
+            "enabled",
+            format!(
+                "enabled: {}",
+                defra_agent_protocol::graphql::graphql_bool_literal(credential.enabled)
+            ),
         ),
     ]
-    .join(",\n                    ")
+}
+
+/// Join rendered input entries into a GraphQL input body, skipping any field in `exclude`.
+fn render_oauth_input(fields: &[(&'static str, String)], exclude: &[&str]) -> String {
+    fields
+        .iter()
+        .filter(|(name, _)| !exclude.contains(name))
+        .map(|(_, rendered)| rendered.as_str())
+        .collect::<Vec<_>>()
+        .join(",\n                    ")
 }
 
 fn oauth_credential_from_value(value: Value) -> Result<OAuthCredential> {
@@ -406,13 +462,74 @@ fn parse_optional_datetime(value: Option<String>, field: &str) -> Result<Option<
         .transpose()
 }
 
-fn token_is_fresh(expires_at: DateTime<Utc>) -> bool {
+/// True when `expires_at` is far enough in the future that the runtime will serve the token without
+/// refreshing — i.e. beyond [`REFRESH_SKEW`] from now. Shared with `diagnose` so its health report
+/// agrees with what the runtime actually does.
+pub fn token_is_fresh(expires_at: DateTime<Utc>) -> bool {
     Utc::now() + REFRESH_SKEW < expires_at
+}
+
+/// Get the `Arc` stored under `key`, constructing it with `make` on first use. Subsequent calls for
+/// the same key return the original `Arc` and never run `make`.
+fn get_or_insert_arc<T>(
+    registry: &std::sync::Mutex<std::collections::HashMap<String, Arc<T>>>,
+    key: &str,
+    make: impl FnOnce() -> T,
+) -> Arc<T> {
+    let mut map = registry.lock().expect("bearer registry mutex poisoned");
+    map.entry(key.to_string())
+        .or_insert_with(|| Arc::new(make()))
+        .clone()
+}
+
+/// Process-wide registry of [`DbCredentialBearer`]s keyed by `credential_id`. Sharing one bearer —
+/// and therefore one cache and one `refresh_lock` — across every client for a credential keeps the
+/// rotating refresh token single-writer within the process. Two independent bearers could each
+/// observe a near-expiry token and both POST the same refresh token, which the provider's
+/// reuse-detection treats as a leak and revokes the credential.
+fn bearer_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<DbCredentialBearer>>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<DbCredentialBearer>>>,
+    > = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// The shared bearer for `credential_id`, constructed via `make` on first use (see
+/// [`bearer_registry`]).
+fn shared_bearer(
+    credential_id: &str,
+    make: impl FnOnce() -> DbCredentialBearer,
+) -> Arc<DbCredentialBearer> {
+    get_or_insert_arc(bearer_registry(), credential_id, make)
 }
 
 /// Supplies a current OAuth bearer, refreshing it as needed.
 pub trait BearerSource: Send + Sync {
     fn current_bearer(&self) -> impl Future<Output = Result<String>> + Send;
+
+    /// Signal that the current bearer was rejected by the provider (401/403), so the next
+    /// [`current_bearer`](Self::current_bearer) must refresh rather than serve the rejected token.
+    /// Default is a no-op for sources that do not cache.
+    fn invalidate(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+}
+
+/// HTTP status from a transport error that indicates the bearer itself was rejected (so it should
+/// be refreshed), or `None` for any other error. Both rig status-error variants are handled.
+fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
+    match error {
+        http_client::Error::InvalidStatusCode(status)
+        | http_client::Error::InvalidStatusCodeWithMessage(status, _) => Some(status.as_u16()),
+        _ => None,
+    }
+}
+
+/// True when a transport error means the provider rejected the bearer (401 Unauthorized / 403
+/// Forbidden) — i.e. the cached token must be invalidated and refreshed.
+fn is_bearer_rejection(error: &http_client::Error) -> bool {
+    matches!(bearer_rejection_status(error), Some(401) | Some(403))
 }
 
 pub struct DbCredentialBearer {
@@ -426,6 +543,9 @@ pub struct DbCredentialBearer {
     cache: Mutex<Option<OAuthCredential>>,
     refresh_lock: Mutex<()>,
     is_owner: bool,
+    /// Set when the provider rejected the current bearer (401/403) before its clock expiry. Forces
+    /// the next `current_bearer` to refresh instead of serving the clock-fresh-but-revoked token.
+    force_refresh: AtomicBool,
 }
 
 impl DbCredentialBearer {
@@ -436,15 +556,29 @@ impl DbCredentialBearer {
         credential_id: impl Into<String>,
         is_owner: bool,
     ) -> Self {
+        Self::with_cache(node, agent_did, provider, credential_id, is_owner, None)
+    }
+
+    /// Like [`new`](Self::new), but pre-seeds the in-memory cache with a credential the caller has
+    /// already loaded, so the first request serves from memory instead of re-reading the document.
+    pub fn with_cache(
+        node: Arc<EmbeddedNode>,
+        agent_did: impl Into<String>,
+        provider: impl Into<String>,
+        credential_id: impl Into<String>,
+        is_owner: bool,
+        cache_seed: Option<OAuthCredential>,
+    ) -> Self {
         Self {
             node,
             agent_did: agent_did.into(),
             provider: provider.into(),
             credential_id: credential_id.into(),
             http: reqwest::Client::new(),
-            cache: Mutex::new(None),
+            cache: Mutex::new(cache_seed),
             refresh_lock: Mutex::new(()),
             is_owner,
+            force_refresh: AtomicBool::new(false),
         }
     }
 
@@ -535,18 +669,29 @@ fn apply_refreshed_tokens(
 
 impl BearerSource for DbCredentialBearer {
     async fn current_bearer(&self) -> Result<String> {
-        if let Some(cred) = self.cached().await {
-            if token_is_fresh(cred.access_token_expires_at) {
-                return Ok(cred.access_token);
+        // A provider 401/403 sets this; a clock-fresh token is then known-revoked, so every "serve
+        // the fresh cached/DB token" short-circuit below is suppressed until a refresh re-mints it.
+        let forced = self.force_refresh.load(Ordering::SeqCst);
+
+        if !forced {
+            if let Some(cred) = self.cached().await {
+                if token_is_fresh(cred.access_token_expires_at) {
+                    return Ok(cred.access_token);
+                }
             }
         }
 
         let _guard = self.refresh_lock.lock().await;
 
-        // Re-check under the lock: another turn may have refreshed while we waited.
-        if let Some(cred) = self.cached().await {
-            if token_is_fresh(cred.access_token_expires_at) {
-                return Ok(cred.access_token);
+        // Re-read the flag under the lock: a racing turn may have already refreshed and cleared it.
+        let forced = self.force_refresh.load(Ordering::SeqCst);
+
+        if !forced {
+            // Re-check under the lock: another turn may have refreshed while we waited.
+            if let Some(cred) = self.cached().await {
+                if token_is_fresh(cred.access_token_expires_at) {
+                    return Ok(cred.access_token);
+                }
             }
         }
 
@@ -560,14 +705,16 @@ impl BearerSource for DbCredentialBearer {
                 cred
             }
         };
-        if token_is_fresh(credential.access_token_expires_at) {
+        if !forced && token_is_fresh(credential.access_token_expires_at) {
             return Ok(credential.access_token);
         }
 
         if !self.is_owner {
             // Non-owner nodes never refresh: a second writer racing the owner with the same
             // refresh token triggers provider reuse-detection and revokes the credential. They
-            // serve the latest replicated token and rely on the owner's write-back.
+            // serve the latest replicated token and rely on the owner's write-back. Clear any
+            // force flag — a non-owner cannot resolve a rejection itself.
+            self.force_refresh.store(false, Ordering::SeqCst);
             return Ok(credential.access_token);
         }
 
@@ -579,7 +726,7 @@ impl BearerSource for DbCredentialBearer {
         let db_credential = self.load_credential().await?;
         if db_credential.access_token_expires_at >= credential.access_token_expires_at {
             credential = db_credential;
-            if token_is_fresh(credential.access_token_expires_at) {
+            if !forced && token_is_fresh(credential.access_token_expires_at) {
                 self.cache_credential(&credential).await;
                 return Ok(credential.access_token);
             }
@@ -599,6 +746,8 @@ impl BearerSource for DbCredentialBearer {
         // write failure can never strand the consumed refresh token and force a reuse-revoking
         // re-refresh on the next request.
         self.cache_credential(&credential).await;
+        // The freshly-minted token clears the rejection: stop forcing refresh on every request.
+        self.force_refresh.store(false, Ordering::SeqCst);
         if let Err(error) = self.persist_with_retry(&credential).await {
             tracing::error!(
                 agent_did = %self.agent_did,
@@ -610,6 +759,12 @@ impl BearerSource for DbCredentialBearer {
             );
         }
         Ok(credential.access_token)
+    }
+
+    async fn invalidate(&self) {
+        // Keep the cache as the authoritative base (it may hold a rotated-but-unpersisted refresh
+        // token); just force the next call past the freshness short-circuits into a refresh.
+        self.force_refresh.store(true, Ordering::SeqCst);
     }
 }
 
@@ -685,6 +840,16 @@ impl<S: BearerSource, H> ChatGptCodexHttpClient<S, H> {
         Ok(Request::from_parts(parts, body))
     }
 
+    /// If a transport result is a bearer rejection (401/403), return the bearer to invalidate so the
+    /// next request refreshes instead of replaying a clock-fresh-but-revoked token. Synchronous on
+    /// purpose: the caller must drop the (non-`Send`) `result` borrow before awaiting `invalidate`.
+    fn bearer_to_invalidate<X>(&self, result: &http_client::Result<X>) -> Option<Arc<S>> {
+        match result {
+            Err(error) if is_bearer_rejection(error) => self.bearer.clone(),
+            _ => None,
+        }
+    }
+
     fn inject_required_instructions(req: Request<Bytes>) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
@@ -725,7 +890,11 @@ where
         let req = Request::from_parts(parts, body.into());
         async move {
             let req = this.prepare(req).await?;
-            send_inner(inner, req).await
+            let result = send_inner(inner, req).await;
+            if let Some(bearer) = this.bearer_to_invalidate(&result) {
+                bearer.invalidate().await;
+            }
+            result
         }
     }
 
@@ -744,7 +913,11 @@ where
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("authorization", value);
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send_multipart(&inner, req).await
+            let result = HttpClientExt::send_multipart(&inner, req).await;
+            if let Some(bearer) = this.bearer_to_invalidate(&result) {
+                bearer.invalidate().await;
+            }
+            result
         }
     }
 
@@ -761,7 +934,11 @@ where
         let req = Request::from_parts(parts, body.into());
         async move {
             let req = this.prepare(req).await?;
-            let mut response = HttpClientExt::send_streaming(&inner, req).await?;
+            let result = HttpClientExt::send_streaming(&inner, req).await;
+            if let Some(bearer) = this.bearer_to_invalidate(&result) {
+                bearer.invalidate().await;
+            }
+            let mut response = result?;
             // The Codex backend returns a 200 SSE stream but omits the `Content-Type` header.
             // rig's SSE reader requires `text/event-stream` and otherwise fails with "Invalid
             // content type was returned". The body IS SSE (the non-streaming path parses it as
@@ -1038,14 +1215,23 @@ pub async fn build_responses_client(
     let headers =
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    let bearer = DbCredentialBearer::new(
-        node,
-        agent_did,
-        provider,
-        credential.credential_id.clone(),
-        /*is_owner*/ true,
-    );
-    let http = ChatGptCodexHttpClient::new(Arc::new(bearer));
+    let credential_id = credential.credential_id.clone();
+    // Share one bearer per credential across all clients in this process (see `bearer_registry`):
+    // the rotating refresh token must have a single writer or the provider revokes the credential.
+    // `is_owner` is `true` because the current routing model places each (did, behavior) on exactly
+    // one deployment, so the local runtime is the sole refresh writer; multi-node owner election is
+    // a later slice (docs/backends.md, oauth-credentials design doc Sharp edge A).
+    let bearer = shared_bearer(&credential_id, || {
+        DbCredentialBearer::with_cache(
+            node,
+            agent_did,
+            provider,
+            credential_id.clone(),
+            /*is_owner*/ true,
+            Some(credential.clone()),
+        )
+    });
+    let http = ChatGptCodexHttpClient::new(bearer);
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,
@@ -1064,6 +1250,17 @@ mod tests {
     struct CountingBearer {
         token: String,
         calls: AtomicUsize,
+        invalidations: AtomicUsize,
+    }
+
+    impl CountingBearer {
+        fn new(token: &str) -> Arc<Self> {
+            Arc::new(Self {
+                token: token.to_string(),
+                calls: AtomicUsize::new(0),
+                invalidations: AtomicUsize::new(0),
+            })
+        }
     }
 
     impl BearerSource for CountingBearer {
@@ -1071,6 +1268,118 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.token.clone())
         }
+
+        async fn invalidate(&self) {
+            self.invalidations.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Inner transport that yields a fixed HTTP status — `>= 400` becomes the rig status error the
+    /// reqwest transport would produce, `< 400` an empty success response.
+    #[derive(Clone, Debug)]
+    struct StatusInjectingClient {
+        status: u16,
+    }
+
+    impl HttpClientExt for StatusInjectingClient {
+        fn send<T, U>(
+            &self,
+            _req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            T: Into<Bytes> + WasmCompatSend,
+            U: From<Bytes> + WasmCompatSend + 'static,
+        {
+            let status = self.status;
+            async move {
+                if status >= 400 {
+                    return Err(http_client::Error::InvalidStatusCodeWithMessage(
+                        status.to_string().parse().expect("valid status"),
+                        "injected".to_string(),
+                    ));
+                }
+                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::new())) });
+                Response::builder()
+                    .status(status)
+                    .body(body)
+                    .map_err(http_client::Error::Protocol)
+            }
+        }
+
+        fn send_multipart<U>(
+            &self,
+            _req: Request<MultipartForm>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            U: From<Bytes> + WasmCompatSend + 'static,
+        {
+            std::future::ready(Err(http_client::Error::InvalidStatusCode(
+                "501".parse().expect("valid status"),
+            )))
+        }
+
+        fn send_streaming<T>(
+            &self,
+            _req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+        where
+            T: Into<Bytes>,
+        {
+            std::future::ready(Err(http_client::Error::InvalidStatusCode(
+                "501".parse().expect("valid status"),
+            )))
+        }
+    }
+
+    fn status_error(status: &str) -> http_client::Error {
+        http_client::Error::InvalidStatusCodeWithMessage(
+            status.parse().expect("valid status"),
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn bearer_rejection_only_for_401_and_403() {
+        assert!(is_bearer_rejection(&status_error("401")));
+        assert!(is_bearer_rejection(&status_error("403")));
+        assert!(!is_bearer_rejection(&status_error("500")));
+        assert!(!is_bearer_rejection(&status_error("429")));
+        assert!(!is_bearer_rejection(&http_client::Error::Instance(
+            anyhow::anyhow!("network down").into()
+        )));
+    }
+
+    async fn send_through(status: u16) -> Arc<CountingBearer> {
+        let bearer = CountingBearer::new("tok");
+        let client =
+            ChatGptCodexHttpClient::with_inner(bearer.clone(), StatusInjectingClient { status });
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://example.com/v1/models")
+            .body(Bytes::from_static(b"{}"))
+            .unwrap();
+        let _ = HttpClientExt::send::<Bytes, Bytes>(&client, req).await;
+        bearer
+    }
+
+    #[tokio::test]
+    async fn provider_401_invalidates_the_bearer() {
+        let bearer = send_through(401).await;
+        assert_eq!(
+            bearer.invalidations.load(Ordering::SeqCst),
+            1,
+            "a 401 from the provider must invalidate the bearer so the next request refreshes"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_success_leaves_the_bearer_intact() {
+        let bearer = send_through(200).await;
+        assert_eq!(
+            bearer.invalidations.load(Ordering::SeqCst),
+            0,
+            "a successful response must not invalidate the bearer"
+        );
     }
 
     #[test]
@@ -1114,12 +1423,174 @@ mod tests {
         assert!(msg.contains("defra-agent codex-login"), "{msg}");
     }
 
+    fn sample_credential() -> OAuthCredential {
+        OAuthCredential {
+            doc_id: Some("doc-1".to_string()),
+            credential_id: oauth_credential_id("did:key:zAgent", CHATGPT_CODEX_PROVIDER),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: CHATGPT_CODEX_PROVIDER.to_string(),
+            access_token: "access-tok".to_string(),
+            refresh_token: "refresh-tok".to_string(),
+            id_token: Some("id-tok".to_string()),
+            account_id: Some("acct-1".to_string()),
+            chatgpt_plan_type: Some("pro".to_string()),
+            is_fedramp: false,
+            access_token_expires_at: DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap(),
+            last_refresh: Some(DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap()),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn shared_registry_returns_one_arc_per_key_and_constructs_once() {
+        use std::collections::HashMap;
+        use std::sync::Mutex as StdMutex;
+
+        let registry: StdMutex<HashMap<String, Arc<u32>>> = StdMutex::new(HashMap::new());
+        let calls = AtomicUsize::new(0);
+
+        let a = get_or_insert_arc(&registry, "k1", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            7u32
+        });
+        let b = get_or_insert_arc(&registry, "k1", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            99u32
+        });
+        let c = get_or_insert_arc(&registry, "k2", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            7u32
+        });
+
+        assert!(Arc::ptr_eq(&a, &b), "same key must share one Arc");
+        assert!(!Arc::ptr_eq(&a, &c), "different keys must be distinct Arcs");
+        assert_eq!(*a, 7, "first construction wins for a key");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "construct exactly once per distinct key"
+        );
+    }
+
+    #[test]
+    fn token_is_fresh_respects_refresh_skew() {
+        assert!(
+            token_is_fresh(Utc::now() + Duration::hours(1)),
+            "comfortably-future token is fresh"
+        );
+        assert!(
+            !token_is_fresh(Utc::now() - Duration::minutes(1)),
+            "expired token is stale"
+        );
+        assert!(
+            !token_is_fresh(Utc::now() + Duration::minutes(2)),
+            "token inside the 5-minute skew window is treated as stale"
+        );
+    }
+
+    #[test]
+    fn apply_refreshed_tokens_preserves_omitted_optionals_and_ors_fedramp() {
+        let mut credential = sample_credential();
+        credential.is_fedramp = true;
+        let prior_id = credential.id_token.clone();
+
+        apply_refreshed_tokens(
+            &mut credential,
+            crate::chatgpt_oauth_refresh::RefreshedTokens {
+                access_token: "new-access".to_string(),
+                refresh_token: "new-refresh".to_string(),
+                id_token: None,
+                account_id: None,
+                is_fedramp: false,
+                plan_type: None,
+                access_token_expires_at: DateTime::<Utc>::from_timestamp(2_000_000_000, 0).unwrap(),
+            },
+        );
+
+        assert_eq!(credential.access_token, "new-access");
+        assert_eq!(credential.refresh_token, "new-refresh");
+        assert_eq!(credential.id_token, prior_id, "omitted id_token preserved");
+        assert_eq!(
+            credential.account_id.as_deref(),
+            Some("acct-1"),
+            "omitted account_id preserved"
+        );
+        assert_eq!(
+            credential.chatgpt_plan_type.as_deref(),
+            Some("pro"),
+            "omitted plan preserved"
+        );
+        assert!(credential.is_fedramp, "is_fedramp stays true via OR");
+        assert_eq!(
+            credential.access_token_expires_at.timestamp(),
+            2_000_000_000
+        );
+        assert!(credential.last_refresh.is_some());
+    }
+
+    #[test]
+    fn oauth_credential_from_value_applies_defaults_and_cleans_blanks() {
+        let row = json!({
+            "_docID": "doc-9",
+            "credential_id": "chatgpt-codex:did:key:zA",
+            "agent_did": "did:key:zA",
+            "provider": "chatgpt-codex",
+            "access_token": "acc",
+            "refresh_token": "ref",
+            "id_token": null,
+            "account_id": "",
+            "chatgpt_plan_type": null,
+            "access_token_expires_at": "2030-01-01T00:00:00Z",
+            "last_refresh": null,
+        });
+
+        let credential = oauth_credential_from_value(row).expect("row parses");
+
+        assert_eq!(credential.doc_id.as_deref(), Some("doc-9"));
+        assert_eq!(credential.access_token, "acc");
+        assert_eq!(credential.id_token, None, "explicit null -> None");
+        assert_eq!(credential.account_id, None, "blank string cleaned to None");
+        assert!(!credential.is_fedramp, "missing is_fedramp defaults false");
+        assert!(credential.enabled, "missing enabled defaults true");
+        assert_eq!(credential.last_refresh, None);
+        assert_eq!(
+            credential.access_token_expires_at,
+            DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn upsert_update_block_omits_immutable_agent_did() {
+        let mutation = oauth_credential_upsert_mutation(&sample_credential());
+
+        let update_idx = mutation
+            .find("update:")
+            .expect("mutation has an update block");
+        let (add_block, update_block) = mutation.split_at(update_idx);
+
+        // agent_did is @immutable; this DefraDB pin rejects re-sending it on an existing document,
+        // so the update (re-login / token-rotation) path must not carry it.
+        assert!(
+            !update_block.contains("agent_did:"),
+            "update block must omit immutable agent_did: {update_block}"
+        );
+        // ...but mutable token material must still be written on update.
+        assert!(
+            update_block.contains("access_token:") && update_block.contains("refresh_token:"),
+            "update block must still rotate token fields: {update_block}"
+        );
+        // The add block (new-document path) does set the immutable key and the unique key.
+        assert!(
+            add_block.contains("agent_did:") && add_block.contains("credential_id:"),
+            "add block must set agent_did and credential_id: {add_block}"
+        );
+    }
+
     #[tokio::test]
     async fn injects_fresh_bearer_on_each_request() {
-        let bearer = Arc::new(CountingBearer {
-            token: "tok-123".to_string(),
-            calls: AtomicUsize::new(0),
-        });
+        let bearer = CountingBearer::new("tok-123");
         let client = ChatGptCodexHttpClient::new(bearer.clone());
 
         let req = Request::builder()

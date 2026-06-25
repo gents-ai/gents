@@ -106,6 +106,13 @@ pub async fn refresh_chatgpt_token(
     })
 }
 
+/// Decode the advisory claims (account id, plan, FedRAMP flag, expiry) from an OIDC ID token.
+///
+/// The signature is NOT verified: trust derives from the TLS-protected token endpoint these tokens
+/// arrive from, per OIDC §3.1.3.7's allowance for tokens received directly over a secure channel.
+/// The claims are used only to populate request headers sent back to OpenAI and to estimate expiry;
+/// they are not an authorization boundary inside defra-agent. If a claim ever gates a security
+/// decision, verify the signature against OpenAI's JWKS first.
 pub fn decode_id_token_claims(id_token: &str) -> IdTokenClaims {
     let Some(payload) = jwt_payload(id_token) else {
         return IdTokenClaims::default();
@@ -189,6 +196,37 @@ mod tests {
         assert!(claims.is_fedramp);
         assert_eq!(claims.plan_type.as_deref(), Some("pro"));
         assert_eq!(claims.expires_at.unwrap().timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn jwt_expiration_reads_exp_claim() {
+        let jwt = unsigned_jwt(serde_json::json!({ "exp": 1_700_000_000i64 }));
+        assert_eq!(jwt_expiration(&jwt).unwrap().timestamp(), 1_700_000_000);
+        assert!(
+            jwt_expiration("not-a-jwt").is_none(),
+            "malformed token has no expiry"
+        );
+    }
+
+    #[test]
+    fn parse_error_message_prefers_nested_then_falls_back() {
+        assert_eq!(
+            parse_error_message(r#"{"error":{"message":"bad token"}}"#),
+            "bad token"
+        );
+        assert_eq!(
+            parse_error_message(r#"{"error":"flat error"}"#),
+            "flat error"
+        );
+        assert_eq!(
+            parse_error_message(r#"{"message":"top level"}"#),
+            "top level"
+        );
+        assert_eq!(
+            parse_error_message("plain text body"),
+            "plain text body",
+            "non-JSON body is returned verbatim"
+        );
     }
 
     fn unsigned_jwt(payload: Value) -> String {

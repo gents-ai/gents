@@ -13,7 +13,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
-    let provider = normalize_provider(&args.provider);
+    let provider = defra_agent::chatgpt_codex::normalize_provider(&args.provider);
     let synthetic_home =
         std::env::temp_dir().join(format!("defra-agent-codex-login-{}", Uuid::new_v4()));
     let mut opts = ServerOptions::new(
@@ -90,13 +90,4 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
         "id_token": credential.id_token.as_ref().map(|_| "<redacted>"),
     }))?;
     Ok(())
-}
-
-fn normalize_provider(provider: &str) -> String {
-    let provider = provider.trim();
-    if provider.is_empty() {
-        defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string()
-    } else {
-        provider.to_string()
-    }
 }

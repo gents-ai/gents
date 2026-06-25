@@ -1,5 +1,13 @@
 # ChatGPT-OAuth Finish (#339) Implementation Plan
 
+> **⚠️ SUPERSEDED — historical record only.** This plan describes an earlier
+> `AuthManager`/`CodexAuth`/`~/.codex`-home design that was **not** the one shipped.
+> The delivered approach stores credentials as `OAuthCredential` DefraDB documents
+> with a `DbCredentialBearer` that reads/refreshes/writes them. For the architecture
+> as built, see `docs/superpowers/specs/2026-06-19-oauth-credentials-in-db-design.md`
+> and `docs/backends.md`. Do not implement from this file; it is kept for planning
+> history. (Notably, the "No DefraDB/schema/Lean change" note below is obsolete.)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the `ChatGptCodex` (ChatGPT-subscription-over-OAuth) backend production-usable: refresh the OAuth bearer per request so long sessions don't 401, turn auth failures into actionable CLI errors, and document the fleet/remote credential-home behavior.

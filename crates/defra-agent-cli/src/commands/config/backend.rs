@@ -127,10 +127,15 @@ async fn load_chatgpt_credential_for_discovery(
 }
 
 /// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex
-/// discovery can append re-login guidance the bare error omits.
+/// discovery can append re-login guidance the bare error omits. Inspects the typed status carried
+/// by [`ModelDiscoveryHttpError`] rather than scraping the rendered message (which also contains the
+/// endpoint URL and response body, and could otherwise match "401"/"403" spuriously).
 fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
-    let rendered = format!("{error:#}");
-    rendered.contains("401") || rendered.contains("403")
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<defra_agent::backend_provider::ModelDiscoveryHttpError>()
+            .is_some_and(|http| http.is_auth())
+    })
 }
 
 async fn resolve_backend_discovery_target(

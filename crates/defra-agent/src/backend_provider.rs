@@ -3,6 +3,24 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
+/// A non-success HTTP status from model discovery, carried as a typed error source so callers can
+/// classify (e.g. 401/403 auth failures) by status rather than scraping the rendered message.
+#[derive(Debug, thiserror::Error)]
+#[error("{provider} model discovery failed at {url}: {status} {body}")]
+pub struct ModelDiscoveryHttpError {
+    pub provider: String,
+    pub url: String,
+    pub status: u16,
+    pub body: String,
+}
+
+impl ModelDiscoveryHttpError {
+    /// True when the provider rejected the request on authentication grounds (401/403).
+    pub fn is_auth(&self) -> bool {
+        matches!(self.status, 401 | 403)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendProviderKind {
     #[default]
@@ -164,13 +182,13 @@ pub async fn discover_models(
             .unwrap_or_else(|_| "<unreadable body>".to_string());
         if !status.is_success() {
             tracing::Span::current().record("failure_class", "http_status");
-            anyhow::bail!(
-                "{} model discovery failed at {}: {} {}",
-                provider_name,
-                models_url,
-                status,
-                truncate_probe_body(&body)
-            );
+            return Err(ModelDiscoveryHttpError {
+                provider: provider_name.to_string(),
+                url: models_url.to_string(),
+                status: status.as_u16(),
+                body: truncate_probe_body(&body),
+            }
+            .into());
         }
 
         let models: OpenAiModelsResponse = match serde_json::from_str(&body) {
