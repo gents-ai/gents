@@ -277,6 +277,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         backgroundable_tool_names: Vec::new(),
         enable_memory: false,
         enable_session_history_tool: false,
+        enable_context_budget: true,
         enable_defra_query: true,
         defra_query_collections: Vec::new(),
         subagent_targets: Vec::new(),

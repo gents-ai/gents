@@ -146,6 +146,8 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) enable_session_history_tool: bool,
     #[serde(default = "default_true")]
+    pub(crate) enable_context_budget: bool,
+    #[serde(default = "default_true")]
     pub(crate) enable_defra_query: bool,
     #[serde(default)]
     pub(crate) defra_query_collections: Vec<String>,

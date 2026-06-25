@@ -1033,6 +1033,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 orchestration_enabled: false,
                 enable_memory: false,
                 enable_session_history_tool: false,
+                enable_context_budget: true,
                 enable_defra_query: false,
                 defra_query_collections: Vec::new(),
                 write_tools: Vec::new(),

@@ -28,6 +28,7 @@ pub struct BehaviorToolConfig {
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
     enable_session_history_tool: bool,
+    enable_context_budget: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
@@ -45,6 +46,7 @@ impl BehaviorToolConfig {
             custom_tools: Vec::new(),
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -100,6 +102,7 @@ impl BehaviorToolConfig {
             orchestration_enabled,
             enable_memory,
             enable_session_history_tool,
+            enable_context_budget,
             enable_defra_query,
             defra_query_collections,
             write_tools,
@@ -148,6 +151,7 @@ impl BehaviorToolConfig {
             custom_tools,
             enable_memory,
             enable_session_history_tool,
+            enable_context_budget,
             enable_defra_query,
             defra_query_collections: dedupe_strings(defra_query_collections),
             write_tools,
@@ -168,6 +172,10 @@ impl BehaviorToolConfig {
 
     pub(crate) fn defra_query_requested(&self) -> bool {
         self.enable_defra_query
+    }
+
+    pub(crate) fn context_budget_requested(&self) -> bool {
+        self.enable_context_budget
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
@@ -227,6 +235,7 @@ impl BehaviorToolConfig {
             custom_tools: self.custom_tools.clone(),
             enable_memory: self.enable_memory,
             enable_session_history_tool: self.enable_session_history_tool,
+            enable_context_budget: self.enable_context_budget,
             enable_defra_query: self.enable_defra_query,
             defra_query_collections: self.defra_query_collections.clone(),
             write_tools: self.write_tools.clone(),
@@ -304,6 +313,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
+            .field("enable_context_budget", &self.enable_context_budget)
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)

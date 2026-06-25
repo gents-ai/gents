@@ -298,6 +298,11 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_context_budget(mut self, enable_context_budget: bool) -> Self {
+        self.behavior.tool_selection.enable_context_budget = enable_context_budget;
+        self
+    }
+
     pub fn enable_memory(mut self, enable_memory: bool) -> Self {
         self.behavior.tool_selection.enable_memory = enable_memory;
         self

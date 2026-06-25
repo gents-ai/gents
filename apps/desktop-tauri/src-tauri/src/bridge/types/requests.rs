@@ -145,6 +145,10 @@ pub(crate) struct ToolSelectionSaveRequest {
     pub enable_memory: Option<bool>,
     #[serde(default)]
     pub enable_session_history_tool: Option<bool>,
+    #[serde(default)]
+    pub enable_context_budget: Option<bool>,
+    #[serde(default)]
+    pub enable_defra_query: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

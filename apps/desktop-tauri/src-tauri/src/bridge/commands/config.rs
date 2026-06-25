@@ -303,6 +303,7 @@ pub(crate) async fn save_tool_selection_config(
             cross_deployment_spawn_timeout_seconds: None,
             enable_memory: Some(false),
             enable_session_history_tool: Some(false),
+            enable_context_budget: Some(true),
             enable_defra_query: Some(false),
             defra_query_collections: Vec::new(),
         });
@@ -375,6 +376,8 @@ pub(crate) async fn save_tool_selection_config(
     row.enable_session_history_tool = request
         .enable_session_history_tool
         .or(row.enable_session_history_tool);
+    row.enable_context_budget = request.enable_context_budget.or(row.enable_context_budget);
+    row.enable_defra_query = request.enable_defra_query.or(row.enable_defra_query);
     core.save_tool_selection(&row).await?;
     Ok(())
 }

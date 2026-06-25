@@ -30,6 +30,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         cross_deployment_spawn_timeout_seconds: None,
         enable_memory: None,
         enable_session_history_tool: None,
+        enable_context_budget: None,
         enable_defra_query: None,
         defra_query_collections: None,
         write_tools: None,

@@ -158,6 +158,14 @@ impl P2POps for RecordingP2P {
         Ok(())
     }
 
+    async fn disconnect_peer(&self, addr: &str) -> P2PResult<()> {
+        self.connected_peers
+            .write()
+            .expect("connected peers lock poisoned")
+            .retain(|peer| peer != addr);
+        Ok(())
+    }
+
     async fn notify_network_change(&self) -> P2PResult<()> {
         self.notify_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())

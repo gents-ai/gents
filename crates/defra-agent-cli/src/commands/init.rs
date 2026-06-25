@@ -591,6 +591,7 @@ fn tool_selection_for_package(
         cross_deployment_spawn_timeout_seconds: None,
         enable_memory: Some(enable_memory),
         enable_session_history_tool: Some(false),
+        enable_context_budget: Some(true),
         enable_defra_query: Some(enable_defra_query),
         defra_query_collections: Some(defra_query_collections),
         write_tools: None,
