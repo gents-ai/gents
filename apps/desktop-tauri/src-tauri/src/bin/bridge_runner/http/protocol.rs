@@ -18,6 +18,14 @@ pub(super) struct HttpResponse {
 }
 
 impl HttpResponse {
+    pub(super) fn empty(status: &'static str) -> Self {
+        Self {
+            status,
+            content_type: "text/plain; charset=utf-8",
+            body: String::new(),
+        }
+    }
+
     pub(super) fn json_ok(body: String) -> Self {
         Self {
             status: "200 OK",
@@ -92,7 +100,7 @@ pub(super) fn write_http_response(
     body: &str,
 ) -> Result<()> {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Max-Age: 600\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(response.as_bytes())?;

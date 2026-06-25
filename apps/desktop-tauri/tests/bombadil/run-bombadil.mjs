@@ -61,8 +61,11 @@ try {
   }
   bombadilArgs.push(...args);
 
+  const outputPath = outputPathFromArgs(bombadilArgs);
+  await writeRunReadme(outputPath, harnessUrl, bombadilArgs);
+
   console.log(`[bombadil] harness: ${harnessUrl}`);
-  console.log(`[bombadil] output: ${outputPathFromArgs(bombadilArgs)}`);
+  console.log(`[bombadil] output: ${outputPath}`);
 
   bombadilProcess = spawn(resolveBin("bombadil"), bombadilArgs, {
     cwd: rootDir,
@@ -176,6 +179,50 @@ function outputPathFromArgs(values) {
   }
   const assigned = values.find((value) => value.startsWith("--output-path="));
   return assigned ? assigned.slice("--output-path=".length) : "(bombadil default)";
+}
+
+async function writeRunReadme(outputPath, harnessUrl, bombadilArgs) {
+  if (outputPath === "(bombadil default)") {
+    return;
+  }
+  const outputDir = resolve(rootDir, outputPath);
+  await mkdir(outputDir, { recursive: true });
+  const inspectCommand = `npx bombadil browser inspect ${shellQuote(outputDir)}`;
+  const reproduceCommand = `npm run test:ui:fuzz -- --reproduce ${shellQuote(outputDir)}`;
+  const directCommand = `npx bombadil ${bombadilArgs.map(shellQuote).join(" ")}`;
+  await writeFile(
+    resolve(outputDir, "README.md"),
+    [
+      "# Bombadil Desktop UI Run",
+      "",
+      `Created: ${new Date().toISOString()}`,
+      `Harness: ${harnessUrl}`,
+      "",
+      "Inspect the run:",
+      "",
+      "```bash",
+      inspectCommand,
+      "```",
+      "",
+      "Reproduce through the desktop npm wrapper:",
+      "",
+      "```bash",
+      reproduceCommand,
+      "```",
+      "",
+      "Direct Bombadil command used by the wrapper:",
+      "",
+      "```bash",
+      directCommand,
+      "```",
+      "",
+      "Notes:",
+      "",
+      "- The npm wrapper starts Vite on a fresh local port before replaying.",
+      "- Use this directory path in GitHub bug issues as the artifact reference.",
+      "",
+    ].join("\n"),
+  );
 }
 
 function bufferViteOutput(buffer, chunk) {

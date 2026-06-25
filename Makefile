@@ -39,9 +39,13 @@ help:
 	@echo
 	@echo "Desktop UI:"
 	@echo "  make desktop-ui            Run full desktop UI suite"
+	@echo "  make desktop-ui-qa-sweep   Run desktop QA sweep (format/build/unit/e2e/screenshots/fuzz)"
 	@echo "  make desktop-ui-unit       Run desktop unit tests"
 	@echo "  make desktop-ui-e2e        Run desktop Playwright journeys"
 	@echo "  make desktop-ui-fuzz       Run desktop Bombadil smoke (FUZZ_TIME=$(FUZZ_TIME))"
+	@echo "  make desktop-ui-fuzz-long  Run longer desktop Bombadil sweep"
+	@echo "  make desktop-ui-visual     Run desktop visual baseline checks"
+	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
@@ -127,9 +131,12 @@ test-agent-e2e:
 test-cli:
 	$(CARGO) test -p defra-agent-cli -- --nocapture --test-threads=1
 
-.PHONY: desktop-ui desktop-ui-unit desktop-ui-e2e desktop-ui-fuzz
+.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e
 desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui
+
+desktop-ui-qa-sweep:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:qa-sweep
 
 desktop-ui-unit:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:unit
@@ -139,6 +146,15 @@ desktop-ui-e2e:
 
 desktop-ui-fuzz:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:fuzz -- --time-limit $(FUZZ_TIME)
+
+desktop-ui-fuzz-long:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:fuzz:long
+
+desktop-ui-visual:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:visual
+
+desktop-ui-live-e2e:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

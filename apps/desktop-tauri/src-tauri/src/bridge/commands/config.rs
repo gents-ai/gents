@@ -296,6 +296,7 @@ pub(crate) async fn save_tool_selection_config(
             backgroundable_tool_names: Vec::new(),
             subagent_targets: Vec::new(),
             subagent_spawn_enabled: Some(false),
+            orchestration_enabled: Some(false),
             subagent_steering_enabled: Some(false),
             subagent_background_enabled: Some(false),
             subagent_allow_cross_deployment: Some(false),

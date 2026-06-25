@@ -58,15 +58,99 @@ const tablistSelectionProblems = extract((state) => {
       const selected = tabs.filter(
         (tab) => tab.getAttribute("aria-selected") === "true",
       );
+      const hasInteractiveControls = Boolean(
+        tablist.querySelector("button, a, input, select, textarea, [tabindex]"),
+      );
       return {
         label:
           tablist.getAttribute("aria-label") ??
           normalizeText(tablist.textContent ?? ""),
+        hasInteractiveControls,
         tabCount: tabs.length,
         selectedCount: selected.length,
       };
     })
-    .filter((entry) => entry.tabCount > 0 && entry.selectedCount !== 1);
+    .filter(
+      (entry) =>
+        (entry.hasInteractiveControls || entry.tabCount > 0) &&
+        (entry.tabCount === 0 || entry.selectedCount !== 1),
+    );
+});
+
+const tabPanelRelationshipProblems = extract((state) => {
+  const issues: string[] = [];
+  for (const tab of Array.from(state.document.querySelectorAll('[role="tab"]'))) {
+    if (tab.getAttribute("aria-selected") !== "true") {
+      continue;
+    }
+    const panelId = tab.getAttribute("aria-controls") ?? "";
+    const tabId = tab.getAttribute("id") ?? "";
+    const label = normalizeText(tab.textContent ?? tabId);
+    if (!panelId) {
+      issues.push(`${label}: selected tab is missing aria-controls`);
+      continue;
+    }
+    const panel = state.document.getElementById(panelId);
+    if (!panel) {
+      issues.push(`${label}: controlled panel ${panelId} is missing`);
+      continue;
+    }
+    if (panel.getAttribute("role") !== "tabpanel") {
+      issues.push(`${label}: controlled element ${panelId} is not a tabpanel`);
+    }
+    if (tabId && panel.getAttribute("aria-labelledby") !== tabId) {
+      issues.push(`${label}: panel ${panelId} does not point back to ${tabId}`);
+    }
+  }
+  return issues;
+});
+
+const duplicateDomIds = extract((state) => {
+  const counts = new Map<string, number>();
+  for (const element of Array.from(state.document.querySelectorAll("[id]"))) {
+    const id = element.getAttribute("id") ?? "";
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([id, count]) => `${id} (${count})`);
+});
+
+const dialogProblems = extract((state) => {
+  const dialogs = Array.from(state.document.querySelectorAll('[role="dialog"]'));
+  const issues: string[] = [];
+  if (dialogs.length > 1) {
+    issues.push(`expected at most one dialog, found ${dialogs.length}`);
+  }
+  for (const dialog of dialogs) {
+    if (!accessibleName(dialog, state.document)) {
+      issues.push("dialog is missing an accessible name");
+    }
+    if (dialog.getAttribute("aria-modal") !== "true") {
+      issues.push("dialog is missing aria-modal=true");
+    }
+  }
+  return issues;
+});
+
+const emptyPrimarySurfaceProblems = extract((state) => {
+  const surfaces = [
+    '[data-testid="fleet-dashboard"]',
+    '[data-testid="fleet-empty"]',
+    '[data-testid="transcript-panel"]',
+    ".config-workspace",
+  ];
+  return surfaces
+    .map((selector) => {
+      const surface = state.document.querySelector(selector);
+      return {
+        selector,
+        mounted: Boolean(surface),
+        textLength: normalizeText(surface?.textContent ?? "").length,
+      };
+    })
+    .filter((surface) => surface.mounted && surface.textLength === 0)
+    .map((surface) => surface.selector);
 });
 
 export const desktop_shell_stays_mounted = always(
@@ -87,6 +171,22 @@ export const desktop_shell_does_not_horizontally_overflow = always(
 
 export const visible_tablists_have_one_selected_tab = always(
   () => tablistSelectionProblems.current.length === 0,
+);
+
+export const selected_tabs_control_visible_panels = always(
+  () => tabPanelRelationshipProblems.current.length === 0,
+);
+
+export const desktop_shell_has_no_duplicate_dom_ids = always(
+  () => duplicateDomIds.current.length === 0,
+);
+
+export const desktop_shell_does_not_stack_dialogs = always(
+  () => dialogProblems.current.length === 0,
+);
+
+export const desktop_primary_surfaces_are_not_empty = always(
+  () => emptyPrimarySurfaceProblems.current.length === 0,
 );
 
 export const transcript_does_not_render_adjacent_duplicate_messages = always(() => {
@@ -114,4 +214,18 @@ export const enabled_buttons_have_accessible_names = always(
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function accessibleName(element: Element, document: Document) {
+  const ariaLabel = normalizeText(element.getAttribute("aria-label") ?? "");
+  if (ariaLabel) {
+    return ariaLabel;
+  }
+  const labelledBy = element.getAttribute("aria-labelledby") ?? "";
+  return normalizeText(
+    labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" "),
+  );
 }

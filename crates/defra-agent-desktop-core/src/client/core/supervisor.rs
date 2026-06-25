@@ -383,23 +383,24 @@ async fn run_pairing_reconcile_for_peer(
     let Some(graphql_url) = record.graphql.as_deref() else {
         return;
     };
-    let admin = match HttpRemoteP2pAdmin::new_with_actor(graphql_url, remote_admin_actor) {
-        // Collection ids are content-addressed, so the local schema resolves the
-        // same name → id the remote tracks; this lets the reconcile diff compare
-        // desired (names) against the remote subscription set (ids) correctly.
-        Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
-        Err(error) => {
-            tracing::warn!(
-                target: "defra_agent_desktop_core::pairing_reconcile",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                error = %error,
-                "failed to construct remote P2P admin"
-            );
-            return;
-        }
-    };
-    let store = GraphqlPairingStateStore::new(Arc::clone(node));
+    let admin =
+        match HttpRemoteP2pAdmin::new_with_actor(graphql_url, Arc::clone(&remote_admin_actor)) {
+            // Collection ids are content-addressed, so the local schema resolves the
+            // same name → id the remote tracks; this lets the reconcile diff compare
+            // desired (names) against the remote subscription set (ids) correctly.
+            Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
+            Err(error) => {
+                tracing::warn!(
+                    target: "defra_agent_desktop_core::pairing_reconcile",
+                    peer_id = %record.peer_id,
+                    label = %record.label,
+                    error = %error,
+                    "failed to construct remote P2P admin"
+                );
+                return;
+            }
+        };
+    let store = GraphqlPairingStateStore::new(Arc::clone(node), remote_admin_actor);
     let desired = match store.load_desired(&record.peer_id).await {
         Ok(Some(desired)) => desired,
         Ok(None) => PairingDesired::default(),
