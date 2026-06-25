@@ -67,6 +67,11 @@ def jsonEscape (s : String) : String :=
 def jsonString (s : String) : String :=
   "\"" ++ jsonEscape s ++ "\""
 
+/-- Regression guard (#553): the single emitted-JSON string serializer escapes
+    quotes and backslashes. All conformance modules route through this, so a
+    field value containing `"`/`\\` cannot emit malformed JSON. -/
+example : jsonString "a\"b\\c" = "\"a\\\"b\\\\c\"" := by native_decide
+
 def jsonArray (values : List String) : String :=
   "[" ++ String.intercalate "," values ++ "]"
 
