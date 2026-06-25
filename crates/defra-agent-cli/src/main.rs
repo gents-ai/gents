@@ -51,6 +51,7 @@ const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 1_800;
 const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
+const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -396,8 +397,16 @@ pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
 pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
     "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at";
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
+        .build()
+        .context("building tokio runtime")?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let argv = std::env::args().collect::<Vec<_>>();
     if let Some(warning) = cli::deprecations::deprecation_warning(&argv) {
         eprintln!("{warning}");

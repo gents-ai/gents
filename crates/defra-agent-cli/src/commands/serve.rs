@@ -209,7 +209,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
-    let p2p_status = load_local_server_p2p_status(node.as_ref(), P2pTransportArg::Iroh).await?;
+    let p2p_status = load_local_server_p2p_status(node.as_ref(), args.p2p_transport).await?;
     write_runtime_state(
         &home_dir,
         &StoredRuntimeState {
@@ -333,9 +333,13 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         "codex_shim": codex_shim_output,
     });
     print_json(&output)?;
-    eprintln!(
-        "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
-    );
+    if args.p2p_transport == P2pTransportArg::Iroh {
+        eprintln!(
+            "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
+        );
+    } else {
+        eprintln!("defra-agent server is running local-only. Press Ctrl-C to stop.");
+    }
 
     if let Some(handle) = codex_shim_handle.as_mut() {
         tokio::select! {
@@ -540,6 +544,10 @@ fn resolve_server_p2p_config(
     home_dir: &Path,
     args: &ServeArgs,
 ) -> Result<Option<defra_node::P2PConfig>> {
+    if args.p2p_transport == P2pTransportArg::None {
+        return Ok(None);
+    }
+
     let secret_key_path = args
         .p2p_secret_key_path
         .clone()

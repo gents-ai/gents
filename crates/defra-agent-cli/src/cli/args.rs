@@ -477,6 +477,13 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
     pub(crate) codex_shim_poll_ms: u64,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = P2pTransportArg::Iroh,
+        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
+    )]
+    pub(crate) p2p_transport: P2pTransportArg,
     #[arg(long)]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
