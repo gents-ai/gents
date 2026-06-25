@@ -6,6 +6,7 @@ import type {
   P2PHealth,
   PeerAddRequest,
 } from "../../lib/types";
+import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import { AddPeerForm } from "./AddPeerForm";
 import { BrandLockup } from "./BrandLockup";
 import { FleetRow } from "./FleetRow";
@@ -66,7 +67,7 @@ export function FleetDashboard({
       setPeerForm(DEFAULT_PEER_FORM);
       setShowAddPeer(false);
     } catch (error) {
-      setPeerFormError(String(error));
+      setPeerFormError(formatPeerConnectionError(error, "add-peer"));
     }
   }
 
@@ -76,7 +77,7 @@ export function FleetDashboard({
     try {
       await onInitLocalRuntime(bootstrap?.initAgentName ?? "Local Agent");
     } catch (error) {
-      setLocalRuntimeError(String(error));
+      setLocalRuntimeError(formatPeerConnectionError(error, "local-runtime"));
     }
   }
 

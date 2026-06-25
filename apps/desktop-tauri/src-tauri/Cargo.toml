@@ -1,5 +1,6 @@
 [package]
 name = "defra-agent-desktop-tauri"
+default-run = "defra-agent-desktop-tauri"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -46,6 +46,9 @@ help:
 	@echo "  make desktop-ui-fuzz-long  Run longer desktop Bombadil sweep"
 	@echo "  make desktop-ui-visual     Run desktop visual baseline checks"
 	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
+	@echo "  make desktop-native-preflight  Build frontend/Rust shell and print Tauri CLI version"
+	@echo "  make desktop-native-dev    Launch the native Tauri dev app for manual QA"
+	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
@@ -131,7 +134,7 @@ test-agent-e2e:
 test-cli:
 	$(CARGO) test -p defra-agent-cli -- --nocapture --test-threads=1
 
-.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e
+.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui
 
@@ -155,6 +158,15 @@ desktop-ui-visual:
 
 desktop-ui-live-e2e:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e
+
+desktop-native-preflight:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
+
+desktop-native-dev:
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
+
+desktop-native-build:
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

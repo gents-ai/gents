@@ -30,13 +30,27 @@ npm run dev
 Run the full Tauri shell:
 
 ```bash
-npm run tauri dev
+npm run tauri -- dev
 ```
 
 Build the frontend:
 
 ```bash
 npm run build
+```
+
+Build the Tauri app:
+
+```bash
+npm run tauri -- build
+```
+
+From the repo root, the Makefile exposes the native app QA commands:
+
+```bash
+make desktop-native-preflight
+make desktop-native-dev
+make desktop-native-build
 ```
 
 Build the desktop binary from the repo root:
@@ -89,6 +103,7 @@ npm run test:ui:invariants
 npm run test:ui:screenshots
 npm run test:ui:fuzz -- --time-limit 30s
 npm run test:ui:fuzz:long
+npm run test:ui:native:preflight
 ```
 
 The Playwright suite serves `tests/ui-harness/harness.html` with Vite and renders
@@ -138,3 +153,7 @@ npm run smoke:remote-fleet
 
 The live tests expect real runtime connectivity and should be treated as manual
 or release validation, not the default fast correctness gate.
+
+Native macOS/Tauri smoke coverage is intentionally smaller than the browser
+matrix. See [tests/NATIVE_QA.md](./tests/NATIVE_QA.md) for the app-window,
+WebView, menu/window chrome, runtime handoff, and clean-quit checklist.
