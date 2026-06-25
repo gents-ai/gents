@@ -119,6 +119,20 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     backend.probe_status
                 );
             }
+            // ChatGptCodex needs an enabled OAuthCredential before a slot can build its client.
+            // Without this gate the behavior is admitted as runnable, the slot build fails at start,
+            // and the readiness barrier never completes (the process hangs instead of degrading).
+            if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex
+                && !view.has_enabled_oauth_credential(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
+            {
+                let agent_did = view.principal.value.agent_did.as_str();
+                anyhow::bail!(
+                    "behavior {} ChatGptCodex backend {} has no enabled OAuthCredential for agent \
+                     {agent_did}; run `defra-agent codex-login --agent-did {agent_did}`",
+                    behavior.behavior_id,
+                    backend.backend_id,
+                );
+            }
             let profile_id = behavior
                 .inference_profile_id
                 .as_deref()

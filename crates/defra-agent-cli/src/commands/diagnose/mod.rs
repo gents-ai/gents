@@ -142,18 +142,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let principal_present = bundle.agent_principal.is_some();
-    let status = if schemas_ok
-        && principal_present
-        && default_behavior_ok
-        && tool_ceiling_ok
-        && backends_ok
-        && p2p_ok
-        && config_load_error.is_none()
-    {
-        "ok"
-    } else {
-        "degraded"
-    };
 
     let chatgpt_provider = defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     let chatgpt_auth_check = match crate::commands::codex_auth_probe::load_oauth_credential(
@@ -200,6 +188,31 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "provider": chatgpt_provider,
             "error": error.to_string(),
         }),
+    };
+
+    // An auth failure only degrades overall health when a ChatGptCodex backend is actually
+    // configured and enabled — deployments that don't use the ChatGPT backend have no credential
+    // and must still report `ok`.
+    let chatgpt_backend_configured = backend_reports.iter().any(|report| {
+        report.get("provider_kind").and_then(Value::as_str)
+            == Some(defra_agent::backend_provider::BackendProviderKind::ChatGptCodex.as_str())
+            && report.get("enabled").and_then(Value::as_bool) == Some(true)
+    });
+    let chatgpt_auth_ok = !chatgpt_backend_configured
+        || chatgpt_auth_check.get("ok").and_then(Value::as_bool) == Some(true);
+
+    let status = if schemas_ok
+        && principal_present
+        && default_behavior_ok
+        && tool_ceiling_ok
+        && backends_ok
+        && chatgpt_auth_ok
+        && p2p_ok
+        && config_load_error.is_none()
+    {
+        "ok"
+    } else {
+        "degraded"
     };
 
     let mut output = json!({

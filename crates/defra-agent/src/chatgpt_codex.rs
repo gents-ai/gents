@@ -249,6 +249,69 @@ pub async fn lookup_oauth_credential_by_id(
         .transpose()
 }
 
+pub fn oauth_credentials_for_agent_query(agent_did: &str) -> String {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    format!(
+        r#"query {{
+            OAuthCredential(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    format!(
+        r#"query {{
+            OAuthCredential(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+/// All OAuthCredential documents for an agent (any provider, enabled or not), so callers can
+/// reason about credential presence/state — e.g. behavior-availability gating at snapshot time.
+pub async fn list_oauth_credentials(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<OAuthCredential>> {
+    let response = node
+        .execute(&oauth_credentials_for_agent_query(agent_did))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying OAuthCredential returned errors: {:?}",
+            response.errors
+        );
+    }
+    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect()
+}
+
+pub async fn lookup_oauth_credential_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<OAuthCredential>> {
+    let response = node
+        .execute(&oauth_credential_by_doc_id_query(doc_id))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying OAuthCredential returned errors: {:?}",
+            response.errors
+        );
+    }
+    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .transpose()
+}
+
 pub async fn upsert_oauth_credential(
     node: &EmbeddedNode,
     credential: &OAuthCredential,

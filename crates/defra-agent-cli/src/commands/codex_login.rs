@@ -33,7 +33,9 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
             .context("ChatGPT device-code login failed")?;
     } else {
         let server = run_login_server(opts).context("starting ChatGPT login server")?;
-        println!(
+        // Human prompt goes to stderr so stdout stays pure JSON (the command emits a single JSON
+        // object via print_json on success) for automation.
+        eprintln!(
             "Open this URL to sign in with ChatGPT:\n{}",
             server.auth_url
         );

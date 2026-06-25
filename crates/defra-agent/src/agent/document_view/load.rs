@@ -33,6 +33,7 @@ pub(crate) async fn load_document_runtime_view(
         tool_selections: HashMap::new(),
         inference_profiles: HashMap::new(),
         backends: HashMap::new(),
+        oauth_credentials: HashMap::new(),
         tasks: HashMap::new(),
         schedules: HashMap::new(),
         event_triggers: HashMap::new(),
@@ -66,6 +67,30 @@ pub(crate) async fn load_document_runtime_view(
                 value: backend,
             },
         );
+    }
+
+    // OAuth credentials are best-effort: a node predating the OAuthCredential collection simply
+    // yields none (credential-backed backends then resolve as unavailable until codex-login runs).
+    match crate::chatgpt_codex::list_oauth_credentials(node, agent_did).await {
+        Ok(credentials) => {
+            for credential in credentials {
+                let doc_id = credential.doc_id.clone().unwrap_or_default();
+                view.oauth_credentials.insert(
+                    credential.credential_id.clone(),
+                    DocumentRecord {
+                        doc_id,
+                        value: credential,
+                    },
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %agent_did,
+                error = %error,
+                "runtime document view could not load OAuthCredential documents; treating as none"
+            );
+        }
     }
 
     for (doc_id, behavior) in list_agent_behavior_records(node, agent_did).await? {
