@@ -128,13 +128,13 @@ def sourceInstances : List SourceInstanceRow :=
     }
   , { name := "EventSource"
     , dedupePolicy := DedupePolicy.toContract .monotoneOnce
-    , rescanBoundedBy := SourceInstance.unboundedRescan
-    , deviation := some "event_source_lacks_periodic_rescan"
+    , rescanBoundedBy := EventSource.eventSourceSrc.rescanBoundedBy
+    , deviation := none
     }
   , { name := "SubagentSource"
     , dedupePolicy := DedupePolicy.toContract .monotoneOnce
-    , rescanBoundedBy := SourceInstance.unboundedRescan
-    , deviation := some "subagent_source_lacks_live_rescan"
+    , rescanBoundedBy := SubagentSource.subagentSourceSrc.rescanBoundedBy
+    , deviation := none
     }
   ]
 
@@ -148,8 +148,9 @@ structure ConvergenceTraceRow where
   initialWorld   : World
   actions        : List Action
   finalWorld     : World
-  /-- "substantive" (D1 closes with real witness today) or "deviation" (D1
-      vacuous; Rust should be in the documented deviation state). -/
+  /-- Expected runtime status for the finite witness. Current live source rows
+      should be "substantive"; "deviation" is retained only as legacy JSON
+      vocabulary for future documented gaps. -/
   status         : String
 
 /-- Worked convergence trace for the watcher: persist + rescanTick + handle
@@ -166,33 +167,32 @@ def watcherTrace : ConvergenceTraceRow :=
   , status := "substantive"
   }
 
-/-- EventSource trace today: persist event observed, subscription drops it,
-    no live rescan. Rust consumer asserts the runtime is in this deviation
-    state. -/
+/-- EventSource convergence trace: a doc is persisted, the periodic
+    introspection rescan observes it, and the source emits a fire intent. -/
 def eventSourceTrace : ConvergenceTraceRow :=
-  { name := "event_source_drop_then_no_resync"
+  { name := "event_source_persist_rescan_handle"
   , instanceName := "EventSource"
   , initialWorld := World.empty
   , actions :=
       [ .persist (doc "doc-1")
-      , .enqueue (doc "doc-1")
-      , .drop (doc "doc-1") ]
-  , finalWorld := mkWorld [doc "doc-1"] [] [] []
-  , status := "deviation"
+      , .rescanTick
+      , .handle (doc "doc-1") ]
+  , finalWorld := mkWorld [doc "doc-1"] [] [doc "doc-1"] [doc "doc-1"]
+  , status := "substantive"
   }
 
-/-- SubagentSource trace today: orphan child persists, dropped event,
-    no live rescan in this process. Rust consumer asserts deviation state. -/
+/-- SubagentSource convergence trace: a running bridge row is persisted, the
+    periodic scan observes the orphan child, and the source materializes it. -/
 def subagentSourceTrace : ConvergenceTraceRow :=
-  { name := "subagent_orphan_no_live_rescan"
+  { name := "subagent_orphan_rescan_handle"
   , instanceName := "SubagentSource"
   , initialWorld := World.empty
   , actions :=
       [ .persist (doc "tool-call-1")
-      , .enqueue (doc "tool-call-1")
-      , .drop (doc "tool-call-1") ]
-  , finalWorld := mkWorld [doc "tool-call-1"] [] [] []
-  , status := "deviation"
+      , .rescanTick
+      , .handle (doc "tool-call-1") ]
+  , finalWorld := mkWorld [doc "tool-call-1"] [] [doc "tool-call-1"] [doc "tool-call-1"]
+  , status := "substantive"
   }
 
 def convergenceTraces : List ConvergenceTraceRow :=

@@ -16,6 +16,7 @@ const EVENT_SOURCE_COLLECTION: &str = "EventDeliveryDoc";
 const EVENT_SOURCE_TRIGGER_ID: &str = "event-delivery-trigger";
 const EVENT_SOURCE_TASK_ID: &str = "event-delivery-task";
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) async fn event_delivery_transition_cases_match_contract() {
     let cases = lean_event_delivery_transition_cases();
@@ -95,24 +96,10 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
                     trace.name
                 );
             }
-            "deviation" => {
-                assert!(
-                    source.deviation.is_some(),
-                    "deviation trace `{}` must name a runtime source with a documented deviation",
-                    trace.name
-                );
-                assert_eq!(
-                    source.rescan_bounded_by, 0,
-                    "deviation trace `{}` must run against an unbounded-rescan source",
-                    trace.name
-                );
-                assert!(
-                    !runtime.unhandled_persistent_docs().await.is_empty(),
-                    "deviation trace `{}` did not witness the documented \
-                     deviation state (no orphan persistent doc remaining)",
-                    trace.name,
-                );
-            }
+            "deviation" => panic!(
+                "event-delivery deviation trace `{}` is retired; live sources must emit substantive convergence traces",
+                trace.name,
+            ),
             other => panic!(
                 "trace `{}` has unknown status `{}` (expected 'substantive' or 'deviation')",
                 trace.name, other,
@@ -205,6 +192,9 @@ impl ProductionEventDeliveryDriver {
                 }
             }
             "SubagentSource" => {
+                install_subagent_source_fixture(db.node.as_ref())
+                    .await
+                    .expect("install SubagentSource event-delivery fixture");
                 let (runner, emitted_rx, snapshot_tx) = spawn_subagent_source_runner(
                     db.node.clone(),
                     mock_subs.clone(),
@@ -289,7 +279,7 @@ impl ProductionEventDeliveryDriver {
             LeanEventDeliveryAction::RescanTick => {
                 if self.source.rescan_bounded_by == 0 {
                     return Err(format!(
-                        "source {} has no bounded live rescan",
+                        "source {} does not advertise a positive bounded live rescan",
                         self.source.name
                     ));
                 }
@@ -428,23 +418,46 @@ impl ProductionEventDeliveryDriver {
     async fn create_subagent_tool_call_doc(&self, doc: &str) -> Result<String, String> {
         let tool_call_id = escape_graphql_string(doc);
         let tool_call_key = escape_graphql_string(&format!("event-delivery-session:{doc}"));
+        let parent_request_id = format!("event-delivery-parent-{doc}");
+        let parent_session_id = format!("event-delivery-session-{doc}");
+        let child_request_id = format!("event-delivery-child-{doc}");
+        create_request(
+            self.db.node.as_ref(),
+            &parent_request_id,
+            &parent_session_id,
+            "processing",
+            "2026-05-20T00:00:00Z",
+        )
+        .await;
+        let parent_request_id = escape_graphql_string(&parent_request_id);
+        let parent_session_id = escape_graphql_string(&parent_session_id);
+        let child_request_id = escape_graphql_string(&child_request_id);
+        let args = escape_graphql_string(
+            &serde_json::json!({
+                "name": AGENT_NAME,
+                "agent_did": AGENT_DID,
+                "behavior_id": AGENT_NAME,
+                "prompt": "materialize event-delivery child",
+            })
+            .to_string(),
+        );
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
-                    request_id: "",
-                    session_id: "event-delivery-session",
+                    request_id: "{parent_request_id}",
+                    session_id: "{parent_session_id}",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{}}",
+                    args: "{args}",
                     result: "",
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "2026-05-20T00:00:00Z",
                     await_mode: "foreground",
                     cancel_policy: "cascade",
-                    child_request_id: "",
+                    child_request_id: "{child_request_id}",
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,
@@ -521,14 +534,12 @@ impl ProductionEventDeliveryDriver {
                 Ok(())
             }
             ProductionRuntime::EventSource | ProductionRuntime::SubagentSource => {
-                if expected_docs.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "source {} has no bounded live rescan",
-                        self.source.name
-                    ))
+                for expected in expected_docs {
+                    let expected = self.production_doc_id(expected)?;
+                    self.wait_for_emitted_doc_buffered(&expected, DELIVERY_TIMEOUT)
+                        .await?;
                 }
+                Ok(())
             }
         }
     }
@@ -576,11 +587,12 @@ impl ProductionEventDeliveryDriver {
     fn production_doc_id(&self, doc: &str) -> Result<String, String> {
         match self.source.name {
             "Watcher" => Ok(doc.to_string()),
-            "EventSource" | "SubagentSource" => self
+            "EventSource" => self
                 .doc_ids
                 .get(doc)
                 .cloned()
                 .ok_or_else(|| format!("doc {doc:?} has no runtime row")),
+            "SubagentSource" => Ok(doc.to_string()),
             other => Err(format!("unsupported source {other:?}")),
         }
     }
@@ -598,6 +610,34 @@ impl ProductionEventDeliveryDriver {
             match self.wait_for_any_emitted_doc_until(deadline).await? {
                 Some(emitted) if emitted == expected => return Ok(()),
                 Some(emitted) => self.emitted_buffer.push(emitted),
+                None => {
+                    return Err(format!(
+                        "{} did not emit expected runtime doc {:?}",
+                        self.source.name, expected
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn wait_for_emitted_doc_buffered(
+        &mut self,
+        expected: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        if self.emitted_buffer.iter().any(|doc| doc == expected) {
+            return Ok(());
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match self.wait_for_any_emitted_doc_until(deadline).await? {
+                Some(emitted) => {
+                    let matched = emitted == expected;
+                    self.emitted_buffer.push(emitted);
+                    if matched {
+                        return Ok(());
+                    }
+                }
                 None => {
                     return Err(format!(
                         "{} did not emit expected runtime doc {:?}",
@@ -652,7 +692,8 @@ fn spawn_event_source_runner(
     let snapshot = active_snapshot_with_event_trigger();
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let mut source =
-        EventSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel);
+        EventSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel)
+            .with_rescan_interval(RESCAN_TEST_INTERVAL);
     let (tx, rx) = mpsc::channel(16);
     let runner = tokio::spawn(async move {
         while let Some(intent) = source.next_fire().await {
@@ -682,7 +723,8 @@ fn spawn_subagent_source_runner(
     let snapshot = active_snapshot_without_event_triggers();
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let mut source =
-        SubagentSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel);
+        SubagentSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel)
+            .with_rescan_interval(RESCAN_TEST_INTERVAL);
     let (tx, rx) = mpsc::channel(16);
     let runner = tokio::spawn(async move {
         while let Some(intent) = source.next_fire().await {
@@ -718,6 +760,53 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
     node.add_schema(schema)
         .await
         .expect("add_schema for EventDeliveryDoc");
+}
+
+async fn install_subagent_source_fixture(node: &EmbeddedNode) -> Result<(), String> {
+    const TOOL_SELECTION_ID: &str = "event-delivery-subagent-tools";
+
+    upsert_tool_selection(
+        node,
+        &ToolSelectionDocument {
+            selection_id: TOOL_SELECTION_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+                AGENT_NAME, AGENT_DID, AGENT_NAME, None,
+            )]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|err| format!("upsert ToolSelection failed: {err}"))?;
+
+    upsert_agent_behavior(
+        node,
+        &AgentBehaviorDocument {
+            behavior_id: AGENT_NAME.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("Event delivery subagent fixture".to_string()),
+            description: None,
+            summary: None,
+            system_prompt: None,
+            request_context_template: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: Some(TOOL_SELECTION_ID.to_string()),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
+            enabled: true,
+            created_at: Some("2026-05-20T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .map_err(|err| format!("upsert AgentBehavior failed: {err}"))?;
+
+    Ok(())
 }
 
 fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
@@ -758,7 +847,7 @@ fn active_snapshot(
         local_did: AGENT_DID.to_string(),
         paired_peer_dids: HashSet::new(),
         default_behavior_id: AGENT_NAME.to_string(),
-        behaviors: HashMap::new(),
+        behaviors: HashMap::from([(AGENT_NAME.to_string(), runtime_behavior(AGENT_NAME))]),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
@@ -771,6 +860,23 @@ fn active_snapshot(
         behavior_executor_capacities: HashMap::new(),
         behavior_executor_queue_capacities: HashMap::new(),
     })
+}
+
+fn runtime_behavior(behavior_id: &str) -> Arc<defra_agent::AgentBehavior> {
+    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(
+        crate::support::fixtures::test_identity(&format!("event-delivery-{behavior_id}")),
+    );
+    let principal = Arc::new(defra_agent::AgentPrincipal {
+        agent_did: AGENT_DID.to_string(),
+        identity,
+        default_behavior_id: AGENT_NAME.to_string(),
+        display_name: None,
+        enabled: true,
+    });
+    Arc::new(crate::support::fixtures::test_behavior_for_principal(
+        behavior_id,
+        principal,
+    ))
 }
 
 fn empty_event_delivery_world() -> lean_vocab_test::LeanEventDeliveryWorld {

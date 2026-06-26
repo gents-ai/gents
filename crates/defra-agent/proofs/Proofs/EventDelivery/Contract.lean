@@ -120,9 +120,9 @@ inductive Trace : World → World → Prop where
 /-- `SourceInstance` binds the contract to a concrete runtime subsystem.
     `rescanBoundedBy : Nat` is the maximum number of non-rescanTick actions
     that may occur between two consecutive `rescanTick`s in a `Fair` sequence
-    (see `Properties.lean`). The sentinel `unboundedRescan = 0` records
-    "no bounded rescan in the live process today"; D1 holds vacuously for
-    such instances. -/
+    (see `Properties.lean`). Live source bindings that claim D1 must use a
+    positive bound; `unboundedRescan = 0` is retained only as vocabulary for
+    explicitly documented non-live or future deviation instances. -/
 structure SourceInstance where
   name            : String
   dedupePolicy    : DedupePolicy

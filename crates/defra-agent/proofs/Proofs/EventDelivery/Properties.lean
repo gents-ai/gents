@@ -12,11 +12,14 @@ def pendingWork (w : World) : Nat :=
     `inst.rescanBoundedBy + 1` consecutive actions contains at least one
     `rescanTick`.
 
-    When `inst.rescanBoundedBy = 0` (the `unboundedRescan` sentinel), every
-    window of size `1` must contain a `rescanTick`, i.e. EVERY action must
-    be `rescanTick`. Since real action lists also contain `persist`, etc.,
-    the sentinel makes `Fair` unsatisfiable for any non-trivial trace —
-    that's exactly what closes D1 vacuously for deviation instances. -/
+    This remains a finite-prefix predicate because the conformance boundary
+    emits executable finite traces. Short prefixes whose length is below the
+    window size are vacuously fair; the live source bindings therefore use
+    `rescanBoundedBy = 1` and emit concrete `persist → rescanTick → handle`
+    witnesses so D1's rescan window is exercised. The `0` sentinel remains
+    unsatisfiable for non-trivial traces and must not be used by live D1
+    source bindings. Infinite-stream or tick-indexed latency refinements belong
+    in the liveness taxonomy layer rather than this executable trace contract. -/
 def Fair (inst : SourceInstance) (actions : List Action) : Prop :=
   ∀ i : Nat, i + inst.rescanBoundedBy < actions.length →
     ∃ j : Nat, i ≤ j ∧ j ≤ i + inst.rescanBoundedBy ∧
@@ -53,12 +56,11 @@ inductive TraceOf : World → List Action → World → Prop where
     persistent doc into the subscription queue, after which `handle d` is
     enabled and lands `d` in `handled`. Fairness holds because
     `rescanBoundedBy ≥ 1` makes the window check either trivially closed
-    (`b ≥ 2` → vacuous) or satisfied by the leading `rescanTick` (`b = 1`).
-
-    For instances using `SourceInstance.unboundedRescan = 0`, this theorem is
-    vacuous (`Fair` becomes unsatisfiable for any 2-action list); that is
-    exactly the deviation that the Rust gap-fill in EventSource /
-    SubagentSource closes operationally. -/
+    (`b ≥ 2` → the two-action witness is shorter than the checked window) or
+    satisfied by the leading `rescanTick` (`b = 1`). The executable
+    conformance rows use the stronger three-action `persist → rescanTick →
+    handle` shape with `b = 1`, which prevents live EventSource and
+    SubagentSource bindings from closing D1 by the old `0`-sentinel gap. -/
 theorem D1_delivery_convergence
     (inst : SourceInstance)
     (w₀ : World) (d : DocId)
