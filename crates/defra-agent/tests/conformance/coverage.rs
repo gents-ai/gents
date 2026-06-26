@@ -275,6 +275,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
+        "boundary.event-delivery.rescan-doc-cap",
         "boundary.streaming-response.idle-timeout-deadline",
         "boundary.prompt-assembly.provider-input-sanitization",
     ]

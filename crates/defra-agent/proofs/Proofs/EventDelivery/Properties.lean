@@ -18,8 +18,10 @@ def pendingWork (w : World) : Nat :=
     `rescanBoundedBy = 1` and emit concrete `persist → rescanTick → handle`
     witnesses so D1's rescan window is exercised. The `0` sentinel remains
     unsatisfiable for non-trivial traces and must not be used by live D1
-    source bindings. Infinite-stream or tick-indexed latency refinements belong
-    in the liveness taxonomy layer rather than this executable trace contract. -/
+    source bindings. Infinite-stream or tick-indexed latency refinements — the
+    universal "every fair schedule delivers within bound" form, as opposed to
+    this existential reachability witness — belong in the liveness taxonomy layer
+    (#557) rather than this executable trace contract. -/
 def Fair (inst : SourceInstance) (actions : List Action) : Prop :=
   ∀ i : Nat, i + inst.rescanBoundedBy < actions.length →
     ∃ j : Nat, i ≤ j ∧ j ≤ i + inst.rescanBoundedBy ∧
