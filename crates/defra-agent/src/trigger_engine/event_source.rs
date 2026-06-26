@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 use tokio::sync::watch;
+use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -39,6 +41,7 @@ use super::{FireIntent, TriggerKind, TriggerSource};
 /// next event); v1 doesn't target catalog-scale source collections, so a
 /// conservative limit is fine.
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
+const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 /// `TriggerSource` that fans DefraDB document events out to
 /// `active_event_triggers`.
@@ -106,6 +109,16 @@ pub struct EventSource {
     /// (`pop_front` / `push_back`) with no `.await` inside, so it will never
     /// actually contend.
     pending_intents: Mutex<VecDeque<FireIntent>>,
+    /// Periodic live rescan that closes the lossy-subscription gap. The
+    /// interval is stored on the source so a busy stream of `next_fire()` calls
+    /// does not reset the cadence.
+    rescan_tick: tokio::time::Interval,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceDocIdRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
 }
 
 /// Per-source-collection schema cache.
@@ -196,6 +209,17 @@ fn is_defradb_aggregate_field(name: &str) -> bool {
     )
 }
 
+fn event_source_rescan_tick(interval: Duration) -> tokio::time::Interval {
+    let interval = if interval.is_zero() {
+        EVENT_SOURCE_RESCAN_INTERVAL
+    } else {
+        interval
+    };
+    let mut tick = tokio::time::interval(interval);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tick
+}
+
 impl EventSource {
     /// Build an event source wired to the given snapshot receiver and
     /// embedded node.
@@ -230,7 +254,17 @@ impl EventSource {
             collection_id_to_name: HashMap::new(),
             seen_docs: HashMap::new(),
             pending_intents: Mutex::new(VecDeque::new()),
+            rescan_tick: event_source_rescan_tick(EVENT_SOURCE_RESCAN_INTERVAL),
         }
+    }
+
+    /// Override the periodic rescan cadence. Exposed for integration tests
+    /// that need to drive the live rescan path without waiting for the
+    /// production interval.
+    #[doc(hidden)]
+    pub fn with_rescan_interval(mut self, interval: Duration) -> Self {
+        self.rescan_tick = event_source_rescan_tick(interval);
+        self
     }
 
     /// Override the reconciliation debounce. Test-only hook mirroring
@@ -400,6 +434,36 @@ impl EventSource {
             .or_default()
             .extend(doc_ids);
         Ok(())
+    }
+
+    async fn load_doc_ids_for_collection(&self, collection: &str) -> anyhow::Result<Vec<String>> {
+        let query = format!(
+            r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
+            collection = collection,
+            limit = SEEN_DOCS_SEED_LIMIT,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "event source rescan query for {} failed: {:?}",
+                collection,
+                response.errors
+            );
+        }
+        let rows: Vec<SourceDocIdRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(collection))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        if rows.len() >= SEEN_DOCS_SEED_LIMIT {
+            tracing::warn!(
+                source_collection = %collection,
+                limit = %SEEN_DOCS_SEED_LIMIT,
+                "event source rescan hit limit; older unseen docs may wait for a later event"
+            );
+        }
+        Ok(rows.into_iter().map(|row| row.doc_id).collect())
     }
 
     /// Record that `(collection, doc_id)` has been observed and return
@@ -761,14 +825,72 @@ impl EventSource {
         }
         intents
     }
+
+    fn take_first_and_queue_rest(&self, mut intents: Vec<FireIntent>) -> Option<FireIntent> {
+        if intents.is_empty() {
+            return None;
+        }
+        let first = intents.remove(0);
+        let mut queue = self
+            .pending_intents
+            .lock()
+            .expect("pending_intents mutex poisoned");
+        for intent in intents {
+            queue.push_back(intent);
+        }
+        Some(first)
+    }
+
+    async fn rescan_created_docs(&mut self) -> Option<FireIntent> {
+        let mut collections: Vec<String> = self.desired_collections.iter().cloned().collect();
+        collections.sort();
+        let snapshot = self.snapshot_rx.borrow().clone();
+
+        for collection in collections {
+            let doc_ids = match self.load_doc_ids_for_collection(&collection).await {
+                Ok(doc_ids) => doc_ids,
+                Err(err) => {
+                    tracing::warn!(
+                        source_collection = %collection,
+                        %err,
+                        "event source periodic rescan failed for collection",
+                    );
+                    continue;
+                }
+            };
+
+            for doc_id in doc_ids {
+                if !self.is_first_seen(&collection, &doc_id) {
+                    continue;
+                }
+                let intents = self
+                    .build_intents_for_all_matching(
+                        snapshot.as_ref(),
+                        &collection,
+                        &doc_id,
+                        "created",
+                    )
+                    .await;
+                if let Some(first) = self.take_first_and_queue_rest(intents) {
+                    tracing::info!(
+                        source_collection = %collection,
+                        source_doc_id = %doc_id,
+                        "event source periodic rescan emitted fire intent",
+                    );
+                    return Some(first);
+                }
+            }
+        }
+        None
+    }
 }
 
 impl EventDeliveryRuntimeContract for EventSource {
     const EVENT_DELIVERY_CONTRACT: EventDeliverySourceContract = EventDeliverySourceContract {
         name: "EventSource",
         dedupe_policy: "monotone_once",
-        rescan_bounded_by: 0,
-        deviation: Some("event_source_lacks_periodic_rescan"),
+        rescan_bounded_by: 1,
+        deviation: None,
     };
 }
 
@@ -829,48 +951,66 @@ impl TriggerSource for EventSource {
                 // Step 3: race the subscription against snapshot changes and
                 // cancel. Subscription is guaranteed Some here by the check
                 // above, so we can take a &mut borrow for the recv poll.
-                let subscription = self
-                    .subscription
-                    .as_mut()
-                    .expect("subscription is Some when desired_collections is non-empty");
-                let message = tokio::select! {
-                    biased;
-                    _ = self.cancel.cancelled() => return None,
-                    res = self.snapshot_rx.changed() => {
-                        if res.is_err() {
-                            return None;
-                        }
-                        // New snapshot — loop back to reconcile. Any event
-                        // in-flight on the subscription will be seen on the
-                        // next tick (events::Subscription buffers behind the
-                        // mpsc receiver, so no loss).
-                        continue;
-                    }
-                    msg = subscription.recv() => {
-                        match msg {
-                            Some(m) => m,
-                            None => {
-                                // The subscription channel closed. This is
-                                // effectively source death; returning None so
-                                // the engine drops us.
-                                tracing::warn!(
-                                    "event source subscription channel closed; \
-                                     source exiting",
-                                );
+                let mut message = None;
+                let mut dropped = 0;
+                let rescan_due = {
+                    let subscription = self
+                        .subscription
+                        .as_mut()
+                        .expect("subscription is Some when desired_collections is non-empty");
+                    let rescan_due = tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return None,
+                        res = self.snapshot_rx.changed() => {
+                            if res.is_err() {
                                 return None;
                             }
+                            // New snapshot — loop back to reconcile. Any event
+                            // in-flight on the subscription will be seen on the
+                            // next tick (events::Subscription buffers behind the
+                            // mpsc receiver, so no loss).
+                            continue;
                         }
+                        _ = self.rescan_tick.tick() => true,
+                        msg = subscription.recv() => {
+                            match msg {
+                                Some(m) => {
+                                    message = Some(m);
+                                    false
+                                }
+                                None => {
+                                    // The subscription channel closed. This is
+                                    // effectively source death; returning None so
+                                    // the engine drops us.
+                                    tracing::warn!(
+                                        "event source subscription channel closed; \
+                                         source exiting",
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                    };
+                    if !rescan_due {
+                        dropped = subscription.check_and_reset_dropped();
                     }
+                    rescan_due
                 };
+                if rescan_due {
+                    if let Some(intent) = self.rescan_created_docs().await {
+                        return Some(intent);
+                    }
+                    continue;
+                }
+                let message = message.expect("subscription recv branch sets message");
 
-                let dropped = subscription.check_and_reset_dropped();
                 if dropped > 0 {
-                    // Dropped events are a correctness hazard for this
-                    // source — without a full-resync path we can't know what
-                    // we missed. Log loudly; Task 22+ may add a resync hook.
+                    // Dropped events are a correctness hazard. The periodic
+                    // rescan closes the gap for created docs, and this log
+                    // keeps the lossy event visible operationally.
                     tracing::warn!(
                         dropped = dropped,
-                        "event source dropped messages; may have missed event triggers",
+                        "event source dropped messages; periodic rescan will recover created docs",
                     );
                 }
 
@@ -937,7 +1077,7 @@ impl TriggerSource for EventSource {
                 // — all writes go through Update, distinguished only by
                 // block contents) to the right string.
                 let event_kind = "created";
-                let mut intents = self
+                let intents = self
                     .build_intents_for_all_matching(
                         snapshot.as_ref(),
                         &collection_name,
@@ -959,17 +1099,7 @@ impl TriggerSource for EventSource {
                 // before reading another event off the subscription. Order
                 // is deterministic (sorted by trigger_id in
                 // `build_intents_for_all_matching`).
-                let first = intents.remove(0);
-                {
-                    let mut queue = self
-                        .pending_intents
-                        .lock()
-                        .expect("pending_intents mutex poisoned");
-                    for intent in intents {
-                        queue.push_back(intent);
-                    }
-                }
-                return Some(first);
+                return self.take_first_and_queue_rest(intents);
             }
         })
     }

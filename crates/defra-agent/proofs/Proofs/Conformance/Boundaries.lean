@@ -249,6 +249,9 @@ def boundaryCoverageLedgerReviewDisciplineId : String :=
 def boundaryEventDeliveryFairSubstrateId : String :=
   "boundary.event-delivery.fair-substrate"
 
+def boundaryEventDeliveryRescanDocCapId : String :=
+  "boundary.event-delivery.rescan-doc-cap"
+
 def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
   "boundary.streaming-response.idle-timeout-deadline"
 
@@ -367,6 +370,22 @@ def boundaries : List Boundary :=
         "is taken as an axiom; the substrate model lives in tla/ReversePairing.tla."
     , acceptedFollowUp :=
         some "Substrate fairness is proved separately in tla/ReversePairing.tla; see also #162."
+    }
+  , { id := boundaryEventDeliveryRescanDocCapId
+    , domain := "event_delivery"
+    , subject := "EventSource introspection rescan completeness"
+    , statement :=
+        "The Lean rescanTick transition models a complete rescan that surfaces " ++
+        "every unprocessed persistent doc. The live EventSource rescan seeds and " ++
+        "re-queries at most SEEN_DOCS_SEED_LIMIT (10_000) docs per source " ++
+        "collection with no pagination, so for collections larger than that cap " ++
+        "the tail beyond the first 10_000 docs is not surfaced by rescan and " ++
+        "stays dependent on the lossy subscription path. v1 does not target " ++
+        "catalog-scale source collections. SubagentSource's running-bridge rescan " ++
+        "is not subject to this cap."
+    , acceptedFailureMode := some "missed_event_observation"
+    , acceptedFollowUp :=
+        some "Paginate EventSource rescan past SEEN_DOCS_SEED_LIMIT to eliminate the residual missed_event_observation mode; tracked in #564."
     }
   , { id := boundaryStreamingResponseIdleTimeoutDeadlineId
     , domain := "StreamingResponse"

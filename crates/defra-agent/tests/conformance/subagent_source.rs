@@ -988,9 +988,8 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     )
     .await;
 
-    // Spawn the source FIRST so its global Update subscription is open before the
-    // bridge is written (the source has no live rescan; a create event written
-    // before subscription would be missed).
+    // Spawn the source first so this test exercises the subscription path
+    // deterministically rather than waiting for the periodic rescan.
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
     let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
@@ -1648,9 +1647,8 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
 }
 
 /// The fixture `SubagentSource` opens its global Update subscription lazily on
-/// the first `next_fire` poll and has no live rescan, so a bridge written before
-/// the subscription is open would be missed. Give the spawned source task a
-/// moment to open its subscription before writing the bridge.
+/// the first `next_fire` poll. Give the spawned source task a moment to open
+/// its subscription when a test wants to exercise the event path directly.
 async fn wait_for_subagent_source_subscription() {
     tokio::time::sleep(Duration::from_millis(250)).await;
 }
