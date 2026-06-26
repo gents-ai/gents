@@ -1,4 +1,5 @@
 import Proofs.Conformance.Triggers.Trace
+import Proofs.Conformance.ContractTypes
 
 /-!
 # Trigger Dispatch Conformance Contracts
@@ -9,6 +10,8 @@ exercise the same branch matrix without hand-maintaining expected outcomes.
 -/
 
 namespace Conformance.TriggerContracts
+
+open Conformance.Contracts
 
 structure TriggerScenario where
   name : String
@@ -21,18 +24,10 @@ def concurrencyName : ConcurrencyMode → String
   | .serial => "serial"
   | .latestOnly => "latest_only"
 
-def jsonString (s : String) : String :=
-  "\"" ++ s ++ "\""
-
-def jsonArray (values : List String) : String :=
-  "[" ++ String.intercalate "," values ++ "]"
-
-def jsonStringArray (values : List String) : String :=
-  jsonArray (values.map jsonString)
-
-def jsonOptionString : Option String → String
-  | none => "null"
-  | some value => jsonString value
+-- `jsonString`/`jsonArray`/`jsonStringArray` come from `Conformance.Contracts`
+-- (the single escaping implementation, see #553). `jsonOptionString` is a thin
+-- name-adapter for the shared `jsonOptionalString`.
+def jsonOptionString : Option String → String := jsonOptionalString
 
 def jsonOptionNat : Option Nat → String
   | none => "null"

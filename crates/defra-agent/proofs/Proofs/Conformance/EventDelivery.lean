@@ -1,8 +1,10 @@
 import Proofs.EventDelivery
+import Proofs.Conformance.ContractTypes
 
 namespace Conformance.EventDelivery
 
 open _root_.EventDelivery
+open Conformance.Contracts
 
 /-! ## Family 1 — Transition cases -/
 
@@ -198,15 +200,13 @@ def convergenceTraces : List ConvergenceTraceRow :=
 
 def convergenceTraceCount : Nat := convergenceTraces.length
 
-/-! ## JSON serializers (local; mirrored after `Conformance.TriggerContracts`) -/
+/-! ## JSON serializers
 
-def jsonString (s : String) : String := "\"" ++ s ++ "\""
+`jsonString`/`jsonArray`/`jsonStringArray` come from `Conformance.Contracts`
+(the single escaping implementation, see #553). `jsonOptionString` is a thin
+name-adapter for the shared `jsonOptionalString`. -/
 
-def jsonArray (vs : List String) : String := "[" ++ String.intercalate "," vs ++ "]"
-
-def jsonOptionString : Option String → String
-  | none => "null"
-  | some s => jsonString s
+def jsonOptionString : Option String → String := jsonOptionalString
 
 def docIdJson (d : DocId) : String := jsonString d.raw
 
