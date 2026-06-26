@@ -87,8 +87,14 @@ Every category is expressed with one of three typed atoms:
   - `mode`: `min` on `Off ≤ ReadOnly ≤ Full`.
   - `network_mode`: stricter value wins (`min` on the network-permissiveness order).
   - `forbidden_argv_prefixes`: **union** (a prefix forbidden by either is forbidden).
-  - `allowed_argv_prefixes` / `read_only_allowlist`: **intersection** (allowed only if
-    both allow); a `forbidden` prefix overrides an `allowed` one.
+  - `allowed_argv_prefixes` / `read_only_allowlist`: **`EndpointScope` meet, not raw
+    set intersection** — because today an **empty** `allowed_argv_prefixes` means *no
+    allowed-prefix gate* (allow-all), since validation only enforces it when the vec is
+    non-empty (`command.rs:288`). So empty ⇒ `All`, non-empty ⇒ `Only(set)`, and the
+    meet follows `EndpointScope` rules (`All ⊓ Only(B) = Only(B)`;
+    `Only(A) ⊓ Only(B) = Only(A∩B)`). Raw intersection would invert the semantics
+    (`∅ ∩ X = ∅` would read as deny-all). A `forbidden` prefix overrides an `allowed`
+    one.
   - sandbox availability (carried in `mode` / runtime): **fail-closed** — if either
     side says unavailable, the result is unavailable.
   - This product is itself a bounded meet-semilattice; `Effective ⊆ Ceiling` for bash
@@ -134,9 +140,11 @@ list with an overloaded meaning anywhere.
 - **Presets** ("wide-open", future named sets) are simply *shared instances* of the
   vocabulary. There is no profile layer and no profile tools — a preset is the same
   type as any other policy, saved once and pointed at.
-  - **Storage constraint:** the runtime hydrates `ToolSelection` rows scoped by
-    `agent_did` (`tool_surface/runtime_context.rs:15,29`), so a single *global* preset
-    row is invisible to other principals. The chosen no-schema-change route is
+  - **Storage constraint:** the runtime document view loads `ToolSelection` rows
+    scoped by `agent_did` (`list_tool_selection_records(node, agent_did)`,
+    `agent/document_view/load.rs:43`) and **rejects cross-agent referenced selections**
+    with a warning (`load.rs:205`), so a single *global* preset row is invisible to
+    other principals. The chosen no-schema-change route is
     **per-principal seeded preset rows with canonical IDs** (e.g. a `wide-open`
     selection id seeded per DID at provisioning). "One pointer away" therefore means
     "point at the canonical preset id for your principal", not a shared global row.
@@ -168,8 +176,13 @@ The four scattered clamp sites collapse into a single
     moves out. The snapshot's MCP-online set is built from **`ServiceHealthMap`**
     (`health_checker.rs:218`), which already derives online services from
     `ToolServiceRegistry` rows (`health_checker.rs:404-431`) plus live probe health —
-    so availability = *registered AND healthy*, not merely registered. The gaps SP1
-    closes: (a) the document runtime view does not currently load `ToolServiceRegistry`
+    so availability = *registered AND healthy*. **Note this is a deliberate
+    strictness change** the SP1 plan must ratify with tests: today's call-time
+    `enforce_health_gate` (`meta_tools/shared.rs:366`) rejects only `Unreachable` and
+    lets `Stale` through with a warning. SP1 decides whether availability is
+    strict-`Healthy`-only or `not-Unreachable`, and either way the dropped/degraded
+    state appears as an explicit `ToolSurfaceExplanation` drop reason rather than a log
+    warning. The gaps SP1 closes: (a) the document runtime view does not currently load `ToolServiceRegistry`
     and the control watcher does not handle those rows — SP1 wires that load; (b) SP1
     defines the **republish trigger**: a change in the `ServiceHealthMap` online-set
     (registry add/remove or health transition) bumps the runtime generation and
@@ -181,6 +194,12 @@ The four scattered clamp sites collapse into a single
   effective` with a drop reason for anything removed. It replaces the four silent
   `warn`-and-drop sites (problem #3) and is the artifact consumed by CLI `explain`
   and the desktop UI.
+  - **Post-build generated tools must be classified, not invisible.** `load_skill` is
+    appended *after* `tool_surface.build_tools()` (`agent/runtime/context.rs:98`),
+    already scoped to the behavior's skill+tool ceiling. For "category-complete"
+    control and a truthful explanation, SP1 classifies it explicitly — either as a
+    `skills` capability or as a named *generated system tool* — and includes it in
+    `ToolSurfaceExplanation` rather than letting it bypass the manifest.
 
 ### 3.4 Defaults & migration
 
@@ -259,8 +278,12 @@ detail next.
 - `crates/defra-agent/src/tool_surface/selection.rs:100-270` — current defaults/parse
 - `crates/defra-agent/src/tool_surface/mod.rs:145-218` — final assembly
 - `crates/defra-agent/src/tool_surface/explain.rs` — explanation surface to formalize
-- `crates/defra-agent/src/tool_surface/runtime_context.rs:15,29` — `agent_did`-scoped
-  hydration (the preset-storage constraint, §3.2)
+- `crates/defra-agent/src/agent/document_view/load.rs:43,205` — `agent_did`-scoped
+  selection load + cross-agent rejection (the preset-storage constraint, §3.2)
+- `crates/defra-agent/src/meta_tools/shared.rs:366` — `enforce_health_gate` (today:
+  rejects `Unreachable` only, `Stale` passes — the §3.3 health-strictness decision)
+- `crates/defra-agent/src/agent/runtime/context.rs:98` — `load_skill` appended after
+  `build_tools()` (the §3.3 explanation-classification item)
 - `crates/defra-agent/src/toolset/shared/command.rs:89` — `CommandExecutionPolicy`
   fields (the `BashPolicy` product meet, §3.1)
 - `crates/defra-agent/src/health_checker.rs:218,404-431` — `ServiceHealthMap` +
