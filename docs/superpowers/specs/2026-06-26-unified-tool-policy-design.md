@@ -35,12 +35,17 @@ verifications, all confirmed) found the system is structurally inconsistent:
    MCP-presence probe inside resolve (`behavior_config.rs:209`), so the effective
    surface is not statically computable at context-load time.
 
-5. **Parity drift across schema → protocol → desktop.** `write_tools` and
-   `subagent_default_await_mode` exist in schema but are absent from
-   `ToolSelectionRow` (`defra-agent-protocol/src/row.rs:580-637`). Desktop save
-   silently drops `enable_defra_query` / `defra_query_collections` / `write_tools`
-   (read-but-not-written → **data loss on save**;
-   `defra-agent-desktop-core/src/client/mutations/manage/tools.rs`).
+5. **Parity drift across schema → protocol → desktop.** The protocol
+   `ToolSelectionRow` *does* carry `enable_defra_query`
+   (`defra-agent-protocol/src/row.rs:634`) and `defra_query_collections` (`:636`), but
+   still **lacks `write_tools` and `subagent_default_await_mode`**. Separately, the
+   desktop save path **silently drops** `enable_defra_query` /
+   `defra_query_collections` / `write_tools` — not because the row can't hold them, but
+   because the Tauri `ToolSelectionSaveRequest` struct omits those fields
+   (`apps/desktop-tauri/src-tauri/src/bridge/types/requests.rs:~114`) and the mutation
+   builder never sets them
+   (`crates/defra-agent-desktop-core/src/client/mutations/manage/tools.rs:31`). Net:
+   a query allowlist configured in the UI **reverts on save → data loss**.
 
 6. **Lean proves the pieces, not the whole.** `CommandPolicy/*.lean` and
    `Skills.lean` (skills-within-ceiling) are proven independently and never compose;
@@ -64,21 +69,54 @@ fewer concepts.
 
 ### 3.1 One per-category vocabulary
 
-Every category is expressed with one of two typed atoms:
+Every category is expressed with one of three typed atoms:
 
 - **`Capability`** — a ranked mode for *how much*:
   - file: `Off ≤ ReadOnly ≤ ReadWrite`
-  - bash: `Off ≤ ReadOnly ≤ Full` (carrying its command policy)
   - boolean capabilities (`Off ≤ On`): meta-tools, defra_query-enabled, subagent
     spawn / steering / background / orchestration / cross-deployment, memory,
-    session-history, context_budget.
+    session-history, **context_budget** (its on/off gate; see §5 — gate is SP1,
+    quota/limits are SP3).
   - Meet (`⊓`) = `min` on the rank.
 
-- **`EndpointScope<T>`** — `None ≤ Only(set) ≤ All` for *which things*: cli tools,
-  MCP services, defra_query collections, subagent targets, backgroundable tools,
-  write_tools.
-  - Meet: `Only(A) ⊓ Only(B) = Only(A ∩ B)`; `Only(A) ⊓ All = Only(A)`;
-    `x ⊓ None = None`; `All ⊓ All = All`.
+- **`BashPolicy`** — bash is **not** a single rank, because it carries a
+  `CommandExecutionPolicy` (`toolset/shared/command.rs:89` =
+  `{mode, allowed_argv_prefixes, forbidden_argv_prefixes, network_mode,
+  read_only_allowlist}`). Its meet is a **product over those fields**, each chosen so
+  the result is no more permissive than either operand:
+  - `mode`: `min` on `Off ≤ ReadOnly ≤ Full`.
+  - `network_mode`: stricter value wins (`min` on the network-permissiveness order).
+  - `forbidden_argv_prefixes`: **union** (a prefix forbidden by either is forbidden).
+  - `allowed_argv_prefixes` / `read_only_allowlist`: **intersection** (allowed only if
+    both allow); a `forbidden` prefix overrides an `allowed` one.
+  - sandbox availability (carried in `mode` / runtime): **fail-closed** — if either
+    side says unavailable, the result is unavailable.
+  - This product is itself a bounded meet-semilattice; `Effective ⊆ Ceiling` for bash
+    is then a per-field consequence, not hand-waving.
+
+- **`EndpointScope<K, V>`** — `None ≤ Only(map) ≤ All` for *which things*. The element
+  type is a **typed key `K` plus an authority-bearing value `V`**, so the meet is a
+  keyed map-meet, not a bare set intersection:
+  - **Simple keys (V = unit):** MCP service ids, defra_query collection names,
+    backgroundable tool names, cli tool names (key = tool name). Map-meet degenerates
+    to set intersection.
+  - **Structured values:** the riskiest categories carry value authority that the
+    ceiling *narrows*:
+    - **`write_tools`** — key = tool name; value = `{collection, allowed_field_set}`.
+      A behavior *requests* a write tool against a collection/fields; the ceiling
+      *constrains* the permitted collection and field set; the effective declaration
+      is the **constrained intersection** (effective fields = requested ∩
+      ceiling-allowed, on the matching collection). Exact-declaration equality is
+      explicitly rejected as too brittle; name-only is explicitly rejected as too
+      weak.
+    - **`subagent_targets`** — key = `(did, behavior)`; value carries await/mode prefs.
+      Meet = key intersection; value prefs are behavior-authoritative (not narrowed),
+      bounded separately by the `cross_deployment` capability.
+    - **`cli_tools`** — key = tool name; value = `{binary_path, working_dir, env}`,
+      which today is **not** root-clamped (audit gap); the ceiling value narrows
+      `working_dir`/`binary_path` to the effective root.
+  - Meet on the lattice skeleton: `Only(A) ⊓ Only(B) = Only(keymeet(A,B))`;
+    `Only(A) ⊓ All = Only(A)`; `x ⊓ None = None`; `All ⊓ All = All`.
 
 `None`, `Only`, and `All` are **distinct values**. This is the single change that
 eliminates the empty=allow-all ambiguity (problem #2): there is no longer a bare empty
@@ -96,6 +134,14 @@ list with an overloaded meaning anywhere.
 - **Presets** ("wide-open", future named sets) are simply *shared instances* of the
   vocabulary. There is no profile layer and no profile tools — a preset is the same
   type as any other policy, saved once and pointed at.
+  - **Storage constraint:** the runtime hydrates `ToolSelection` rows scoped by
+    `agent_did` (`tool_surface/runtime_context.rs:15,29`), so a single *global* preset
+    row is invisible to other principals. The chosen no-schema-change route is
+    **per-principal seeded preset rows with canonical IDs** (e.g. a `wide-open`
+    selection id seeded per DID at provisioning). "One pointer away" therefore means
+    "point at the canonical preset id for your principal", not a shared global row.
+    (Cross-principal shared presets would require relaxing the `agent_did` hydration
+    filter — explicitly out of scope here.)
 
 ### 3.3 One resolution, one law
 
@@ -117,6 +163,20 @@ The four scattered clamp sites collapse into a single
   active behavior ids, compiled feature flags) passed *into* resolution rather than
   probed mid-resolve. This fixes the determinism break (problem #4): the effective
   surface is now a pure function of three inputs.
+  - **Source & watcher contract (SP1 must specify, not leave implicit).** Today MCP
+    presence is probed *inside* resolution via `has_registered_mcp_services`; that
+    moves out. The snapshot's MCP-online set is built from **`ServiceHealthMap`**
+    (`health_checker.rs:218`), which already derives online services from
+    `ToolServiceRegistry` rows (`health_checker.rs:404-431`) plus live probe health —
+    so availability = *registered AND healthy*, not merely registered. The gaps SP1
+    closes: (a) the document runtime view does not currently load `ToolServiceRegistry`
+    and the control watcher does not handle those rows — SP1 wires that load; (b) SP1
+    defines the **republish trigger**: a change in the `ServiceHealthMap` online-set
+    (registry add/remove or health transition) bumps the runtime generation and
+    recomputes affected behaviors' effective surfaces. Active-behavior ids come from
+    the existing deployment view; feature flags are compile-time constants. The
+    snapshot is thus a value with a defined provenance and a defined invalidation
+    event, not an ambient query.
 - **`ToolSurfaceExplanation`** records, per category, `requested → ceiling → runtime →
   effective` with a drop reason for anything removed. It replaces the four silent
   `warn`-and-drop sites (problem #3) and is the artifact consumed by CLI `explain`
@@ -126,27 +186,51 @@ The four scattered clamp sites collapse into a single
 
 - **Secure-minimal is the default value-set**: an unset field resolves to deny / `Off`
   / `None`, not today's `true` / allow-all.
-- **`wide-open` is a seeded preset** reproducing today's permissive behavior, one
-  pointer away.
+- **`wide-open` is a seeded preset** reproducing today's permissive behavior.
 - This **flips the unset-defaults** for `enable_meta_tools` and `enable_defra_query`
-  from `true` to secure — a deliberate breaking change. Migration: existing
-  `ToolSelection` documents keep their *explicit* values (those are preserved verbatim
-  through the retype); only genuinely-unset fields adopt the secure default.
-  Deployments that want no behavior change point their behaviors at `wide-open`. This
-  break is called out in release notes and the SP2 migration.
+  from `true` to secure — a deliberate breaking change.
+
+**The decode is a soundness problem, and it gates the flip — so it lives in SP1, not
+SP2.** Today's fields are nullable, so a `null` cannot distinguish *"unset, relying on
+the permissive legacy default"* from *"intentionally unset by a partial writer"*. If
+SP1 simply flips the default-for-`null`, it **silently changes the behavior of every
+existing document** — most dangerously behaviors with **no `tool_selection_id` at
+all**, which resolve entirely from defaults. We cannot flip safely on top of ambiguous
+data. SP1 therefore owns the decode foundation:
+
+1. **A policy schema version** stamped on `ToolSelection` (and on the resolution
+   input). Legacy/unversioned documents decode under *legacy-permissive* semantics
+   (preserving today's behavior bit-for-bit); only documents at the new version decode
+   under secure-minimal.
+2. **A one-time backfill** that rewrites legacy documents to explicit values (the
+   permissive defaults they were silently relying on) and stamps the version, so that
+   after backfill every `null` is unambiguously *intentional*.
+3. Only **after** a document is versioned/backfilled does the secure-default-for-unset
+   semantics apply to it. Behaviors with no `tool_selection_id` get an explicit seeded
+   default selection during backfill rather than inheriting an implicit flip.
+
+SP2 then layers the *ergonomics* on this foundation (the `wide-open` preset wiring,
+release-note guidance, desktop/CLI surfacing of the version). The semantic flip itself
+is SP1-gated and backfill-gated.
 
 ## 4. The proof obligation (Lean)
 
 Per "decide the shape first, then Lean" — the shape is now fixed and the Lean scope is
 decided **inside SP1**. The model:
 
-- A per-category lattice with `Capability` (a linear order) and `EndpointScope<T>` (a
-  bounded lattice on `Finset T` with `None`=⊥, `All`=⊤).
-- `meet` proven **commutative, associative, idempotent**, and a **lower bound**.
+- A per-category lattice with three atom families: `Capability` (a linear order),
+  `BashPolicy` (the **product lattice** over `{mode, network_mode, allowed/forbidden
+  argv prefixes, read-only allowlist, sandbox-availability}` defined in §3.1, each
+  factor a bounded meet-semilattice), and `EndpointScope<K,V>` (a bounded lattice;
+  skeleton `None`=⊥, `All`=⊤, with `Only(map)` carrying a keyed map whose values meet
+  per the value authority in §3.1).
+- `meet` proven **commutative, associative, idempotent**, and a **lower bound** — for
+  the product/keyed cases this is the pointwise/per-key consequence, which is exactly
+  why bash and `write_tools` get `Effective ⊆ Ceiling` non-hand-wavily.
 - The headline theorem: `Effective ⊆ OperatorCeiling` for all categories,
   generalizing `activation_subset_ceiling` and composing with the existing
   `CommandPolicy` and `Skills` proofs (which become instances/consumers of the
-  general lattice).
+  general lattice — `CommandPolicy` is the `BashPolicy` product instance).
 - **Decision deferred to SP1 spec:** whether `RuntimeAvailability` is modeled as a
   first-class lattice element now (full three-way composition) or left as an external
   assumption with `Effective ⊆ BehaviorPolicy ⊓ Ceiling` proven and runtime folded in
@@ -159,9 +243,9 @@ Standard: zero `sorry`s; conformance tests mirror the model per the repo's
 
 | Sub-project | Scope | Depends on |
 |---|---|---|
-| **SP1 — Unified policy model** | The `Capability` / `EndpointScope` vocabulary; retyped `ToolSelection`; category-complete operator ceiling; single `from_selection_*` resolution seam; `ToolSurfaceExplanation`; the Lean lattice model + `Effective ⊆ Ceiling` theorem + conformance mirror. The spine. | — |
-| **SP2 — Parity + presets + migration** | Wire every field through `ToolSelectionRow` (add `write_tools`, `subagent_default_await_mode`) and desktop mutations (`enable_defra_query` / `defra_query_collections` / `write_tools` — fixes silent data loss) and the CLI builder API; ship the secure-minimal default + the `wide-open` preset; the unset-default-flip migration. | SP1 |
-| **SP3 — Straggler governance** | Bring `context_budget`, memory quota, and session-history limits under the vocabulary as first-class categories. | SP1 |
+| **SP1 — Unified policy model** | The `Capability` / `BashPolicy` / `EndpointScope` vocabulary (incl. the `context_budget` **on/off gate** — required for "category-complete"); retyped `ToolSelection`; **category-complete operator ceiling** (all 11 categories, not native-only); the **policy schema version + decode + one-time backfill** (the soundness foundation that gates the secure-default flip, §3.4); the **`RuntimeAvailability` input type** with its `ServiceHealthMap`-backed source + republish contract (§3.3); single pure `from_selection_*` resolution seam; the **`ToolSurfaceExplanation` contract** (`requested → ceiling → runtime → effective` + drop reasons); the Lean lattice model + `Effective ⊆ Ceiling` theorem + conformance mirror. The spine. | — |
+| **SP2 — Parity + presets + ergonomics** | Wire every field through `ToolSelectionRow` (add `write_tools`, `subagent_default_await_mode`) and the desktop save path (`enable_defra_query` / `defra_query_collections` / `write_tools` — fixes the `ToolSelectionSaveRequest`/mutation-builder omission and its silent data loss) and the CLI builder API; seed the per-principal `wide-open` preset rows + canonical IDs (§3.2); release-note guidance; desktop/CLI surfacing of the policy version + `ToolSurfaceExplanation`. (The semantic flip + backfill themselves are SP1.) | SP1 |
+| **SP3 — Straggler quotas** | Bring `context_budget` **quota/limits** (the gate is SP1), memory per-agent quota, and session-history limits under the vocabulary as governed values. | SP1 |
 
 Each sub-project gets its own spec → plan → implementation cycle. SP1 is specced in
 detail next.
@@ -175,10 +259,20 @@ detail next.
 - `crates/defra-agent/src/tool_surface/selection.rs:100-270` — current defaults/parse
 - `crates/defra-agent/src/tool_surface/mod.rs:145-218` — final assembly
 - `crates/defra-agent/src/tool_surface/explain.rs` — explanation surface to formalize
+- `crates/defra-agent/src/tool_surface/runtime_context.rs:15,29` — `agent_did`-scoped
+  hydration (the preset-storage constraint, §3.2)
+- `crates/defra-agent/src/toolset/shared/command.rs:89` — `CommandExecutionPolicy`
+  fields (the `BashPolicy` product meet, §3.1)
+- `crates/defra-agent/src/health_checker.rs:218,404-431` — `ServiceHealthMap` +
+  `ToolServiceRegistry` (the `RuntimeAvailability` source, §3.3)
 - `crates/defra-agent/proofs/Proofs/Skills.lean:40-88`,
   `proofs/Proofs/ToolExecution/Policy.lean`, `CommandPolicy/*.lean` — existing proofs
   to generalize/compose
-- `crates/defra-agent-protocol/src/row.rs:580-637` — protocol parity gap
-- `crates/defra-agent-desktop-core/src/client/mutations/manage/tools.rs` — desktop gap
+- `crates/defra-agent-protocol/src/row.rs:634,636` — defra_query fields present;
+  `write_tools` / `subagent_default_await_mode` still absent (parity gap)
+- `apps/desktop-tauri/src-tauri/src/bridge/types/requests.rs:~114`
+  (`ToolSelectionSaveRequest`) and
+  `crates/defra-agent-desktop-core/src/client/mutations/manage/tools.rs:31` — desktop
+  save omits defra_query / write_tools fields → data loss
 - `crates/defra-agent-schemas/schemas/agent/tool_selection.graphql`,
   `agent_behavior.graphql` — schema layer
