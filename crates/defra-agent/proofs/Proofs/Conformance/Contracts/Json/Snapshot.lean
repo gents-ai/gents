@@ -3,6 +3,7 @@ import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
+import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.CodexShim
@@ -54,6 +55,8 @@ def snapshotJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
+    ++ "\"tool_policy_cases\":"
+      ++ toolPolicyCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"
