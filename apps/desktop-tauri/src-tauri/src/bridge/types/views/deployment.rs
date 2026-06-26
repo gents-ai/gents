@@ -59,6 +59,7 @@ pub(crate) struct InferenceBackendView {
     pub backend_id: String,
     pub name: Option<String>,
     pub provider_kind: Option<String>,
+    pub openai_wire_api: Option<String>,
     pub endpoint: Option<String>,
     pub api_key_configured: bool,
     pub api_key_env_var: Option<String>,

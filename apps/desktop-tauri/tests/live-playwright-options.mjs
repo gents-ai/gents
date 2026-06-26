@@ -105,7 +105,6 @@ export function applyMockInference(env, mockInference) {
   applyResolvedInference(next, mockInference.endpoint, mockInference.modelName);
   next.DEFRA_AGENT_TAURI_LIVE_PROVIDER ??= "openai-compatible";
   next.DEFRA_AGENT_TAURI_LIVE_API_KEY ??= "desktop-live-browser-test-key";
-  next.DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS ??= "1";
   return next;
 }
 

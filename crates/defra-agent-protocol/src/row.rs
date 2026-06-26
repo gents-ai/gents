@@ -646,6 +646,8 @@ pub struct InferenceBackendRow {
     #[serde(default)]
     pub provider_kind: Option<String>,
     #[serde(default)]
+    pub openai_wire_api: Option<String>,
+    #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,

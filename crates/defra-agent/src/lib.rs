@@ -32,6 +32,7 @@ pub mod inference_http;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+pub mod openai_wire;
 
 /// Shared in-crate test utilities.
 #[cfg(test)]
@@ -136,6 +137,7 @@ pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
+pub use openai_wire::OpenAiWireApi;
 pub use periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
     PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,

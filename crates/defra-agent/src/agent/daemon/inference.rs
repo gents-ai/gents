@@ -252,7 +252,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         self.behavior.model_name.clone(),
                         crate::rendered_request::RenderedRequestSource::for_behavior_provider(
                             self.behavior.backend_provider_kind,
+                            self.behavior.openai_wire_api,
                         ),
+                        self.behavior
+                            .openai_wire_api
+                            .normalizes_responses_wire(self.behavior.backend_provider_kind),
                     );
                     let sink = factory(context.clone());
                     loop_config.on_rendered_request = Some(std::sync::Arc::new(

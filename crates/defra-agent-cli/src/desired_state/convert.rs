@@ -173,6 +173,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "backend_id",
                         "name",
                         "provider_kind",
+                        "openai_wire_api",
                         "endpoint",
                         "api_key",
                         "api_key_env_var",

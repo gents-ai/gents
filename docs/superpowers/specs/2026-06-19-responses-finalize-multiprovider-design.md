@@ -109,14 +109,13 @@ not a silent no-op.
 
 - **Resolves "fallback fate":** the Chat-Completions path is **kept and tested**, selected
   per-backend in the control plane, not via a global toggle.
-- **Effective-value threading.** Today selection hangs off provider kind plus the global env
+- **Effective-value threading.** Today selection hangs off provider kind plus the legacy global override
   in `agent/runtime/context.rs:135` and `rendered_request.rs:31`. The resolved effective
   `openai_wire_api` must be carried onto `AgentBehavior` (alongside `backend_provider_kind`)
   at reconcile time and *both* of those call sites switched to read it — so the rendered-
   request projection and the runtime client choice agree on one resolved value.
-- `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` is **demoted** to a deprecated global default for
-  backends whose field is unset/`auto` (still honored, documented sunset, regression-tested).
-  `cfg(test)` continues to default to Chat Completions.
+- This was superseded by the 2026-06-26 per-backend wire design: the legacy global override is
+  removed rather than demoted, and unset `OpenAiCompatible` backends resolve to Chat Completions.
 - The backend probe (already hits `/models`, carries `probe_status`/`last_probe`) is extended
   to detect `/v1/responses`. `auto` resolves via the probe result.
 - When an OpenAI-style backend can't serve the selected/`auto` Responses path, emit a **clean

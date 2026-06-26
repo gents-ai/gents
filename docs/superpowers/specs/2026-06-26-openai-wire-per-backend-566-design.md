@@ -1,6 +1,6 @@
 # Per-backend OpenAI wire-API selection + vLLM Responses normalization
 
-**Issue:** #566 (delivers #509 slice 2 — "Effective `openai_wire_api` selection + clean Responses-fallback error")
+**Issue:** #566 (delivers #509 slice 2 subset — effective `openai_wire_api` selection + vLLM Responses normalization)
 **Date:** 2026-06-26
 **Branch:** `feat/openai-wire-per-profile-566`
 **Status:** Design — revised after code-path review (pending user review)
@@ -87,6 +87,9 @@ Resolve the effective `OpenAiWireApi` **once** in `behavior_config_from_document
      first draft)*;
    - rendered-request projection — `RenderedRequestSource::for_behavior_provider`,
      `rendered_request.rs:30` (maps `OpenAiWireApi` → `RenderedRequestSource`).
+     The projection context must also carry whether Responses normalization is active
+     for this behavior (e.g. `normalize_responses_wire: bool`) so capture normalization
+     is applied only when the outbound transport wrapper is applied.
 
 ### C. Remove the env var entirely (clean break)
 
@@ -102,7 +105,9 @@ Resolve the effective `OpenAiWireApi` **once** in `behavior_config_from_document
   OpenAI** backend (production default was Responses) must now declare
   `openai_wire_api: responses`. Local OpenAI-compatible/demo backends work by default.
   This is the explicit no-backwards-compat trade-off; documented as a breaking change in
-  the release notes.
+  the release notes. The `openai` CLI preset writes `openai_wire_api: responses`
+  explicitly so newly initialized hosted-OpenAI configs keep using Responses; generic and
+  local OpenAI-compatible presets omit it unless the operator passes `--openai-wire-api`.
 
 ### D. Responses history normalization at the real outbound seam
 
@@ -115,19 +120,26 @@ mutate the real request before send.
 
 - Add a `ResponsesNormalizingHttpClient<H>` `HttpClientExt` wrapper, **generic over its
   inner transport** (so it composes innermost in the stack — cf. #509 §C composable
-  transport: `SessionTagging<ResponsesNormalizing<Reqwest>>`). Its `send` parses the JSON
-  body, runs `normalize_responses_assistant_items`, and forwards to `inner`.
+  transport: `SessionTagging<ResponsesNormalizing<Reqwest>>`). Its `send` **and
+  `send_streaming`** paths parse the JSON body, run
+  `normalize_responses_assistant_items`, and forward to `inner`; `send_multipart` is a
+  pass-through because Responses completion requests are JSON bodies.
 - The shared normalizer `normalize_responses_assistant_items(&mut Value)` (its own module,
   e.g. `llm/responses_normalize.rs`) ensures each prior **assistant** output item has an
   `id`, `type: "message"`, `role: "assistant"`, `status: "completed"`, and each
   `output_text` content item carries `annotations: []`. Additive and matches what hosted
   OpenAI emits.
 - **Composition:** wrap the transport only for `OpenAiCompatible` backends resolved to
-  Responses (gating by backend keeps the proven ChatGptCodex / hosted-OpenAI client stacks
-  byte-unchanged — verified by test). The wrapper is added where the OpenAiCompatible
-  Responses client is built (`context.rs:135` and `oneshot.rs:72`).
+  Responses. This keeps the proven ChatGptCodex client stack byte-unchanged. Hosted OpenAI
+  also uses `OpenAiCompatible`, so it receives the wrapper when explicitly configured for
+  Responses; the guarantee there is semantic/idempotent compatibility, not byte identity
+  when rig omitted fields the normalizer adds. Tests assert hosted-OpenAI-shaped bodies
+  that already include those fields are unchanged by the normalizer.
 - **Projection fidelity:** call the *same* normalizer inside `rendered_completion_request`
-  (`rig_compat.rs:35`) so the captured/projected body matches the bytes actually sent.
+  (`rig_compat.rs:35`) **only when the render context says the outbound wrapper is active**,
+  so the captured/projected body matches the bytes actually sent. `ChatGptCodex` still
+  renders as `OpenAiResponses`, but its context sets normalization inactive because that
+  client stack does not get the wrapper.
 
 ### E. Clean fallback error — DEFERRED to #509
 
@@ -152,6 +164,8 @@ confirmed present):
 - CLI export fields — `cli/src/main.rs:385` (`EXPORT_INFERENCE_BACKEND_FIELDS`);
 - desktop query fields — `defra-agent-desktop-core/src/client/query.rs:45`;
 - CLI surface — `backend set --openai-wire-api`, `init --openai-wire-api`;
+- preset behavior — `openai` writes `openai_wire_api: responses`; local/generic
+  OpenAI-compatible presets omit it unless the operator explicitly selects a wire API;
 - runtime: `AgentBehavior` field + **manual `Debug`** (`config.rs:86`), resolution in
   `agent.rs:301`, three selection sites (§B), env removal (§C), transport wrapper (§D).
 
@@ -161,11 +175,15 @@ confirmed present):
   `OpenAiWireApi` → Responses/Chat);
 - **runtime + oneshot client selection** from the field (both build the matching client);
 - **transport-level normalization**: capture the **real rig-generated body** through the
-  `ResponsesNormalizingHttpClient` and assert the vLLM-accepted shape (`id` +
-  `output_text.annotations: []` + `status`) — this is the test that would have caught the
-  blocker; a capture-only test would not;
-- **projection == wire**: the rendered-request capture matches the normalized sent body;
-- **ChatGptCodex/hosted-OpenAI unchanged**: those client stacks don't get the wrapper;
+  `ResponsesNormalizingHttpClient` on both `send` and `send_streaming`, and assert the
+  vLLM-accepted shape (`id` + `output_text.annotations: []` + `status`) — this is the
+  test that would have caught the blocker; a capture-only test would not;
+- **projection == wire**: for OpenAiCompatible Responses, the rendered-request capture
+  matches the normalized sent body; for ChatGptCodex Responses, capture remains
+  unnormalized to match its unwrapped outbound stack;
+- **ChatGptCodex unchanged / hosted OpenAI idempotent**: ChatGptCodex does not get the
+  wrapper; hosted-OpenAI-shaped bodies with the required fields already present are
+  unchanged by the normalizer;
 - **Chat Completions path still supports tools**;
 - **reconcile**: changing a backend's `openai_wire_api` produces a new behavior fingerprint
   (regression for the manual-`Debug` obligation);

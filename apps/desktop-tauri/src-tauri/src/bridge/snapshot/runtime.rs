@@ -111,6 +111,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     backend_id: row.backend_id.clone(),
                     name: normalize_optional(row.name.as_deref()),
                     provider_kind: normalize_optional(row.provider_kind.as_deref()),
+                    openai_wire_api: normalize_optional(row.openai_wire_api.as_deref()),
                     endpoint: normalize_optional(row.endpoint.as_deref()),
                     api_key_configured: normalize_optional(row.api_key.as_deref()).is_some(),
                     api_key_env_var: normalize_optional(row.api_key_env_var.as_deref()),

@@ -483,6 +483,11 @@ impl PendingAgentBehavior {
         let behavior_name = self.name.clone();
         let resolved_backend_id = Some(backend.backend_id);
         let provider_kind = backend.provider_kind;
+        let openai_wire_api = crate::OpenAiWireApi::effective_for_provider(
+            backend.provider_kind,
+            backend.openai_wire_api,
+            &backend_id,
+        );
         let endpoint = backend.endpoint;
         let api_key = backend.api_key;
         let api_key_env_var = backend.api_key_env_var;
@@ -493,6 +498,7 @@ impl PendingAgentBehavior {
                 principal,
                 resolved_backend_id,
                 provider_kind,
+                openai_wire_api,
                 endpoint,
                 api_key,
                 api_key_env_var,
@@ -514,9 +520,9 @@ impl PendingAgentBehavior {
     ) -> Result<AgentBehavior> {
         let backend_id = self
             .backend_id
-            .as_deref()
+            .clone()
             .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?;
-        let backend = lookup_backend(node, backend_id).await?.ok_or_else(|| {
+        let backend = lookup_backend(node, &backend_id).await?.ok_or_else(|| {
             anyhow!(
                 "behavior '{}' references missing backend {}",
                 self.name,
@@ -537,6 +543,11 @@ impl PendingAgentBehavior {
             principal,
             Some(backend.backend_id),
             backend.provider_kind,
+            crate::OpenAiWireApi::effective_for_provider(
+                backend.provider_kind,
+                backend.openai_wire_api,
+                &backend_id,
+            ),
             backend.endpoint,
             backend.api_key,
             backend.api_key_env_var,
@@ -550,6 +561,7 @@ impl PendingAgentBehavior {
         principal: Arc<AgentPrincipal>,
         backend_id: Option<String>,
         backend_provider_kind: BackendProviderKind,
+        openai_wire_api: crate::OpenAiWireApi,
         backend_endpoint: String,
         backend_api_key: Option<String>,
         backend_api_key_env_var: Option<String>,
@@ -570,6 +582,7 @@ impl PendingAgentBehavior {
             principal,
             backend_id,
             backend_provider_kind,
+            openai_wire_api,
             backend_endpoint,
             backend_api_key,
             backend_api_key_env_var,
@@ -617,6 +630,11 @@ impl PendingAgentBehavior {
             principal,
             backend_id,
             BackendProviderKind::OpenAiCompatible,
+            crate::OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::OpenAiCompatible,
+                None,
+                "<test>",
+            ),
             backend_endpoint,
             None,
             None,

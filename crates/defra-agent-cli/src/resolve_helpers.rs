@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use defra_agent::{cli_tool, BackendProviderKind};
+use defra_agent::{cli_tool, BackendProviderKind, OpenAiWireApi};
 
-use crate::cli::args::{BackendPresetArg, ToolCeilingArg, ToolPackageArg};
+use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
 use crate::shared::ResolvedBackendConfig;
 use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 
@@ -21,6 +21,7 @@ pub(crate) fn resolve_backend_config_with_preset(
     preset: Option<BackendPresetArg>,
     explicit_endpoint: Option<&str>,
     explicit_provider_kind: Option<&str>,
+    explicit_openai_wire_api: Option<OpenAiWireApiArg>,
     explicit_api_key: Option<&str>,
     explicit_api_key_env_var: Option<&str>,
     mode: BackendResolutionMode,
@@ -33,15 +34,26 @@ pub(crate) fn resolve_backend_config_with_preset(
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
     let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
+    let openai_wire_api = resolve_openai_wire_api(explicit_openai_wire_api, preset);
     let api_key_env_var =
         resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset);
 
     Ok(ResolvedBackendConfig {
         provider_kind,
+        openai_wire_api,
         endpoint,
         api_key,
         api_key_env_var,
     })
+}
+
+fn resolve_openai_wire_api(
+    explicit: Option<OpenAiWireApiArg>,
+    preset: Option<BackendPresetArg>,
+) -> Option<OpenAiWireApi> {
+    explicit
+        .map(OpenAiWireApiArg::to_config)
+        .or_else(|| preset.and_then(BackendPresetArg::default_openai_wire_api))
 }
 
 fn resolve_backend_endpoint(
@@ -132,5 +144,61 @@ pub(crate) fn format_tool_package(value: ToolPackageArg) -> &'static str {
         ToolPackageArg::Readonly => "readonly",
         ToolPackageArg::Write => "write",
         ToolPackageArg::Yolo => "yolo",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_preset_defaults_to_responses_wire_api() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(BackendPresetArg::OpenAi),
+            None,
+            None,
+            None,
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve openai preset");
+
+        assert_eq!(resolved.openai_wire_api, Some(OpenAiWireApi::Responses));
+    }
+
+    #[test]
+    fn generic_openai_compatible_omits_wire_api_by_default() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(BackendPresetArg::GenericOpenAiCompatible),
+            Some("http://127.0.0.1:8000/v1"),
+            None,
+            None,
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve generic preset");
+
+        assert_eq!(resolved.openai_wire_api, None);
+    }
+
+    #[test]
+    fn explicit_wire_api_overrides_preset_default() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(BackendPresetArg::OpenAi),
+            None,
+            None,
+            Some(OpenAiWireApiArg::ChatCompletions),
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve explicit wire api");
+
+        assert_eq!(
+            resolved.openai_wire_api,
+            Some(OpenAiWireApi::ChatCompletions)
+        );
     }
 }

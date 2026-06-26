@@ -77,6 +77,7 @@ fn build_agent_behavior_for_routing_test(
         principal,
         backend_id: None,
         backend_provider_kind: defra_agent::BackendProviderKind::default(),
+        openai_wire_api: defra_agent::OpenAiWireApi::ChatCompletions,
         backend_endpoint: String::new(),
         backend_api_key: None,
         backend_api_key_env_var: None,

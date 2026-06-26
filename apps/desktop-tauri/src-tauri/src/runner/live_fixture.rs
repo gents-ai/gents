@@ -913,7 +913,6 @@ mod tests {
 
     impl MockChatEndpoint {
         fn start(model_name: &str, final_text: &str) -> Result<Self> {
-            std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
             let captured = Arc::new(Mutex::new(Vec::new()));
             let state = Arc::new(MockState {
                 model_name: model_name.to_string(),

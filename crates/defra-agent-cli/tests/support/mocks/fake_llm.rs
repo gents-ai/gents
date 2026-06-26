@@ -62,11 +62,6 @@ impl FakeLlm {
         required_bearer: Option<&str>,
         responder: Responder,
     ) -> Result<Self> {
-        // This fake serves Chat Completions only. For any in-process agent booted
-        // alongside it, force the chat wire API (the OpenAiCompatible default is now
-        // the Responses API). CLI-subprocess tests set the same env via the spawn
-        // harness; this covers in-process consumers.
-        std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
         let captured = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(Notify::new());
         let stopped = Arc::new(AtomicBool::new(false));

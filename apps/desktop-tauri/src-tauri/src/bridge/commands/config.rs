@@ -190,6 +190,7 @@ pub(crate) async fn save_backend_config(
             backend_id: backend_id.clone(),
             name: None,
             provider_kind: None,
+            openai_wire_api: None,
             endpoint: None,
             api_key: None,
             api_key_env_var: None,

@@ -132,7 +132,7 @@ impl RuntimeContext {
                 );
                 // The owned loop is identical for Responses and Chat Completions;
                 // this branch only chooses the OpenAI-compatible wire API.
-                if crate::inference_http::force_openai_chat_completions() {
+                if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                     let client: rig::providers::openai::CompletionsClient<
                         crate::inference_http::SessionTaggingHttpClient,
                     > = crate::inference_http::build_openai_chat_completions_client(
@@ -154,11 +154,15 @@ impl RuntimeContext {
                     .await
                 } else {
                     let client: rig::providers::openai::Client<
-                        crate::inference_http::SessionTaggingHttpClient,
+                        crate::inference_http::SessionTaggingHttpClient<
+                            crate::inference_http::ResponsesNormalizingHttpClient,
+                        >,
                     > = crate::inference_http::build_openai_responses_client(
                         &api_key,
                         &behavior.backend_endpoint,
-                        crate::inference_http::SessionTaggingHttpClient::default(),
+                        crate::inference_http::SessionTaggingHttpClient::new(
+                            crate::inference_http::ResponsesNormalizingHttpClient::default(),
+                        ),
                         Default::default(),
                     )
                     .with_context(|| build_context.clone())?;

@@ -35,6 +35,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         backend_id: "backend-amy".to_string(),
         name: Some("OpenRouter".to_string()),
         provider_kind: Some("openrouter".to_string()),
+        openai_wire_api: None,
         endpoint: Some("https://openrouter.ai/api/v1".to_string()),
         api_key: None,
         api_key_env_var: Some("OPENROUTER_API_KEY".to_string()),

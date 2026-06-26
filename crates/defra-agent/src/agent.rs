@@ -299,6 +299,11 @@ pub(crate) fn behavior_config_from_documents(
         principal,
         backend_id: Some(backend.backend_id.clone()),
         backend_provider_kind: backend.provider_kind,
+        openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
+            backend.provider_kind,
+            backend.openai_wire_api,
+            &backend.backend_id,
+        ),
         backend_endpoint: backend.endpoint.clone(),
         backend_api_key: backend.api_key.clone(),
         backend_api_key_env_var: backend.api_key_env_var.clone(),

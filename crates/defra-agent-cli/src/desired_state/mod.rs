@@ -251,6 +251,8 @@ pub(crate) struct DesiredInferenceBackend {
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) provider_kind: BackendProviderKind,
+    #[serde(default)]
+    pub(crate) openai_wire_api: Option<defra_agent::OpenAiWireApi>,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
@@ -274,6 +276,8 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
             name: String,
             #[serde(default)]
             provider_kind: BackendProviderKind,
+            #[serde(default)]
+            openai_wire_api: Option<defra_agent::OpenAiWireApi>,
             endpoint: String,
             api_key: Option<String>,
             api_key_env_var: Option<String>,
@@ -295,6 +299,7 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
             backend_id: wire.backend_id,
             name: wire.name,
             provider_kind: wire.provider_kind,
+            openai_wire_api: wire.openai_wire_api,
             endpoint: wire.endpoint,
             api_key: wire.api_key,
             api_key_env_var: wire.api_key_env_var,

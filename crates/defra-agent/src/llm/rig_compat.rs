@@ -37,7 +37,12 @@ pub(crate) fn rendered_completion_request(
     turn_index: usize,
     request: &rig::completion::CompletionRequest,
 ) -> Result<crate::rendered_request::RenderedCompletionRequest> {
-    let request_json = provider_request_json(&context.model_name, context.source, request)?;
+    let request_json = provider_request_json(
+        &context.model_name,
+        context.source,
+        context.normalize_responses_wire,
+        request,
+    )?;
     let messages_json = provider_messages(&request_json, context.source);
     let tools_json = request_json
         .get("tools")
@@ -67,6 +72,7 @@ pub(crate) fn rendered_completion_request(
 fn provider_request_json(
     model_name: &str,
     source: crate::rendered_request::RenderedRequestSource,
+    normalize_responses_wire: bool,
     request: &rig::completion::CompletionRequest,
 ) -> Result<Value> {
     match source {
@@ -77,7 +83,12 @@ fn provider_request_json(
                     request.clone(),
                 ))
                 .context("rendering OpenAI Responses request")?;
-            serde_json::to_value(provider_request).context("encoding OpenAI Responses request")
+            let mut value = serde_json::to_value(provider_request)
+                .context("encoding OpenAI Responses request")?;
+            if normalize_responses_wire {
+                crate::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
+            }
+            Ok(value)
         }
         crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions => {
             let provider_request = rig::providers::openai::CompletionRequest::try_from((
@@ -603,6 +614,7 @@ mod tests {
             session_id: "session".to_string(),
             model_name: "test-model".to_string(),
             source: crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+            normalize_responses_wire: false,
         };
 
         let rendered =

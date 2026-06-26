@@ -23,6 +23,7 @@ pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         backend_id: args.backend_id.clone(),
         name: args.name.clone(),
         provider_kind: backend.provider_kind,
+        openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: backend.api_key.clone(),
         api_key_env_var: backend.api_key_env_var.clone(),
@@ -39,6 +40,7 @@ pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "backend_id": args.backend_id,
         "backend_preset": args.backend_preset.map(BackendPresetArg::as_str),
         "provider_kind": backend.provider_kind.as_str(),
+        "openai_wire_api": backend.openai_wire_api.map(defra_agent::OpenAiWireApi::as_str),
         "endpoint": backend.endpoint,
         "api_key": backend.api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": backend.api_key_env_var,
@@ -263,41 +265,15 @@ async fn load_backend_row(graphql: &str, backend_id: &str) -> Result<Value> {
 }
 
 fn resolve_backend_upsert_config(args: &BackendUpsertArgs) -> Result<ResolvedBackendConfig> {
-    resolve_backend_config_with_preset(
+    crate::resolve_helpers::resolve_backend_config_with_preset(
         args.backend_preset,
         args.endpoint.as_deref(),
         args.provider_kind.as_deref(),
+        args.openai_wire_api,
         args.api_key.as_deref(),
         args.api_key_env_var.as_deref(),
         BackendResolutionMode::ConfigWrite,
     )
-}
-
-fn resolve_backend_config_with_preset(
-    preset: Option<BackendPresetArg>,
-    explicit_endpoint: Option<&str>,
-    explicit_provider_kind: Option<&str>,
-    explicit_api_key: Option<&str>,
-    explicit_api_key_env_var: Option<&str>,
-    mode: BackendResolutionMode,
-) -> Result<ResolvedBackendConfig> {
-    let api_key = normalize_optional_string(explicit_api_key);
-    let explicit_api_key_env_var = normalize_optional_string(explicit_api_key_env_var);
-    if api_key.is_some() && explicit_api_key_env_var.is_some() {
-        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
-    }
-
-    let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
-    let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
-    let api_key_env_var =
-        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset);
-
-    Ok(ResolvedBackendConfig {
-        provider_kind,
-        endpoint,
-        api_key,
-        api_key_env_var,
-    })
 }
 
 fn resolve_backend_endpoint(

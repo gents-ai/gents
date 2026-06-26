@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
 use crate::identity::{AgentIdentity, AgentPrincipal};
+use crate::openai_wire::OpenAiWireApi;
 use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
@@ -31,6 +32,7 @@ pub struct AgentBehavior {
     pub principal: Arc<AgentPrincipal>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
+    pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
     pub backend_api_key: Option<String>,
     pub backend_api_key_env_var: Option<String>,
@@ -90,6 +92,7 @@ impl std::fmt::Debug for AgentBehavior {
             .field("principal_did", &self.principal.agent_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
+            .field("openai_wire_api", &self.openai_wire_api)
             .field("backend_endpoint", &self.backend_endpoint)
             .field(
                 "backend_api_key",
