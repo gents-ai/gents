@@ -605,6 +605,112 @@ mod tests {
         }
     }
 
+    fn sample_request_with_assistant_turn() -> CompletionRequest {
+        CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: OneOrMany::many(vec![
+                Message::system("You are exact."),
+                Message::User {
+                    content: OneOrMany::one(UserContent::Text(Text {
+                        text: "Read the file.".to_string(),
+                    })),
+                },
+                Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(rig::completion::message::AssistantContent::text(
+                        "Prior answer.",
+                    )),
+                },
+                Message::User {
+                    content: OneOrMany::one(UserContent::Text(Text {
+                        text: "Continue.".to_string(),
+                    })),
+                },
+            ])
+            .expect("non-empty history"),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: Some(0.2),
+            max_tokens: Some(512),
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        }
+    }
+
+    fn responses_context(
+        normalize_responses_wire: bool,
+    ) -> crate::rendered_request::RenderedRequestContext {
+        crate::rendered_request::RenderedRequestContext {
+            request_id: "req-1".to_string(),
+            agent_did: "did:key:test".to_string(),
+            behavior_id: "behavior".to_string(),
+            session_id: "session".to_string(),
+            model_name: "test-model".to_string(),
+            source: crate::rendered_request::RenderedRequestSource::OpenAiResponses,
+            normalize_responses_wire,
+        }
+    }
+
+    /// TA-2 (#566 review): the rendered-request capture must match the bytes the
+    /// transport actually sends. The capture path normalizes the Responses body only
+    /// when `normalize_responses_wire` is set (the same gate the outbound
+    /// `ResponsesNormalizingHttpClient` uses), so a prior-assistant turn gains the
+    /// vLLM-required `id` / `type` / `status` / `output_text.annotations: []`. With the
+    /// gate off the capture stays the raw rig shape. This drives the `OpenAiResponses`
+    /// branch + the gating boolean that no other test exercises.
+    #[test]
+    fn responses_capture_normalizes_prior_assistant_items_only_when_enabled() {
+        let request = sample_request_with_assistant_turn();
+        let rendered_on = rendered_completion_request(&responses_context(true), 0, &request)
+            .expect("render normalized");
+        let rendered_off = rendered_completion_request(&responses_context(false), 0, &request)
+            .expect("render raw");
+
+        // The gating boolean must have an observable effect on the captured body.
+        assert_ne!(
+            rendered_on.request_json, rendered_off.request_json,
+            "normalize_responses_wire must change the captured Responses body"
+        );
+
+        let input = rendered_on.request_json["input"]
+            .as_array()
+            .expect("responses input array");
+        let assistant = input
+            .iter()
+            .find(|item| item["role"] == "assistant")
+            .expect("a prior assistant item in the Responses input");
+        assert_eq!(assistant["type"], "message");
+        assert!(assistant["id"].is_string());
+        assert_eq!(assistant["status"], "completed");
+        let annotated = assistant["content"]
+            .as_array()
+            .expect("assistant content array")
+            .iter()
+            .any(|c| c["type"] == "output_text" && c["annotations"] == json!([]));
+        assert!(
+            annotated,
+            "output_text items must carry annotations: [] after normalization"
+        );
+
+        // Without the gate, the raw rig shape carries no added annotations.
+        let assistant_off = rendered_off.request_json["input"]
+            .as_array()
+            .expect("input array")
+            .iter()
+            .find(|item| item["role"] == "assistant")
+            .expect("assistant item (gate off)");
+        let any_annotations = assistant_off["content"]
+            .as_array()
+            .map(|content| content.iter().any(|c| c.get("annotations").is_some()))
+            .unwrap_or(false);
+        assert!(
+            !any_annotations,
+            "without normalization the captured body must not carry output_text annotations"
+        );
+    }
+
     #[test]
     fn renders_openai_chat_provider_shape_for_capture() {
         let context = crate::rendered_request::RenderedRequestContext {
