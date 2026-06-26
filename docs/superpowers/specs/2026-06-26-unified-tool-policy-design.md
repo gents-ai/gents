@@ -269,6 +269,24 @@ Standard: zero `sorry`s; conformance tests mirror the model per the repo's
 Each sub-project gets its own spec → plan → implementation cycle. SP1 is specced in
 detail next.
 
+### SP1-Rust handoff notes
+
+The SP1 Lean/conformance slice fixes the model boundary and emitted cases, but SP1-Rust
+must carry the runtime-specific representation choices:
+
+- Build the `RuntimeAvailability` snapshot from the service registry and decide the
+  MCP health strictness used before feeding availability into `effective`.
+- Represent `EndpointScope.Only(∅)` for bash allowed-prefix gates as deny-all on the
+  wire; it is distinct from an empty `allowed_argv_prefixes` list, which remains
+  allow-all. When translating the model back to today's validator, also preserve or
+  explicitly revise the read-only-mode distinction that an empty wire list skips the
+  prefix requirement but does not make `allowed_prefix_matched` true.
+- Replace the temporary Rust `tool_policy_mirror.rs` conformance mirror with the
+  production resolver pointed at the same Lean-emitted cases.
+- Preserve the structured lookup/root-narrowing semantics, including precise CLI
+  path-prefix containment where the Lean SP1 model uses finite-set intersection as the
+  reduced proof stand-in.
+
 ## 6. Key files
 
 - `crates/defra-agent/src/tool_surface/modes.rs:62-134` — ceiling shape (to generalize)
