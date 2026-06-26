@@ -3,7 +3,7 @@
 **Issue:** #566 (delivers #509 slice 2 — "Effective `openai_wire_api` selection + clean Responses-fallback error")
 **Date:** 2026-06-26
 **Branch:** `feat/openai-wire-per-profile-566`
-**Status:** Design — pending user review
+**Status:** Design — revised after code-path review (pending user review)
 
 ## Summary
 
@@ -13,152 +13,202 @@ Responses assistant-history shape so strict OpenAI-compatible servers (vLLM) acc
 
 This is a **clean break**: the `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` env var and its
 `force_openai_chat_completions()` code path are **removed entirely** — no deprecated
-fallback, no migration shim. Wire selection is the control plane (the database) and,
-in tests, the same per-backend field.
+fallback, no migration shim. Wire selection is the control plane (the database) and, in
+tests, the same per-backend field.
 
-This delivers #509's implementation **slice 2** (see
-`2026-06-19-responses-finalize-multiprovider-design.md` §B). Per-backend placement is
-intentional: backends are the wire/transport boundary, so exposing both wire APIs
-against one model means two `InferenceBackend` documents (same endpoint/model,
-different `openai_wire_api`) — that is the model, not a workaround.
+Per-backend placement is intentional: backends are the wire/transport boundary, so
+exposing both wire APIs against one model means two `InferenceBackend` documents (same
+endpoint/model, different `openai_wire_api`).
 
-## Decisions (from brainstorm)
+> **Revised after a code-path review.** The first draft mis-placed normalization on the
+> capture/projection path and under-counted the touch surfaces. Corrections are folded in:
+> normalization moves to the real outbound `HttpClientExt` seam (§D); the resolved value
+> must enter the reconcile fingerprint (§B); a third client-construction site (`oneshot.rs`)
+> is enumerated (§B); the clean-fallback error is deferred to #509 (§E); the full schema/
+> export/desktop surface is enumerated (Implementation surface).
+
+## Decisions (from brainstorm + review)
 
 1. **Config home:** per-**backend** only (`openai_wire_api` on `InferenceBackend`). No
-   profile/behavior override layer.
+   profile/behavior override.
 2. **Scope:** config plumbing **and** vLLM Responses normalization land together in #566.
-3. **Normalization home:** a dedicated, independently-testable unit in defra-agent,
-   applied at the `rig_compat` Responses seam — not in the vendored rig fork.
+3. **Normalization home:** a dedicated normalizer applied at the **real outbound
+   `HttpClientExt` transport seam** (not the capture path, not the rig fork); the *same*
+   normalizer is reused for the rendered-request capture so projection matches wire.
 4. **No backwards compat:** remove the env var and all old global-override code.
-5. **Enum:** `responses | chat_completions`, **default `responses`**. `auto` + the
-   `/v1/responses` probe are **deferred to #509** (out of scope here).
+5. **Storage:** the field is `Option<OpenAiWireApi>` (None = unset) so "explicitly set"
+   is distinguishable from "defaulted" (needed for the ignored-provider warning).
+6. **Enum:** `responses | chat_completions`; **unset resolves to `responses`** for
+   `OpenAiCompatible`. `auto` + the `/v1/responses` probe + the clean-fallback error are
+   **deferred to #509**. *(See Open product question — the default is a migration call.)*
 
 ## Architecture
 
 ### A. The field (control plane)
 
-Add `openai_wire_api: "responses" | "chat_completions"` (default `responses`) to:
+Add `openai_wire_api: Option<OpenAiWireApi>` to the `InferenceBackend` model and document,
+where `OpenAiWireApi { Responses, ChatCompletions }` is a dedicated typed enum (serde
+`responses` / `chat_completions`), distinct from the broader `RenderedRequestSource`
+render-projection enum. `None` (omitted) means unset.
 
-- the `InferenceBackend` runtime struct — `crates/defra-agent/src/backend_registry.rs:16`;
-- the `InferenceBackend` config document + DefraDB schema (desired-state);
-- the CLI surface (`backend set --openai-wire-api`, `init --openai-wire-api`), with
-  presets defaulting sensibly (`openai` → `responses`, local vLLM/ollama left to the
-  operator; no implicit chat default now that the env var is gone).
+**Per-provider resolution semantics:**
 
-Represent the choice with a dedicated typed config enum
-`OpenAiWireApi { Responses, ChatCompletions }` (serde `responses` / `chat_completions`),
-distinct from the broader `RenderedRequestSource` render-projection enum (which also
-covers future Anthropic/Gemini render shapes). Resolution maps `OpenAiWireApi` →
-`RenderedRequestSource` at the selection sites. No raw strings past the document boundary.
+| Provider kind | field | effective wire |
+|---|---|---|
+| `OpenAiCompatible` | `Some(x)` → `x`; `None` → **`responses`** (default) | honored |
+| `OpenRouter` | `Some(_)` → **validation warning**; ignored | always Chat Completions |
+| `ChatGptCodex` | `Some(_)` → **validation warning**; ignored | always Responses |
 
-**Per-provider semantics** (unchanged from #509 §B): only `OpenAiCompatible` honors the
-field. `OpenRouter` (always Chat Completions) and `ChatGptCodex` (always Responses)
-**ignore** it; setting it on those is a **config-validation warning**, not a silent no-op.
+Storing `Option` (not a defaulted value) is what lets the warning fire only when an
+ignoring provider has the field **explicitly** set — precedent: `api_key`/`api_key_env_var`
+are already `Option<String>` with no serde default (`desired_state/mod.rs:255`).
 
 The field is a scalar string in desired-state — no `[]`/`JsonArray` nillable-array trap.
-Schema/apply additions follow the existing apply/reconcile path (Collection enum fence);
-adding a scalar field to an existing collection is plumbing, but the apply diff/renderer
-must round-trip it.
 
-### B. Resolution + threading (one resolved value, both call sites)
+### B. Resolution + threading (one resolved value, every site)
 
-Resolve the effective wire API **once** in `behavior_config_from_documents`
-(`crates/defra-agent/src/agent.rs:301`, where `backend_provider_kind` is set) and carry
-it onto `AgentBehavior` (`crates/defra-agent/src/config.rs:28`) next to
-`backend_provider_kind`.
+Resolve the effective `OpenAiWireApi` **once** in `behavior_config_from_documents`
+(`agent.rs:301`, where `backend_provider_kind` is set) and carry it onto `AgentBehavior`
+(`config.rs:28`).
 
-Switch **both** selection sites to read the resolved value (not provider-kind-plus-env):
+**Two threading obligations:**
 
-- the rendered-request projection — `RenderedRequestSource::for_behavior_provider`
-  (`crates/defra-agent/src/rendered_request.rs:30`): take the resolved
-  `OpenAiWireApi` for the `OpenAiCompatible` arm instead of consulting the env;
-- runtime client construction — `crates/defra-agent/src/agent/runtime/context.rs:135`:
-  branch on `behavior`'s resolved wire API instead of `force_openai_chat_completions()`.
-
-So the projection (#503) and the actual client agree on one resolved value.
+1. **Reconcile fingerprint (load-bearing).** `AgentBehavior` has a *manual* `Debug` impl
+   (`config.rs:86`) and runtime fingerprints hash `format!("{behavior:?}")`
+   (`runtime_snapshot.rs:521`). A new field is **invisible to reconcile** unless added to
+   that manual `Debug` — so switching a backend's `openai_wire_api` would not trigger a
+   generation swap. The resolved wire API **must** be added to the manual `Debug` output.
+2. **Every selection site reads the resolved value** (not provider-kind-plus-env). There
+   are **three** client-construction sites plus the projection — all currently keyed off
+   `force_openai_chat_completions()`:
+   - runtime daemon client — `agent/runtime/context.rs:135`;
+   - **oneshot client** — `run_openai_oneshot_with_tools`, `oneshot.rs:72` *(missed in the
+     first draft)*;
+   - rendered-request projection — `RenderedRequestSource::for_behavior_provider`,
+     `rendered_request.rs:30` (maps `OpenAiWireApi` → `RenderedRequestSource`).
 
 ### C. Remove the env var entirely (clean break)
 
-- Delete `force_openai_chat_completions()` and `openai_chat_completions_override_enabled()`
-  — `crates/defra-agent/src/inference_http.rs:30`.
-- Remove every `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` reference (production, CLI, tests, docs).
+- Delete `force_openai_chat_completions()` + `openai_chat_completions_override_enabled()`
+  (`inference_http.rs:30`) and every `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` reference
+  (production, CLI, tests, docs).
 - **Tests move to the field.** The `cfg(test) => true` branch was the only thing giving
-  in-process unit tests Chat Completions; with it gone, the central test backend/behavior
+  in-process unit tests Chat Completions; with it gone, the shared test backend/behavior
   fixture sets `openai_wire_api = chat_completions` explicitly, and integration tests that
-  exported the env var set the field instead. This is the bulk of the removal labor — find
-  the shared test backend builder and default it to `chat_completions` so existing
-  chat-mock-based tests keep passing; audit any test that genuinely exercises Responses.
+  exported the env var set the field instead. This is the bulk of the removal labor.
+- **Breaking change (no migration shim).** Any backend that relied on the env default now
+  uses the resolved default. With unset → `responses`, a local OpenAI-compatible backend
+  that serves **only** Chat Completions breaks until it declares
+  `openai_wire_api: chat_completions`. This is the explicit no-backwards-compat trade-off;
+  documented as a breaking change in the release notes. *(See Open product question.)*
 
-### D. Responses history normalization unit
+### D. Responses history normalization at the real outbound seam
 
-A dedicated `normalize_responses_assistant_items(&mut Value)` (its own module, e.g.
-`crates/defra-agent/src/llm/responses_normalize.rs`), applied in the Responses arm of
-`provider_request_json` (`crates/defra-agent/src/llm/rig_compat.rs:67`) after rig builds
-the body and before serialization/send.
+The bytes vLLM receives are produced by rig's `CompletionModel::stream`
+(`loop_stream.rs:230`), **not** by `rig_compat::provider_request_json` (which only feeds
+the optional `on_rendered_request` capture). Normalization therefore lives at the
+`HttpClientExt` transport seam, the same place `ChatGptCodexHttpClient::patch_instructions_body`
+(`chatgpt_codex.rs:1057`) and `SessionTaggingHttpClient::tag` (`inference_http.rs:103`)
+mutate the real request before send.
 
-For each prior **assistant** output item it ensures:
-- an `id` (e.g. stable/synthesized `msg_*` when absent);
-- `type: "message"`, `role: "assistant"`, `status: "completed"`;
-- each `content[]` `output_text` item carries `annotations: []`.
+- Add a `ResponsesNormalizingHttpClient<H>` `HttpClientExt` wrapper, **generic over its
+  inner transport** (so it composes innermost in the stack — cf. #509 §C composable
+  transport: `SessionTagging<ResponsesNormalizing<Reqwest>>`). Its `send` parses the JSON
+  body, runs `normalize_responses_assistant_items`, and forwards to `inner`.
+- The shared normalizer `normalize_responses_assistant_items(&mut Value)` (its own module,
+  e.g. `llm/responses_normalize.rs`) ensures each prior **assistant** output item has an
+  `id`, `type: "message"`, `role: "assistant"`, `status: "completed"`, and each
+  `output_text` content item carries `annotations: []`. Additive and matches what hosted
+  OpenAI emits.
+- **Composition:** wrap the transport only for `OpenAiCompatible` backends resolved to
+  Responses (gating by backend keeps the proven ChatGptCodex / hosted-OpenAI client stacks
+  byte-unchanged — verified by test). The wrapper is added where the OpenAiCompatible
+  Responses client is built (`context.rs:135` and `oneshot.rs:72`).
+- **Projection fidelity:** call the *same* normalizer inside `rendered_completion_request`
+  (`rig_compat.rs:35`) so the captured/projected body matches the bytes actually sent.
 
-These are exactly the fields hosted OpenAI already emits, so the pass is **additive and
-safe** on the Responses path generally (it is applied to all Responses renders, not gated
-to `OpenAiCompatible`). A fixture/wire-shape **test locks in** that the ChatGptCodex /
-hosted-OpenAI Responses bodies are unchanged by the pass, and a second test feeds a
-prior-assistant history through and asserts the vLLM-accepted shape.
+### E. Clean fallback error — DEFERRED to #509
 
-(Chosen over patching the vendored rig fork: keeps wire-fidelity logic in our code,
-aligns with the staged rig removal #438/#439, and avoids the fork-divergence risk #509
-flags.)
+The actionable "this backend can't serve Responses → set `openai_wire_api: chat_completions`"
+error needs behavior-aware classification wrapped around the generic stream-error path
+(provider 400/404s are currently classified without knowing "OpenAiCompatible selected
+Responses"). That pairs naturally with #509's `auto`/probe work and is **out of #566
+scope**. #566's normalization (§D) already removes the most common vLLM Responses failure
+(the bad assistant-history shape); a backend with no `/v1/responses` at all still surfaces
+the raw provider error until #509 lands the probe + hinted error.
 
-### E. Clean fallback error
+## Implementation surface checklist
 
-When an `OpenAiCompatible` backend selected for Responses can't serve it, surface an
-**actionable** error naming the field to set (`openai_wire_api: chat_completions`) — never
-a raw provider 400. (Endpoint-presence detection / `auto` resolution stays deferred to
-#509's probe work; this error is the #566-scope guardrail.)
+Adding the field touches every place that enumerates `InferenceBackend` fields (all
+confirmed present):
+
+- runtime struct — `backend_registry.rs:16`;
+- protocol row — `defra-agent-protocol/src/row.rs:642` (`InferenceBackendRow`);
+- SDL — `defra-agent-protocol/schemas/inference/inference_backend.graphql`;
+- desired-state strict deser — `cli/src/desired_state/mod.rs:270` (`#[serde(deny_unknown_fields)]`,
+  so the field **must** be added or strict import breaks) + import/export + JSON-schema gen;
+- CLI export fields — `cli/src/main.rs:385` (`EXPORT_INFERENCE_BACKEND_FIELDS`);
+- desktop query fields — `defra-agent-desktop-core/src/client/query.rs:45`;
+- CLI surface — `backend set --openai-wire-api`, `init --openai-wire-api`;
+- runtime: `AgentBehavior` field + **manual `Debug`** (`config.rs:86`), resolution in
+  `agent.rs:301`, three selection sites (§B), env removal (§C), transport wrapper (§D).
 
 ## Test strategy
 
-Per #566 acceptance criteria:
-
-- **render-source selection** from the field (`for_behavior_provider` returns
-  Responses/Chat per resolved `openai_wire_api`);
-- **runtime client selection** from the field (`context.rs` builds the matching client);
-- **vLLM-shape acceptance**: a prior-assistant Responses history, after the normalization
-  unit, matches the minimal vLLM-accepted shape (`id` + `output_text.annotations: []` +
-  `status`);
+- **render-source selection** from the field (`for_behavior_provider` maps resolved
+  `OpenAiWireApi` → Responses/Chat);
+- **runtime + oneshot client selection** from the field (both build the matching client);
+- **transport-level normalization**: capture the **real rig-generated body** through the
+  `ResponsesNormalizingHttpClient` and assert the vLLM-accepted shape (`id` +
+  `output_text.annotations: []` + `status`) — this is the test that would have caught the
+  blocker; a capture-only test would not;
+- **projection == wire**: the rendered-request capture matches the normalized sent body;
+- **ChatGptCodex/hosted-OpenAI unchanged**: those client stacks don't get the wrapper;
 - **Chat Completions path still supports tools**;
-- **env removal regression**: no code reads `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS`; the
-  shared test fixture drives wire selection via the field.
+- **reconcile**: changing a backend's `openai_wire_api` produces a new behavior fingerprint
+  (regression for the manual-`Debug` obligation);
+- **env removal**: no code reads `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS`; the shared test
+  fixture drives wire selection via the field.
 
-Gate with the full package suite (`cargo test -p defra-agent`), not `--lib` — integration
-tests are separate compile units.
+Gate with the full package suite (`cargo test -p defra-agent`), not `--lib`.
 
 ## Out of scope / deferred to #509
 
-- `auto` enum value and the backend `/v1/responses` **probe** (#509 slice 2 remainder).
+- `auto` enum value + the backend `/v1/responses` **probe** (#509 slice 2 remainder).
+- The clean-fallback **error** (§E) — coupled to the probe.
 - The **#545** record/replay fixture harness / provider corpus (#509 slice 3). #566 uses
-  plain unit/wire-shape tests for the normalization.
+  unit + transport-level wire-shape tests.
 - Native Anthropic/Gemini providers, docs matrix (#509 slices 4–5).
 
 ## Coordination
 
-#566 **is** #509 slice 2 (minus the deferred probe/`auto`). Note this on #509 and the
+#566 **is** #509 slice 2 (minus deferred probe/`auto`/error). Note this on #509 and the
 `feat/responses-api-finalize-509` worktree so the `openai_wire_api` field is not
-double-implemented; #509 then layers `auto` + probe on top of #566's field.
+double-implemented; #509 then layers `auto` + probe + hinted error on #566's field.
+
+## Open product question (for user)
+
+The reviewer flagged the #509 divergence as a product/migration call, not just
+implementation scope: #509 specified `auto` default + a deprecated env var; this design
+removes the env var and defaults unset → `responses`. With no `auto`/probe, **some**
+default necessarily breaks someone (default `responses` breaks chat-only local backends;
+default `chat_completions` breaks hosted-OpenAI). Resolve before implementation:
+**(a)** keep no-env + default `responses` (clean break; operators declare
+`chat_completions` on chat-only backends) — current design; or **(b)** pull `auto` + the
+probe into #566 so the default self-resolves (larger scope, re-converges with #509).
 
 ## Foundation note (Lean)
 
 Pure plumbing under the provider-agnostic `PromptAssembly` model: no new legal transition,
-no invariant change, and *what the model is fed* is unchanged (the same sanitized native
-message family; normalization only reshapes the already-sanitized Responses serialization
-at the wire boundary). No new theorems. The schema/apply field addition rides the existing
-apply/reconcile Collection-enum fence.
+no invariant change, and *what the model is fed* is unchanged (the normalizer reshapes the
+already-sanitized Responses serialization at the wire boundary only). No new theorems. The
+schema/apply field addition rides the existing apply/reconcile Collection-enum fence.
 
 ## Sharp edges
 
-- `tracing`, never `println` (the ignored-field validation warning, the fallback error).
-- `graphql::escape_graphql_string()` for any interpolated GraphQL in the apply/read path.
+- `tracing`, never `println` (the ignored-field validation warning).
+- `graphql::escape_graphql_string()` for any interpolated GraphQL in apply/read.
 - Scalar field → no `[]`/`JsonArray` trap, but confirm the apply renderer round-trips it.
+- `deny_unknown_fields` on the desired-state Wire struct: the field must be added there or
+  strict import of any backend with it set fails.
 - Gate with the full `-p defra-agent` suite, not `--lib`.
