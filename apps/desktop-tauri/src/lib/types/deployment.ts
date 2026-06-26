@@ -37,6 +37,7 @@ export type InferenceBackendView = {
   backendId: string;
   name?: string | null;
   providerKind?: string | null;
+  openaiWireApi?: string | null;
   endpoint?: string | null;
   apiKeyConfigured: boolean;
   apiKeyEnvVar?: string | null;

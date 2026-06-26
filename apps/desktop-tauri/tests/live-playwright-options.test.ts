@@ -24,7 +24,6 @@ describe("live Playwright option resolution", () => {
     expect(env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME).toBe("mock-model");
     expect(env.DEFRA_AGENT_TAURI_LIVE_PROVIDER).toBe("openai-compatible");
     expect(env.DEFRA_AGENT_TAURI_LIVE_API_KEY).toBe("desktop-live-browser-test-key");
-    expect(env.DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS).toBe("1");
   });
 
   it("fails loudly in real-provider mode when no backend is configured", () => {

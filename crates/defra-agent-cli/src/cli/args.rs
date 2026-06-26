@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
-use defra_agent::BackendProviderKind;
+use defra_agent::{BackendProviderKind, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::output_format::OutputFormat;
@@ -335,6 +335,12 @@ pub(crate) struct InitArgs {
         help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
     )]
     pub(crate) provider_kind: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "OpenAI-style wire API for OpenAiCompatible backends: responses or chat-completions"
+    )]
+    pub(crate) openai_wire_api: Option<OpenAiWireApiArg>,
     #[arg(long, help = "Raw API key stored directly in the backend document")]
     pub(crate) api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the backend API key")]
@@ -709,6 +715,22 @@ pub(crate) enum P2pDiscoveryArg {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OpenAiWireApiArg {
+    Responses,
+    #[value(name = "chat-completions", alias = "chat_completions")]
+    ChatCompletions,
+}
+
+impl OpenAiWireApiArg {
+    pub(crate) fn to_config(self) -> OpenAiWireApi {
+        match self {
+            Self::Responses => OpenAiWireApi::Responses,
+            Self::ChatCompletions => OpenAiWireApi::ChatCompletions,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum BackendPresetArg {
     #[value(name = "generic-openai-compatible")]
     GenericOpenAiCompatible,
@@ -781,6 +803,18 @@ impl BackendPresetArg {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::GenericOpenAiCompatible
+            | Self::ChatGptCodex
+            | Self::Ollama
+            | Self::Vllm
+            | Self::LlamaCpp => None,
+        }
+    }
+
+    pub(crate) fn default_openai_wire_api(self) -> Option<OpenAiWireApi> {
+        match self {
+            Self::OpenAi => Some(OpenAiWireApi::Responses),
+            Self::GenericOpenAiCompatible
+            | Self::OpenRouter
             | Self::ChatGptCodex
             | Self::Ollama
             | Self::Vllm
@@ -1603,6 +1637,12 @@ pub(crate) struct BackendUpsertArgs {
         help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
     )]
     pub(crate) provider_kind: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "OpenAI-style wire API for OpenAiCompatible backends: responses or chat-completions"
+    )]
+    pub(crate) openai_wire_api: Option<OpenAiWireApiArg>,
     #[arg(
         long,
         help = "Inference backend base URL, usually including /v1. Falls back to the preset default when available"

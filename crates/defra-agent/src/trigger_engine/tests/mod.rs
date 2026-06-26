@@ -437,6 +437,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:0/v1".to_string(),
         backend_api_key: None,
         backend_api_key_env_var: None,

@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::backend_provider::BackendProviderKind;
+use crate::openai_wire::OpenAiWireApi;
 
 pub type RenderedRequestCaptureSink = Arc<
     dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
@@ -28,15 +29,15 @@ pub enum RenderedRequestSource {
 }
 
 impl RenderedRequestSource {
-    pub(crate) fn for_behavior_provider(kind: BackendProviderKind) -> Self {
+    pub(crate) fn for_behavior_provider(
+        kind: BackendProviderKind,
+        openai_wire_api: OpenAiWireApi,
+    ) -> Self {
         match kind {
-            BackendProviderKind::OpenAiCompatible => {
-                if crate::inference_http::force_openai_chat_completions() {
-                    Self::OpenAiChatCompletions
-                } else {
-                    Self::OpenAiResponses
-                }
-            }
+            BackendProviderKind::OpenAiCompatible => match openai_wire_api {
+                OpenAiWireApi::Responses => Self::OpenAiResponses,
+                OpenAiWireApi::ChatCompletions => Self::OpenAiChatCompletions,
+            },
             BackendProviderKind::OpenRouter => Self::OpenAiChatCompletions,
             BackendProviderKind::ChatGptCodex => Self::OpenAiResponses,
         }
@@ -51,6 +52,7 @@ pub struct RenderedRequestContext {
     pub session_id: String,
     pub model_name: String,
     pub source: RenderedRequestSource,
+    pub normalize_responses_wire: bool,
 }
 
 impl RenderedRequestContext {
@@ -58,6 +60,7 @@ impl RenderedRequestContext {
         request: &crate::watcher::AgentRequest,
         model_name: String,
         source: RenderedRequestSource,
+        normalize_responses_wire: bool,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
@@ -66,6 +69,7 @@ impl RenderedRequestContext {
             session_id: request.session_id.clone(),
             model_name,
             source,
+            normalize_responses_wire,
         }
     }
 }
@@ -169,6 +173,38 @@ mod tests {
     }
 
     #[test]
+    fn rendered_source_uses_effective_backend_wire_api() {
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::OpenAiCompatible,
+                OpenAiWireApi::Responses,
+            ),
+            RenderedRequestSource::OpenAiResponses
+        );
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::OpenAiCompatible,
+                OpenAiWireApi::ChatCompletions,
+            ),
+            RenderedRequestSource::OpenAiChatCompletions
+        );
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::OpenRouter,
+                OpenAiWireApi::Responses,
+            ),
+            RenderedRequestSource::OpenAiChatCompletions
+        );
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::ChatGptCodex,
+                OpenAiWireApi::ChatCompletions,
+            ),
+            RenderedRequestSource::OpenAiResponses
+        );
+    }
+
+    #[test]
     fn rendered_completion_request_hashes_prompt_and_tools() {
         let context = RenderedRequestContext {
             request_id: "req-1".to_string(),
@@ -177,6 +213,7 @@ mod tests {
             session_id: "session".to_string(),
             model_name: "test-model".to_string(),
             source: RenderedRequestSource::OpenAiChatCompletions,
+            normalize_responses_wire: false,
         };
         let rendered = build_rendered_completion_request(
             &context,

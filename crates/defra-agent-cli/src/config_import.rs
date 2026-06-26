@@ -1888,6 +1888,7 @@ mod lean_apply_write_boundary_tests {
             backend_id: doc.id.clone(),
             name: doc.content.clone(),
             provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: None,
             endpoint: format!("http://127.0.0.1/{}/v1", doc.id),
             api_key: None,
             api_key_env_var: None,

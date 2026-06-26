@@ -1,6 +1,6 @@
 use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::BackendProviderKind;
+use defra_agent::{BackendProviderKind, OpenAiWireApi};
 
 use crate::config_writes::ConfigAccess;
 use crate::{graphql_bool_literal, nullable_string_field, string_list_field};
@@ -10,6 +10,7 @@ pub(crate) struct InferenceBackendUpsertDocument {
     pub(crate) backend_id: String,
     pub(crate) name: String,
     pub(crate) provider_kind: BackendProviderKind,
+    pub(crate) openai_wire_api: Option<OpenAiWireApi>,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
@@ -39,6 +40,10 @@ pub(crate) async fn write_inference_backend_document(
         Some(format!(
             r#"provider_kind: "{}""#,
             escape_graphql_string(backend.provider_kind.as_str())
+        )),
+        Some(nullable_string_field(
+            "openai_wire_api",
+            backend.openai_wire_api.map(OpenAiWireApi::as_str),
         )),
         Some(format!(
             r#"endpoint: "{}""#,
@@ -73,6 +78,7 @@ pub(crate) async fn write_inference_backend_document(
                     backend_id: "{backend_id}",
                     name: "{name}",
                     provider_kind: "{provider_kind}",
+                    {openai_wire_api},
                     endpoint: "{endpoint}",
                     {api_key},
                     {api_key_env_var},
@@ -90,6 +96,10 @@ pub(crate) async fn write_inference_backend_document(
         backend_id = escape_graphql_string(&backend.backend_id),
         name = escape_graphql_string(&backend.name),
         provider_kind = escape_graphql_string(backend.provider_kind.as_str()),
+        openai_wire_api = nullable_string_field(
+            "openai_wire_api",
+            backend.openai_wire_api.map(OpenAiWireApi::as_str)
+        ),
         endpoint = escape_graphql_string(&backend.endpoint),
         api_key = nullable_string_field("api_key", backend.api_key.as_deref()),
         api_key_env_var =

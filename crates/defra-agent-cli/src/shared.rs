@@ -1,4 +1,4 @@
-use defra_agent::{BackendProviderKind, Collection};
+use defra_agent::{BackendProviderKind, Collection, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +10,7 @@ use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
     pub(crate) provider_kind: BackendProviderKind,
+    pub(crate) openai_wire_api: Option<OpenAiWireApi>,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,

@@ -2,6 +2,7 @@ use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
+use crate::OpenAiWireApi;
 
 #[test]
 fn inference_backend_from_value_parses() {
@@ -9,6 +10,7 @@ fn inference_backend_from_value_parses() {
         "backend_id": "workstation-dual",
         "name": "Workstation Dual GPU",
         "provider_kind": "OpenRouter",
+        "openai_wire_api": "chat_completions",
         "endpoint": "http://100.73.235.38:8000/v1",
         "api_key": "raw-key",
         "api_key_env_var": "DUAL_GPU_API_KEY",
@@ -22,6 +24,10 @@ fn inference_backend_from_value_parses() {
     let backend = InferenceBackend::from_value(&json).expect("should parse");
     assert_eq!(backend.backend_id, "workstation-dual");
     assert_eq!(backend.provider_kind, BackendProviderKind::OpenRouter);
+    assert_eq!(
+        backend.openai_wire_api,
+        Some(OpenAiWireApi::ChatCompletions)
+    );
     assert_eq!(backend.endpoint, "http://100.73.235.38:8000/v1");
     assert_eq!(backend.api_key.as_deref(), Some("raw-key"));
     assert_eq!(backend.api_key_env_var.as_deref(), Some("DUAL_GPU_API_KEY"));
@@ -50,6 +56,7 @@ fn inference_backend_from_value_missing_fields_defaults() {
 
     let backend = InferenceBackend::from_value(&json).expect("should parse");
     assert_eq!(backend.provider_kind, BackendProviderKind::OpenAiCompatible);
+    assert_eq!(backend.openai_wire_api, None);
     assert_eq!(backend.api_key, None);
     assert_eq!(backend.api_key_env_var, None);
     assert_eq!(backend.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
@@ -63,6 +70,7 @@ fn is_available_requires_enabled_and_healthy() {
         backend_id: "test".into(),
         name: "Test".into(),
         provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: None,
         endpoint: "http://localhost:8000/v1".into(),
         api_key: None,
         api_key_env_var: None,
@@ -97,6 +105,7 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             backend_id: case.name.clone(),
             name: case.name.clone(),
             provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: None,
             endpoint: "http://localhost:8000/v1".into(),
             api_key: None,
             api_key_env_var: None,
@@ -200,6 +209,7 @@ fn backend_with_keys(api_key: Option<&str>, env_var: Option<&str>) -> InferenceB
         backend_id: "test".into(),
         name: "Test".into(),
         provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: None,
         endpoint: "http://localhost:8000/v1".into(),
         api_key: api_key.map(ToOwned::to_owned),
         api_key_env_var: env_var.map(ToOwned::to_owned),

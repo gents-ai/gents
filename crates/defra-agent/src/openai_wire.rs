@@ -1,0 +1,113 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+use crate::backend_provider::BackendProviderKind;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpenAiWireApi {
+    #[serde(rename = "responses")]
+    Responses,
+    #[serde(rename = "chat_completions")]
+    ChatCompletions,
+}
+
+impl OpenAiWireApi {
+    pub fn parse_optional(value: Option<&str>) -> Result<Option<Self>> {
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            None => Ok(None),
+            Some("responses") => Ok(Some(Self::Responses)),
+            Some("chat_completions") | Some("chat-completions") => Ok(Some(Self::ChatCompletions)),
+            Some(other) => anyhow::bail!("unknown OpenAI wire API {other}"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Responses => "responses",
+            Self::ChatCompletions => "chat_completions",
+        }
+    }
+
+    pub fn effective_for_provider(
+        provider_kind: BackendProviderKind,
+        configured: Option<Self>,
+        backend_id: &str,
+    ) -> Self {
+        match provider_kind {
+            BackendProviderKind::OpenAiCompatible => configured.unwrap_or(Self::ChatCompletions),
+            BackendProviderKind::OpenRouter => {
+                if let Some(value) = configured {
+                    tracing::warn!(
+                        backend_id = %backend_id,
+                        openai_wire_api = value.as_str(),
+                        provider_kind = %provider_kind,
+                        "openai_wire_api is ignored for this backend provider"
+                    );
+                }
+                Self::ChatCompletions
+            }
+            BackendProviderKind::ChatGptCodex => {
+                if let Some(value) = configured {
+                    tracing::warn!(
+                        backend_id = %backend_id,
+                        openai_wire_api = value.as_str(),
+                        provider_kind = %provider_kind,
+                        "openai_wire_api is ignored for this backend provider"
+                    );
+                }
+                Self::Responses
+            }
+        }
+    }
+
+    pub fn normalizes_responses_wire(self, provider_kind: BackendProviderKind) -> bool {
+        provider_kind == BackendProviderKind::OpenAiCompatible && self == Self::Responses
+    }
+}
+
+impl std::fmt::Display for OpenAiWireApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_effective_wire_api_by_provider() {
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::OpenAiCompatible,
+                None,
+                "local",
+            ),
+            OpenAiWireApi::ChatCompletions
+        );
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::OpenAiCompatible,
+                Some(OpenAiWireApi::Responses),
+                "local",
+            ),
+            OpenAiWireApi::Responses
+        );
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::OpenRouter,
+                Some(OpenAiWireApi::Responses),
+                "openrouter",
+            ),
+            OpenAiWireApi::ChatCompletions
+        );
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::ChatGptCodex,
+                Some(OpenAiWireApi::ChatCompletions),
+                "codex",
+            ),
+            OpenAiWireApi::Responses
+        );
+    }
+}

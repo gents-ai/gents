@@ -81,6 +81,7 @@ fn backend(id: &str) -> DesiredInferenceBackend {
         backend_id: id.to_string(),
         name: id.to_string(),
         provider_kind: Default::default(),
+        openai_wire_api: None,
         endpoint: "http://localhost:1234".to_string(),
         api_key: None,
         api_key_env_var: None,
