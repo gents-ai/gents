@@ -156,6 +156,26 @@ def ceilingWriteFieldsNarrowed : Surface :=
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeA
 
+-- Same write tool, DIFFERENT collection: behavior grants `(wt, coll1)`, ceiling
+-- grants `(wt, coll2)`. Because the collection is part of the KEY, the meet
+-- intersects to an empty key set — the write tool is DENIED, not merged. Guards
+-- against tool-name-only keying, which would silently keep it active.
+def writeCollA : EndpointScope (String × String) (Finset String) :=
+  writeOnly ("wt", "coll1") ["field_a"]
+
+def writeCollB : EndpointScope (String × String) (Finset String) :=
+  writeOnly ("wt", "coll2") ["field_a"]
+
+def behaviorWriteCollA : Surface :=
+  surface .readWrite
+    (bashPolicy .unrestricted .enabled .all)
+    true true true .all writeCollA
+
+def ceilingWriteCollB : Surface :=
+  surface .readWrite
+    (bashPolicy .unrestricted .enabled .all)
+    true true true .all writeCollB
+
 -- Two disjoint, non-empty `.only` scopes on both bash-allowed and mcp:
 -- behavior permits `svc-x` / `git status`, ceiling permits `svc-y` / `ls`.
 -- Their meet intersects to empty, exercising the `only ∩ only` branch and the
@@ -187,6 +207,8 @@ def cases : List Case :=
       wideOpen wideOpen runtimeNoMcp "svc-a" probeWrite
   , mkCase "write_fields_narrowed_by_ceiling"
       behaviorWriteB ceilingWriteFieldsNarrowed wideOpen "svc-a" probeWrite
+  , mkCase "write_tool_collection_mismatch_denies"
+      behaviorWriteCollA ceilingWriteCollB wideOpen "svc-a" ("wt", "coll1")
   , mkCase "disjoint_only_scopes_intersect_to_empty"
       behaviorDisjointOnly ceilingDisjointOnly wideOpen "svc-x" probeWrite
   , mkCase "bash_all_allowed_kind_idempotent"

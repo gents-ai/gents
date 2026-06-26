@@ -38,6 +38,19 @@ def Surface.meet (a b : Surface) : Surface :=
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
   , writeTools := a.writeTools.meet fieldsVM b.writeTools }
 
+/-- Effective surface = behavior ⊓ ceiling ⊓ runtime.
+
+    Composition-order note: SP1 chose full three-way composition NOW (spec §4
+    left "model runtime availability as a first-class lattice element" as an
+    option); availability is just another `Surface` operand of the same meet, so
+    it costs nothing extra and keeps `effective` a pure function of three inputs.
+    The order `(behavior ⊓ ceiling) ⊓ runtime` is fixed; the lower-bound safety
+    property is order-independent, so associativity is not load-bearing.
+
+    Out of scope (SP1-Rust): the DECODE that turns a stored `ToolSelection`
+    document (with unset/nullable fields) into a `Surface` — including the
+    secure-minimal default-for-unset and the schema-version/backfill (spec §3.4).
+    This model takes a fully-resolved `Surface` as given. -/
 def effective (behavior ceiling : Surface) (runtime : Avail) : Surface :=
   (behavior.meet ceiling).meet runtime
 

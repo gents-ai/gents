@@ -108,13 +108,18 @@ Every category is expressed with one of three typed atoms:
     to set intersection.
   - **Structured values:** the riskiest categories carry value authority that the
     ceiling *narrows*:
-    - **`write_tools`** — key = tool name; value = `{collection, allowed_field_set}`.
-      A behavior *requests* a write tool against a collection/fields; the ceiling
-      *constrains* the permitted collection and field set; the effective declaration
-      is the **constrained intersection** (effective fields = requested ∩
-      ceiling-allowed, on the matching collection). Exact-declaration equality is
-      explicitly rejected as too brittle; name-only is explicitly rejected as too
-      weak.
+    - **`write_tools`** — key = **`(tool_name, collection_id)`** (a pair); value =
+      `allowed_field_set`. The collection is part of the *key*, not the value — this
+      matches the Lean model `EndpointScope (String × String) (Finset String)`
+      (`ToolPolicy/Types.lean`). A behavior *requests* a write tool against a
+      `(tool, collection)`; the ceiling *constrains* the permitted field set for that
+      exact pair; the effective declaration is the **constrained intersection**
+      (effective fields = requested ∩ ceiling-allowed). **A `(tool, collection)`
+      mismatch — behavior requests `(wt, coll1)`, ceiling allows `(wt, coll2)` — yields
+      an EMPTY effective key set (deny), not a merge.** Keying by tool-name-only would
+      silently keep a write tool the ceiling meant to deny for a different collection —
+      do not do that. Exact-declaration equality is rejected as too brittle; name-only
+      is rejected as too weak *and unsound*.
     - **`subagent_targets`** — key = `(did, behavior)`; value carries await/mode prefs.
       Meet = key intersection; value prefs are behavior-authoritative (not narrowed),
       bounded separately by the `cross_deployment` capability.
@@ -127,6 +132,23 @@ Every category is expressed with one of three typed atoms:
 `None`, `Only`, and `All` are **distinct values**. This is the single change that
 eliminates the empty=allow-all ambiguity (problem #2): there is no longer a bare empty
 list with an overloaded meaning anywhere.
+
+**Category-completeness carve-out (`custom_tools`).** "Category-complete" means complete
+over the **document-driven** tool categories — every tool a `ToolSelection` document can
+configure, which the operator ceiling therefore governs. It deliberately excludes
+`custom_tools` (`tool_surface/mod.rs` `CustomToolFactory`): those are **code-injected** at
+runtime-construction time, not configured by any document, so they sit at a higher trust
+boundary (whoever links the binary) than the document control plane. They are an intentional
+out-of-band extension point, not an escape hatch. SP1-Rust must not silently treat them as
+ceiling-governed; capping code-injected tools by the document ceiling is a separate explicit
+decision (add a `custom` Surface field first). This carve-out is documented on `Surface` in
+`ToolPolicy/Types.lean`.
+
+**`context_budget` reconciliation.** The model makes `context_budget` a gateable boolean
+capability (correct, forward-looking). The runtime gained its `enable_context_budget` gate
+in PR #526, which post-dates this branch's base — so SP1-Rust must rebase onto current
+`main` (or carry #526) so the runtime honors the gate the model assumes; otherwise the tool
+stays unconditionally on and the model↔runtime contract is violated.
 
 ### 3.2 Two appliers of the one vocabulary
 

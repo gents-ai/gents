@@ -53,6 +53,20 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                 "disjoint case: Only(∅) must stay \"only\""
             );
         }
+        if case.name == "write_tool_collection_mismatch_denies" {
+            // Behavior grants (wt, coll1); ceiling grants (wt, coll2). The
+            // collection is part of the KEY, so the keys don't intersect and the
+            // write tool is denied — effective fields empty. A tool-name-only
+            // keying would merge the two and silently keep it active.
+            assert!(
+                !case.behavior.write_fields.is_empty(),
+                "collision case: behavior must grant the field at its own collection"
+            );
+            assert!(
+                case.expected.write_fields.is_empty(),
+                "collision case: a (tool, collection) mismatch must DENY (empty effective fields)"
+            );
+        }
         if case.name == "bash_all_allowed_kind_idempotent" {
             assert_eq!(case.expected.bash_allowed_kind, "all");
         }

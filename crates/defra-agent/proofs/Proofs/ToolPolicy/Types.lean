@@ -54,7 +54,19 @@ structure BashPolicy where
   sandbox : Bool
 
 /-- Full per-category surface. Used for behavior policy, operator ceiling, and
-    runtime availability. -/
+    runtime availability.
+
+    SCOPE / category-completeness carve-out: this Surface models the
+    DOCUMENT-DRIVEN tool categories — every tool that a `ToolSelection` document
+    can configure and that the operator ceiling therefore governs. It deliberately
+    does NOT model `custom_tools` (`tool_surface/mod.rs` `CustomToolFactory`):
+    those are CODE-INJECTED at runtime-construction time, not configured by any
+    document, and so live at a higher trust boundary (whoever links the binary)
+    than the document control plane. They are an intentional out-of-band extension
+    point, not an escape hatch in this model. SP1-Rust must NOT silently treat them
+    as ceiling-governed; if code-injected tools ever need to be capped by the
+    document ceiling, that is a separate, explicit decision (add a `custom` field
+    here first). "Category-complete" = complete over document-driven categories. -/
 structure Surface where
   file : FileCap
   bash : BashPolicy
