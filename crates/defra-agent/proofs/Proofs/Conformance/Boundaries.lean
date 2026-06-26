@@ -399,6 +399,12 @@ def boundaries : List Boundary :=
     , statement :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
     }
+  , { id := "boundary.ci-gate-negative-test.intentional-drift"
+    , domain := "test"
+    , subject := "intentional CI gate negative test"
+    , statement :=
+        "INTENTIONAL contract drift: this boundary id is deliberately NOT registered in coverage.rs expected_boundary_ids, so the conformance set-equality fence must fail. Used to prove the #554 CI gate fails red and blocks rust-and-cli. Revert before merge."
+    }
   ]
 
 def Boundary.toJson (boundary : Boundary) : String :=
