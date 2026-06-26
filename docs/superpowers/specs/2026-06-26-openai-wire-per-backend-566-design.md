@@ -38,9 +38,10 @@ endpoint/model, different `openai_wire_api`).
 4. **No backwards compat:** remove the env var and all old global-override code.
 5. **Storage:** the field is `Option<OpenAiWireApi>` (None = unset) so "explicitly set"
    is distinguishable from "defaulted" (needed for the ignored-provider warning).
-6. **Enum:** `responses | chat_completions`; **unset resolves to `responses`** for
-   `OpenAiCompatible`. `auto` + the `/v1/responses` probe + the clean-fallback error are
-   **deferred to #509**. *(See Open product question — the default is a migration call.)*
+6. **Enum:** `responses | chat_completions`; **unset resolves to `chat_completions`** for
+   `OpenAiCompatible` (safer for the local/demo stack that drives #566; hosted OpenAI
+   declares `responses` explicitly). `auto` + the `/v1/responses` probe + the
+   clean-fallback error are **deferred to #509**.
 
 ## Architecture
 
@@ -55,7 +56,7 @@ render-projection enum. `None` (omitted) means unset.
 
 | Provider kind | field | effective wire |
 |---|---|---|
-| `OpenAiCompatible` | `Some(x)` → `x`; `None` → **`responses`** (default) | honored |
+| `OpenAiCompatible` | `Some(x)` → `x`; `None` → **`chat_completions`** (default) | honored |
 | `OpenRouter` | `Some(_)` → **validation warning**; ignored | always Chat Completions |
 | `ChatGptCodex` | `Some(_)` → **validation warning**; ignored | always Responses |
 
@@ -92,15 +93,16 @@ Resolve the effective `OpenAiWireApi` **once** in `behavior_config_from_document
 - Delete `force_openai_chat_completions()` + `openai_chat_completions_override_enabled()`
   (`inference_http.rs:30`) and every `DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS` reference
   (production, CLI, tests, docs).
-- **Tests move to the field.** The `cfg(test) => true` branch was the only thing giving
-  in-process unit tests Chat Completions; with it gone, the shared test backend/behavior
-  fixture sets `openai_wire_api = chat_completions` explicitly, and integration tests that
-  exported the env var set the field instead. This is the bulk of the removal labor.
-- **Breaking change (no migration shim).** Any backend that relied on the env default now
-  uses the resolved default. With unset → `responses`, a local OpenAI-compatible backend
-  that serves **only** Chat Completions breaks until it declares
-  `openai_wire_api: chat_completions`. This is the explicit no-backwards-compat trade-off;
-  documented as a breaking change in the release notes. *(See Open product question.)*
+- **Tests largely keep working by default.** The `cfg(test) => true` branch defaulted
+  in-process unit tests to Chat Completions; with unset now also resolving to
+  `chat_completions`, those tests keep getting Chat **for free** — removing the env code is
+  low-risk. The labor is: delete the env-setting in integration tests (now redundant) and
+  set `openai_wire_api = responses` only on the tests that genuinely exercise Responses.
+- **Breaking change (no migration shim).** With unset → `chat_completions`, a **hosted
+  OpenAI** backend (production default was Responses) must now declare
+  `openai_wire_api: responses`. Local OpenAI-compatible/demo backends work by default.
+  This is the explicit no-backwards-compat trade-off; documented as a breaking change in
+  the release notes.
 
 ### D. Responses history normalization at the real outbound seam
 
@@ -186,16 +188,14 @@ Gate with the full package suite (`cargo test -p defra-agent`), not `--lib`.
 `feat/responses-api-finalize-509` worktree so the `openai_wire_api` field is not
 double-implemented; #509 then layers `auto` + probe + hinted error on #566's field.
 
-## Open product question (for user)
+## Resolved product decision
 
-The reviewer flagged the #509 divergence as a product/migration call, not just
-implementation scope: #509 specified `auto` default + a deprecated env var; this design
-removes the env var and defaults unset → `responses`. With no `auto`/probe, **some**
-default necessarily breaks someone (default `responses` breaks chat-only local backends;
-default `chat_completions` breaks hosted-OpenAI). Resolve before implementation:
-**(a)** keep no-env + default `responses` (clean break; operators declare
-`chat_completions` on chat-only backends) — current design; or **(b)** pull `auto` + the
-probe into #566 so the default self-resolves (larger scope, re-converges with #509).
+The #509 divergence (a product/migration call) is **resolved**: #566 removes the env var
+and defaults unset → **`chat_completions`** (no `auto`/probe in #566). Rationale: the
+local/demo OpenAI-compatible stack that drives #566 works with no extra config; hosted
+OpenAI deployments declare `openai_wire_api: responses` explicitly. #509 later adds `auto`
++ the probe so the default can self-resolve; until then this is the committed behavior and
+a documented breaking change.
 
 ## Foundation note (Lean)
 
