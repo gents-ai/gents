@@ -56,21 +56,50 @@ defra-agent server \
 
 ## Connected runtime bring-up
 
-To bring up two runtimes and pair them through the operator CLI:
+For the scripted local version, run:
 
 ```bash
-defra-agent server --home /tmp/amy --p2p-bind-addr 127.0.0.1 --p2p-port 4017
-defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
+make demo-p2p-two-node
 ```
 
-Create an invite on Amy and join it from Coding:
+To bring up two runtimes manually and enroll Coding into Amy's signed network:
 
 ```bash
-AMY_INVITE=$(defra-agent p2p pairings invite --home /tmp/amy | jq -r .token)
-CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
-CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
-defra-agent p2p pairings join --home /tmp/amy "$CODING_INVITE"
+defra-agent init --home /tmp/amy --agent-name amy
+defra-agent init --home /tmp/coding --agent-name coding
+
+defra-agent server --home /tmp/amy --no-codex-shim \
+  --p2p-bind-addr 127.0.0.1 --p2p-port 4017 \
+  --p2p-relay-mode disabled --p2p-discovery disabled
+defra-agent server --home /tmp/coding --no-codex-shim \
+  --p2p-bind-addr 127.0.0.1 --p2p-port 4018 \
+  --p2p-relay-mode disabled --p2p-discovery disabled
 ```
+
+Create the network root on Amy, grant Coding's DID, then join Coding with a
+signed `network-control` invite:
+
+```bash
+CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
+
+defra-agent p2p network create --home /tmp/amy --name "Two Node Demo"
+defra-agent p2p network grant --home /tmp/amy "$CODING_DID"
+
+AMY_INVITE=$(
+  defra-agent p2p pairings invite \
+    --home /tmp/amy \
+    --member-did "$CODING_DID" \
+    --template network-control \
+    | jq -r .token
+)
+
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+```
+
+The join wires the narrow control-plane substrate only. To move chat,
+subagent, and trace rows, add `DataPlanePairingDesired` rows for the
+conversation edge. The scripted demo writes those rows and then proves
+replication by submitting a no-wait request on Coding and reading it from Amy.
 
 Inspect desired pairing rows and live connectivity from either runtime:
 
@@ -112,13 +141,21 @@ Built-in templates:
 | `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction | `agent_did` equality | Push |
 | `agent-config` | Behaviors, tool selections, backends, profiles, tool services, skills | Unscoped | Replicate |
 | `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
+| `discovery` | Network membership + agent config bootstrap docs | Unscoped | Replicate |
+| `network-control` | Network root, membership, endpoints, join requests | Unscoped | Replicate |
 
-Pass `--template` to `invite` and `join` to select the intent:
+Use `network-control` for signed fleet enrollment and `conversation` for
+application data-plane rows:
 
 ```bash
-AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
+AMY_INVITE=$(
+  defra-agent p2p pairings invite \
+    --member-did "$CODING_DID" \
+    --template network-control \
+    | jq -r .token
+)
 defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
-# join reads the template from the token; pass --template to override
+# join reads the template from the token; pass --template only to override
 ```
 
 ## Admin filtered replication
@@ -140,17 +177,21 @@ defra-agent p2p admin replicators add \
 Format: `<Collection>:<field>=<value>`. Parse errors (missing `:` or `=`,
 empty component) are hard failures with a clear message.
 
-## Service discovery — joining a network
+## Service discovery and signed networks
 
-Beyond pairwise pairing, the `p2p network` commands target the replicated
-`PeerRegistry` collection so that joining one member surfaces the whole
-network. Pairing over the `discovery` collection profile replicates
-`PeerRegistry`, and `p2p pairings invite`/`join` mint and verify a member
-**signature** on the invite token (trust-on-first-use for the bootstrap join;
-registry-membership-checked thereafter).
+There are two related network surfaces:
+
+- `p2p network create|grant|revoke` writes the admin-signed
+  `AgentNetwork`/`NetworkMembership` control plane used by v5 invite/join.
+- `p2p network register|list|rm` writes and reads the `PeerRegistry`
+  discovery view: display names, offered templates, heartbeat freshness, and
+  pairing diagnostics.
 
 ```bash
-defra-agent p2p network register --home /tmp/amy --template conversation   # self-register, advertise template
+defra-agent p2p network create --home /tmp/amy --name "Fleet One"
+defra-agent p2p network grant --home /tmp/amy "$CODING_DID"
+
+defra-agent p2p network register --home /tmp/amy --template conversation   # self-register in discovery
 defra-agent p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
 defra-agent p2p network rm --home /tmp/amy                                  # deregister this node's row
 ```
@@ -162,9 +203,9 @@ the discovery reconciler materialize registry-owned `PeerPairingDesired` rows
 discovered peers and you pair explicitly. Registry-owned rows are retracted
 when their entry stales/removed and never touch operator-authored pairings.
 
-For the narrated walkthrough — the three layers (discovery / replication /
-authorization) and transitive pairing — see [Part 3 of the getting-started
-walkthrough](demo.md#part-3--join-a-network).
+For the narrated walkthrough — the network-control and conversation data-plane
+layers — see [Part 3 of the getting-started
+walkthrough](demo.md#part-3--grow-the-link-into-a-fleet).
 
 ## Remote Codex clients
 

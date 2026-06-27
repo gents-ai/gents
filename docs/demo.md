@@ -230,11 +230,38 @@ toward it** — connecting, subscribing collections, installing replicators,
 and recording what it did. The same idea as `kubectl apply`, applied to
 gossip replication.
 
-## The two documents
+## The presentable local demo
+
+From a checkout, run the scripted two-node demo:
+
+```bash
+make demo-p2p-two-node
+```
+
+It starts two isolated homes under `/tmp`, creates an admin-signed network on
+Amy, grants Coding membership, joins Coding with a v5 `network-control`
+invite, writes the bidirectional conversation data-plane rows, waits for the
+runtime reconcilers to install replicators, then submits one no-wait request on
+Coding and verifies that Amy sees the replicated `AgentRequest` document.
+
+Useful knobs:
+
+```bash
+DEFRA_AGENT_DEMO_KEEP=1 make demo-p2p-two-node
+DEFRA_AGENT_DEMO_INFERENCE_URL=http://127.0.0.1:8080/v1 \
+DEFRA_AGENT_DEMO_MODEL=google/gemma-4-12B-it-qat-q4_0-gguf \
+  make demo-p2p-two-node
+```
+
+`DEFRA_AGENT_DEMO_KEEP=1` leaves both runtimes running and prints the exact
+follow-up commands for manual inspection.
+
+## The operator/reconciler documents
 
 | Document | Who writes it | Meaning |
 |---|---|---|
-| `PeerPairingDesired` | you (the operator) | the pairing you want: which peer, which DID you expect it to have, which collections/profiles to replicate |
+| `PeerPairingDesired` | you (or the network materializer) | the control-plane pairing you want: which peer, which DID you expect it to have, and which narrow network documents should replicate |
+| `DataPlanePairingDesired` | you (the operator) | the application edge you want: which admitted peer should receive this agent's conversation/subagent documents |
 | `PeerPairingApplied` | the runtime reconciler | what it actually installed for that peer — the **ownership record** |
 
 The split matters. The reconciler only ever tears down wiring it finds in
@@ -252,53 +279,73 @@ P2P to loopback for the demo:
 ```bash
 defra-agent init  --home /tmp/coding --agent-name coding \
   --inference-url http://127.0.0.1:8080/v1 --model-name "$MODEL"
-defra-agent server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 0
+defra-agent server --home /tmp/coding --no-codex-shim \
+  --p2p-bind-addr 127.0.0.1 --p2p-port 0 \
+  --p2p-relay-mode disabled --p2p-discovery disabled
 ```
 
 Use Part 1's home (say `~/.defra-agent`) as the first node, "Amy", and
 `/tmp/coding` as the second, "Coding".
 
-## 2. Exchange a pairing invite
+## 2. Create the network and grant membership
 
 Pairing carries the remote agent's **DID** — the identity that is the
 permission and audit boundary for everything that replicates. The
-invite/join flow moves the DID for you, so you never hand-type it.
+invite/join flow moves the DID for you, but v5 invites are membership-gated:
+the issuer must first create an `AgentNetwork` and grant the joining DID.
 
-On Amy, mint an invite token. It encodes Amy's shareable P2P address, peer id,
-DID, and the collection profiles it offers:
-
-```bash
-AMY_INVITE=$(defra-agent p2p pairings invite | jq -r .token)
-```
-
-On Coding, accept it. This writes Coding's `PeerPairingDesired` row for Amy
-and — because this is the first leg — prints a **reciprocal token** so Amy can
-pair back:
+On Amy:
 
 ```bash
-CODING_JOIN=$(defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE")
-CODING_INVITE=$(printf '%s\n' "$CODING_JOIN" | jq -r .reciprocal_token)
+CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
+defra-agent p2p network create --name "Two Node Demo"
+defra-agent p2p network grant "$CODING_DID"
 ```
 
-Pairing is **directional**: Coding now wants documents from Amy, but Amy
-doesn't yet know about Coding. Close the loop by joining the reciprocal token
-on Amy:
+Then mint a signed network-control invite for Coding:
 
 ```bash
-defra-agent p2p pairings join "$CODING_INVITE"
+AMY_INVITE=$(
+  defra-agent p2p pairings invite \
+    --member-did "$CODING_DID" \
+    --template network-control \
+    | jq -r .token
+)
 ```
 
-## 3. Watch the runtime reconcile
+On Coding, accept it:
+
+```bash
+defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+```
+
+This writes Coding's control-plane `PeerPairingDesired` row for Amy, imports
+the signed network root and membership grant, burns the single-use invite
+nonce, and lets the reconciler install the network-control replicator.
+
+## 3. Add the conversation data plane
+
+The network-control edge moves membership and endpoint documents. Conversation
+traffic lives in a separate operator-owned `DataPlanePairingDesired` row so it
+can be filtered by local `agent_did` and gated by the same membership decision.
+
+The demo script writes the two data-plane rows for you. If you are driving the
+flow by hand, use the script with `DEFRA_AGENT_DEMO_KEEP=1` first and inspect
+the generated GraphQL in `scripts/demo-p2p-two-node.sh`; a dedicated CLI sugar
+command for data-plane rows is the next operator-ergonomics step.
+
+## 4. Watch the runtime reconcile
 
 You wrote documents; you installed nothing. Watch the reconciler converge:
 
 ```bash
+defra-agent p2p pairings list --output table
 defra-agent p2p pairings list --home /tmp/coding --output table
 ```
 
 ```
-PEER       DID            PROFILES       CONNECTED  SUBSCRIBED  REPLICATING
-12D3Koo…   did:key:amy…   chat-requests  yes        yes         yes
+PEER       DID            PROFILES  CONNECTED  SUBSCRIBED  REPLICATING
+12D3Koo…   did:key:amy…   -         no         yes         yes
 ```
 
 Those last three columns are the health of the pairing, each derived from a
@@ -310,24 +357,34 @@ different source so you can see *where* a stuck pairing is stuck:
 - **REPLICATING** — every desired replicator address appears in
   `PeerPairingApplied` (the push replicator is installed).
 
-All three flip to `yes` on their own, on the runtime's pairing sweep — no
-further commands. If one stays `no`, that column tells you whether the problem
-is connectivity, subscription, or replication.
+For this loopback/no-relay demo, `SUBSCRIBED` and `REPLICATING` are the
+durable pass criteria. `CONNECTED` is a point-in-time live peer-list check and
+can read `no` between short-lived direct dials even after the reconciler has
+installed the subscription and push replicator. The final proof is the
+replicated `AgentRequest` in the next step.
 
-## 4. Confirm replication
+## 5. Confirm replication
 
-Send a chat on one node and read it on the other. Because the `chat-requests`
-profile replicates the request/response/message collections, a request created
-on Coding and its streamed response are visible from Amy:
+Submit a no-wait request on Coding and read the replicated request row from
+Amy. This proves the data-plane replicator moved a real application document;
+it does not require the model backend to answer.
 
 ```bash
-defra-agent chat --home /tmp/coding "Say hello to the other node."
-defra-agent request submit --graphql http://127.0.0.1:9191/api/v0/graphql \
-  --agent-did "$CODING_DID" --content "ping" | jq -r '.request_id'
-# read the replicated row back from Amy's endpoint
+REQ=$(
+  defra-agent request submit \
+    --graphql http://127.0.0.1:19392/api/v0/graphql \
+    --agent-did "$CODING_DID" \
+    --content "two-node p2p demo ping from Coding" \
+    --no-wait \
+    | jq -r .request_id
+)
+
+defra-agent request show \
+  --graphql http://127.0.0.1:19391/api/v0/graphql \
+  "$REQ" --output json | jq .request
 ```
 
-## 5. Unpair
+## 6. Unpair
 
 Delete the desired row. The runtime sees the row gone, reads its
 `PeerPairingApplied` record, tears down **only** what it installed for that
@@ -356,132 +413,88 @@ across deployments unless `subagent_allow_cross_deployment: true` is set on
 both sides — that gate is off by default and deferred. Pairing is the
 transport; trust is still configured explicitly.
 
-# Part 3 — Join a network
+# Part 3 — Grow the link into a fleet
 
-Part 2 pairs two nodes you wired by hand. A real fleet has many nodes, and you
-do not want to hand-exchange an invite with each one. Part 3 turns pairwise
-pairing into a **network**: join one member, and you discover — and can pair
-with — the whole network. Three layers do this, and the point is that they stay
-distinct:
+Part 2 showed the two-node flow. A real fleet repeats the same pattern for
+each member, with two separate layers:
 
-| Layer | Document | Question it answers |
+| Layer | Documents | What it does |
 |---|---|---|
-| **Discovery** | `PeerRegistry` | *Who is out there?* |
-| **Replication** | `PeerPairingDesired` + reconciler | *Move the documents.* (Part 2) |
-| **Authorization** | signed invite · `subagent_allow_cross_deployment` | *Who may join? Who may delegate?* |
+| **Network control** | `AgentNetwork`, `NetworkMembership`, `PeerEndpoint`, `PeerPairingDesired` | admits a DID into the fleet and gossips only membership/endpoint state |
+| **Conversation data plane** | `DataPlanePairingDesired` | declares which application documents should replicate between two admitted members |
 
-Discovery makes a peer *visible*. It does not make it *authorized*. Those are
-different documents, gated separately — that separation is the whole design.
+That split is the important bit. The invite/join command is now for the narrow
+`network-control` substrate. Chat, subagent, and trace documents move only
+after an operator writes the data-plane edge for that relationship.
 
-## 1. Self-register into the registry
+## 1. Create the fleet root
 
-Each running node writes (and heartbeats) its own row in `PeerRegistry`, keyed
-by its peer id. The runtime does this automatically; the explicit command is
-for a manual refresh, a display name, or to advertise the profiles it offers:
+The fleet admin creates one signed network root, then grants each joining DID.
+On Amy:
 
 ```bash
-defra-agent p2p network register --profile discovery --display-name amy
+defra-agent p2p network create --name "Fleet One"
+defra-agent p2p network grant "$CODING_DID"
 ```
 
-The registry travels in the `discovery` profile. So the moment a node pairs
-with a member over `discovery`, it replicates `PeerRegistry` and sees every
-member that member already knows.
+`network create` writes the singleton `AgentNetwork` document and the admin's
+own membership. `network grant` writes an active, admin-signed
+`NetworkMembership` for Coding's DID.
 
-## 2. Mint a signed invite — the credential
+## 2. Enroll the member
 
-In Part 2 any reachable node could join. A network gates membership on a
-member's cryptographic say-so. `p2p pairings invite` now signs the token with
-the local agent's DID and **carries the chosen scope template** (default:
-`conversation`) so the joining peer knows exactly what to replicate:
+Mint a v5 invite for the granted DID. Use `network-control` for fleet
+enrollment:
 
 ```bash
-AMY_INVITE=$(defra-agent p2p pairings invite --template conversation | jq -r .token)
-```
+AMY_INVITE=$(
+  defra-agent p2p pairings invite \
+    --member-did "$CODING_DID" \
+    --template network-control \
+    | jq -r .token
+)
 
-Pair by intent, not by schema: `--template` selects a named bundle of
-collections, scoping policy, and delivery mode. The runtime resolves the
-collections and filtering at reconcile time so operators never hand-author
-collection lists. Use `defra-agent p2p templates list` to see the built-in
-catalog (`conversation`, `agent-config`, `backup`).
-
-`p2p pairings join` verifies that signature and reads the template from the
-token. Because a `did:key` embeds its own public key, verification needs
-nothing but the token — no lookup, no registry:
-
-```bash
 defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
 ```
 
-`join` reads the template from the token and writes it as the desired pairing's
-template. If both `--template` and a token template are present, the explicit
-`--template` wins (document it in your script if you override):
+The token embeds the signed network root and the signed membership grant.
+`join` verifies both, burns the single-use nonce, writes Coding's
+`PeerPairingDesired` row for Amy, and lets the runtime reconcile the
+network-control edge. v5 joins do not mint a reciprocal token.
+
+## 3. Add an application edge
+
+Network membership answers "may this node belong to the fleet?" It does not
+answer "which application documents should move?" For chat and subagent demos,
+write `DataPlanePairingDesired` rows for the exact pair of agents you want to
+link.
+
+The local demo script does this today:
 
 ```bash
-# Override to backup template regardless of what the token offers:
-defra-agent p2p pairings join --home /tmp/coding --template backup "$AMY_INVITE"
+make demo-p2p-two-node
 ```
 
-The rule has two arms:
+It writes Amy→Coding and Coding→Amy conversation data-plane rows, waits until
+both reconcilers install push replicators, then submits a request on Coding and
+confirms Amy sees the replicated `AgentRequest`.
 
-- **Bootstrap (trust-on-first-use).** Your registry has no other members yet,
-  so a valid signature over a well-formed token is enough. The issuer's DID is
-  recorded as `invited_by` — an audit trail of how you entered the trust set.
-- **Subsequent invites.** Once your registry holds live members, an invite is
-  admitted only if its issuer is one of them. A signature from a non-member (or
-  an evicted one) is rejected. A tampered signature is rejected outright.
+## 4. Optional registry discovery
 
-A reciprocal join (the `--reciprocal` token a first join prints, so the issuer
-pairs back) completes a handshake both sides already agreed to, so it verifies
-the signature but skips the membership arm.
+`p2p network register` and `p2p network list` still operate on the
+`PeerRegistry` discovery view: useful names, offered templates, heartbeat
+freshness, and "visible but not paired" diagnostics. Discovery makes a peer
+visible; it does not grant membership and it does not create conversation
+authority by itself.
 
-## 3. Watch transitive pairing
+## 5. The authorization boundary, again
 
-Pairing Coding to Amy replicated Amy's `PeerRegistry`. List what Coding can now
-see:
-
-```bash
-defra-agent p2p network list --home /tmp/coding --output table
-```
-
-```
-PEER       DID            NAME   NETWORK  ONLINE  PAIRED  PROFILES
-12D3Koo…   did:key:amy…   amy    default  yes     yes     discovery
-12D3Koo…   did:key:dana…  dana   default  yes     no      discovery
-```
-
-`ONLINE` is derived from the heartbeat age, not the self-reported `status` —
-the timestamp is the truth, the field is a hint. `PAIRED` shows whether a
-`PeerPairingDesired` row already exists for that peer.
-
-Dana is *visible* but not *paired*: discovery found her through Amy's registry,
-but nobody has paired with her yet. Turn on auto-pair and the discovery
-reconciler closes that gap:
-
-```bash
-DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1 defra-agent server --home /tmp/coding \
-  --p2p-bind-addr 127.0.0.1 --p2p-port 0
-```
-
-Now, for each live member that Coding has *not* already paired with by hand,
-the reconciler writes a **registry-owned** `PeerPairingDesired` row
-(`source: "registry"`) and the Part 2 pairing reconciler wires it — no invite,
-no operator command. Auto-pair is off by default; with it off, `network list`
-shows the peers and you pair explicitly.
-
-Ownership stays clean across the two sources of desired rows:
-
-- A registry entry going stale or removed retracts **only** its registry-owned
-  rows. Your hand-authored `pairings set` rows are never touched.
-- The discovery step never overwrites an operator-authored row for the same
-  peer — operator intent wins.
-
-## 4. The authorization boundary, again
-
-Discovery and replication moved documents and wired transport. They did **not**
-grant permission. A peer Coding auto-paired with still cannot run a delegated
-subagent on Coding's behalf unless `subagent_allow_cross_deployment: true` is
-set on both behaviors' tool selections — exactly the Part 2 boundary, now at
-network scale. Visible ≠ paired ≠ authorized; each is its own document.
+Network-control and data-plane replication moved documents and wired
+transport. They did **not** grant tool permission. A peer Coding is linked to
+still cannot run a delegated subagent on Coding's behalf unless
+`subagent_allow_cross_deployment: true` is set on both behaviors' tool
+selections. Visible ≠ admitted ≠ replicating ≠ authorized; each is its own
+document.
 
 ## How this is wired (for the curious)
 
