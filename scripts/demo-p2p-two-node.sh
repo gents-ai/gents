@@ -17,11 +17,18 @@ Environment:
                                   cargo build -p defra-agent-cli.
   DEFRA_AGENT_DEMO_ROOT           Demo state root. Defaults to mktemp under /tmp.
   DEFRA_AGENT_DEMO_KEEP=1         Keep homes/logs and leave servers running.
+  DEFRA_AGENT_DEMO_BACKEND_PRESET Backend preset passed to init (for example:
+                                  openai, openrouter, llama-cpp, vllm).
   DEFRA_AGENT_DEMO_INFERENCE_URL  Backend URL used by init.
                                   Default: http://127.0.0.1:8080/v1
-  DEFRA_AGENT_DEMO_MODEL          Model name used by init. Default: demo-model
-  AMY_HTTP_PORT                   Amy HTTP port. Default: 19391
-  CODING_HTTP_PORT                Coding HTTP port. Default: 19392
+  DEFRA_AGENT_DEMO_MODEL          Model name used by init. The default local
+                                  path uses google/gemma-4-12B-it-qat-q4_0-gguf;
+                                  backend presets use their CLI defaults unless
+                                  this is set.
+  DEFRA_AGENT_DEMO_API_KEY_ENV_VAR
+                                  API-key env var stored in the backend document.
+  AGENT_A_HTTP_PORT                   Amy HTTP port. Default: 19391
+  AGENT_B_HTTP_PORT                Coding HTTP port. Default: 19392
 EOF
 }
 
@@ -60,17 +67,38 @@ fi
 ROOT="${DEFRA_AGENT_DEMO_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/defra-agent-p2p-demo.XXXXXX")}"
 KEEP="${DEFRA_AGENT_DEMO_KEEP:-0}"
 MODEL_URL="${DEFRA_AGENT_DEMO_INFERENCE_URL:-http://127.0.0.1:8080/v1}"
-MODEL_NAME="${DEFRA_AGENT_DEMO_MODEL:-demo-model}"
-AMY_HTTP_PORT="${AMY_HTTP_PORT:-19391}"
-CODING_HTTP_PORT="${CODING_HTTP_PORT:-19392}"
+DEFAULT_LOCAL_MODEL_NAME="google/gemma-4-12B-it-qat-q4_0-gguf"
+MODEL_NAME="${DEFRA_AGENT_DEMO_MODEL:-}"
+BACKEND_PRESET="${DEFRA_AGENT_DEMO_BACKEND_PRESET:-}"
+if [[ -z "$BACKEND_PRESET" && -z "$MODEL_NAME" ]]; then
+  MODEL_NAME="$DEFAULT_LOCAL_MODEL_NAME"
+fi
+API_KEY_ENV_VAR="${DEFRA_AGENT_DEMO_API_KEY_ENV_VAR:-}"
+# Agent names are parameterized so wrappers (e.g. the desktop demo) can relabel
+# the two runtimes; the standalone runbook keeps amy/coding.
+AGENT_A_NAME="${DEFRA_AGENT_DEMO_AGENT_A_NAME:-amy}"
+AGENT_B_NAME="${DEFRA_AGENT_DEMO_AGENT_B_NAME:-coding}"
+AGENT_A_HTTP_PORT="${AGENT_A_HTTP_PORT:-${AMY_HTTP_PORT:-19391}}"
+AGENT_B_HTTP_PORT="${AGENT_B_HTTP_PORT:-${CODING_HTTP_PORT:-19392}}"
 
-AMY_HOME="$ROOT/amy"
-CODING_HOME="$ROOT/coding"
-AMY_WORK="$ROOT/amy-work"
-CODING_WORK="$ROOT/coding-work"
+if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "$HOME" ]]; then
+  echo "refusing unsafe demo root: '$ROOT'" >&2
+  exit 1
+fi
+if [[ "$AGENT_A_HTTP_PORT" == "$AGENT_B_HTTP_PORT" ]]; then
+  echo "AGENT_A_HTTP_PORT and AGENT_B_HTTP_PORT must differ (both are $AGENT_A_HTTP_PORT)" >&2
+  exit 1
+fi
+
+AGENT_A_HOME="$ROOT/$AGENT_A_NAME"
+AGENT_B_HOME="$ROOT/$AGENT_B_NAME"
+AGENT_A_WORK="$ROOT/$AGENT_A_NAME-work"
+AGENT_B_WORK="$ROOT/$AGENT_B_NAME-work"
 LOG_DIR="$ROOT/logs"
-AMY_GRAPHQL="http://127.0.0.1:${AMY_HTTP_PORT}/api/v0/graphql"
-CODING_GRAPHQL="http://127.0.0.1:${CODING_HTTP_PORT}/api/v0/graphql"
+STATE_FILE="$ROOT/demo-state.json"
+PID_FILE="$ROOT/demo-pids.txt"
+AGENT_A_GRAPHQL="http://127.0.0.1:${AGENT_A_HTTP_PORT}/api/v0/graphql"
+AGENT_B_GRAPHQL="http://127.0.0.1:${AGENT_B_HTTP_PORT}/api/v0/graphql"
 
 PIDS=()
 
@@ -97,10 +125,14 @@ cleanup() {
   rm -rf "$ROOT"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
+STEP=0
 say() {
+  STEP=$((STEP + 1))
   echo
-  echo "==> $*"
+  echo "==> [step $STEP] $*"
 }
 
 run_json() {
@@ -124,22 +156,61 @@ post_graphql() {
   printf '%s\n' "$response"
 }
 
+dump_log_tail() {
+  local log="$1"
+  [[ -n "$log" && -f "$log" ]] || return 0
+  echo "  --- last 20 lines of $log ---" >&2
+  tail -n 20 "$log" | sed 's/^/  | /' >&2
+  echo "  --- end of log ---" >&2
+}
+
 wait_http() {
   local url="$1"
   local pid="$2"
   local label="$3"
+  local log="${4:-}"
   for _ in $(seq 1 300); do
     if curl -fsS "$url" >/dev/null 2>&1; then
       return 0
     fi
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       echo "$label exited before becoming ready" >&2
+      dump_log_tail "$log"
       return 1
     fi
     sleep 0.2
   done
   echo "timed out waiting for $label at $url" >&2
+  dump_log_tail "$log"
   return 1
+}
+
+port_in_use() {
+  # Connect to a loopback listener using bash's /dev/tcp; success means busy.
+  local port="$1"
+  (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null
+}
+
+ensure_ports_available() {
+  local conflict=0 entry name port
+  for entry in "${AGENT_A_NAME}:${AGENT_A_HTTP_PORT}" "${AGENT_B_NAME}:${AGENT_B_HTTP_PORT}"; do
+    name="${entry%%:*}"
+    port="${entry##*:}"
+    if port_in_use "$port"; then
+      echo "HTTP port $port (for $name) is already in use" >&2
+      conflict=1
+    fi
+  done
+  if [[ "$conflict" == "1" ]]; then
+    cat >&2 <<EOF
+Refusing to start: a demo HTTP port is busy (a previous demo may still be running).
+Free the port, or choose different ports:
+  AGENT_A_HTTP_PORT=<free> AGENT_B_HTTP_PORT=<free> $0
+Inspect a listener with:
+  lsof -nP -iTCP:<port> -sTCP:LISTEN
+EOF
+    exit 1
+  fi
 }
 
 start_server() {
@@ -149,7 +220,7 @@ start_server() {
   local log="$LOG_DIR/${name}.log"
   if [[ "$KEEP" == "1" ]]; then
     nohup env \
-      RUST_LOG="warn,defra_agent::agent::p2p_reconcile=debug" \
+      RUST_LOG="${DEFRA_AGENT_DEMO_RUST_LOG:-warn,defra_agent::agent::p2p_reconcile=debug}" \
       DEFRA_AGENT_REGISTRY_HEARTBEAT_MS=1000 \
       DEFRA_AGENT_PAIRING_SWEEP_MS=1000 \
       DEFRA_AGENT_REGISTRY_STALE_MS=300000 \
@@ -165,7 +236,7 @@ start_server() {
         >"$log" 2>&1 &
   else
     env \
-      RUST_LOG="warn,defra_agent::agent::p2p_reconcile=debug" \
+      RUST_LOG="${DEFRA_AGENT_DEMO_RUST_LOG:-warn,defra_agent::agent::p2p_reconcile=debug}" \
       DEFRA_AGENT_REGISTRY_HEARTBEAT_MS=1000 \
       DEFRA_AGENT_PAIRING_SWEEP_MS=1000 \
       DEFRA_AGENT_REGISTRY_STALE_MS=300000 \
@@ -182,7 +253,8 @@ start_server() {
   fi
   local pid=$!
   PIDS+=("$pid")
-  wait_http "http://127.0.0.1:${port}/healthz" "$pid" "$name"
+  echo "$pid" >>"$PID_FILE"
+  wait_http "http://127.0.0.1:${port}/healthz" "$pid" "$name" "$log"
   echo "  $name ready on http://127.0.0.1:${port} (pid $pid, log $log)"
 }
 
@@ -314,70 +386,177 @@ EOF
   return 1
 }
 
-mkdir -p "$AMY_HOME" "$CODING_HOME" "$AMY_WORK" "$CODING_WORK" "$LOG_DIR"
+wait_conversation_on_peer() {
+  local graphql="$1"
+  local session_id="$2"
+  local label="$3"
+  local escaped
+  escaped="$(graphql_escape "$session_id")"
+  local query
+  query=$(cat <<EOF
+{
+  AgentConversation(filter: { session_id: { _eq: "$escaped" } }, limit: 1) {
+    session_id
+    title
+    preview_text
+    status
+    latest_request_id
+  }
+}
+EOF
+)
+  for _ in $(seq 1 120); do
+    local response
+    response="$(post_graphql "$graphql" "$query")"
+    if jq -e '.data.AgentConversation | length == 1' >/dev/null <<<"$response"; then
+      echo "  $label saw AgentConversation $session_id"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "timed out waiting for AgentConversation $session_id on $label" >&2
+  return 1
+}
+
+say "Checking demo HTTP ports are free"
+ensure_ports_available
+echo "  Amy port:    $AGENT_A_HTTP_PORT free"
+echo "  Coding port: $AGENT_B_HTTP_PORT free"
+
+mkdir -p "$AGENT_A_HOME" "$AGENT_B_HOME" "$AGENT_A_WORK" "$AGENT_B_WORK" "$LOG_DIR"
+: >"$PID_FILE"
+
+INIT_BACKEND_ARGS=()
+if [[ -n "$MODEL_NAME" ]]; then
+  INIT_BACKEND_ARGS+=(--model-name "$MODEL_NAME")
+fi
+if [[ -n "$BACKEND_PRESET" ]]; then
+  INIT_BACKEND_ARGS+=(--backend-preset "$BACKEND_PRESET")
+  if [[ -n "${DEFRA_AGENT_DEMO_INFERENCE_URL:-}" ]]; then
+    INIT_BACKEND_ARGS+=(--inference-url "$MODEL_URL")
+  fi
+else
+  INIT_BACKEND_ARGS+=(--inference-url "$MODEL_URL")
+fi
+if [[ -n "$API_KEY_ENV_VAR" ]]; then
+  INIT_BACKEND_ARGS+=(--api-key-env-var "$API_KEY_ENV_VAR")
+fi
 
 say "Initializing isolated nodes"
-AMY_INIT="$(run_json init --home "$AMY_HOME" --dangerously-overwrite --agent-name amy --tool-root "$AMY_WORK" --inference-url "$MODEL_URL" --model-name "$MODEL_NAME")"
-CODING_INIT="$(run_json init --home "$CODING_HOME" --dangerously-overwrite --agent-name coding --tool-root "$CODING_WORK" --inference-url "$MODEL_URL" --model-name "$MODEL_NAME")"
-AMY_DID="$(jq -r '.agent_did' <<<"$AMY_INIT")"
-CODING_DID="$(jq -r '.agent_did' <<<"$CODING_INIT")"
-echo "  Amy DID:    $AMY_DID"
-echo "  Coding DID: $CODING_DID"
+AGENT_A_INIT="$(run_json init --home "$AGENT_A_HOME" --dangerously-overwrite --agent-name "$AGENT_A_NAME" --tool-root "$AGENT_A_WORK" "${INIT_BACKEND_ARGS[@]}")"
+AGENT_B_INIT="$(run_json init --home "$AGENT_B_HOME" --dangerously-overwrite --agent-name "$AGENT_B_NAME" --tool-root "$AGENT_B_WORK" "${INIT_BACKEND_ARGS[@]}")"
+AGENT_A_DID="$(jq -r '.agent_did' <<<"$AGENT_A_INIT")"
+AGENT_B_DID="$(jq -r '.agent_did' <<<"$AGENT_B_INIT")"
+echo "  Amy DID:    $AGENT_A_DID"
+echo "  Coding DID: $AGENT_B_DID"
 
 say "Starting two loopback P2P runtimes"
-start_server "amy" "$AMY_HOME" "$AMY_HTTP_PORT"
-start_server "coding" "$CODING_HOME" "$CODING_HTTP_PORT"
+start_server "$AGENT_A_NAME" "$AGENT_A_HOME" "$AGENT_A_HTTP_PORT"
+start_server "$AGENT_B_NAME" "$AGENT_B_HOME" "$AGENT_B_HTTP_PORT"
 
 say "Reading live P2P identities"
-AMY_P2P="$(p2p_status "$AMY_HOME")"
-CODING_P2P="$(p2p_status "$CODING_HOME")"
-AMY_PEER="$(jq -r '.p2p_peer_id' <<<"$AMY_P2P")"
-CODING_PEER="$(jq -r '.p2p_peer_id' <<<"$CODING_P2P")"
-AMY_SHAREABLE="$(jq -r '.p2p_shareable_address' <<<"$AMY_P2P")"
-CODING_SHAREABLE="$(jq -r '.p2p_shareable_address' <<<"$CODING_P2P")"
-echo "  Amy peer:        $AMY_PEER"
-echo "  Coding peer:     $CODING_PEER"
-echo "  Amy shareable:   $AMY_SHAREABLE"
-echo "  Coding shareable: $CODING_SHAREABLE"
+AGENT_A_P2P="$(p2p_status "$AGENT_A_HOME")"
+AGENT_B_P2P="$(p2p_status "$AGENT_B_HOME")"
+AGENT_A_PEER="$(jq -r '.p2p_peer_id' <<<"$AGENT_A_P2P")"
+AGENT_B_PEER="$(jq -r '.p2p_peer_id' <<<"$AGENT_B_P2P")"
+AGENT_A_SHAREABLE="$(jq -r '.p2p_shareable_address' <<<"$AGENT_A_P2P")"
+AGENT_B_SHAREABLE="$(jq -r '.p2p_shareable_address' <<<"$AGENT_B_P2P")"
+echo "  Amy peer:        $AGENT_A_PEER"
+echo "  Coding peer:     $AGENT_B_PEER"
+echo "  Amy shareable:   $AGENT_A_SHAREABLE"
+echo "  Coding shareable: $AGENT_B_SHAREABLE"
 
 say "Creating the network and granting Coding membership"
-run_json p2p network create --home "$AMY_HOME" --name "Two Node Demo" --output json | jq .
-run_json p2p network grant --home "$AMY_HOME" "$CODING_DID" --output json | jq .
+run_json p2p network create --home "$AGENT_A_HOME" --name "Two Node Demo" --output json | jq .
+run_json p2p network grant --home "$AGENT_A_HOME" "$AGENT_B_DID" --output json | jq .
 
 say "Joining Coding to Amy with a signed network-control invite"
-AMY_INVITE="$(run_json p2p pairings invite --home "$AMY_HOME" --member-did "$CODING_DID" --template network-control)"
-TOKEN="$(jq -r '.token' <<<"$AMY_INVITE")"
-run_json p2p pairings join --home "$CODING_HOME" "$TOKEN" | jq .
+AGENT_A_INVITE="$(run_json p2p pairings invite --home "$AGENT_A_HOME" --member-did "$AGENT_B_DID" --template network-control)"
+TOKEN="$(jq -r '.token' <<<"$AGENT_A_INVITE")"
+run_json p2p pairings join --home "$AGENT_B_HOME" "$TOKEN" | jq .
 
 say "Adding bidirectional conversation data-plane rows"
-upsert_data_plane "$AMY_GRAPHQL" "$CODING_PEER" "$AMY_DID" "$CODING_SHAREABLE"
-upsert_data_plane "$CODING_GRAPHQL" "$AMY_PEER" "$CODING_DID" "$AMY_SHAREABLE"
+upsert_data_plane "$AGENT_A_GRAPHQL" "$AGENT_B_PEER" "$AGENT_A_DID" "$AGENT_B_SHAREABLE"
+upsert_data_plane "$AGENT_B_GRAPHQL" "$AGENT_A_PEER" "$AGENT_B_DID" "$AGENT_A_SHAREABLE"
 
 say "Waiting for reconciled replicators"
-wait_replicator "$CODING_GRAPHQL" "$AMY_PEER" "Coding -> Amy"
-wait_replicator "$AMY_GRAPHQL" "$CODING_PEER" "Amy -> Coding"
+wait_replicator "$AGENT_B_GRAPHQL" "$AGENT_A_PEER" "Coding -> Amy"
+wait_replicator "$AGENT_A_GRAPHQL" "$AGENT_B_PEER" "Amy -> Coding"
 
 say "Reconciled data-plane state"
 echo "  Amy -> Coding: network-control subscribed, conversation replicator installed"
 echo "  Coding -> Amy: network-control subscribed, conversation replicator installed"
 
 say "Proving document replication with one no-wait request"
-REQUEST="$(run_json request submit --graphql "$CODING_GRAPHQL" --agent-did "$CODING_DID" --content "two-node p2p demo ping from Coding" --no-wait)"
+REQUEST="$(run_json request submit --graphql "$AGENT_B_GRAPHQL" --agent-did "$AGENT_B_DID" --content "two-node p2p demo ping from Coding" --no-wait)"
 REQUEST_ID="$(jq -r '.request_id' <<<"$REQUEST")"
+REQUEST_SESSION_ID="$(jq -r '.session_id' <<<"$REQUEST")"
 echo "  Coding created AgentRequest $REQUEST_ID"
-wait_request_on_peer "$AMY_GRAPHQL" "$REQUEST_ID" "Amy"
+wait_conversation_on_peer "$AGENT_B_GRAPHQL" "$REQUEST_SESSION_ID" "Coding"
+wait_request_on_peer "$AGENT_A_GRAPHQL" "$REQUEST_ID" "Amy"
+wait_conversation_on_peer "$AGENT_A_GRAPHQL" "$REQUEST_SESSION_ID" "Amy"
+
+PIDS_JSON="$(printf '%s\n' "${PIDS[@]}" | jq -R 'select(length > 0) | tonumber' | jq -s '.')"
+jq -n \
+  --arg root "$ROOT" \
+  --arg logs "$LOG_DIR" \
+  --arg requestId "$REQUEST_ID" \
+  --arg requestSessionId "$REQUEST_SESSION_ID" \
+  --arg amyHome "$AGENT_A_HOME" \
+  --arg amyWork "$AGENT_A_WORK" \
+  --arg amyDid "$AGENT_A_DID" \
+  --arg amyPeer "$AGENT_A_PEER" \
+  --arg amyShareable "$AGENT_A_SHAREABLE" \
+  --arg amyGraphql "$AGENT_A_GRAPHQL" \
+  --arg codingHome "$AGENT_B_HOME" \
+  --arg codingWork "$AGENT_B_WORK" \
+  --arg codingDid "$AGENT_B_DID" \
+  --arg codingPeer "$AGENT_B_PEER" \
+  --arg codingShareable "$AGENT_B_SHAREABLE" \
+  --arg codingGraphql "$AGENT_B_GRAPHQL" \
+  --arg nameA "$AGENT_A_NAME" \
+  --arg nameB "$AGENT_B_NAME" \
+  --argjson pids "$PIDS_JSON" \
+  '{
+    root: $root,
+    logs: $logs,
+    pids: $pids,
+    request: {
+      id: $requestId,
+      session_id: $requestSessionId
+    },
+    node_a: {
+      name: $nameA,
+      home: $amyHome,
+      work: $amyWork,
+      agent_did: $amyDid,
+      peer_id: $amyPeer,
+      shareable_address: $amyShareable,
+      graphql: $amyGraphql
+    },
+    node_b: {
+      name: $nameB,
+      home: $codingHome,
+      work: $codingWork,
+      agent_did: $codingDid,
+      peer_id: $codingPeer,
+      shareable_address: $codingShareable,
+      graphql: $codingGraphql
+    }
+  }' >"$STATE_FILE"
 
 say "Demo complete"
 echo "  Root:        $ROOT"
-echo "  Amy home:    $AMY_HOME"
-echo "  Coding home: $CODING_HOME"
+echo "  Amy home:    $AGENT_A_HOME"
+echo "  Coding home: $AGENT_B_HOME"
 echo "  Logs:        $LOG_DIR"
+echo "  State:       $STATE_FILE"
 echo
 if [[ "$KEEP" == "1" ]]; then
   echo "Try manually:"
-  echo "  $BIN p2p pairings list --home $AMY_HOME --output table"
-  echo "  $BIN p2p pairings list --home $CODING_HOME --output table"
-  echo "  $BIN request show --graphql $AMY_GRAPHQL $REQUEST_ID --output json | jq .request"
+  echo "  $BIN p2p pairings list --home $AGENT_A_HOME --output table"
+  echo "  $BIN p2p pairings list --home $AGENT_B_HOME --output table"
+  echo "  $BIN request show --graphql $AGENT_A_GRAPHQL $REQUEST_ID --output json | jq .request"
 else
   echo "Run with DEFRA_AGENT_DEMO_KEEP=1 to keep the runtimes for manual inspection."
 fi
