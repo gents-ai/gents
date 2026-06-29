@@ -7,9 +7,10 @@ use crate::toolset::ToolSet;
 
 use super::build::{
     build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
-    downgrade_file_tools, has_registered_mcp_services,
+    downgrade_file_tools, online_mcp_service_ids,
 };
 use super::modes::ToolCeiling;
+use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
     BackgroundToolConfig, CustomToolFactory, OrchestrationToolConfig, SubagentToolConfig,
     ToolSelection,
@@ -27,10 +28,14 @@ pub struct BehaviorToolConfig {
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
+    enable_context_budget_tool: bool,
     enable_session_history_tool: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
+    behavior_policy: ToolPolicySurface,
+    ceiling_policy: ToolPolicySurface,
+    static_policy: ToolPolicySurface,
 }
 
 impl BehaviorToolConfig {
@@ -44,10 +49,23 @@ impl BehaviorToolConfig {
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
             enable_memory: false,
+            enable_context_budget_tool: true,
             enable_session_history_tool: false,
             enable_defra_query: true,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            behavior_policy: ToolPolicySurface::legacy_non_host_wide(
+                super::FileToolMode::Off,
+                super::BashMode::Off,
+            ),
+            ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
+                super::FileToolMode::Off,
+                super::BashMode::Off,
+            ),
+            static_policy: ToolPolicySurface::legacy_non_host_wide(
+                super::FileToolMode::Off,
+                super::BashMode::Off,
+            ),
         }
     }
 
@@ -88,25 +106,33 @@ impl BehaviorToolConfig {
         subagent_tools: SubagentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        let behavior_policy = ToolPolicySurface::from_selection(&selection, &subagent_tools);
+        let ceiling_policy = ceiling.policy().clone();
+        let static_policy = ToolPolicySurface::effective(
+            &behavior_policy,
+            &ceiling_policy,
+            &ToolPolicySurface::runtime_all(),
+        );
         let ToolSelection {
             file_tools: requested_file_tools,
             file_tool_root,
             bash: requested_bash,
             command_policy,
             cli_tool_names,
-            enable_meta_tools,
+            enable_meta_tools: _,
             allowed_mcp_service_ids,
             backgroundable_tool_names,
-            orchestration_enabled,
+            orchestration_enabled: _,
             enable_memory,
-            enable_session_history_tool,
-            enable_defra_query,
-            defra_query_collections,
+            enable_session_history_tool: _,
+            enable_defra_query: _,
+            defra_query_collections: _,
             write_tools,
         } = selection;
         let file_tools =
-            downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
-        let bash = downgrade_bash(behavior_name, requested_bash, ceiling.bash());
+            downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
+        let bash = downgrade_bash(behavior_name, requested_bash, static_policy.bash.tool);
+        let cli_tool_names = static_policy.filter_cli_names(cli_tool_names);
         let host_tools = build_host_tools(
             behavior_name,
             file_tools,
@@ -117,9 +143,13 @@ impl BehaviorToolConfig {
             ceiling,
         )?;
 
-        let background_allowlist = dedupe_strings(backgroundable_tool_names);
+        let effective_allowed_mcp_service_ids =
+            effective_string_allowlist(allowed_mcp_service_ids, &static_policy.mcp_services);
+
+        let background_allowlist =
+            dedupe_strings(static_policy.filter_background_tools(backgroundable_tool_names));
         for name in &background_allowlist {
-            let allowed_mcp_wrapper = enable_meta_tools && name == "call_tool";
+            let allowed_mcp_wrapper = static_policy.meta && name == "call_tool";
             if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
                 anyhow::bail!(
                     "behavior {behavior_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
@@ -127,30 +157,41 @@ impl BehaviorToolConfig {
             }
         }
 
+        let mut effective_subagent_targets = dedupe_subagent_targets(subagent_tools.targets);
+        effective_subagent_targets.retain(|target| {
+            static_policy
+                .subagent_targets
+                .permits(&(target.agent_did.clone(), target.behavior_id.clone()))
+        });
+
         Ok(Self {
             host_tools,
-            enable_meta_tools,
-            allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
+            enable_meta_tools: static_policy.meta,
+            allowed_mcp_service_ids: effective_allowed_mcp_service_ids,
             subagent_tools: SubagentToolConfig {
-                targets: dedupe_subagent_targets(subagent_tools.targets),
-                spawn_enabled: subagent_tools.spawn_enabled,
-                steering_enabled: subagent_tools.steering_enabled,
-                background_enabled: subagent_tools.background_enabled,
+                targets: effective_subagent_targets,
+                spawn_enabled: static_policy.spawn,
+                steering_enabled: static_policy.steering,
+                background_enabled: static_policy.background,
                 default_await_mode: subagent_tools.default_await_mode,
-                allow_cross_deployment: subagent_tools.allow_cross_deployment,
+                allow_cross_deployment: static_policy.cross_deployment,
             },
             orchestration_tools: OrchestrationToolConfig {
-                enabled: orchestration_enabled,
+                enabled: static_policy.orchestration,
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
             },
             custom_tools,
-            enable_memory,
-            enable_session_history_tool,
-            enable_defra_query,
-            defra_query_collections: dedupe_strings(defra_query_collections),
-            write_tools,
+            enable_memory: static_policy.memory && enable_memory,
+            enable_context_budget_tool: static_policy.context_budget,
+            enable_session_history_tool: static_policy.session_history,
+            enable_defra_query: static_policy.defra_query,
+            defra_query_collections: static_policy.defra_query_collections_for_runtime(),
+            write_tools: static_policy.write_decls_for_runtime(&write_tools),
+            behavior_policy,
+            ceiling_policy,
+            static_policy,
         })
     }
 
@@ -206,30 +247,50 @@ impl BehaviorToolConfig {
         node: &EmbeddedNode,
         subagent_tools: SubagentToolConfig,
     ) -> Result<ToolSurface> {
-        let mcp_services_online = has_registered_mcp_services(node).await?;
-        Ok(self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools))
+        let availability =
+            RuntimeToolAvailability::from_online_mcp_services(online_mcp_service_ids(node).await?);
+        Ok(self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn resolve_with_subagent_tools_for_mcp_presence(
         &self,
         mcp_services_online: bool,
         subagent_tools: SubagentToolConfig,
     ) -> ToolSurface {
-        let include_meta_tools = self.enable_meta_tools && mcp_services_online;
+        self.resolve_with_subagent_tools_for_runtime_availability(
+            RuntimeToolAvailability::for_mcp_presence(mcp_services_online),
+            subagent_tools,
+        )
+    }
+
+    pub(crate) fn resolve_with_subagent_tools_for_runtime_availability(
+        &self,
+        availability: RuntimeToolAvailability,
+        subagent_tools: SubagentToolConfig,
+    ) -> ToolSurface {
+        let effective_policy = self.static_policy.meet(&availability.policy);
+        let include_meta_tools = effective_policy.include_meta_tools();
+        let allowed_mcp_service_ids = effective_string_allowlist(
+            self.allowed_mcp_service_ids.clone(),
+            &effective_policy.mcp_services,
+        );
 
         ToolSurface {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
-            allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
+            allowed_mcp_service_ids,
             subagent_tools,
             orchestration_tools: self.orchestration_tools.clone(),
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
-            enable_memory: self.enable_memory,
-            enable_session_history_tool: self.enable_session_history_tool,
-            enable_defra_query: self.enable_defra_query,
-            defra_query_collections: self.defra_query_collections.clone(),
-            write_tools: self.write_tools.clone(),
+            enable_memory: effective_policy.memory && self.enable_memory,
+            enable_context_budget_tool: effective_policy.context_budget
+                && self.enable_context_budget_tool,
+            enable_session_history_tool: effective_policy.session_history,
+            enable_defra_query: effective_policy.defra_query,
+            defra_query_collections: effective_policy.defra_query_collections_for_runtime(),
+            write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
         }
     }
 
@@ -257,6 +318,7 @@ impl BehaviorToolConfig {
         self.resolve_with_subagent_tools(node, subagent_tools).await
     }
 
+    #[allow(dead_code)]
     pub(crate) fn resolve_with_available_subagent_targets_for_mcp_presence(
         &self,
         mcp_services_online: bool,
@@ -274,11 +336,43 @@ impl BehaviorToolConfig {
         });
         self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools)
     }
+
+    pub(crate) fn behavior_policy(&self) -> &ToolPolicySurface {
+        &self.behavior_policy
+    }
+
+    pub(crate) fn ceiling_policy(&self) -> &ToolPolicySurface {
+        &self.ceiling_policy
+    }
+
+    pub(crate) fn static_policy(&self) -> &ToolPolicySurface {
+        &self.static_policy
+    }
 }
 
 impl Default for BehaviorToolConfig {
     fn default() -> Self {
         Self::meta_only()
+    }
+}
+
+fn effective_string_allowlist(
+    requested: Vec<String>,
+    scope: &EndpointScope<String, ()>,
+) -> Vec<String> {
+    match scope {
+        EndpointScope::None => Vec::new(),
+        EndpointScope::All => dedupe_strings(requested),
+        EndpointScope::Only(keys) => {
+            let requested = dedupe_strings(requested);
+            if requested.is_empty() {
+                return keys.keys().cloned().collect();
+            }
+            requested
+                .into_iter()
+                .filter(|value| keys.contains_key(value))
+                .collect()
+        }
     }
 }
 
@@ -301,12 +395,19 @@ impl std::fmt::Debug for BehaviorToolConfig {
             )
             .field("enable_memory", &self.enable_memory)
             .field(
+                "enable_context_budget_tool",
+                &self.enable_context_budget_tool,
+            )
+            .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)
+            .field("behavior_policy", &self.behavior_policy)
+            .field("ceiling_policy", &self.ceiling_policy)
+            .field("static_policy", &self.static_policy)
             .finish()
     }
 }

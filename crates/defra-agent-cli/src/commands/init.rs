@@ -568,6 +568,7 @@ fn tool_selection_for_package(
         selection_id: tool_selection_id.to_string(),
         agent_did: agent_did.to_string(),
         display_name: Some(profile.display_name.to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(profile.enable_file_tools),
         file_tools_mode: Some(profile.file_tools_mode.to_string()),
         file_tool_root: None,

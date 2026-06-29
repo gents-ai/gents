@@ -4,6 +4,8 @@ use anyhow::{bail, Result};
 
 use crate::toolset::CliToolConfig;
 
+use super::policy::{EndpointScope, ToolPolicySurface};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FileToolMode {
     #[default]
@@ -64,6 +66,7 @@ pub struct ToolCeiling {
     bash: BashMode,
     cli_tools: Vec<CliToolConfig>,
     root: Option<PathBuf>,
+    policy: ToolPolicySurface,
 }
 
 impl ToolCeiling {
@@ -73,6 +76,7 @@ impl ToolCeiling {
             bash: BashMode::Off,
             cli_tools: Vec::new(),
             root: None,
+            policy: ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off),
         }
     }
 
@@ -82,6 +86,10 @@ impl ToolCeiling {
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
             root: None,
+            policy: ToolPolicySurface::legacy_non_host_wide(
+                FileToolMode::ReadOnly,
+                BashMode::ReadOnly,
+            ),
         }
     }
 
@@ -91,6 +99,10 @@ impl ToolCeiling {
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
             root: Some(root.into()),
+            policy: ToolPolicySurface::legacy_non_host_wide(
+                FileToolMode::ReadOnly,
+                BashMode::ReadOnly,
+            ),
         }
     }
 
@@ -100,11 +112,16 @@ impl ToolCeiling {
             bash: BashMode::Unrestricted,
             cli_tools: Vec::new(),
             root: Some(root.into()),
+            policy: ToolPolicySurface::legacy_non_host_wide(
+                FileToolMode::ReadWrite,
+                BashMode::Unrestricted,
+            ),
         }
     }
 
     pub fn with_cli_tool(mut self, tool: CliToolConfig) -> Self {
         self.cli_tools.push(tool);
+        self.refresh_cli_policy();
         self
     }
 
@@ -113,6 +130,15 @@ impl ToolCeiling {
         I: IntoIterator<Item = CliToolConfig>,
     {
         self.cli_tools.extend(tools);
+        self.refresh_cli_policy();
+        self
+    }
+
+    pub fn with_policy(mut self, policy: ToolPolicySurface) -> Self {
+        self.file_tools = policy.file;
+        self.bash = policy.bash.tool;
+        self.policy = policy;
+        self.refresh_cli_policy();
         self
     }
 
@@ -130,6 +156,25 @@ impl ToolCeiling {
 
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
+    }
+
+    pub(crate) fn policy(&self) -> &ToolPolicySurface {
+        &self.policy
+    }
+
+    fn refresh_cli_policy(&mut self) {
+        self.policy.cli_tools =
+            EndpointScope::<String, std::collections::BTreeSet<String>>::only_map(
+                self.cli_tools
+                    .iter()
+                    .map(|tool| {
+                        (
+                            tool.name.trim().to_string(),
+                            std::collections::BTreeSet::new(),
+                        )
+                    })
+                    .collect(),
+            );
     }
 }
 

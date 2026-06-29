@@ -123,6 +123,7 @@ async fn seed_demo_documents(
             selection_id: tool_selection_id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some("Demo Tools".to_string()),
+            tool_policy_version: None,
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
             file_tool_root: None,

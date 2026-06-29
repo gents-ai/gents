@@ -9,13 +9,14 @@ use crate::toolset::{
     FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 
-use super::{BehaviorToolConfig, ToolSurface};
+use super::{BehaviorToolConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
 
 const MEMORY_TOOL_NAME: &str = "memory";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
     pub tool_names: Vec<String>,
+    pub policy: ToolSurfacePolicyTrace,
     pub included: BTreeMap<String, Vec<String>>,
     pub excluded: BTreeMap<String, Vec<String>>,
     pub unavailable: BTreeMap<String, Vec<String>>,
@@ -28,9 +29,26 @@ pub struct ToolSurfaceWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+pub struct ToolSurfacePolicyTrace {
+    pub requested: BTreeMap<String, Vec<String>>,
+    pub ceiling: BTreeMap<String, Vec<String>>,
+    pub runtime: BTreeMap<String, Vec<String>>,
+    pub effective: BTreeMap<String, Vec<String>>,
+}
+
 impl ToolSurfaceExplanation {
+    #[allow(dead_code)]
     pub(crate) fn from_resolved(
         config: &BehaviorToolConfig,
+        surface: &ToolSurface,
+    ) -> ToolSurfaceExplanation {
+        Self::from_resolved_with_runtime(config, &RuntimeToolAvailability::all(), surface)
+    }
+
+    pub(crate) fn from_resolved_with_runtime(
+        config: &BehaviorToolConfig,
+        availability: &RuntimeToolAvailability,
         surface: &ToolSurface,
     ) -> ToolSurfaceExplanation {
         let mut builder = ExplanationBuilder::default();
@@ -51,20 +69,15 @@ impl ToolSurfaceExplanation {
         explain_builtin_reads(config, surface, &mut builder);
 
         let tool_names = surface.tool_names();
-        if surface.host_tools.tool_names().is_empty()
-            && tool_names.iter().any(|name| {
-                name == CONTEXT_BUDGET_TOOL_NAME
-                    || name == SESSION_HISTORY_TOOL_NAME
-                    || name == DEFRA_QUERY_TOOL_NAME
-            })
-        {
-            builder.warn(
-                "host_ceiling_not_global",
-                "ToolCeiling currently clamps host-native file/bash/CLI tools only; built-in read tools can still be model-callable.",
-            );
-        }
-
-        builder.finish(tool_names)
+        builder.finish(
+            tool_names,
+            ToolSurfacePolicyTrace {
+                requested: policy_summary(config.behavior_policy()),
+                ceiling: policy_summary(config.ceiling_policy()),
+                runtime: policy_summary(&availability.policy),
+                effective: policy_summary(&config.static_policy().meet(&availability.policy)),
+            },
+        )
     }
 }
 
@@ -75,12 +88,45 @@ impl BehaviorToolConfig {
         own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
     ) -> ToolSurfaceExplanation {
-        let surface = self.resolve_with_available_subagent_targets_for_mcp_presence(
-            mcp_services_online,
+        let availability = RuntimeToolAvailability::for_mcp_presence(mcp_services_online);
+        let surface = self.resolve_with_available_subagent_targets_for_runtime_availability(
+            availability.clone(),
             own_agent_did,
             active_behavior_ids,
         );
-        ToolSurfaceExplanation::from_resolved(self, &surface)
+        ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
+    }
+
+    pub(crate) fn resolve_with_available_subagent_targets_for_runtime_availability(
+        &self,
+        availability: RuntimeToolAvailability,
+        own_agent_did: &str,
+        active_behavior_ids: &HashSet<String>,
+    ) -> ToolSurface {
+        let mut subagent_tools = self.subagent_tools().clone();
+        let allow_cross_deployment = subagent_tools.allow_cross_deployment;
+        subagent_tools.targets.retain(|target| {
+            if target.agent_did == own_agent_did {
+                active_behavior_ids.contains(&target.behavior_id)
+            } else {
+                allow_cross_deployment
+            }
+        });
+        self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools)
+    }
+
+    pub fn explain_with_runtime_availability(
+        &self,
+        availability: RuntimeToolAvailability,
+        own_agent_did: &str,
+        active_behavior_ids: &HashSet<String>,
+    ) -> ToolSurfaceExplanation {
+        let surface = self.resolve_with_available_subagent_targets_for_runtime_availability(
+            availability.clone(),
+            own_agent_did,
+            active_behavior_ids,
+        );
+        ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
 }
 
@@ -121,9 +167,14 @@ impl ExplanationBuilder {
         });
     }
 
-    fn finish(self, tool_names: Vec<String>) -> ToolSurfaceExplanation {
+    fn finish(
+        self,
+        tool_names: Vec<String>,
+        policy: ToolSurfacePolicyTrace,
+    ) -> ToolSurfaceExplanation {
         ToolSurfaceExplanation {
             tool_names,
+            policy,
             included: into_vec_map(self.included),
             excluded: into_vec_map(self.excluded),
             unavailable: into_vec_map(self.unavailable),
@@ -275,11 +326,11 @@ fn explain_builtin_reads(
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
-    builder.include_many("built_in_read", [CONTEXT_BUDGET_TOOL_NAME.to_string()]);
-    builder.warn(
-        "unmanaged_builtin_read_tools",
-        "context_budget is always included; it has no ToolSelection field and is not clamped by ToolCeiling.",
-    );
+    if surface.enable_context_budget_tool {
+        builder.include_many("built_in_read", [CONTEXT_BUDGET_TOOL_NAME.to_string()]);
+    } else {
+        builder.exclude("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
+    }
 
     // The `sessions` history tool is opt-in via the ToolSelection
     // `enable_session_history_tool` field (default off), so report it as
@@ -303,4 +354,69 @@ fn explain_builtin_reads(
     } else {
         builder.exclude("built_in_read", DEFRA_QUERY_TOOL_NAME);
     }
+}
+
+fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
+    let mut summary = BTreeMap::new();
+    summary.insert(
+        "host".to_string(),
+        vec![
+            format!("file:{:?}", policy.file),
+            format!("bash:{:?}", policy.bash.tool),
+            format!("bash_mode:{:?}", policy.bash.execution_mode),
+            format!("bash_network:{:?}", policy.bash.network_mode),
+            format!("bash_allowed:{}", policy.bash.allowed_argv_prefixes.kind()),
+        ],
+    );
+    summary.insert(
+        "built_in_read".to_string(),
+        [
+            (policy.context_budget, CONTEXT_BUDGET_TOOL_NAME),
+            (policy.session_history, SESSION_HISTORY_TOOL_NAME),
+            (policy.defra_query, DEFRA_QUERY_TOOL_NAME),
+        ]
+        .into_iter()
+        .filter_map(|(enabled, name)| enabled.then_some(name.to_string()))
+        .collect(),
+    );
+    summary.insert(
+        "meta_mcp".to_string(),
+        vec![
+            format!("enabled:{}", policy.meta),
+            format!("services:{}", policy.mcp_services.kind()),
+        ],
+    );
+    summary.insert(
+        "subagent".to_string(),
+        vec![
+            format!("spawn:{}", policy.spawn),
+            format!("steering:{}", policy.steering),
+            format!("cross_deployment:{}", policy.cross_deployment),
+            format!("targets:{}", policy.subagent_targets.kind()),
+        ],
+    );
+    summary.insert(
+        "background_process".to_string(),
+        vec![
+            format!("enabled:{}", policy.background),
+            format!("tools:{}", policy.background_tools.kind()),
+        ],
+    );
+    summary.insert(
+        "workflow_orchestration".to_string(),
+        vec![format!("enabled:{}", policy.orchestration)],
+    );
+    summary.insert(
+        "built_in_memory".to_string(),
+        policy
+            .memory
+            .then_some(MEMORY_TOOL_NAME.to_string())
+            .into_iter()
+            .collect(),
+    );
+    summary.insert(
+        "write_tools".to_string(),
+        vec![format!("scope:{}", policy.write_tools.kind())],
+    );
+    summary
 }

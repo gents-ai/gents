@@ -2,12 +2,17 @@ mod behavior_config;
 mod build;
 mod explain;
 mod modes;
+mod policy;
 mod runtime_context;
 mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub use policy::{
+    EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
+    TOOL_POLICY_V1,
+};
 pub use runtime_context::ToolRuntimeContext;
 pub(crate) use selection::{BackgroundToolConfig, OrchestrationToolConfig, SubagentToolConfig};
 pub use selection::{CustomToolFactory, ToolSelection};
@@ -43,6 +48,7 @@ pub struct ToolSurface {
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
+    pub(super) enable_context_budget_tool: bool,
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
@@ -125,7 +131,9 @@ impl ToolSurface {
         if self.enable_memory {
             names.push(MEMORY_TOOL_NAME.to_string());
         }
-        names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
+        if self.enable_context_budget_tool {
+            names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
+        }
         if self.enable_session_history_tool {
             names.push(SESSION_HISTORY_TOOL_NAME.to_string());
         }
@@ -171,10 +179,12 @@ impl ToolSurface {
                 runtime.agent_did.clone(),
             ));
         }
-        tools.push(build_context_budget_tool(
-            runtime.node.clone(),
-            runtime.agent_did.clone(),
-        ));
+        if self.enable_context_budget_tool {
+            tools.push(build_context_budget_tool(
+                runtime.node.clone(),
+                runtime.agent_did.clone(),
+            ));
+        }
         if self.enable_session_history_tool {
             tools.push(build_session_history_tool(
                 runtime.node.clone(),
@@ -236,6 +246,10 @@ impl std::fmt::Debug for ToolSurface {
                     .collect::<Vec<_>>(),
             )
             .field("enable_memory", &self.enable_memory)
+            .field(
+                "enable_context_budget_tool",
+                &self.enable_context_budget_tool,
+            )
             .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,

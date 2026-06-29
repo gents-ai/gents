@@ -608,6 +608,37 @@ fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_session_history_tool);
 }
 
+#[test]
+fn tool_policy_version_controls_nullable_default_decode() {
+    let legacy_doc = crate::document_config::ToolSelectionDocument {
+        selection_id: "legacy-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        ..Default::default()
+    };
+    let legacy = ToolSelection::from_document(&legacy_doc).unwrap();
+    assert!(legacy.enable_meta_tools);
+    assert!(legacy.enable_defra_query);
+
+    let backfilled = legacy_doc.with_legacy_policy_defaults_backfilled();
+    assert_eq!(
+        backfilled.tool_policy_version,
+        Some(TOOL_POLICY_V1.to_string())
+    );
+    assert_eq!(backfilled.enable_meta_tools, Some(true));
+    assert_eq!(backfilled.enable_defra_query, Some(true));
+    let decoded_backfill = ToolSelection::from_document(&backfilled).unwrap();
+    assert!(decoded_backfill.enable_meta_tools);
+    assert!(decoded_backfill.enable_defra_query);
+
+    let versioned_doc = crate::document_config::ToolSelectionDocument {
+        tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
+        ..legacy_doc
+    };
+    let versioned = ToolSelection::from_document(&versioned_doc).unwrap();
+    assert!(!versioned.enable_meta_tools);
+    assert!(!versioned.enable_defra_query);
+}
+
 #[tokio::test]
 async fn session_history_tool_requires_selection_opt_in() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
@@ -662,6 +693,7 @@ fn init_like_tool_selection_document(
         selection_id: format!("{package_name}-tools"),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: Some(package_name.to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(enable_file_tools),
         file_tools_mode: Some(file_tools_mode.to_string()),
         file_tool_root: None,
@@ -740,8 +772,8 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             mcp_services_online: false,
             expected_tool_names: vec!["context_budget"],
             absent_tool_names: vec!["call_tool", "defra_query", "read_file", "spawn_process"],
-            expected_warnings: vec!["unmanaged_builtin_read_tools", "host_ceiling_not_global"],
-            host_ceiling_warning: true,
+            expected_warnings: vec![],
+            host_ceiling_warning: false,
         },
         Case {
             name: "introspection-offline",
@@ -760,12 +792,10 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             expected_tool_names: vec!["context_budget", "defra_query"],
             absent_tool_names: vec!["call_tool", "read_file", "spawn_process"],
             expected_warnings: vec![
-                "unmanaged_builtin_read_tools",
-                "host_ceiling_not_global",
                 "meta_requested_no_online_mcp",
                 "defra_query_empty_scope_all",
             ],
-            host_ceiling_warning: true,
+            host_ceiling_warning: false,
         },
         Case {
             name: "introspection-online",
@@ -788,13 +818,8 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "defra_query",
             ],
             absent_tool_names: vec!["read_file", "spawn_process", "spawn_subagent"],
-            expected_warnings: vec![
-                "unmanaged_builtin_read_tools",
-                "host_ceiling_not_global",
-                "mcp_empty_allowlist_all",
-                "defra_query_empty_scope_all",
-            ],
-            host_ceiling_warning: true,
+            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
+            host_ceiling_warning: false,
         },
         Case {
             name: "readonly-online",
@@ -822,11 +847,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "defra_query",
             ],
             absent_tool_names: vec!["write_file", "bash_unrestricted", "spawn_process"],
-            expected_warnings: vec![
-                "unmanaged_builtin_read_tools",
-                "mcp_empty_allowlist_all",
-                "defra_query_empty_scope_all",
-            ],
+            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
             host_ceiling_warning: false,
         },
         Case {
@@ -859,11 +880,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "defra_query",
             ],
             absent_tool_names: vec!["bash", "spawn_subagent"],
-            expected_warnings: vec![
-                "unmanaged_builtin_read_tools",
-                "mcp_empty_allowlist_all",
-                "defra_query_empty_scope_all",
-            ],
+            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
             host_ceiling_warning: false,
         },
     ];
@@ -922,6 +939,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         selection_id: "complex-tools".to_string(),
         agent_did: own_agent_did.to_string(),
         display_name: Some("Complex Tools".to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(true),
         file_tools_mode: Some("ReadOnly".to_string()),
         file_tool_root: None,
@@ -1115,19 +1133,54 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     assert!(explanation
         .warnings
         .iter()
-        .any(|warning| warning.code == "unmanaged_builtin_read_tools"));
-    assert!(explanation
-        .warnings
-        .iter()
         .any(|warning| warning.code == "defra_query_empty_scope_all"));
-    assert!(explanation
-        .warnings
-        .iter()
-        .any(|warning| warning.code == "host_ceiling_not_global"));
+    assert!(
+        explanation
+            .policy
+            .effective
+            .get("built_in_read")
+            .is_some_and(
+                |names| names.contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string())
+            )
+    );
     assert!(explanation
         .unavailable
         .get("meta_mcp")
         .is_some_and(|names| names.contains(&"discover_tools".to_string())));
+}
+
+#[test]
+fn category_complete_ceiling_clamps_builtin_reads() {
+    let mut ceiling_policy =
+        ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off);
+    ceiling_policy.context_budget = false;
+    ceiling_policy.defra_query = false;
+    ceiling_policy.defra_collections = EndpointScope::None;
+
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection::default(),
+        &ToolCeiling::meta_only().with_policy(ceiling_policy),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation = config.explain_with_runtime(
+        false,
+        "did:defra-agent:test",
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(!explanation
+        .tool_names
+        .contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string()));
+    assert!(!explanation
+        .tool_names
+        .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+    assert!(
+        explanation.excluded.get("built_in_read").is_some_and(
+            |names| names.contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string())
+        )
+    );
 }
 
 #[test]

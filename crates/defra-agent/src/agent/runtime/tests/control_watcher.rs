@@ -211,6 +211,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
             selection_id: selection_id.clone(),
             agent_did: agent.agent_did().to_string(),
             display_name: Some("Read tools".to_string()),
+            tool_policy_version: None,
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
             file_tool_root: None,

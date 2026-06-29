@@ -584,6 +584,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
+    pub tool_policy_version: Option<String>,
+    #[serde(default)]
     pub enable_file_tools: Option<bool>,
     #[serde(default)]
     pub file_tools_mode: Option<String>,

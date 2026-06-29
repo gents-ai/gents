@@ -244,11 +244,10 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
     deduped
 }
 
-pub(super) async fn has_registered_mcp_services(node: &EmbeddedNode) -> Result<bool> {
+pub(super) async fn online_mcp_service_ids(node: &EmbeddedNode) -> Result<Vec<String>> {
     let query = r#"{
   ToolServiceRegistry(
     filter: { status: { _eq: "online" } }
-    limit: 1
   ) {
     service_id
   }
@@ -270,5 +269,11 @@ pub(super) async fn has_registered_mcp_services(node: &EmbeddedNode) -> Result<b
         .cloned()
         .unwrap_or_default();
 
-    Ok(!services.is_empty())
+    Ok(services
+        .iter()
+        .filter_map(|row| row.get("service_id").and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|service_id| !service_id.is_empty())
+        .map(str::to_string)
+        .collect())
 }

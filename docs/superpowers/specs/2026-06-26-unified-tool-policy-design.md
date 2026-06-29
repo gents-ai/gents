@@ -265,8 +265,10 @@ decided **inside SP1**. The model:
   factor a bounded meet-semilattice), and `EndpointScope<K,V>` (a bounded lattice;
   skeleton `None`=⊥, `All`=⊤, with `Only(map)` carrying a keyed map whose values meet
   per the value authority in §3.1).
-- `meet` proven **commutative, associative, idempotent**, and a **lower bound** — for
-  the product/keyed cases this is the pointwise/per-key consequence, which is exactly
+- `meet` proven as a **lower bound**, with idempotence and the load-bearing
+  commutativity/idempotence facts used by the implementation. Full associativity is
+  intentionally not load-bearing because `effective` fixes the composition order
+  `(behavior ⊓ ceiling) ⊓ runtime`; the product/keyed lower-bound facts are exactly
   why bash and `write_tools` get `Effective ⊆ Ceiling` non-hand-wavily.
 - The headline theorem: `Effective ⊆ OperatorCeiling` for all categories,
   generalizing `activation_subset_ceiling` and composing with the existing
@@ -284,7 +286,7 @@ Standard: zero `sorry`s; conformance tests mirror the model per the repo's
 
 | Sub-project | Scope | Depends on |
 |---|---|---|
-| **SP1 — Unified policy model** | The `Capability` / `BashPolicy` / `EndpointScope` vocabulary (incl. the `context_budget` **on/off gate** — required for "category-complete"); retyped `ToolSelection`; **category-complete operator ceiling** (all 11 categories, not native-only); the **policy schema version + decode + one-time backfill** (the soundness foundation that gates the secure-default flip, §3.4); the **`RuntimeAvailability` input type** with its `ServiceHealthMap`-backed source + republish contract (§3.3); single pure `from_selection_*` resolution seam; the **`ToolSurfaceExplanation` contract** (`requested → ceiling → runtime → effective` + drop reasons); the Lean lattice model + `Effective ⊆ Ceiling` theorem + conformance mirror. The spine. | — |
+| **SP1 — Unified policy model** | The `Capability` / `BashPolicy` / `EndpointScope` vocabulary (incl. the `context_budget` **on/off gate** — required for "category-complete"); retyped `ToolSelection`; **category-complete operator ceiling** (all 11 categories, not native-only); the **policy schema version + decode + one-time backfill** (the soundness foundation that gates the secure-default flip, §3.4); the **`RuntimeAvailability` input type** with its `ServiceHealthMap`-backed source + republish contract (§3.3); single pure `from_selection_*` resolution seam; the **`ToolSurfaceExplanation` contract** (`requested → ceiling → runtime → effective` + drop reasons); the Lean lattice model + `Effective ⊆ Ceiling` theorem + conformance bridge into the production resolver. The spine. | — |
 | **SP2 — Parity + presets + ergonomics** | Wire every field through `ToolSelectionRow` (add `write_tools`, `subagent_default_await_mode`) and the desktop save path (`enable_defra_query` / `defra_query_collections` / `write_tools` — fixes the `ToolSelectionSaveRequest`/mutation-builder omission and its silent data loss) and the CLI builder API; seed the per-principal `wide-open` preset rows + canonical IDs (§3.2); release-note guidance; desktop/CLI surfacing of the policy version + `ToolSurfaceExplanation`. (The semantic flip + backfill themselves are SP1.) | SP1 |
 | **SP3 — Straggler quotas** | Bring `context_budget` **quota/limits** (the gate is SP1), memory per-agent quota, and session-history limits under the vocabulary as governed values. | SP1 |
 
@@ -303,8 +305,9 @@ must carry the runtime-specific representation choices:
   allow-all. When translating the model back to today's validator, also preserve or
   explicitly revise the read-only-mode distinction that an empty wire list skips the
   prefix requirement but does not make `allowed_prefix_matched` true.
-- Replace the temporary Rust `tool_policy_mirror.rs` conformance mirror with the
-  production resolver pointed at the same Lean-emitted cases.
+- Keep the `tool_policy_mirror.rs` conformance filename only as a compatibility
+  adapter: it translates Lean's compact JSON view into the production
+  `ToolPolicySurface` resolver, not an independent Rust meet.
 - Preserve the structured lookup/root-narrowing semantics, including precise CLI
   path-prefix containment where the Lean SP1 model uses finite-set intersection as the
   reduced proof stand-in.
@@ -312,6 +315,8 @@ must carry the runtime-specific representation choices:
 ## 6. Key files
 
 - `crates/defra-agent/src/tool_surface/modes.rs:62-134` — ceiling shape (to generalize)
+- `crates/defra-agent/src/tool_surface/policy.rs` — production `EndpointScope` /
+  `ToolPolicySurface` vocabulary and meet
 - `crates/defra-agent/src/tool_surface/behavior_config.rs:84-155` — the one real
   intersection today; becomes the single seam
 - `crates/defra-agent/src/tool_surface/build.rs:14-168` — downgrade pipeline

@@ -11,6 +11,12 @@ namespace ToolPolicy.ContractCases
 
 open ToolPolicy
 
+structure WriteGrantView where
+  tool : String
+  collection : String
+  fields : List String
+  deriving Repr
+
 structure SurfaceView where
   fileRank : Nat
   meta : Bool
@@ -20,9 +26,14 @@ structure SurfaceView where
   bashNet : Nat
   bashSandbox : Bool
   bashAllowedKind : String
+  bashAllowedPrefixes : List (List String)
   mcpProbe : String
+  mcpScopeKind : String
+  mcpServices : List String
   mcpPermits : Bool
   writeProbe : String × String
+  writeScopeKind : String
+  writeGrants : List WriteGrantView
   writeFields : List String
   deriving Repr
 
@@ -42,6 +53,45 @@ def scopeKind {K V : Type} : EndpointScope K V → String
 def stringSet (items : List String) : Finset String :=
   items.toFinset
 
+def knownToolIds : List String :=
+  ["svc-a", "svc-x", "svc-y"]
+
+def knownArgvPrefixes : List (List String) :=
+  [["git", "status"], ["ls"]]
+
+def knownWriteKeys : List (String × String) :=
+  [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
+
+def knownFieldNames : List String :=
+  ["field_a", "field_b", "field_c"]
+
+def fieldList (fields : Finset String) : List String :=
+  knownFieldNames.filter (fun field => decide (field ∈ fields))
+
+def toolScopeKeys {V : Type} : EndpointScope ToolId V → List String
+  | .only keys _ => knownToolIds.filter (fun key => decide (key ∈ keys))
+  | .all => []
+  | .none => []
+
+def bashAllowedPrefixes : EndpointScope (List String) Unit → List (List String)
+  | .only keys _ => knownArgvPrefixes.filter (fun key => decide (key ∈ keys))
+  | .all => []
+  | .none => []
+
+def writeGrantViews :
+    EndpointScope (String × String) (Finset String) → List WriteGrantView
+  | .only keys val =>
+      knownWriteKeys.filterMap (fun key =>
+        if key ∈ keys then
+          some
+            { tool := key.1
+            , collection := key.2
+            , fields := fieldList (val key) }
+        else
+          none)
+  | .all => []
+  | .none => []
+
 def unitOnly {K : Type} (keys : Finset K) : EndpointScope K Unit :=
   .only keys (fun _ => ())
 
@@ -51,14 +101,6 @@ def toolOnly (tool : ToolId) : EndpointScope ToolId Unit :=
 def writeOnly (key : String × String) (fields : List String) :
     EndpointScope (String × String) (Finset String) :=
   .only [key].toFinset (fun _ => stringSet fields)
-
-def fieldList (fields : Finset String) : List String :=
-  if "field_a" ∈ fields then
-    ["field_a"]
-  else if "field_b" ∈ fields then
-    ["field_b"]
-  else
-    []
 
 def bashPolicy (mode : ExecMode) (network : NetMode)
     (allowed : EndpointScope (List String) Unit) : BashPolicy :=
@@ -102,9 +144,14 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , bashNet := s.bash.network.rank
   , bashSandbox := s.bash.sandbox
   , bashAllowedKind := scopeKind s.bash.allowed
+  , bashAllowedPrefixes := bashAllowedPrefixes s.bash.allowed
   , mcpProbe := mcpProbe
+  , mcpScopeKind := scopeKind s.mcpServices
+  , mcpServices := toolScopeKeys s.mcpServices
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
   , writeProbe := writeProbe
+  , writeScopeKind := scopeKind s.writeTools
+  , writeGrants := writeGrantViews s.writeTools
   , writeFields := match s.writeTools.lookup writeProbe with
       | some fields => fieldList fields
       | none => [] }
