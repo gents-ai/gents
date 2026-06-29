@@ -16,20 +16,21 @@ fn wide_open_preset_is_permissive_and_versioned() {
         preset.tool_policy_version.as_deref(),
         Some(crate::tool_surface::TOOL_POLICY_V1)
     );
-    // Reproduces today's permissive surface (meta + defra on; file/bash off).
+    // Reproduces today's permissive surface against an EXPLICIT expected set, so
+    // a change to the underlying backfill is caught (not a tautology that
+    // recomputes the same call). meta + defra on; everything privilege-bearing
+    // backfills to secure (false).
     assert_eq!(preset.enable_meta_tools, Some(true));
     assert_eq!(preset.enable_defra_query, Some(true));
     assert_eq!(preset.enable_file_tools, Some(false));
     assert_eq!(preset.enable_bash, Some(false));
-    // The constructor must not drift from the backfill it reuses.
-    let via_backfill = ToolSelectionDocument {
-        selection_id: id.clone(),
-        agent_did: did.to_string(),
-        display_name: preset.display_name.clone(),
-        ..Default::default()
-    }
-    .with_legacy_policy_defaults_backfilled();
-    assert_eq!(preset, via_backfill);
+    assert_eq!(preset.orchestration_enabled, Some(false));
+    assert_eq!(preset.subagent_spawn_enabled, Some(false));
+    assert_eq!(preset.subagent_steering_enabled, Some(false));
+    assert_eq!(preset.subagent_background_enabled, Some(false));
+    assert_eq!(preset.subagent_allow_cross_deployment, Some(false));
+    assert_eq!(preset.enable_memory, Some(false));
+    assert_eq!(preset.enable_session_history_tool, Some(false));
 }
 
 #[test]

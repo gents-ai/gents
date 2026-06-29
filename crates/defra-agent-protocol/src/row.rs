@@ -626,8 +626,9 @@ pub struct ToolSelectionRow {
     pub subagent_background_enabled: Option<bool>,
     /// Default await mode for spawned subagents (`foreground` | `background`).
     /// Parity field: the runtime `ToolSelectionDocument` and the GraphQL schema
-    /// already carry it; mirror it here so the desktop/protocol round-trip does
-    /// not silently drop it.
+    /// already carry it; mirroring it on the row makes a lossless round-trip
+    /// possible. Wiring the desktop read query + upsert mutation to actually
+    /// carry it is Phase B (deferred while desktop-core is blocked on #490).
     #[serde(default)]
     pub subagent_default_await_mode: Option<String>,
     #[serde(default)]

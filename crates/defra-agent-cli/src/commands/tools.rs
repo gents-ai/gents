@@ -108,6 +108,11 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             .as_deref()
             .and_then(|id| selection_rows.get(id))
             .and_then(|selection| selection.tool_policy_version.clone());
+        // A selection with an unrecognized version fails to decode earlier
+        // (`from_tool_selection_document` propagates `ToolPolicyVersion::parse`'s
+        // error → the behavior is already in `unavailable_behaviors`), so the
+        // `Err` arm is a defensive fallback rather than a reachable label — kept
+        // because the alternative (unwrap on document-derived data) is worse.
         let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
             Ok(ToolPolicyVersion::LegacyDefaults) => "legacy-permissive",
             Ok(ToolPolicyVersion::V1) => "tool-policy/v1",
