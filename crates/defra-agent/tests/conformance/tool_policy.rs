@@ -65,6 +65,65 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                 case.expected.bash_allowed_prefixes.is_empty(),
                 "disjoint case: effective bash allowed-prefix scope must be Only(empty)"
             );
+            // defra_collections is the blocker category: a disjoint meet must
+            // produce Only(∅) deny-all, never collapse to "all" (which the
+            // runtime would read as every-collection-readable).
+            assert_eq!(
+                case.expected.defra_collections_scope_kind, "only",
+                "disjoint case: defra_collections Only(∅) must stay \"only\", not \"all\""
+            );
+            assert!(
+                case.expected.defra_collections_keys.is_empty(),
+                "disjoint case: effective defra_collections must have no surviving keys"
+            );
+        }
+        if case.name == "ceiling_clamps_each_category" {
+            // Every boolean capability the original 7-category view aliased away
+            // is independently clamped off by the ceiling here. An `||`-vs-`&&`
+            // wiring typo in any single one would leave it true and diverge from
+            // the Lean-computed expected.
+            for (label, value) in [
+                ("memory", case.expected.memory),
+                ("session_history", case.expected.session_history),
+                ("context_budget", case.expected.context_budget),
+                ("steering", case.expected.steering),
+                ("background", case.expected.background),
+                ("orchestration", case.expected.orchestration),
+                ("cross_deployment", case.expected.cross_deployment),
+                ("skills", case.expected.skills),
+            ] {
+                assert!(
+                    !value,
+                    "each-category case: {label} must clamp off when the ceiling denies it"
+                );
+            }
+            // The four keyed scopes key-intersect down to the ceiling's narrow set.
+            assert_eq!(case.expected.cli_keys, vec!["svc-a".to_string()]);
+            assert_eq!(
+                case.expected.defra_collections_keys,
+                vec!["svc-a".to_string()]
+            );
+            assert_eq!(
+                case.expected.subagent_targets_keys,
+                vec!["did-a::beh-a".to_string()]
+            );
+            assert_eq!(
+                case.expected.background_tools_keys,
+                vec!["svc-a".to_string()]
+            );
+        }
+        if case.name == "behavior_all_scopes_clamped_by_ceiling_only" {
+            // Behavior left these scopes `All`; the ceiling's `Only` must win
+            // (All ⊓ Only = Only) while the booleans stay on (no spurious clamp).
+            assert!(case.expected.memory && case.expected.skills && case.expected.orchestration);
+            assert_eq!(case.expected.cli_scope_kind, "only");
+            assert_eq!(case.expected.defra_collections_scope_kind, "only");
+            assert_eq!(case.expected.subagent_targets_scope_kind, "only");
+            assert_eq!(case.expected.background_tools_scope_kind, "only");
+            assert_eq!(
+                case.expected.subagent_targets_keys,
+                vec!["did-a::beh-a".to_string()]
+            );
         }
         if case.name == "write_tool_collection_mismatch_denies" {
             // Behavior grants (wt, coll1); ceiling grants (wt, coll2). The

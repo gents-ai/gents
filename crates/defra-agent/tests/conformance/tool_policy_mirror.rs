@@ -90,6 +90,45 @@ fn unit_scope_from_prefixes(kind: &str, keys: &[Vec<String>]) -> EndpointScope<V
     }
 }
 
+/// Pair-keyed unit scope (subagent targets). Lean serializes each `(did,
+/// behavior)` key as `"<did>::<behavior>"`; we split it back here.
+fn pair_scope_from_keys(kind: &str, keys: &[String]) -> EndpointScope<(String, String), ()> {
+    match kind {
+        "none" => EndpointScope::None,
+        "all" => EndpointScope::All,
+        "only" => EndpointScope::<(String, String), ()>::only_units(keys.iter().map(|key| {
+            let (did, behavior) = key.split_once("::").unwrap_or((key.as_str(), ""));
+            (did.to_string(), behavior.to_string())
+        })),
+        other => panic!("unknown pair scope kind {other:?}"),
+    }
+}
+
+fn encode_pair_keys(scope: &EndpointScope<(String, String), ()>) -> Vec<String> {
+    scope
+        .keys()
+        .into_iter()
+        .map(|(did, behavior)| format!("{did}::{behavior}"))
+        .collect()
+}
+
+/// CLI tools carry a per-tool value set in production, but the Lean view only
+/// observes the *keys* (cli value-narrowing shares the set-intersection
+/// combinator that `write_tools` already fences via `write_fields`). Reconstruct
+/// with empty value sets so the key-meet round-trips exactly.
+fn cli_scope_from_keys(kind: &str, keys: &[String]) -> EndpointScope<String, BTreeSet<String>> {
+    match kind {
+        "none" => EndpointScope::None,
+        "all" => EndpointScope::All,
+        "only" => EndpointScope::Only(
+            keys.iter()
+                .map(|key| (key.clone(), BTreeSet::new()))
+                .collect::<BTreeMap<_, _>>(),
+        ),
+        other => panic!("unknown cli scope kind {other:?}"),
+    }
+}
+
 fn write_scope_from_grants(
     kind: &str,
     grants: &[WriteGrant],
@@ -143,20 +182,29 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         },
         meta: view.meta,
         defra_query: view.defra_query,
-        memory: view.meta,
-        session_history: view.meta,
-        context_budget: view.meta,
+        memory: view.memory,
+        session_history: view.session_history,
+        context_budget: view.context_budget,
         spawn: view.spawn,
-        steering: view.meta,
-        background: view.spawn,
-        orchestration: view.spawn,
-        cross_deployment: view.spawn,
-        skills: view.meta,
-        cli_tools: EndpointScope::All,
+        steering: view.steering,
+        background: view.background,
+        orchestration: view.orchestration,
+        cross_deployment: view.cross_deployment,
+        skills: view.skills,
+        cli_tools: cli_scope_from_keys(&view.cli_scope_kind, &view.cli_keys),
         mcp_services: unit_scope_from_strings(&view.mcp_scope_kind, &view.mcp_services),
-        defra_collections: EndpointScope::All,
-        subagent_targets: EndpointScope::All,
-        background_tools: EndpointScope::All,
+        defra_collections: unit_scope_from_strings(
+            &view.defra_collections_scope_kind,
+            &view.defra_collections_keys,
+        ),
+        subagent_targets: pair_scope_from_keys(
+            &view.subagent_targets_scope_kind,
+            &view.subagent_targets_keys,
+        ),
+        background_tools: unit_scope_from_strings(
+            &view.background_tools_scope_kind,
+            &view.background_tools_keys,
+        ),
         write_tools: write_scope_from_grants(&view.write_scope_kind, &view.write_grants),
     }
 }
@@ -178,16 +226,32 @@ fn view_from_surface(
         file_rank: file_rank(surface.file),
         meta: surface.meta,
         defra_query: surface.defra_query,
+        memory: surface.memory,
+        session_history: surface.session_history,
+        context_budget: surface.context_budget,
         spawn: surface.spawn,
+        steering: surface.steering,
+        background: surface.background,
+        orchestration: surface.orchestration,
+        cross_deployment: surface.cross_deployment,
+        skills: surface.skills,
         bash_mode: exec_rank(surface.bash.execution_mode),
         bash_net: net_rank(surface.bash.network_mode),
         bash_sandbox: surface.bash.sandbox,
         bash_allowed_kind: surface.bash.allowed_argv_prefixes.kind().to_string(),
         bash_allowed_prefixes: surface.bash.allowed_argv_prefixes.keys(),
+        cli_scope_kind: surface.cli_tools.kind().to_string(),
+        cli_keys: surface.cli_tools.keys(),
         mcp_permits: surface.mcp_services.permits(&mcp_probe),
         mcp_probe,
         mcp_scope_kind: surface.mcp_services.kind().to_string(),
         mcp_services: surface.mcp_services.keys(),
+        defra_collections_scope_kind: surface.defra_collections.kind().to_string(),
+        defra_collections_keys: surface.defra_collections.keys(),
+        subagent_targets_scope_kind: surface.subagent_targets.kind().to_string(),
+        subagent_targets_keys: encode_pair_keys(&surface.subagent_targets),
+        background_tools_scope_kind: surface.background_tools.kind().to_string(),
+        background_tools_keys: surface.background_tools.keys(),
         write_probe_tool,
         write_probe_collection,
         write_scope_kind: surface.write_tools.kind().to_string(),

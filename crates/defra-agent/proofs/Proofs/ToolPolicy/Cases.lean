@@ -17,20 +17,42 @@ structure WriteGrantView where
   fields : List String
   deriving Repr
 
+/-- Projection of a `Surface` carrying EVERY document-driven category
+    independently, so the conformance round-trip fences the production meet for
+    all 19 categories (not just the original 7). Each boolean capability and each
+    `EndpointScope` (kind + surviving keys) is observed directly — no category is
+    aliased to another, so a `||`-vs-`&&` typo or a wrong scope branch in any
+    single category diverges from the Lean-computed `expected`. -/
 structure SurfaceView where
   fileRank : Nat
   meta : Bool
   defraQuery : Bool
+  memory : Bool
+  sessionHistory : Bool
+  contextBudget : Bool
   spawn : Bool
+  steering : Bool
+  background : Bool
+  orchestration : Bool
+  crossDeployment : Bool
+  skills : Bool
   bashMode : Nat
   bashNet : Nat
   bashSandbox : Bool
   bashAllowedKind : String
   bashAllowedPrefixes : List (List String)
+  cliScopeKind : String
+  cliKeys : List String
   mcpProbe : String
   mcpScopeKind : String
   mcpServices : List String
   mcpPermits : Bool
+  defraCollectionsScopeKind : String
+  defraCollectionsKeys : List String
+  subagentTargetsScopeKind : String
+  subagentTargetsKeys : List String
+  backgroundToolsScopeKind : String
+  backgroundToolsKeys : List String
   writeProbe : String × String
   writeScopeKind : String
   writeGrants : List WriteGrantView
@@ -62,6 +84,11 @@ def knownArgvPrefixes : List (List String) :=
 def knownWriteKeys : List (String × String) :=
   [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
 
+-- Kept sorted so the filtered projection matches the production `BTreeMap`
+-- key order on the Rust side (the round-trip compares the lists verbatim).
+def knownSubagentTargets : List (String × String) :=
+  [("did-a", "beh-a"), ("did-b", "beh-b")]
+
 def knownFieldNames : List String :=
   ["field_a", "field_b", "field_c"]
 
@@ -70,6 +97,16 @@ def fieldList (fields : Finset String) : List String :=
 
 def toolScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .only keys _ => knownToolIds.filter (fun key => decide (key ∈ keys))
+  | .all => []
+  | .none => []
+
+-- Pair keys are observed as `"<did>::<behavior>"` strings; the separator is
+-- absent from the controlled test keys, so the encoding is injective here and
+-- matches the Rust mirror's `format!("{did}::{behavior}")`.
+def subagentScopeKeys {V : Type} : EndpointScope (String × String) V → List String
+  | .only keys _ =>
+      knownSubagentTargets.filterMap (fun key =>
+        if key ∈ keys then some (key.1 ++ "::" ++ key.2) else none)
   | .all => []
   | .none => []
 
@@ -97,6 +134,21 @@ def unitOnly {K : Type} (keys : Finset K) : EndpointScope K Unit :=
 
 def toolOnly (tool : ToolId) : EndpointScope ToolId Unit :=
   unitOnly [tool].toFinset
+
+def toolsOnly (tools : List ToolId) : EndpointScope ToolId Unit :=
+  unitOnly tools.toFinset
+
+def subagentOnly (keys : List (String × String)) :
+    EndpointScope (String × String) Unit :=
+  unitOnly keys.toFinset
+
+def cliOnly (entries : List (String × List String)) :
+    EndpointScope ToolId (Finset String) :=
+  .only (entries.map Prod.fst).toFinset
+    (fun key =>
+      match entries.find? (fun entry => entry.1 == key) with
+      | some entry => stringSet entry.2
+      | none => ∅)
 
 def writeOnly (key : String × String) (fields : List String) :
     EndpointScope (String × String) (Finset String) :=
@@ -139,16 +191,32 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   { fileRank := s.file.rank
   , meta := s.meta
   , defraQuery := s.defraQuery
+  , memory := s.memory
+  , sessionHistory := s.sessionHistory
+  , contextBudget := s.contextBudget
   , spawn := s.spawn
+  , steering := s.steering
+  , background := s.background
+  , orchestration := s.orchestration
+  , crossDeployment := s.crossDeployment
+  , skills := s.skills
   , bashMode := s.bash.mode.rank
   , bashNet := s.bash.network.rank
   , bashSandbox := s.bash.sandbox
   , bashAllowedKind := scopeKind s.bash.allowed
   , bashAllowedPrefixes := bashAllowedPrefixes s.bash.allowed
+  , cliScopeKind := scopeKind s.cliTools
+  , cliKeys := toolScopeKeys s.cliTools
   , mcpProbe := mcpProbe
   , mcpScopeKind := scopeKind s.mcpServices
   , mcpServices := toolScopeKeys s.mcpServices
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
+  , defraCollectionsScopeKind := scopeKind s.defraCollections
+  , defraCollectionsKeys := toolScopeKeys s.defraCollections
+  , subagentTargetsScopeKind := scopeKind s.subagentTargets
+  , subagentTargetsKeys := subagentScopeKeys s.subagentTargets
+  , backgroundToolsScopeKind := scopeKind s.backgroundTools
+  , backgroundToolsKeys := toolScopeKeys s.backgroundTools
   , writeProbe := writeProbe
   , writeScopeKind := scopeKind s.writeTools
   , writeGrants := writeGrantViews s.writeTools
@@ -228,14 +296,53 @@ def ceilingWriteCollB : Surface :=
 -- Their meet intersects to empty, exercising the `only ∩ only` branch and the
 -- `Only(∅)` deny-all trap (which must serialize as "only", never "all").
 def behaviorDisjointOnly : Surface :=
-  surface .readWrite
-    (bashPolicy .unrestricted .enabled allowedOnlyGit)
-    true true true (toolOnly "svc-x") writeA
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled allowedOnlyGit)
+      true true true (toolOnly "svc-x") writeA with
+    defraCollections := toolOnly "svc-x" }
 
 def ceilingDisjointOnly : Surface :=
-  surface .readWrite
-    (bashPolicy .unrestricted .enabled allowedOnlyLs)
-    true true true (toolOnly "svc-y") writeA
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled allowedOnlyLs)
+      true true true (toolOnly "svc-y") writeA with
+    defraCollections := toolOnly "svc-y" }
+
+-- Behavior with EVERY boolean capability on and every keyed scope a broad
+-- `Only`. Paired with `ceilingClampsEachCategory` it fences all 12 categories
+-- that the original 7-category view aliased away: the 8 booleans must clamp to
+-- false, and the 4 scopes must key-intersect down to the ceiling's narrow set.
+def behaviorEachCategory : Surface :=
+  { wideOpen with
+    cliTools := cliOnly [("svc-a", ["field_a", "field_b"]), ("svc-x", ["field_a"])]
+  , defraCollections := toolsOnly ["svc-a", "svc-x"]
+  , subagentTargets := subagentOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
+  , backgroundTools := toolsOnly ["svc-a", "svc-x"] }
+
+def ceilingClampsEachCategory : Surface :=
+  { wideOpen with
+    memory := false
+  , sessionHistory := false
+  , contextBudget := false
+  , steering := false
+  , background := false
+  , orchestration := false
+  , crossDeployment := false
+  , skills := false
+  , cliTools := cliOnly [("svc-a", ["field_a"])]
+  , defraCollections := toolOnly "svc-a"
+  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , backgroundTools := toolOnly "svc-a" }
+
+-- Behavior leaves the four keyed scopes wide open (`All`); the ceiling narrows
+-- each to a small `Only`. Fences the `All ⊓ Only = Only` branch — and the dual
+-- direction from `behaviorEachCategory` — for cli/defra/subagent/background,
+-- while the booleans stay true (no spurious clamp).
+def ceilingScopesOnly : Surface :=
+  { wideOpen with
+    cliTools := cliOnly [("svc-a", ["field_a"])]
+  , defraCollections := toolOnly "svc-a"
+  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , backgroundTools := toolOnly "svc-a" }
 
 def mkCase (name : String) (b c : Surface) (r : Avail)
     (mcpProbe : String) (writeProbe : String × String) : Case :=
@@ -260,6 +367,10 @@ def cases : List Case :=
       behaviorDisjointOnly ceilingDisjointOnly wideOpen "svc-x" probeWrite
   , mkCase "bash_all_allowed_kind_idempotent"
       wideOpen wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "ceiling_clamps_each_category"
+      behaviorEachCategory ceilingClampsEachCategory wideOpen "svc-a" probeWrite
+  , mkCase "behavior_all_scopes_clamped_by_ceiling_only"
+      wideOpen ceilingScopesOnly wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases
