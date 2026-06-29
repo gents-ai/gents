@@ -311,6 +311,16 @@ must carry the runtime-specific representation choices:
 - Preserve the structured lookup/root-narrowing semantics, including precise CLI
   path-prefix containment where the Lean SP1 model uses finite-set intersection as the
   reduced proof stand-in.
+- **Bash `forbidden` / `read_only_allowlist` ceiling-narrowing is deferred (explicit
+  carve-out).** The Lean `BashPolicy` models and proves both factors
+  (`bash_meet_forbidden_superset`, `bash_meet_readonly_*`), but the production
+  `ToolPolicyBash` mirrors only `mode`/`network`/`allowed`/`sandbox`. A behavior's own
+  forbidden/read-only prefixes are still enforced via the legacy `CommandExecutionPolicy`
+  passthrough, so there is no runtime soundness gap — only a ceiling-narrowing capability
+  not yet exposed. Closing it (add both factors to `ToolPolicyBash` + the conformance bash
+  view so the proven bounds are exercised end-to-end) is tracked with the bash sub-field →
+  executable-validator projection above. The carve-out is documented on `BashPolicy` in
+  `ToolPolicy/Types.lean`.
 
 ## 6. Key files
 

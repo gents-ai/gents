@@ -716,7 +716,7 @@ theorem effective_write_keys_subset_ceiling (k : String × String) :
   exact EndpointScope.meet_permits_left fieldsVM _ _ _
     (EndpointScope.meet_permits_right fieldsVM _ _ _ h)
 
--- KIND E: bash (request-level). 
+-- KIND E: bash (request-level).
 theorem effective_bash_permits_subset_ceiling (req : CmdReq) :
     (effective behavior ceiling runtime).bash.permits req →
       ceiling.bash.permits req := by
