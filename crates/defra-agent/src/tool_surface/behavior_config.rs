@@ -289,7 +289,7 @@ impl BehaviorToolConfig {
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
             enable_defra_query: effective_policy.include_defra_query(),
-            defra_query_collections: effective_policy.defra_query_collections_for_runtime(),
+            defra_query_scope: effective_policy.defra_query_collection_scope(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
             enable_skills: effective_policy.skills,
         }

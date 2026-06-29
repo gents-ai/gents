@@ -51,7 +51,7 @@ pub struct ToolSurface {
     pub(super) enable_context_budget_tool: bool,
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_defra_query: bool,
-    pub(super) defra_query_collections: Vec<String>,
+    pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) enable_skills: bool,
 }
@@ -203,7 +203,7 @@ impl ToolSurface {
         if self.enable_defra_query {
             tools.push(build_defra_query_tool(
                 runtime.node.clone(),
-                CollectionScope::restricted(self.defra_query_collections.clone()),
+                self.defra_query_scope.clone(),
             ));
         }
         // Apply-time validation rejects write_tools names that collide with the
@@ -264,7 +264,7 @@ impl std::fmt::Debug for ToolSurface {
                 &self.enable_session_history_tool,
             )
             .field("enable_defra_query", &self.enable_defra_query)
-            .field("defra_query_collections", &self.defra_query_collections)
+            .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
             .field("enable_skills", &self.enable_skills)
             .finish()

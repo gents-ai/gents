@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::defra_query::CollectionScope;
 use crate::document_config::{SubagentTarget, WriteToolDecl, WriteToolField};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
@@ -411,6 +412,20 @@ impl ToolPolicySurface {
     /// [`include_meta_tools`] for the MCP category.
     pub fn include_defra_query(&self) -> bool {
         self.defra_query && !self.defra_collections.is_deny_all()
+    }
+
+    /// Project the effective `defra_collections` scope onto the executable
+    /// [`CollectionScope`] tristate. `All` permits everything; a non-empty
+    /// `Only` restricts to that set; `None`/`Only(∅)` deny — preserving the
+    /// `Only(∅) ≠ All` distinction at the projection boundary so a deny-all can
+    /// never be read as allow-all (defense-in-depth behind `include_defra_query`).
+    pub fn defra_query_collection_scope(&self) -> CollectionScope {
+        match &self.defra_collections {
+            EndpointScope::All => CollectionScope::all(),
+            EndpointScope::None => CollectionScope::none(),
+            EndpointScope::Only(keys) if keys.is_empty() => CollectionScope::none(),
+            EndpointScope::Only(_) => CollectionScope::restricted(self.defra_collections.keys()),
+        }
     }
 
     pub fn mcp_service_ids_for_runtime(&self) -> Vec<String> {

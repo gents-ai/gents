@@ -65,40 +65,57 @@ pub struct DefraQueryParams {
     pub limit: Option<u32>,
 }
 
-/// Which collections a query surface is permitted to read. An empty allowlist
-/// means every collection is readable (trim as needed).
+/// Which collections a query surface is permitted to read.
+///
+/// An explicit tristate so the deny-all case cannot be confused with allow-all
+/// at this projection boundary (the `Only(∅) ≠ All` trap): `None` and an empty
+/// `Only` both DENY, only `All` permits everything. `restricted([])` therefore
+/// means deny-all, NOT allow-all — callers wanting allow-all must use `all()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CollectionScope {
-    allowed: Vec<String>,
+pub enum CollectionScope {
+    /// No collection is readable.
+    #[default]
+    None,
+    /// Only the listed collections are readable. An empty set denies everything.
+    Only(std::collections::BTreeSet<String>),
+    /// Every collection is readable.
+    All,
 }
 
 impl CollectionScope {
     /// Allow every collection.
     pub fn all() -> Self {
-        Self::default()
+        Self::All
     }
 
-    /// Restrict reads to the given collections.
+    /// Deny every collection.
+    pub fn none() -> Self {
+        Self::None
+    }
+
+    /// Restrict reads to the given collections. An EMPTY list denies all (it is
+    /// `Only(∅)`), never allow-all — use [`CollectionScope::all`] for allow-all.
     pub fn restricted(collections: Vec<String>) -> Self {
-        Self {
-            allowed: collections,
-        }
+        Self::Only(collections.into_iter().collect())
     }
 
-    /// True when no allowlist is configured (every collection readable).
+    /// True only when every collection is readable (`All`).
     pub fn is_unrestricted(&self) -> bool {
-        self.allowed.is_empty()
+        matches!(self, Self::All)
     }
 
     /// Error unless `collection` is readable under this scope.
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
-        if self.allowed.is_empty() || self.allowed.iter().any(|c| c == collection) {
-            Ok(())
-        } else {
-            bail!(
+        match self {
+            Self::All => Ok(()),
+            Self::Only(allowed) if allowed.contains(collection) => Ok(()),
+            Self::None => bail!(
+                "collection {collection:?} is not within the allowed query scope: [] (deny-all)"
+            ),
+            Self::Only(allowed) => bail!(
                 "collection {collection:?} is not within the allowed query scope: [{}]",
-                self.allowed.join(", ")
-            )
+                allowed.iter().cloned().collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -245,6 +262,24 @@ mod tests {
     fn allows_any_collection_when_unrestricted() {
         let scope = CollectionScope::all();
         assert!(build_query(&params("AnythingGoes", &["x"]), &scope).is_ok());
+    }
+
+    #[test]
+    fn deny_all_scopes_reject_every_collection() {
+        // The `Only(∅) ≠ All` trap: an empty allowlist and `None` both DENY,
+        // never allow-all. `restricted([])` must NOT behave like `all()`.
+        for scope in [
+            CollectionScope::none(),
+            CollectionScope::restricted(Vec::new()),
+        ] {
+            assert!(!scope.is_unrestricted());
+            let err = build_query(&params("AnythingGoes", &["x"]), &scope).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("not within the allowed query scope"),
+                "deny-all scope must reject every collection, got: {err}"
+            );
+        }
     }
 
     #[test]

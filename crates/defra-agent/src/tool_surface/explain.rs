@@ -343,10 +343,10 @@ fn explain_builtin_reads(
 
     if surface.enable_defra_query {
         builder.include_many("built_in_read", [DEFRA_QUERY_TOOL_NAME.to_string()]);
-        if surface.defra_query_collections.is_empty() {
+        if surface.defra_query_scope.is_unrestricted() {
             builder.warn(
                 "defra_query_empty_scope_all",
-                "defra_query_collections is empty, which currently means all collections except hard-blocked sensitive fields.",
+                "defra_query has no collection allowlist (scope: all), so every collection except hard-blocked sensitive fields is readable.",
             );
         }
     } else if config.defra_query_requested() {
