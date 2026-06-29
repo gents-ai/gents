@@ -102,57 +102,78 @@ The model extends the pairing/template layer to prove:
 Conformance mirrors the obligation in `tests/conformance/` per the existing
 Proofs/ ↔ conformance structure fence.
 
-### 1. Schema: two denormalized routing fields
+### 1. Schema: one denormalized routing field
 
 - **`AgentToolCall.spawn_target_did: String @index`** — denormalized from
   `SpawnArgs.agent_did` when the bridge is written. Makes the coordinator-owned
   bridge routable to its intended host. Empty/absent for non-spawn tool calls.
   Must be `@immutable` (filter-field requirement from #1033: a doc cannot drift
   in/out of a filter).
-- **`PeerPairingDesired.subagent_target_did: String`** (nullable; required when
-  `template == "subagent"`) — the delegation **host** DID. Both ends of the
-  pairing set it to the *same* value (the host), which is why it cannot reuse
-  `agent_did`: that field feeds `paired_peer_dids` trust and the loader filters
-  out the local node's own DID, so the host's own row would lose its trust entry.
-  Keeping `agent_did` = the peer (for trust) and `subagent_target_did` = the host
-  (for the filter) keeps both intact.
 
-### 2. The `subagent` scope template
+**No new field on `PeerPairingDesired`.** An earlier draft added a
+`subagent_target_did` DID column to name the host on both rows. It isn't needed:
+a node already has both relevant DIDs — `local_did` (itself) and `agent_did`
+(the peer) — and the host is always one of those two. The only thing genuinely
+missing from a *symmetric* pairing row is **which role this node plays**
+(coordinator or host), and that is captured by the template id (§2), not by a
+DID field. The host DID is then *derived*: `peer_did` on the coordinator side,
+`local_did` on the host side.
+
+(Why the role can't simply reuse `agent_did`: that field means "the peer's DID"
+and feeds `paired_peer_dids` trust, which deliberately drops the local node's own
+DID. On the host's row the peer is the coordinator but the host is itself, so
+writing the host DID into `agent_did` would both destroy the trust entry and be
+discarded by the loader. `agent_did` stays = peer; role lives in the template id.)
+
+### 2. Two directional templates: `subagent-coordinator` and `subagent-host`
 
 Extend the catalog (`agent/p2p_reconcile/templates.rs`). The existing model is
 `Scope = PeerDid{field} | Unscoped` with a single uniform per-collection field.
-`subagent` needs **per-collection** filters keyed to the host DID, so the `Scope`
-enum gains a variant that resolves a *map* of (collection → field) against a
-supplied host DID rather than the peer DID:
+The subagent topology is inherently **directional** (one coordinator, one host),
+and the bridge must round-trip while always filtering on the host DID, so the
+role is encoded in the **template id** and the `Scope` gains a variant that
+resolves a per-collection (collection → field) map against a host DID *derived
+from the role*:
+
+One uniform rule, two fields:
 
 ```
-Scope::HostScoped {
-  // collection -> field that must equal the host DID
-  // AgentToolCall      -> "spawn_target_did"
-  // AgentRequest, AgentResponse, AgentMessage, AgentSession,
-  // AgentConversation, AgentToolResult, CompactionEntry -> "agent_did"
-}
+Scope::HostScoped { host: HostSource }     // host == peer (coordinator) | local (host)
+  // AgentToolCall                                  -> "spawn_target_did" == host
+  // AgentRequest, AgentResponse, AgentMessage,
+  // AgentSession, AgentConversation, AgentToolResult,
+  // CompactionEntry                                -> "agent_did" == host
 ```
 
-| id | collections | scope | delivery | filter value |
+| id | role | host DID | delivery | outbound leg carries |
 |---|---|---|---|---|
-| `subagent` | AgentToolCall, AgentRequest, AgentResponse, AgentMessage, AgentSession, AgentConversation, AgentToolResult, CompactionEntry | `HostScoped` (per-collection field above) | `Push` | the row's `subagent_target_did` |
+| `subagent-coordinator` | coordinator | `peer_did` | `Push` | `AgentToolCall` where `spawn_target_did == peer` (the bridge → host) |
+| `subagent-host` | host | `local_did` | `Push` | everything `agent_did == local` (the child request/response/messages/etc.) **and** `AgentToolCall` where `spawn_target_did == local` (the completed bridge → coordinator) |
 
-`Delivery::Push` (no gossip subscription) is what eliminates the `backup`
-authorization/direction errors and the foreign-row leak. `scope_filter` is
-extended to take the **host DID** (from `subagent_target_did`) instead of the
-peer DID, and to emit the per-collection field map for `HostScoped`.
+The operator pairs the coordinator side with `subagent-coordinator` and the host
+side with `subagent-host`. The reconciler reads the role off the template id and
+derives the host DID from the two DIDs it already has. `Delivery::Push` (no gossip
+subscription) is what eliminates the `backup` authorization/direction errors and
+the foreign-row leak.
 
-### 3. Reconciler: bidirectional, same filter value both ends
+Why the asymmetry: the **only** coordinator-owned doc the host needs is the
+bridge, so the coordinator's outbound leg carries just that (scoped to bridges
+for *this* host via `spawn_target_did`, so a coordinator paired with several hosts
+doesn't fan every bridge out to all of them). Everything else the host needs it
+creates locally; everything the coordinator needs (terminal child, response,
+completed bridge) the host pushes back under the single `agent_did == host` rule.
 
-Both pairing rows (coordinator's `{peer: host, subagent_target_did: host}` and
-the host's `{peer: coordinator, subagent_target_did: host}`) resolve to filters
-on the **same** host DID. Each side installs its **outbound** filtered replicator
-leg (`InstallReplicator`) — coordinator→host carries the bridge, host→coordinator
-carries the child docs and the completed bridge — and neither subscribes to
-gossip. The result is convergence of exactly the host-scoped delegation set, in
-both directions, with no whole-collection exposure. No change to the
-`diff.rs`/`engine.rs` op model beyond plumbing the host DID into `scope_filter`.
+### 3. Reconciler: each role installs its own outbound leg
+
+No shared "filter value" needs to be agreed between the rows — each side computes
+the host DID locally from its template id (`peer_did` for `subagent-coordinator`,
+`local_did` for `subagent-host`) and installs its **outbound** filtered replicator
+leg (`InstallReplicator`), with no gossip subscription. The coordinator→host leg
+carries the bridge; the host→coordinator leg carries the child set and the
+completed bridge. Both legs filter `AgentToolCall.spawn_target_did` on the same
+concrete host DID (peer on one side, local on the other), so the bridge converges
+in both directions. No change to the `diff.rs`/`engine.rs` op model beyond
+plumbing the role-derived host DID into `scope_filter`.
 
 ### 4. Bridge write path
 
@@ -175,15 +196,16 @@ could otherwise have a leaked bridge claimed by the wrong one.
 ### 6. Tests
 
 - **E2E rewrite** (`subagent_delegation_live.rs`): drop `install_one_way_replicator`.
-  Write `PeerPairingDesired{ template: "subagent", subagent_target_did: <host> }`
-  on both nodes and let the **reconciler** install the replicators. Assert: (a)
-  cross-node delegation completes (child runs on host, result projects back to
-  parent); (b) **no foreign `AgentRequest` rows** land on the host (the property
-  `backup` violated). This converts the test from "proves the runtime" to "proves
-  the declarative surface."
-- **Unit test**: the `subagent` template resolves to the expected per-collection
-  filter map (host-DID-keyed) and the expected replicator legs / no-subscription,
-  for a concrete (coordinator, host) pair.
+  Write `PeerPairingDesired{ template: "subagent-coordinator" }` on the coordinator
+  and `PeerPairingDesired{ template: "subagent-host" }` on the host, and let the
+  **reconciler** install the replicators. Assert: (a) cross-node delegation
+  completes (child runs on host, result projects back to parent); (b) **no foreign
+  `AgentRequest` rows** land on the host (the property `backup` violated). This
+  converts the test from "proves the runtime" to "proves the declarative surface."
+- **Unit test**: `subagent-coordinator` and `subagent-host` each resolve to the
+  expected per-collection filter map (with the host DID derived from the role —
+  peer vs. local) and the expected single outbound replicator leg / no
+  subscription, for a concrete (coordinator, host) pair.
 
 ### 7. Restart stopgap (until defradb.rs#1074)
 
@@ -206,9 +228,19 @@ in-tree.
 - **`@immutable` on `spawn_target_did`**: required for the filter field, and the
   bridge's target never changes after creation, so this is consistent — but the
   Lean crossing proof should confirm no transition rewrites it.
-- **Both-rows-agree invariant**: correctness depends on both pairing rows carrying
-  the same `subagent_target_did`. The join/invite flow that provisions the host's
-  symmetric row must set it; a unit/conformance check should fence this.
+- **Role-pairing invariant**: correctness depends on the two rows carrying
+  *complementary* roles — one `subagent-coordinator`, one `subagent-host` — for
+  the same peer pair. The join/invite flow that provisions the host's row must set
+  the host role; a unit/conformance check should fence the pairing (e.g. two
+  `subagent-coordinator` rows, or two `subagent-host` rows, is a misconfiguration
+  that yields no working channel).
+- **Return-leg scope is broad for self-hosting nodes** (deferred): the host's
+  outbound leg filters response/message/session/etc. on `agent_did == host`, which
+  also carries the host's *own* (non-delegation) docs to the coordinator if the
+  host runs its own agents. Exact for a dedicated host (e.g. `workstation-1`).
+  Precise per-delegation scoping would require denormalizing a delegation/session
+  discriminator onto those collections; out of scope for #575, tracked as a
+  follow-up.
 - **Filter-field availability across the conversation set**: resolved — every
   collection in the host-scoped set (`AgentRequest`, `AgentResponse`,
   `AgentMessage`, `AgentSession`, `AgentConversation`, `AgentToolResult`,
