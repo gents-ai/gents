@@ -131,6 +131,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "selection_id",
                         "agent_did",
                         "display_name",
+                        "tool_policy_version",
                         "enable_file_tools",
                         "file_tools_mode",
                         "file_tool_root",

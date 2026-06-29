@@ -171,7 +171,7 @@ pub use template::{
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
-    ToolRuntimeContext, ToolSelection, ToolSurface,
+    ToolPolicyVersion, ToolRuntimeContext, ToolSelection, ToolSurface, TOOL_POLICY_V1,
 };
 pub use toolset::{
     build_native_tools, CliToolConfig, CommandExecutionMode, CommandExecutionPolicy,

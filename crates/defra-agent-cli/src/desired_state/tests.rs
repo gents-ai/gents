@@ -261,6 +261,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         selection_id: selection_id.to_string(),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: None,
+        tool_policy_version: None,
         enable_file_tools: false,
         file_tools_mode: "ReadOnly".to_string(),
         file_tool_root: None,

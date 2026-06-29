@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use defra_agent::{
-    AgentBehaviorDocument, BehaviorToolConfig, ToolCeiling, ToolSelection, ToolSelectionDocument,
+    AgentBehaviorDocument, BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection,
+    ToolSelectionDocument,
 };
 use serde_json::{json, Value};
 
@@ -100,12 +101,26 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         };
         let explanation =
             config.explain_with_runtime(mcp_services_online, &agent_did, &active_behavior_id_set);
+        // Surface the unified tool-policy version + its decoded decode-semantics so
+        // an operator can see whether this behavior's selection resolves under
+        // legacy-permissive or secure-minimal defaults (SP2 §5 surfacing).
+        let tool_policy_version = tool_selection_id
+            .as_deref()
+            .and_then(|id| selection_rows.get(id))
+            .and_then(|selection| selection.tool_policy_version.clone());
+        let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
+            Ok(ToolPolicyVersion::LegacyDefaults) => "legacy-permissive",
+            Ok(ToolPolicyVersion::V1) => "tool-policy/v1",
+            Err(_) => "unknown",
+        };
         behaviors.push(json!({
             "behavior_id": behavior.behavior_id,
             "display_name": behavior.display_name,
             "enabled": behavior.enabled,
             "tool_selection_id": tool_selection_id,
             "tool_selection_source": tool_selection_source,
+            "tool_policy_version": tool_policy_version,
+            "tool_policy_semantics": tool_policy_semantics,
             "surface": explanation,
         }));
     }

@@ -1845,6 +1845,7 @@ mod lean_apply_write_boundary_tests {
             selection_id: doc.id.clone(),
             agent_did: agent_did.to_string(),
             display_name: Some(doc.content.clone()),
+            tool_policy_version: None,
             enable_file_tools: false,
             file_tools_mode: "disabled".to_string(),
             file_tool_root: None,
