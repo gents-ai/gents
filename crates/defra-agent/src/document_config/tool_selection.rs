@@ -285,6 +285,29 @@ pub struct ToolSelectionDocument {
     pub write_tools: Option<Vec<WriteToolDecl>>,
 }
 
+/// Canonical per-principal id for the seeded `wide-open` preset. Prefixed with
+/// the agent DID so it is globally unique AND passes the runtime document view's
+/// `agent_did` hydration filter + cross-agent rejection (a single global preset
+/// row would be invisible to other principals — see design §3.2).
+pub fn wide_open_tool_selection_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}:wide-open")
+}
+
+/// The seeded `wide-open` preset for a principal: a `ToolSelection` that
+/// reproduces today's permissive behavior, expressed explicitly and stamped at
+/// the current policy version. Built by running the legacy-permissive backfill
+/// over an empty document, so the preset value-set can never drift from the
+/// backfill the secure-default flip relies on (single source of truth).
+pub fn wide_open_tool_selection_document(agent_did: &str) -> ToolSelectionDocument {
+    ToolSelectionDocument {
+        selection_id: wide_open_tool_selection_id_for_agent(agent_did),
+        agent_did: agent_did.to_string(),
+        display_name: Some("Wide-open (permissive preset)".to_string()),
+        ..Default::default()
+    }
+    .with_legacy_policy_defaults_backfilled()
+}
+
 impl ToolSelectionDocument {
     pub fn with_legacy_policy_defaults_backfilled(&self) -> Self {
         let mut backfilled = self.clone();

@@ -107,6 +107,7 @@ pub use document_config::{
     list_agent_behaviors, list_inference_profile_records, load_agent_behavior,
     load_agent_principal, load_inference_profile, load_tool_selection, subagent_target_entry,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };

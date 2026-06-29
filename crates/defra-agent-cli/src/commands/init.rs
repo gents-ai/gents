@@ -12,6 +12,7 @@ use defra_agent::{
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
     load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
+    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehaviorDocument, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
@@ -200,6 +201,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "secure_enclave_label": initialized_identity.secure_enclave_label,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
+        "wide_open_preset_id": summary.wide_open_preset_id,
         "inference_profile_id": summary.inference_profile_id,
         "tool_package": format_tool_package(summary.tool_package),
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
@@ -506,6 +508,14 @@ async fn initialize_runtime_home(
     );
     write_tool_selection_document(access, &tool_selection).await?;
 
+    // Seed the canonical per-principal `wide-open` preset (design §3.2): a
+    // permissive ToolSelection an operator can point any behavior at to restore
+    // today's permissive surface under the unified policy. Reproduces the
+    // legacy-permissive value-set and is stamped at the current policy version.
+    let wide_open_preset_id = wide_open_tool_selection_id_for_agent(agent_did);
+    let wide_open_preset = wide_open_tool_selection_document(agent_did);
+    write_tool_selection_document(access, &wide_open_preset).await?;
+
     let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
     let inference_profile = standard_inference_profile(&inference_profile_id);
     upsert_inference_profile(node, &inference_profile).await?;
@@ -543,6 +553,7 @@ async fn initialize_runtime_home(
         max_queue_depth: args.max_queue_depth,
         default_behavior_id,
         tool_selection_id,
+        wide_open_preset_id,
         inference_profile_id,
         tool_package,
         tool_ceiling,
