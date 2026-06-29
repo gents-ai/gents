@@ -609,6 +609,46 @@ fn memory_tool_defaults_disabled() {
 }
 
 #[test]
+fn defra_query_deny_all_collection_scope_gates_tool_off() {
+    use super::policy::{EndpointScope, ToolPolicySurface};
+
+    // Behavior permits collection `a`; ceiling permits only `b`. The disjoint
+    // `Only ∩ Only` meet yields `Only(∅)` — a deny-all the projection must not
+    // collapse into allow-all (the `Only(∅) ≠ All` trap).
+    let mut behavior = ToolPolicySurface::runtime_all();
+    behavior.defra_collections = EndpointScope::<String, ()>::only_units(["a".to_string()]);
+    let mut ceiling = ToolPolicySurface::runtime_all();
+    ceiling.defra_collections = EndpointScope::<String, ()>::only_units(["b".to_string()]);
+
+    let effective = behavior.meet(&ceiling);
+    assert!(
+        effective.defra_collections.is_deny_all(),
+        "disjoint collection scopes must meet to Only(empty) = deny-all"
+    );
+    // The capability bit alone is still on; only the keyed scope is empty.
+    assert!(effective.defra_query);
+    assert!(
+        !effective.include_defra_query(),
+        "deny-all collection scope must gate the defra_query tool off, not surface it as allow-all"
+    );
+    assert!(
+        effective.defra_query_collections_for_runtime().is_empty(),
+        "deny-all and all both project to an empty list; the gate is what distinguishes them"
+    );
+
+    // Sanity: an All ceiling leaves the behavior's own allowlist intact and the
+    // tool surfaced.
+    let mut all_ceiling = ToolPolicySurface::runtime_all();
+    all_ceiling.defra_collections = EndpointScope::all();
+    let permissive = behavior.meet(&all_ceiling);
+    assert!(permissive.include_defra_query());
+    assert_eq!(
+        permissive.defra_query_collections_for_runtime(),
+        vec!["a".to_string()]
+    );
+}
+
+#[test]
 fn tool_policy_version_controls_nullable_default_decode() {
     let legacy_doc = crate::document_config::ToolSelectionDocument {
         selection_id: "legacy-tools".to_string(),

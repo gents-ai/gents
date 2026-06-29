@@ -186,7 +186,7 @@ impl BehaviorToolConfig {
             enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget,
             enable_session_history_tool: static_policy.session_history,
-            enable_defra_query: static_policy.defra_query,
+            enable_defra_query: static_policy.include_defra_query(),
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
             behavior_policy,
@@ -288,9 +288,10 @@ impl BehaviorToolConfig {
             enable_context_budget_tool: effective_policy.context_budget
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
-            enable_defra_query: effective_policy.defra_query,
+            enable_defra_query: effective_policy.include_defra_query(),
             defra_query_collections: effective_policy.defra_query_collections_for_runtime(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
+            enable_skills: effective_policy.skills,
         }
     }
 

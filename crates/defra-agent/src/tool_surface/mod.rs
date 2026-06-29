@@ -53,6 +53,7 @@ pub struct ToolSurface {
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_collections: Vec<String>,
     pub(super) write_tools: Vec<WriteToolDecl>,
+    pub(super) enable_skills: bool,
 }
 
 impl ToolSurface {
@@ -62,6 +63,14 @@ impl ToolSurface {
 
     pub fn includes_meta_tools(&self) -> bool {
         self.include_meta_tools
+    }
+
+    /// Whether the behavior's effective policy permits progressive-disclosure
+    /// skills (the `load_skill` tool). Resolved from the `skills` capability of
+    /// the effective surface, so an operator ceiling that denies skills is
+    /// honored — the capability is governed, not assumed-on.
+    pub fn includes_skills(&self) -> bool {
+        self.enable_skills
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
@@ -257,6 +266,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)
+            .field("enable_skills", &self.enable_skills)
             .finish()
     }
 }

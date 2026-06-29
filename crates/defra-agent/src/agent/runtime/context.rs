@@ -96,7 +96,11 @@ impl RuntimeContext {
         // The owned completion loop (#400) applies its own deadline/cancellation
         // envelope, so these are unwrapped (not `RuntimeManagedTool`).
         let mut loop_tools = tool_surface.build_tools(&self.tool_runtime)?;
-        if !behavior.skills.is_empty() {
+        // Gate skills on the effective `skills` capability, not just the presence
+        // of configured skills: an operator ceiling that denies skills must drop
+        // `load_skill` even when the behavior declares skills (the capability is
+        // governed, mirroring meta/defra_query).
+        if tool_surface.includes_skills() && !behavior.skills.is_empty() {
             let ceiling = crate::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),

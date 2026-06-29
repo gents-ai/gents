@@ -402,6 +402,17 @@ impl ToolPolicySurface {
         self.meta && !self.mcp_services.is_deny_all()
     }
 
+    /// Whether the defra_query tool should be surfaced. The capability bit is not
+    /// sufficient: when the effective `defra_collections` scope meets down to a
+    /// deny-all (`None` or `Only(∅)`), the tool must be dropped — an empty
+    /// collection list is read as allow-all by `CollectionScope::restricted`, so
+    /// emitting the tool with an empty runtime list would silently escalate a
+    /// deny-all above the ceiling (the `Only(∅) ≠ All` trap). Mirror of
+    /// [`include_meta_tools`] for the MCP category.
+    pub fn include_defra_query(&self) -> bool {
+        self.defra_query && !self.defra_collections.is_deny_all()
+    }
+
     pub fn mcp_service_ids_for_runtime(&self) -> Vec<String> {
         match &self.mcp_services {
             EndpointScope::Only(_) => self.mcp_services.keys(),

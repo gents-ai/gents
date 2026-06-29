@@ -373,11 +373,21 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         [
             (policy.context_budget, CONTEXT_BUDGET_TOOL_NAME),
             (policy.session_history, SESSION_HISTORY_TOOL_NAME),
-            (policy.defra_query, DEFRA_QUERY_TOOL_NAME),
+            // `include_defra_query` not the raw `defra_query` bit: a deny-all
+            // collection scope (`Only(∅)`/`None`) gates the tool off, so the
+            // effective trace must not list it as present.
+            (policy.include_defra_query(), DEFRA_QUERY_TOOL_NAME),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name.to_string()))
         .collect(),
+    );
+    summary.insert(
+        "defra_query".to_string(),
+        vec![
+            format!("enabled:{}", policy.defra_query),
+            format!("collections:{}", policy.defra_collections.kind()),
+        ],
     );
     summary.insert(
         "meta_mcp".to_string(),
@@ -405,6 +415,10 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
     summary.insert(
         "workflow_orchestration".to_string(),
         vec![format!("enabled:{}", policy.orchestration)],
+    );
+    summary.insert(
+        "skills".to_string(),
+        vec![format!("enabled:{}", policy.skills)],
     );
     summary.insert(
         "built_in_memory".to_string(),
