@@ -28,6 +28,10 @@ verifying the signed binary, building from source, and the fallback `chat`
 REPL. Desktop app, fleet bring-up, and P2P pairing:
 [docs/operations.md](docs/operations.md).
 
+For the local two-node P2P demo from source, run `make demo-p2p-two-node`.
+It starts Amy + Coding, enrolls Coding through a signed `network-control`
+invite, adds the conversation data plane, and proves request replication.
+
 ## Why this exists
 
 Agent frameworks bolt persistence, identity, and coordination onto a loop. defra-agent inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.

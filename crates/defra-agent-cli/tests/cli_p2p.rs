@@ -36,10 +36,18 @@ fn grant_member(home: &std::path::Path, member_did: &str) -> Result<Value> {
     Ok(out)
 }
 
-fn mint_invite_for(home: &std::path::Path, member_did: &str) -> Result<Value> {
+fn mint_network_control_invite_for(home: &std::path::Path, member_did: &str) -> Result<Value> {
     run_cli_json(
         home,
-        &["p2p", "pairings", "invite", "--member-did", member_did],
+        &[
+            "p2p",
+            "pairings",
+            "invite",
+            "--member-did",
+            member_did,
+            "--template",
+            "network-control",
+        ],
     )
 }
 
@@ -133,7 +141,7 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
     grant_member(&home_a, &agent_did_b)?;
 
     // Mint exactly ONE invite from A for B's active membership grant.
-    let invite_a = mint_invite_for(&home_a, &agent_did_b)?;
+    let invite_a = mint_network_control_invite_for(&home_a, &agent_did_b)?;
     let token_a = invite_a
         .get("token")
         .and_then(Value::as_str)
@@ -688,7 +696,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
     create_network(&home_a, "Invite Fleet")?;
     grant_member(&home_a, &agent_did_b)?;
 
-    let invite_a = mint_invite_for(&home_a, &agent_did_b)?;
+    let invite_a = mint_network_control_invite_for(&home_a, &agent_did_b)?;
     assert_eq!(
         invite_a.get("status").and_then(Value::as_str),
         Some("invite_created")
@@ -735,19 +743,18 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         Some(agent_did_a.as_str())
     );
 
-    // The `conversation` template (the invite/join default) is filtered-PUSH
-    // delivery: the reconciler installs a filtered replicator toward the peer
-    // and deliberately does NOT subscribe the collections (no gossip leak of
-    // the unfiltered collection). So the applied row carries replicator
-    // addresses, not subscribed collections.
+    // The v5 invite seeds the narrow network-control substrate only. The
+    // full conversation data-plane flow is exercised by
+    // `scripts/demo-p2p-two-node.sh`, which writes DataPlanePairingDesired rows
+    // and proves AgentRequest replication.
     let applied_b =
-        wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(70)).await?;
+        wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(90)).await?;
     assert!(
         applied_b
-            .get("replicator_addresses")
+            .get("collections")
             .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty()),
-        "B applied row missing a replicator toward A after joining: {applied_b}"
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentNetwork"))),
+        "B applied row missing network-control collections after joining: {applied_b}"
     );
 
     Ok(())

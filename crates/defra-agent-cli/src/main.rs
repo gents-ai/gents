@@ -184,7 +184,7 @@ Examples:
   defra-agent p2p pairings rm --peer <peer-id>
   defra-agent p2p network create --name \"Fleet One\"
   defra-agent p2p network grant <member-did>
-  defra-agent p2p pairings invite --member-did <member-did> --template conversation
+  defra-agent p2p pairings invite --member-did <member-did> --template network-control
   defra-agent p2p pairings join <invite-token>
 
   # Service discovery:
