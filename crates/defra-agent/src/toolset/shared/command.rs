@@ -134,6 +134,13 @@ impl CommandExecutionPolicy {
         self
     }
 
+    /// Command heads permitted in read-only mode. Exposed so the unified
+    /// tool-policy resolver can carry the behavior's read-only allowlist into the
+    /// `ToolPolicyBash` policy factor (where the operator ceiling can narrow it).
+    pub fn read_only_allowlist(&self) -> &[String] {
+        &self.read_only_allowlist
+    }
+
     pub fn with_network_mode(mut self, network_mode: CommandNetworkMode) -> Self {
         self.network_mode = network_mode;
         self

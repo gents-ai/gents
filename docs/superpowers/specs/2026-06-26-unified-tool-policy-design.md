@@ -331,16 +331,18 @@ must carry the runtime-specific representation choices:
 - Preserve the structured lookup/root-narrowing semantics, including precise CLI
   path-prefix containment where the Lean SP1 model uses finite-set intersection as the
   reduced proof stand-in.
-- **Bash `forbidden` / `read_only_allowlist` ceiling-narrowing is deferred (explicit
-  carve-out).** The Lean `BashPolicy` models and proves both factors
-  (`bash_meet_forbidden_superset`, `bash_meet_readonly_*`), but the production
-  `ToolPolicyBash` mirrors only `mode`/`network`/`allowed`/`sandbox`. A behavior's own
-  forbidden/read-only prefixes are still enforced via the legacy `CommandExecutionPolicy`
-  passthrough, so there is no runtime soundness gap — only a ceiling-narrowing capability
-  not yet exposed. Closing it (add both factors to `ToolPolicyBash` + the conformance bash
-  view so the proven bounds are exercised end-to-end) is tracked with the bash sub-field →
-  executable-validator projection above. The carve-out is documented on `BashPolicy` in
-  `ToolPolicy/Types.lean`.
+- **Bash `forbidden` / `read_only_allowlist` ceiling-narrowing — DONE (2026-06-30).**
+  The production `ToolPolicyBash` now mirrors all six factors: `forbidden_argv_prefixes`
+  (union meet) and `read_only_allowlist` (`EndpointScope` intersection meet) joined
+  `mode`/`network`/`allowed`/`sandbox`. `from_selection` reads them from the behavior's
+  `CommandExecutionPolicy` (empty `read_only_allowlist` → `All` top, asymmetric with the
+  allowed-prefix gate), and the conformance case
+  `bash_forbidden_union_and_readonly_intersection` exercises the proven
+  `bash_meet_forbidden_superset` / `bash_meet_readonly_*` bounds end-to-end through the
+  real resolver. **Still open:** projecting the meet result onto the *executable*
+  `CommandExecutionPolicy` validator (so a ceiling-narrowed forbidden/read-only set is
+  enforced at command time). No runtime soundness gap today — the behavior's own
+  `CommandExecutionPolicy` still enforces its forbidden/read-only via the legacy passthrough.
 
 ## 6. Key files
 

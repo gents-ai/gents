@@ -41,6 +41,9 @@ structure SurfaceView where
   bashSandbox : Bool
   bashAllowedKind : String
   bashAllowedPrefixes : List (List String)
+  bashForbidden : List (List String)
+  bashReadOnlyKind : String
+  bashReadOnlyKeys : List String
   cliScopeKind : String
   cliKeys : List String
   mcpProbe : String
@@ -81,6 +84,14 @@ def knownToolIds : List String :=
 def knownArgvPrefixes : List (List String) :=
   [["git", "status"], ["ls"]]
 
+-- Known forbidden argv prefixes (sorted) for the bash forbidden-set projection,
+-- and known read-only command heads for the read-only allowlist projection.
+def knownForbiddenPrefixes : List (List String) :=
+  [["curl"], ["rm"], ["sudo"]]
+
+def knownReadOnlyCmds : List String :=
+  ["cat", "ls", "pwd"]
+
 def knownWriteKeys : List (String × String) :=
   [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
 
@@ -112,6 +123,16 @@ def subagentScopeKeys {V : Type} : EndpointScope (String × String) V → List S
 
 def bashAllowedPrefixes : EndpointScope (List String) Unit → List (List String)
   | .only keys _ => knownArgvPrefixes.filter (fun key => decide (key ∈ keys))
+  | .all => []
+  | .none => []
+
+-- Forbidden is a plain `Finset` (union meet), not an `EndpointScope`; project it
+-- by filtering the known list so the round-trip order is deterministic.
+def bashForbiddenView (forbidden : Finset (List String)) : List (List String) :=
+  knownForbiddenPrefixes.filter (fun key => decide (key ∈ forbidden))
+
+def bashReadOnlyKeys : EndpointScope String Unit → List String
+  | .only keys _ => knownReadOnlyCmds.filter (fun key => decide (key ∈ keys))
   | .all => []
   | .none => []
 
@@ -163,6 +184,20 @@ def bashPolicy (mode : ExecMode) (network : NetMode)
   , readOnly := .all
   , sandbox := true }
 
+def readOnlyOnly (cmds : List String) : EndpointScope String Unit :=
+  unitOnly cmds.toFinset
+
+/-- Bash policy with non-trivial forbidden + read-only factors, for the
+    union/intersection ceiling-narrowing case. -/
+def bashPolicyRich (forbidden : List (List String))
+    (readOnly : EndpointScope String Unit) : BashPolicy :=
+  { mode := .unrestricted
+  , network := .enabled
+  , forbidden := forbidden.toFinset
+  , allowed := .all
+  , readOnly := readOnly
+  , sandbox := true }
+
 def surface (file : FileCap) (bash : BashPolicy)
     (meta defraQuery spawn : Bool)
     (mcp : EndpointScope ToolId Unit)
@@ -205,6 +240,9 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , bashSandbox := s.bash.sandbox
   , bashAllowedKind := scopeKind s.bash.allowed
   , bashAllowedPrefixes := bashAllowedPrefixes s.bash.allowed
+  , bashForbidden := bashForbiddenView s.bash.forbidden
+  , bashReadOnlyKind := scopeKind s.bash.readOnly
+  , bashReadOnlyKeys := bashReadOnlyKeys s.bash.readOnly
   , cliScopeKind := scopeKind s.cliTools
   , cliKeys := toolScopeKeys s.cliTools
   , mcpProbe := mcpProbe
@@ -344,6 +382,20 @@ def ceilingScopesOnly : Surface :=
   , subagentTargets := subagentOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
+-- Bash forbidden (union) + read-only allowlist (intersection) ceiling-narrowing.
+-- behavior forbids `rm` + read-only {cat,ls}; ceiling forbids `curl` + read-only
+-- {ls,pwd}. Expect forbidden = {rm,curl} (union) and read-only = {ls}
+-- (intersection) — exercising the two proven bash bounds end-to-end.
+def behaviorBashRich : Surface :=
+  surface .readWrite
+    (bashPolicyRich [["rm"]] (readOnlyOnly ["cat", "ls"]))
+    true true true .all writeA
+
+def ceilingBashRich : Surface :=
+  surface .readWrite
+    (bashPolicyRich [["curl"]] (readOnlyOnly ["ls", "pwd"]))
+    true true true .all writeA
+
 def mkCase (name : String) (b c : Surface) (r : Avail)
     (mcpProbe : String) (writeProbe : String × String) : Case :=
   { name := name
@@ -371,6 +423,8 @@ def cases : List Case :=
       behaviorEachCategory ceilingClampsEachCategory wideOpen "svc-a" probeWrite
   , mkCase "behavior_all_scopes_clamped_by_ceiling_only"
       wideOpen ceilingScopesOnly wideOpen "svc-a" probeWrite
+  , mkCase "bash_forbidden_union_and_readonly_intersection"
+      behaviorBashRich ceilingBashRich wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases

@@ -46,20 +46,20 @@ inductive NetMode where
 
 /-- Bash policy is a product, not a single rank.
 
-    SP1-Rust wiring carve-out: the production `ToolPolicyBash`
-    (`tool_surface/policy.rs`) currently mirrors `mode`, `network`, `allowed`
-    (as `allowed_argv_prefixes`), and `sandbox`. The `forbidden` (union-meet) and
-    `readOnly` (intersection-meet) factors are MODELED and PROVEN here
-    (`bash_meet_forbidden_superset`, `bash_meet_readonly_*` in `Theorems.lean`)
-    but are NOT yet threaded through the operator-ceiling meet on the Rust side:
-    a behavior's own forbidden/read-only prefixes are still enforced via the
-    legacy `CommandExecutionPolicy` passthrough (`toolset/shared/command.rs`), so
-    there is no runtime soundness gap — only a ceiling-narrowing capability the
-    Rust resolver does not yet expose. Closing it is an explicit SP1-Rust item
-    (add both factors to `ToolPolicyBash` + the conformance bash view), tracked
-    alongside the bash sub-field → executable-validator projection. Until then the
-    conformance bash cases hold `forbidden := ∅` / `readOnly := .all`, so the
-    proven bounds are not yet exercised end-to-end. -/
+    All six factors are now mirrored in the production `ToolPolicyBash`
+    (`tool_surface/policy.rs`): `mode`, `network`, `allowed`
+    (`allowed_argv_prefixes`), `sandbox`, plus `forbidden` (union meet,
+    `bash_meet_forbidden_superset`) and `readOnly` (intersection meet,
+    `bash_meet_readonly_*`). The conformance case
+    `bash_forbidden_union_and_readonly_intersection` exercises the union/
+    intersection bounds end-to-end through the real resolver.
+
+    Note: this governs the operator-ceiling MEET of the bash factors. Projecting
+    the meet result back onto the EXECUTABLE `CommandExecutionPolicy` validator
+    (so a narrowed forbidden/read-only set is enforced at command time) remains a
+    separate SP1-Rust item; today the behavior's own `CommandExecutionPolicy`
+    still enforces its forbidden/read-only via the legacy passthrough, so there
+    is no runtime soundness gap. -/
 structure BashPolicy where
   mode : ExecMode
   network : NetMode

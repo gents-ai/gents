@@ -129,6 +129,15 @@ pub struct ToolPolicyBash {
     pub network_mode: CommandNetworkMode,
     pub sandbox: bool,
     pub allowed_argv_prefixes: EndpointScope<Vec<String>, ()>,
+    /// Argv prefixes forbidden in any mode. A plain set with a **union** meet:
+    /// a prefix forbidden by either the behavior or the ceiling is forbidden in
+    /// the effective policy (top = ∅ = nothing forbidden). Mirrors Lean
+    /// `BashPolicy.forbidden` (`bash_meet_forbidden_superset`).
+    pub forbidden_argv_prefixes: BTreeSet<Vec<String>>,
+    /// Command heads permitted in read-only mode, an `EndpointScope` with an
+    /// **intersection** meet (top = `All`). Mirrors Lean `BashPolicy.readOnly`
+    /// (`bash_meet_readonly_*`).
+    pub read_only_allowlist: EndpointScope<String, ()>,
 }
 
 impl ToolPolicyBash {
@@ -139,6 +148,8 @@ impl ToolPolicyBash {
             network_mode: CommandNetworkMode::Inherit,
             sandbox: true,
             allowed_argv_prefixes: EndpointScope::<Vec<String>, ()>::all(),
+            forbidden_argv_prefixes: BTreeSet::new(),
+            read_only_allowlist: EndpointScope::all(),
         }
     }
 
@@ -149,6 +160,8 @@ impl ToolPolicyBash {
             network_mode: CommandNetworkMode::Enabled,
             sandbox: true,
             allowed_argv_prefixes: EndpointScope::<Vec<String>, ()>::all(),
+            forbidden_argv_prefixes: BTreeSet::new(),
+            read_only_allowlist: EndpointScope::all(),
         }
     }
 
@@ -161,6 +174,16 @@ impl ToolPolicyBash {
             allowed_argv_prefixes: self
                 .allowed_argv_prefixes
                 .meet_with(&other.allowed_argv_prefixes, |(), ()| ()),
+            // forbidden: a prefix forbidden by either side is forbidden (union).
+            forbidden_argv_prefixes: self
+                .forbidden_argv_prefixes
+                .union(&other.forbidden_argv_prefixes)
+                .cloned()
+                .collect(),
+            // read-only allowlist: narrower of the two (scope intersection).
+            read_only_allowlist: self
+                .read_only_allowlist
+                .meet_with(&other.read_only_allowlist, |(), ()| ()),
         }
     }
 }
@@ -225,6 +248,8 @@ impl ToolPolicySurface {
                 network_mode: CommandNetworkMode::Enabled,
                 sandbox: true,
                 allowed_argv_prefixes: EndpointScope::<Vec<String>, ()>::all(),
+                forbidden_argv_prefixes: BTreeSet::new(),
+                read_only_allowlist: EndpointScope::all(),
             },
             meta: true,
             defra_query: true,
@@ -278,6 +303,12 @@ impl ToolPolicySurface {
         let allowed_argv_prefixes = command_policy
             .map(|policy| policy.allowed_argv_prefixes.clone())
             .unwrap_or_default();
+        let forbidden_argv_prefixes = command_policy
+            .map(|policy| policy.forbidden_argv_prefixes.clone())
+            .unwrap_or_default();
+        let read_only_allowlist = command_policy
+            .map(|policy| policy.read_only_allowlist().to_vec())
+            .unwrap_or_default();
 
         let mut cli_tools = BTreeMap::new();
         for name in &selection.cli_tool_names {
@@ -328,6 +359,20 @@ impl ToolPolicySurface {
                     EndpointScope::<Vec<String>, ()>::all()
                 } else {
                     EndpointScope::<Vec<String>, ()>::only_units(allowed_argv_prefixes)
+                },
+                forbidden_argv_prefixes: forbidden_argv_prefixes.into_iter().collect(),
+                // Asymmetric with allowed_argv_prefixes: an empty read-only
+                // allowlist is the permissive TOP (`All`, no behavior-side
+                // narrowing), not deny-all — only an operator ceiling that sets a
+                // read-only `Only(set)` narrows it. A non-empty list is `Only`.
+                read_only_allowlist: if read_only_allowlist.is_empty() {
+                    EndpointScope::all()
+                } else {
+                    EndpointScope::<String, ()>::only_units(
+                        read_only_allowlist
+                            .into_iter()
+                            .map(|cmd| cmd.trim().to_string()),
+                    )
                 },
             },
             meta: selection.enable_meta_tools,

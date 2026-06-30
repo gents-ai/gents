@@ -179,6 +179,11 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
                 &view.bash_allowed_kind,
                 &view.bash_allowed_prefixes,
             ),
+            forbidden_argv_prefixes: view.bash_forbidden.iter().cloned().collect(),
+            read_only_allowlist: unit_scope_from_strings(
+                &view.bash_read_only_kind,
+                &view.bash_read_only_keys,
+            ),
         },
         meta: view.meta,
         defra_query: view.defra_query,
@@ -240,6 +245,14 @@ fn view_from_surface(
         bash_sandbox: surface.bash.sandbox,
         bash_allowed_kind: surface.bash.allowed_argv_prefixes.kind().to_string(),
         bash_allowed_prefixes: surface.bash.allowed_argv_prefixes.keys(),
+        bash_forbidden: surface
+            .bash
+            .forbidden_argv_prefixes
+            .iter()
+            .cloned()
+            .collect(),
+        bash_read_only_kind: surface.bash.read_only_allowlist.kind().to_string(),
+        bash_read_only_keys: surface.bash.read_only_allowlist.keys(),
         cli_scope_kind: surface.cli_tools.kind().to_string(),
         cli_keys: surface.cli_tools.keys(),
         mcp_permits: surface.mcp_services.permits(&mcp_probe),
