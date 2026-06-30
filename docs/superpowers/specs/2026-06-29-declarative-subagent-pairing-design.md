@@ -254,11 +254,19 @@ single template as-is: invite tokens sign one template that `join` writes direct
   provisioned only by the explicit invite/join and CLI paths above. Complement-aware
   registry materialization is a possible future enhancement, explicitly out of
   scope here.
-- **Fence (conformance + unit):** a pairing whose two ends are **not**
-  complementary (two `subagent-coordinator`, two `subagent-host`, or a `subagent-*`
-  paired against a non-subagent template) yields no working channel and must be
-  flagged — surfaced as a reconcile-time `tracing::warn!` and asserted in a
-  conformance case.
+- **Misconfiguration is node-local-invisible (no cross-node fence).** A node only
+  sees its *own* operator-set `PeerPairingDesired` rows — the peer's row lives on
+  the peer and is **not** replicated (subagent rows are `source: "operator"`, and
+  the registry path is excluded above). So a node **cannot** observe whether the
+  peer chose the complementary role; a reconcile-time warning about "two
+  coordinators" / "two hosts" is not implementable. A non-complementary or
+  one-sided pairing simply produces **no working channel** (one or both legs are
+  absent, so the bridge or the child never flows) — surfaced operationally as the
+  delegation failing to complete, and fenced *positively* by the e2e (§6) for the
+  correct config. What a node *can* check locally — a malformed own row (blank peer
+  DID for a scoped template) — is already refused by the reconciler's blank-DID
+  guard. A negative unit test may assert a one-sided pairing yields no delegated
+  child; no reconcile-time `tracing::warn!` about the peer's role is attempted.
 
 ### 5. Claim hardening (defense in depth)
 

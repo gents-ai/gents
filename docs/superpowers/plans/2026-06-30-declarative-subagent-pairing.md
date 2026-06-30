@@ -210,24 +210,30 @@ git commit -m "proof(#575): directional per-collection subagent scope templates"
 
 ```rust
 /// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` and
-/// `subagent_filter_values_local_or_peer`.
+/// the catalog-resolution theorems. Asserts EXACTNESS (no extra collections or
+/// filters), not just that required keys are present.
 #[test]
 fn subagent_templates_resolve_to_directional_filters() {
+    const CONVERSATION: &[&str] = &[
+        "AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
+        "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
+    ];
+
     let coord = resolve_template("subagent-coordinator").expect("coordinator in catalog");
     assert_eq!(coord.delivery, Delivery::Push);
+    assert_eq!(coord.collections, &["AgentRequest", "AgentToolCall"]); // exact set, exact order
     let f = scope_filter(&coord.scope, coord.collections, "did:key:host", "did:key:coord");
-    assert_eq!(f.get("AgentRequest").unwrap().field, "agent_did");
-    assert_eq!(f.get("AgentRequest").unwrap().value, "did:key:coord"); // local
-    assert_eq!(f.get("AgentToolCall").unwrap().field, "spawn_target_did");
-    assert_eq!(f.get("AgentToolCall").unwrap().value, "did:key:host"); // peer
+    assert_eq!(f.len(), 2, "coordinator filter is exactly two collections");
+    assert_eq!(f["AgentRequest"], FilterPredicate { field: "agent_did".into(), value: "did:key:coord".into() });
+    assert_eq!(f["AgentToolCall"], FilterPredicate { field: "spawn_target_did".into(), value: "did:key:host".into() });
 
     let host = resolve_template("subagent-host").expect("host in catalog");
     assert_eq!(host.delivery, Delivery::Push);
+    assert_eq!(host.collections, CONVERSATION); // exact conversation set
     let f = scope_filter(&host.scope, host.collections, "did:key:coord", "did:key:host");
-    for col in host.collections {
-        let p = f.get(*col).expect("filter for every host collection");
-        assert_eq!(p.field, "agent_did");
-        assert_eq!(p.value, "did:key:host"); // local
+    assert_eq!(f.len(), CONVERSATION.len(), "host filter covers exactly the conversation set");
+    for col in CONVERSATION {
+        assert_eq!(f[*col], FilterPredicate { field: "agent_did".into(), value: "did:key:host".into() });
     }
     // no-third-party: every value is one of the two pairing DIDs
     for p in f.values() {
@@ -378,6 +384,7 @@ git commit -m "feat(#575): stamp spawn_target_did on every subagent bridge (both
 
 **Files:**
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/templates.rs`
+- Modify: `crates/defra-agent-cli/src/commands/p2p/templates.rs` (the `scope_str` match — currently exhaustive over `PeerDid`/`Unscoped`; will fail to compile without a `PerCollection` arm)
 
 **Interfaces:**
 - Produces: `DidSource`, `CollectionRule`, `Scope::PerCollection { rules }`, templates `subagent-coordinator`/`subagent-host`, `scope_filter(scope, collections, peer_did, local_did)` (4-arg).
@@ -478,15 +485,28 @@ pub fn scope_filter(
 }
 ```
 
-- [ ] **Step 4: Build (callers will break — that's Task 6).**
+- [ ] **Step 4: Add the `PerCollection` arm to the CLI template listing.** In `defra-agent-cli/src/commands/p2p/templates.rs`, the `scope_str(s: &Scope)` match (lines ~37-42) is exhaustive over `PeerDid`/`Unscoped` and will fail to compile. Add:
 
-Run: `cargo build -p defra-agent 2>&1 | head -30`
-Expected: FAIL only at `scope_filter` call sites (arity). Confirm the failures are exactly those (engine.rs + any tests), not within `templates.rs`.
+```rust
+        Scope::PerCollection { rules } => {
+            // e.g. "per-collection(AgentRequest:agent_did, AgentToolCall:spawn_target_did)"
+            let parts: Vec<String> = rules
+                .iter()
+                .map(|r| format!("{}:{}", r.collection, r.field))
+                .collect();
+            format!("per-collection({})", parts.join(", "))
+        }
+```
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 5: Build (the `defra-agent` runtime callers will break — that's Task 6; the CLI must compile now).**
+
+Run: `cargo build -p defra-agent-cli && cargo build -p defra-agent 2>&1 | head -30`
+Expected: `defra-agent-cli` builds; `defra-agent` FAILs only at `scope_filter` call sites (arity). Confirm the runtime failures are exactly those (engine.rs + any tests), not within `templates.rs`.
+
+- [ ] **Step 6: Commit.**
 
 ```bash
-git add crates/defra-agent/src/agent/p2p_reconcile/templates.rs
+git add crates/defra-agent/src/agent/p2p_reconcile/templates.rs crates/defra-agent-cli/src/commands/p2p/templates.rs
 git commit -m "feat(#575): add subagent-coordinator/-host templates + PerCollection scope"
 ```
 
@@ -905,12 +925,12 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
     assert_eq!(cases.len(), 1);
     for case in cases {
         // write subagent-host / subagent-coordinator PeerPairingDesired rows on each
-        // DefraDB node BEFORE booting that node's DefraAgent runtime (Task 13 Step 1
-        // rationale: the defradb.rs Controlled auth gate rehydrates at boot, #1074),
-        // then boot both runtimes and let the reconciler install the legs.
+        // node, each carrying the PEER'S listen multiaddr in replicator_addresses
+        // (never []; Task 13 Step 1), then let both reconcilers install their legs
+        // (first install calls add_replicator -> live auth update on both sides).
         // DETERMINISTIC WAIT (no sleeps): before spawning, poll until both legs are
-        // applied on both nodes — wait_for_replicator_installed(coord, host_addr) and
-        // wait_for_replicator_installed(host, coord_addr) — same helper as Task 13,
+        // installed on both nodes — wait_for_replicator_installed(coord, host_addr)
+        // and wait_for_replicator_installed(host, coord_addr) — same helper as Task 13,
         // since the reconciler is sweep-driven (engine.rs:23) and a bare write races it.
         // spawn background child from the coordinator hook; wait for child on host.
         // cancel the parent request -> bridge cancel_cascade_intent_at written.
@@ -947,16 +967,18 @@ git commit -m "test(#575): cancel propagation across declarative subagent legs"
 **Interfaces:**
 - Consumes: the full stack (templates, reconciler, spawn_target_did, claim gate).
 
-- [ ] **Step 1: Replace hand-wired replication with declarative rows written BEFORE agent boot.** In `live_cross_node_subagent_delegation()`, delete the two `install_one_way_replicator(...)` calls. Provision pairing via the templates, **writing the `PeerPairingDesired` rows on each DefraDB node before booting that node's `DefraAgent` runtime** — `{ template: "subagent-coordinator" }` on the coordinator (peer = host DID) and `{ template: "subagent-host" }` on the host (peer = coordinator DID). This ordering is load-bearing: the defradb.rs `Controlled` authorization gate is rehydrated at node **boot** (`load_replicators`/`load_p2p_collections`), and `get_replicators` reports *persisted* state (defradb.rs#1074), so a write-then-reconcile-while-running path can install a replicator whose live auth gate is still stale. Writing the rows before boot mirrors the original test's `write_pairing`-before-boot ordering and sidesteps #1074 in-test. (Reuse `write_pairing`, extended to take a `template`, or write inline with `upsert_PeerPairingDesired`.)
+- [ ] **Step 1: Replace hand-wired replication with declarative rows that carry the peer's listen address.** In `live_cross_node_subagent_delegation()`, delete the two `install_one_way_replicator(...)` calls. Provision pairing via the templates — write `PeerPairingDesired{ template: "subagent-coordinator" }` on the coordinator (peer = host DID) and `{ template: "subagent-host" }` on the host (peer = coordinator DID). **Two non-obvious requirements:**
+  - **`replicator_addresses` MUST be the peer's actual listen multiaddr, never `[]`.** The reconciler only emits `InstallReplicator` for desired addresses (`diff.rs:96`), and the existing `write_pairing` helper writes `replicator_addresses: []` (`subagent_delegation_live.rs:992`) — which both installs nothing *and* trips the DefraDB empty-list sharp edge (`[]` types as `JsonArray`). Resolve each node's listen address first (the e2e already waits for listen addresses for the old `install_one_way_replicator`), and write it into the row: coordinator's row carries the **host's** address; host's row carries the **coordinator's** address. Emit `null` (not `[]`) only if a list is genuinely empty — here it never is.
+  - **Auth-gate freshness (defradb.rs#1074):** `test_p2p_db` builds the P2P `EmbeddedNode` (where the `Controlled` auth gate lives) *before* any row can be written, with `load_persisted_collections: false` (`tests/support/mod.rs:60-69`). So there is no "write before node boot" option, and no boot rehydration to lean on. In this harness the live gate is populated entirely by the reconciler's **first install** (`add_replicator` → `register_replicator_access`, which live-updates auth on the installing node) — first install is never the #1074 no-op (that bug bites only on *changes* where `get_replicators`'s persisted view already matches desired). So writing rows + letting both reconcilers install their legs yields a correct live gate on both sides. **If** the test is ever observed flaky from stale auth, the deterministic fix is to **restart the target `EmbeddedNode` after the rows are written** (boot rehydration), not a sleep. Do NOT claim "before agent boot" avoids #1074 — it doesn't.
 
-- [ ] **Step 1b: Deterministically confirm the legs are live before spawning (no sleeps).** After boot, still poll until both outbound legs are installed on both nodes before submitting the spawn — the reconciler is sweep-driven (`engine.rs:23` `PAIRING_SWEEP_INTERVAL`) and a bare spawn races first install:
+- [ ] **Step 1b: Deterministically confirm both legs are installed before spawning (no sleeps).** The reconciler is sweep-driven (`engine.rs:23` `PAIRING_SWEEP_INTERVAL`) plus on-`Update`; a bare spawn races first install. Poll until both outbound legs are installed on both nodes:
 
 ```rust
 wait_for_replicator_installed(coord.node(), /*to*/ host_addr.as_str()).await; // coordinator -> host
 wait_for_replicator_installed(host.node(), /*to*/ coord_addr.as_str()).await;  // host -> coordinator
 ```
 
-Add `wait_for_replicator_installed` as a bounded-poll helper. (This guards reconcile timing; Step 1's before-boot ordering guards the live-auth gate — both are needed.) **Flakes here are defects** — fix the wait, never add a bare sleep. If the test must instead exercise the *runtime* (post-boot) reconcile path, it must explicitly restart the target node after applying the subagent pairing, per #1074.
+Add `wait_for_replicator_installed` as a bounded-poll helper. **Flakes here are defects** — fix the wait, never add a bare sleep.
 
 - [ ] **Step 2: Keep the existing completion assertion** (child runs on host, result projects back to the parent bridge).
 
