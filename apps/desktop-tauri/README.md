@@ -81,6 +81,38 @@ The saved deployment stores both GraphQL and P2P connection metadata. The app
 finishes replication bootstrap after launch; chat views should wait for the
 status bar to report `replication: subscriptions armed`.
 
+For isolated demo or QA runs, set `DEFRA_AGENT_DESKTOP_HOME` before launching
+the Tauri app. The bootstrap summary, peer directory, embedded desktop node,
+and logs all resolve under that directory:
+
+```bash
+DEFRA_AGENT_DESKTOP_HOME=/tmp/defra-agent-desktop-demo/desktop npm run tauri -- dev
+```
+
+From the repo root, `make demo-desktop-two-node` starts two runtimes,
+**Orchestrator** and **Worker**, tightens their tool surface (drops
+`defra_query`), and lets the Orchestrator delegate to the Worker on node B via a
+cross-node subagent (the child runs on the Worker and its result replicates
+back). It seeds that isolated desktop home and opens the Fleet Dashboard demo.
+Live chat uses the model backend configured during runtime init, and it must be
+reachable on **both** nodes since the Worker now executes the delegated child.
+For working chat with no external model, start the bundled OpenAI-compatible
+mock — it also fires the cross-node delegation (canned replies):
+
+```bash
+DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND=1 make demo-desktop-two-node
+```
+
+Otherwise keep `llama-server` running on `http://127.0.0.1:8080/v1`, or use a
+hosted preset:
+
+```bash
+DEFRA_AGENT_DEMO_BACKEND_PRESET=openai \
+DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini \
+OPENAI_API_KEY=... \
+  make demo-desktop-two-node
+```
+
 ## Tests
 
 The deterministic desktop UI gate is layered so failures point at the right

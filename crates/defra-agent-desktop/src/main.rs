@@ -228,6 +228,8 @@ fn init_tracing() {
         .with(env_filter)
         .with(
             tracing_subscriber::fmt::layer()
+                // Diagnostics go to stderr so stdout stays clean for `init --json`.
+                .with_writer(std::io::stderr)
                 .with_target(false)
                 .compact()
                 .without_time(),

@@ -1,6 +1,9 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
+
+pub const DESKTOP_HOME_ENV: &str = "DEFRA_AGENT_DESKTOP_HOME";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPaths {
@@ -14,6 +17,14 @@ pub struct DesktopPaths {
 
 impl DesktopPaths {
     pub fn discover() -> Result<Self> {
+        Self::discover_with_env(std::env::var_os(DESKTOP_HOME_ENV))
+    }
+
+    fn discover_with_env(env_root: Option<OsString>) -> Result<Self> {
+        if let Some(root) = env_root.filter(|value| !value.is_empty()) {
+            return Ok(Self::from_root(root));
+        }
+
         let root = dirs::data_local_dir()
             .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
             .join("defra-agent")
@@ -67,5 +78,24 @@ impl DesktopPaths {
 
     pub fn iroh_secret_key_path(&self) -> &Path {
         &self.iroh_secret_key_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_uses_desktop_home_env_when_set() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+
+        let paths = DesktopPaths::discover_with_env(Some(tempdir.path().as_os_str().to_owned()))
+            .expect("paths");
+
+        assert_eq!(paths.root(), tempdir.path());
+        assert_eq!(
+            paths.peer_directory_path(),
+            tempdir.path().join("peers.json")
+        );
     }
 }
