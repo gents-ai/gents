@@ -1,9 +1,9 @@
 //! `defra-agent demo` — an interactive, self-contained fleet demo that ships in
-//! the binary. Stage 1: boot a single curated local agent (read-only tools +
-//! demo skills) backed by a real model (interactive first-run backend picker,
-//! persisted), and drop into an interactive `demo>` shell. `pair`/`delegate`
-//! (2-node + cross-node delegation) and `desktop` (paired desktop client) come
-//! in later stages.
+//! the binary. It boots a single curated local agent (read-only tools + demo
+//! skills) backed by a real model (interactive first-run backend picker,
+//! persisted), and drops into an interactive `demo>` shell: `chat` with the
+//! agent, `pair` a 2nd node (worker), `delegate` cross-node subagent work, and
+//! `desktop` to open the paired desktop client.
 
 use std::io::{BufRead, Write as _};
 use std::path::{Path, PathBuf};
@@ -431,7 +431,7 @@ fn print_welcome(graphql: &str) {
     println!("  skills:  summarize, fleet-guide");
     println!("  graphql: {graphql}");
     println!();
-    println!("Commands: chat · skill · status · pair · delegate · help · down");
+    println!("Commands: chat · skill · status · pair · delegate · desktop · help · down");
     println!("Type `chat` to talk to your agent, or `help` for the full list.");
 }
 
@@ -460,6 +460,11 @@ async fn run_shell(
             "delegate" => {
                 if let Err(error) = delegate(fleet).await {
                     println!("  delegate failed: {error}");
+                }
+            }
+            "desktop" => {
+                if let Err(error) = desktop(fleet).await {
+                    println!("  desktop failed: {error}");
                 }
             }
             "down" | "quit" | "exit" => break,
@@ -784,6 +789,100 @@ fn cli(args: &[&str]) -> Vec<String> {
     args.iter().map(|value| value.to_string()).collect()
 }
 
+// ---- desktop (paired desktop client) ----------------------------------------
+
+async fn desktop(fleet: &Fleet) -> Result<()> {
+    let Some(desktop_bin) = resolve_desktop_bin() else {
+        println!("  The desktop app (`defra-agent-desktop`) was not found.");
+        println!("  Install it, or set DEFRA_AGENT_DESKTOP_BIN, then run `desktop` again.");
+        println!(
+            "  To seed it by hand: defra-agent-desktop init --status-endpoint {}",
+            fleet.graphql_a
+        );
+        return Ok(());
+    };
+    let desktop_home = fleet.home_a.join("desktop");
+
+    println!("  seeding desktop deployment(s)…");
+    seed_desktop(
+        &desktop_bin,
+        &desktop_home,
+        &fleet.graphql_a,
+        "demo (orchestrator)",
+        true,
+    )
+    .await?;
+    if let Some(worker) = &fleet.node_b {
+        seed_desktop(
+            &desktop_bin,
+            &desktop_home,
+            &worker.graphql,
+            "worker",
+            false,
+        )
+        .await?;
+    }
+
+    println!("  launching the desktop app…");
+    let mut cmd = std::process::Command::new(&desktop_bin);
+    cmd.env("DEFRA_AGENT_DESKTOP_HOME", path_arg(&desktop_home));
+    // Loopback demo nodes are already paired by the CLI; don't re-pair remotely.
+    cmd.env("DEFRA_AGENT_DESKTOP_PAIR_REMOTE_P2P", "0");
+    cmd.spawn().context("launching the desktop app")?;
+
+    println!("  ✓ Desktop app launched — it pairs with your demo node(s) over P2P.");
+    println!("    It opens in a separate window; keep this demo running. Open the Fleet");
+    println!("    Dashboard to see your node(s); Chat mirrors what you do here.");
+    Ok(())
+}
+
+async fn seed_desktop(
+    desktop_bin: &Path,
+    desktop_home: &Path,
+    graphql: &str,
+    label: &str,
+    overwrite: bool,
+) -> Result<()> {
+    let mut args: Vec<String> = vec![
+        "init".into(),
+        "--desktop-home".into(),
+        path_arg(desktop_home),
+        "--status-endpoint".into(),
+        graphql.into(),
+        "--label".into(),
+        label.into(),
+    ];
+    if overwrite {
+        args.push("--dangerously-overwrite".into());
+    }
+    run_cli_text(desktop_bin, &args).await?;
+    Ok(())
+}
+
+/// Locate the `defra-agent-desktop` launcher: explicit env, then a sibling of
+/// this binary, then PATH.
+fn resolve_desktop_bin() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("DEFRA_AGENT_DESKTOP_BIN") {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(sibling) = exe.parent().map(|dir| dir.join("defra-agent-desktop")) {
+            if sibling.is_file() {
+                return Some(sibling);
+            }
+        }
+    }
+    let name = "defra-agent-desktop";
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
 async fn chat_loop(
     graphql: &str,
     agent_did: &str,
@@ -817,8 +916,9 @@ fn print_help() {
     println!("  chat      talk to your agent (skills available; `/back` to exit)");
     println!("  skill     list the demo skills");
     println!("  status    show the fleet state");
-    println!("  pair      spin up a 2nd node and pair it (next stage)");
-    println!("  delegate  cross-node subagent delegation (later stage)");
+    println!("  pair      spin up a 2nd node (worker) and pair it");
+    println!("  delegate  enable cross-node subagent delegation (run after `pair`)");
+    println!("  desktop   open the desktop app paired to your demo node(s)");
     println!("  down      stop and exit (state is saved; `--reset` to wipe)");
 }
 
