@@ -139,6 +139,7 @@ impl BehaviorToolConfig {
             file_tools,
             bash,
             command_policy,
+            &static_policy.bash,
             file_tool_root.as_deref(),
             &cli_tool_names,
             ceiling,

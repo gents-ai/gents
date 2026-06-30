@@ -632,7 +632,7 @@ fn meet_bash_mode(left: BashMode, right: BashMode) -> BashMode {
     }
 }
 
-fn meet_execution_mode(
+pub(super) fn meet_execution_mode(
     left: CommandExecutionMode,
     right: CommandExecutionMode,
 ) -> CommandExecutionMode {
@@ -651,7 +651,10 @@ fn execution_mode_rank(mode: CommandExecutionMode) -> u8 {
     }
 }
 
-fn meet_network_mode(left: CommandNetworkMode, right: CommandNetworkMode) -> CommandNetworkMode {
+pub(super) fn meet_network_mode(
+    left: CommandNetworkMode,
+    right: CommandNetworkMode,
+) -> CommandNetworkMode {
     if network_mode_rank(left) <= network_mode_rank(right) {
         left
     } else {

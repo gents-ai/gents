@@ -10,6 +10,7 @@ use crate::toolset::{
 };
 
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
+use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
 
 pub(super) fn downgrade_file_tools(
     behavior_name: &str,
@@ -47,11 +48,13 @@ pub(super) fn downgrade_bash(
     ceiling
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_host_tools(
     behavior_name: &str,
     file_tools: FileToolMode,
     bash: BashMode,
     command_policy: Option<CommandExecutionPolicy>,
+    effective_bash: &ToolPolicyBash,
     file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
     ceiling: &ToolCeiling,
@@ -79,7 +82,8 @@ pub(super) fn build_host_tools(
         builder = builder.write_file(root.clone()).edit_file(root);
     }
 
-    let command_policy = constrain_command_policy_to_effective_bash(command_policy, bash);
+    let command_policy =
+        constrain_command_policy_to_effective_bash(command_policy, effective_bash, bash);
     match bash {
         BashMode::Off => {}
         BashMode::ReadOnly => {
@@ -118,12 +122,30 @@ pub(super) fn build_host_tools(
     Ok(builder.build())
 }
 
+/// Build the executable `CommandExecutionPolicy` for the bash tool, applying the
+/// effective (behavior ⊓ ceiling) bash policy on top of the behavior's own
+/// command policy.
+///
+/// Step 1 reproduces the historical `BashMode` downgrade (the per-behavior
+/// policy as run today). Step 2 overlays the operator-ceiling narrowing carried
+/// in `effective_bash`: forbidden prefixes (union), the allowed-prefix gate
+/// (including the `Only(∅) → deny-all` trap, carried via the `deny_all_argv`
+/// sentinel rather than an empty list), the read-only allowlist, and the
+/// network/execution mode — so a ceiling that narrows bash binds at command
+/// time, not just in the policy meet.
+///
+/// Preserves today's behavior exactly when there is no ceiling narrowing: a
+/// behavior with no command policy and an unconstrained effective bash still
+/// resolves to `None`.
 fn constrain_command_policy_to_effective_bash(
     command_policy: Option<CommandExecutionPolicy>,
+    effective_bash: &ToolPolicyBash,
     bash: BashMode,
 ) -> Option<CommandExecutionPolicy> {
-    match (command_policy, bash) {
-        (_, BashMode::Off) | (None, _) => None,
+    // Step 1 — historical BashMode-downgrade base.
+    let base: Option<CommandExecutionPolicy> = match (command_policy, bash) {
+        (_, BashMode::Off) => return None,
+        (None, _) => None,
         (Some(policy), BashMode::Unrestricted) => Some(policy),
         (Some(policy), BashMode::ReadOnly)
             if matches!(policy.mode, CommandExecutionMode::ReadOnly) =>
@@ -136,7 +158,98 @@ fn constrain_command_policy_to_effective_bash(
                 .with_forbidden_argv_prefixes(policy.forbidden_argv_prefixes)
                 .with_network_mode(policy.network_mode),
         ),
+    };
+
+    // Step 2 — overlay the effective ceiling narrowing.
+    let (allowed_override, deny_all) =
+        project_allowed_prefixes(&effective_bash.allowed_argv_prefixes);
+    let forbidden: Vec<Vec<String>> = effective_bash
+        .forbidden_argv_prefixes
+        .iter()
+        .cloned()
+        .collect();
+    let read_only_override = project_read_only_allowlist(&effective_bash.read_only_allowlist);
+
+    // Does the ceiling impose an argv/forbidden/read-only constraint? Network/
+    // execution mode are folded in only when a base policy already exists (a
+    // None-policy behavior with mode/network-only ceiling narrowing keeps `None`
+    // — those factors were never enforced for it and are out of scope here).
+    let imposes_constraint = deny_all
+        || matches!(effective_bash.allowed_argv_prefixes, EndpointScope::Only(_))
+        || !forbidden.is_empty()
+        || read_only_override.is_some();
+
+    let base = match base {
+        Some(policy) => policy,
+        None if imposes_constraint => match bash {
+            BashMode::ReadOnly => default_read_only_command_policy(),
+            _ => CommandExecutionPolicy::write_capable(),
+        },
+        None => return None,
+    };
+
+    Some(apply_effective_bash(
+        base,
+        effective_bash,
+        allowed_override,
+        deny_all,
+        forbidden,
+        read_only_override,
+    ))
+}
+
+/// Project the effective allowed-prefix scope onto `(prefixes, deny_all)`:
+/// `All` → no gate (empty, false); a non-empty `Only` → that set; `None`/
+/// `Only(∅)` → deny-all (empty, true) — the `Only(∅) ≠ All` trap.
+fn project_allowed_prefixes(
+    scope: &EndpointScope<Vec<String>, ()>,
+) -> (Option<Vec<Vec<String>>>, bool) {
+    match scope {
+        EndpointScope::All => (None, false),
+        EndpointScope::None => (None, true),
+        EndpointScope::Only(keys) if keys.is_empty() => (None, true),
+        EndpointScope::Only(_) => (Some(scope.keys()), false),
     }
+}
+
+/// Project the effective read-only allowlist: `All` → keep the base's list;
+/// non-empty `Only` → that set; `None`/`Only(∅)` → empty (deny-all read-only).
+fn project_read_only_allowlist(scope: &EndpointScope<String, ()>) -> Option<Vec<String>> {
+    match scope {
+        EndpointScope::All => None,
+        EndpointScope::None => Some(Vec::new()),
+        EndpointScope::Only(keys) if keys.is_empty() => Some(Vec::new()),
+        EndpointScope::Only(_) => Some(scope.keys()),
+    }
+}
+
+fn apply_effective_bash(
+    mut policy: CommandExecutionPolicy,
+    effective_bash: &ToolPolicyBash,
+    allowed_override: Option<Vec<Vec<String>>>,
+    deny_all: bool,
+    forbidden: Vec<Vec<String>>,
+    read_only_override: Option<Vec<String>>,
+) -> CommandExecutionPolicy {
+    if deny_all {
+        policy.allowed_argv_prefixes = Vec::new();
+        policy = policy.with_deny_all_argv(true);
+    } else if let Some(allowed) = allowed_override {
+        policy.allowed_argv_prefixes = allowed;
+    }
+    // Effective forbidden already includes the behavior's (union meet ⊇ behavior),
+    // so replacing is the union. Only overwrite when the ceiling adds entries.
+    if !forbidden.is_empty() {
+        policy.forbidden_argv_prefixes = forbidden;
+    }
+    if let Some(read_only) = read_only_override {
+        policy = policy.with_read_only_allowlist(read_only);
+    }
+    // Effective mode/network are ≤ the behavior's, so meeting tightens (never
+    // relaxes) and never undoes the BashMode read-only downgrade.
+    policy.mode = meet_execution_mode(policy.mode, effective_bash.execution_mode);
+    policy.network_mode = meet_network_mode(policy.network_mode, effective_bash.network_mode);
+    policy
 }
 
 pub(super) fn resolve_effective_tool_root(
@@ -242,6 +355,93 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
         }
     }
     deduped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn top_bash() -> ToolPolicyBash {
+        ToolPolicyBash::unrestricted()
+    }
+
+    #[test]
+    fn no_command_policy_and_unconstrained_ceiling_stays_none() {
+        // Preserve today's behavior: a behavior with no command policy and an
+        // unconstrained effective bash resolves to no executable policy.
+        let out =
+            constrain_command_policy_to_effective_bash(None, &top_bash(), BashMode::Unrestricted);
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn ceiling_allowed_only_narrows_the_executable_gate() {
+        let mut eb = top_bash();
+        eb.allowed_argv_prefixes =
+            EndpointScope::<Vec<String>, ()>::only_units([vec!["git".to_string()]]);
+        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
+            .expect("a narrowing ceiling must synthesize an executable policy");
+        assert_eq!(out.allowed_argv_prefixes, vec![vec!["git".to_string()]]);
+        assert!(!out.deny_all_argv());
+    }
+
+    #[test]
+    fn effective_only_empty_allowed_projects_to_deny_all_not_allow_all() {
+        // The headline trap: Only(∅) must NOT become an empty allowed list
+        // (which validates as allow-all) — it must set the deny-all sentinel.
+        for scope in [
+            EndpointScope::<Vec<String>, ()>::None,
+            EndpointScope::<Vec<String>, ()>::only_units(Vec::<Vec<String>>::new()),
+        ] {
+            let mut eb = top_bash();
+            eb.allowed_argv_prefixes = scope;
+            let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
+                .expect("deny-all must synthesize a policy");
+            assert!(out.deny_all_argv(), "Only(empty)/None must be deny-all");
+            assert!(out.allowed_argv_prefixes.is_empty());
+        }
+    }
+
+    #[test]
+    fn ceiling_forbidden_union_reaches_the_executable_policy() {
+        let mut eb = top_bash();
+        eb.forbidden_argv_prefixes =
+            BTreeSet::from([vec!["curl".to_string()], vec!["rm".to_string()]]);
+        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
+            .expect("a forbidden ceiling must synthesize a policy");
+        assert!(out
+            .forbidden_argv_prefixes
+            .contains(&vec!["curl".to_string()]));
+        assert!(out
+            .forbidden_argv_prefixes
+            .contains(&vec!["rm".to_string()]));
+    }
+
+    #[test]
+    fn effective_all_allowed_keeps_the_behavior_base_gate() {
+        // effective allowed = All ⇒ no ceiling narrowing ⇒ keep the behavior's
+        // own allowed list unchanged.
+        let base = CommandExecutionPolicy::write_capable()
+            .with_allowed_argv_prefixes(vec![vec!["git".to_string()]]);
+        let out = constrain_command_policy_to_effective_bash(
+            Some(base),
+            &top_bash(),
+            BashMode::Unrestricted,
+        )
+        .expect("a Some base is preserved");
+        assert_eq!(out.allowed_argv_prefixes, vec![vec!["git".to_string()]]);
+        assert!(!out.deny_all_argv());
+    }
+
+    #[test]
+    fn ceiling_read_only_only_narrows_the_executable_allowlist() {
+        let mut eb = top_bash();
+        eb.read_only_allowlist = EndpointScope::<String, ()>::only_units([String::from("cat")]);
+        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::ReadOnly)
+            .expect("a read-only-narrowing ceiling must synthesize a policy");
+        assert_eq!(out.read_only_allowlist(), ["cat".to_string()]);
+    }
 }
 
 pub(super) async fn online_mcp_service_ids(node: &EmbeddedNode) -> Result<Vec<String>> {

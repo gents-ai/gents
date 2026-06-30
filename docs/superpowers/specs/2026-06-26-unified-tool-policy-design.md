@@ -339,10 +339,17 @@ must carry the runtime-specific representation choices:
   allowed-prefix gate), and the conformance case
   `bash_forbidden_union_and_readonly_intersection` exercises the proven
   `bash_meet_forbidden_superset` / `bash_meet_readonly_*` bounds end-to-end through the
-  real resolver. **Still open:** projecting the meet result onto the *executable*
-  `CommandExecutionPolicy` validator (so a ceiling-narrowed forbidden/read-only set is
-  enforced at command time). No runtime soundness gap today — the behavior's own
-  `CommandExecutionPolicy` still enforces its forbidden/read-only via the legacy passthrough.
+  real resolver. **Executable projection — DONE (2026-06-30):** the effective bash policy
+  now binds at command time. `build_host_tools` threads `static_policy.bash` into
+  `constrain_command_policy_to_effective_bash`, which overlays the meet onto the executable
+  `CommandExecutionPolicy` (forbidden union, allowed-prefix narrowing, read-only allowlist,
+  mode/network). An `Only(∅)` allowed scope is carried by a new `deny_all_argv` sentinel on
+  `CommandExecutionPolicy` — an empty allowed list means allow-all, so deny-all needs an
+  explicit flag (the `Only(∅) ≠ All` trap at the executable boundary). Today's behavior is
+  preserved when nothing narrows (no command policy + unconstrained effective bash → no
+  executable policy). Residual edge: mode/network-only ceiling narrowing of a behavior that
+  itself sets no command policy is not synthesized (never enforced for such a behavior; no
+  regression).
 
 ## 6. Key files
 
