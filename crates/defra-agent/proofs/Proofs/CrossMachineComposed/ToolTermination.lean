@@ -1,4 +1,4 @@
-import Proofs.CrossMachineComposed.State
+import Proofs.CrossMachineComposed.WellFormed
 
 namespace ComposedState
 
@@ -54,9 +54,9 @@ transition is tagged with `CancelCause.interrupted`; a future composed
 theorem interrupted_request_cancels_live_linked_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in           : toolPre ∈ pre.tools)
+    (h_wf           : pre.WellFormed)
     (h_interrupted  : pre.request.state = .interrupted)
-    (h_live         : toolPre.cancellable)
-    (h_coherent     : Coherent pre toolPre) :
+    (h_live         : toolPre.cancellable) :
     ∃ post toolPost,
       Trace pre post ∧
       post.request = pre.request ∧
@@ -64,6 +64,8 @@ theorem interrupted_request_cancels_live_linked_tools
       toolPost ∈ post.tools ∧
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
+  have h_coherent : Coherent pre toolPre :=
+    h_wf.allToolsCoherent toolPre h_in
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- Case-split on cancellable: pending → cancelBeforeDispatch; running → cancelDuringRun
@@ -81,6 +83,7 @@ theorem interrupted_request_cancels_live_linked_tools
       -- background, `toolPost` is too — the consequent is unreachable.
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              ⟨h_linked, h_deadline_eq, h_time_eq⟩
               (fun h_bg h_fg => ?_)
       simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
@@ -95,6 +98,7 @@ theorem interrupted_request_cancels_live_linked_tools
     · refine Trace.step ?_ Trace.refl
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              ⟨h_linked, h_deadline_eq, h_time_eq⟩
               (fun h_bg h_fg => ?_)
       simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
@@ -108,8 +112,8 @@ theorem interrupted_request_cancels_live_linked_tools
 theorem deadline_exceeded_request_timesOut_running_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
+    (h_wf        : pre.WellFormed)
     (h_running   : toolPre.state = .running)
-    (h_coherent  : Coherent pre toolPre)
     (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
       Trace pre post ∧
@@ -117,6 +121,8 @@ theorem deadline_exceeded_request_timesOut_running_tools
       post.request = pre.request ∧
       toolPost.state = .timedOut ∧
       toolPost.requestId = pre.requestId := by
+  have h_coherent : Coherent pre toolPre :=
+    h_wf.allToolsCoherent toolPre h_in
   -- Destructure h_coherent into its three component equalities.
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   -- Find the index of toolPre in pre.tools.
@@ -140,6 +146,7 @@ theorem deadline_exceeded_request_timesOut_running_tools
     -- foreground-flip guard vacuously (timeout preserves awaitMode).
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
+      ⟨h_linked, h_deadline_eq, h_time_eq⟩
       (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
   · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
@@ -162,9 +169,9 @@ theorem deadline_exceeded_request_timesOut_running_tools
 theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
+    (h_wf        : pre.WellFormed)
     (h_pending   : toolPre.state = .pending)
-    (h_deadline  : pre.request.deadlineExceeded)
-    (h_coherent  : Coherent pre toolPre) :
+    (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
       Trace pre post ∧
       post.request = pre.request ∧
@@ -172,6 +179,8 @@ theorem deadline_exceeded_request_cancels_pending_tools
       toolPost ∈ post.tools ∧
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
+  have h_coherent : Coherent pre toolPre :=
+    h_wf.allToolsCoherent toolPre h_in
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- Inner cancelBeforeDispatch transition
@@ -183,6 +192,7 @@ theorem deadline_exceeded_request_cancels_pending_tools
   refine ⟨post, toolPost, ?_, rfl, h_deadline, ?_, rfl, h_linked⟩
   · refine Trace.step ?_ Trace.refl
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+            ⟨h_linked, h_deadline_eq, h_time_eq⟩
             ⟨h_linked, h_deadline_eq, h_time_eq⟩
             (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
@@ -201,6 +211,7 @@ theorem deadline_exceeded_request_cancels_pending_tools
     progress-unblock witness rather than forcing a cancel cause into C3. -/
 theorem all_tools_terminal_unblocks_request_progress
     {pre : ComposedState}
+    (_h_wf         : pre.WellFormed)
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)
     (h_proc         : pre.request.state = .processing)
     (h_admission    : pre.request.admission = .executing) :

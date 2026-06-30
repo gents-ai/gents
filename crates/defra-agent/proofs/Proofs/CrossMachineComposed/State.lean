@@ -38,9 +38,8 @@ instance (s : ComposedState) (callId : ToolExecution.ToolCallId) :
   unfold hasToolByCallId; infer_instance
 
 /-- The first tool with a given callId, if any. CallIds are intended to be
-    unique within a composed state, but we don't enforce that as a Prop here
-    — Tasks 7+ will introduce a `UniqueCallIds` invariant alongside the
-    multi-flight C-theorems if needed. -/
+    unique within a well-formed composed state; callers that need uniqueness
+    should consume the global `WellFormed`/`UniqueCallIds` invariant. -/
 def findToolByCallId (s : ComposedState) (callId : ToolExecution.ToolCallId) :
     Option ToolExecution.ToolCallContext :=
   s.tools.find? (fun t => t.callId = callId)
@@ -52,17 +51,31 @@ def findToolByCallId (s : ComposedState) (callId : ToolExecution.ToolCallId) :
 
     The predicate is per-tool: `Coherent pre toolPre` says `toolPre` (one
     element of `pre.tools`) is structurally synced with `pre.request`. The
-    multi-flight `tool_step` constructor applies it to the single tool being
-    stepped. A list-level "all tools coherent" form, if needed by Tasks 7+,
-    can be expressed as `∀ t ∈ pre.tools, Coherent pre t`.
-
-    Future work (B4 persistent processes) will introduce a complementary
-    `Persistent` coherence predicate; the bound case will keep this shape so
-    existing theorem bodies don't need to change. -/
+    global well-formedness invariant lifts this predicate over the full
+    `tools` list. Persistent-process coherence is intentionally kept separate
+    from this live structural predicate. -/
 def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : Prop :=
   toolPre.requestId = pre.requestId ∧
   toolPre.deadline = pre.request.deadline ∧
   toolPre.currentTime = pre.request.currentTime
+
+/-- List-level coherence: every tool currently carried by the composed state
+    is structurally synced with the parent request. -/
+def AllToolsCoherent (s : ComposedState) : Prop :=
+  ∀ t ∈ s.tools, Coherent s t
+
+/-- List-level linkage: every tool row belongs to the composed request id. This
+    is redundant with `AllToolsCoherent`, but it is named separately because
+    linkage is a common audit boundary in higher-level composed theorems. -/
+def AllToolsLinked (s : ComposedState) : Prop :=
+  ∀ t ∈ s.tools, t.requestId = s.requestId
+
+/-- Tool rows are only present once the parent request has reached processing
+    or a later terminal state. This excludes malformed pending/claimed states
+    with pre-existing tools, which would otherwise be able to take request
+    transitions that rewrite request deadline state while leaving tools stale. -/
+def NoToolsBeforeProcessing (s : ComposedState) : Prop :=
+  ∀ t ∈ s.tools, s.request.state ≠ .pending ∧ s.request.state ≠ .claimed
 
 /-- Coherence exposes the exact effective deadline shared by a tool and its
     parent request. -/
@@ -141,9 +154,11 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.call = pre.call →
       post.requestId = pre.requestId →
       -- structural composition guard: the stepping tool tracks the parent
-      -- request. Other tools in `pre.tools` are unconstrained at this
-      -- layer; Tasks 7+ may add list-level invariants if needed.
+      -- request before and after the inner step. The post guard rules out
+      -- standalone tool clock/deadline drift that would break global
+      -- `AllToolsCoherent` preservation.
       Coherent pre toolPre →
+      Coherent post toolPost →
       -- INV-FG composition guard: a background → foreground flip is only
       -- legal when the pre-state has no other foreground non-terminal tool.
       -- The antecedent fires only for the inner `foreground` constructor

@@ -65,7 +65,7 @@ theorem foreground_blocks_parent_advance
         constructor <;> rw [h_post]
       | interrupt_processing _ _ _ h_post =>
         constructor <;> rw [h_post]
-    | tool_step _ _ _ h_req_eq _ _ _ _ =>
+    | tool_step _ _ _ h_req_eq _ _ _ _ _ =>
       constructor <;> rw [h_req_eq]
     | process_step _ h_req _ _ _ =>
       constructor <;> rw [h_req]

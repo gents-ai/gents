@@ -106,7 +106,7 @@ theorem invFG_preserved
     unfold invFG; rw [h_tools]; exact h_inv
   | call_step _ _ _ h_tools _ =>
     unfold invFG; rw [h_tools]; exact h_inv
-  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ h_fg_guard =>
+  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ h_fg_guard =>
     -- A single tool transitions. Case-split on the inner ToolCallContext.Transition.
     -- For all 11 non-`foreground` constructors: `toolPost.awaitMode = toolPre.awaitMode`
     -- AND if toolPost passes the filter (foreground + non-terminal) then so does

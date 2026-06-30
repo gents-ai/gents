@@ -19,6 +19,11 @@ def UniqueCallIds (s : ComposedState) : Prop :=
   ∀ (i j : Nat) (h_i : i < s.tools.length) (h_j : j < s.tools.length),
     s.tools[i].callId = s.tools[j].callId → i = j
 
+/-- The empty initial tool list has unique call ids. -/
+theorem initial_uniqueCallIds : initial.UniqueCallIds := by
+  intro _ _ h_i _ _
+  simp [initial] at h_i
+
 /-- Pairwise corollary: from UniqueCallIds, any two `∈ s.tools` tools with
     the same callId are equal. The form consumed by B3' (cascade-vs-detach
     contradiction) and similar pairwise-uniqueness arguments. -/
@@ -94,7 +99,7 @@ theorem uniqueCallIds_preserved
     have hi : pre.tools[i] = post.tools[i] := by congr 1 <;> rw [h_tools]
     have hj : pre.tools[j] = post.tools[j] := by congr 1 <;> rw [h_tools]
     rw [hi, hj]; exact h_eq
-  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ =>
+  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ _ =>
     -- post.tools = pre.tools.set idx toolPost. Since
     -- transition_preserves_callId says toolPost.callId = toolPre.callId, the
     -- callId at every index is the same in pre and post. UniqueCallIds carries
