@@ -8,6 +8,7 @@ use tracing::Instrument;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::graphql::escape_graphql_string;
+use crate::openai_wire::OpenAiWireApi;
 
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
@@ -18,6 +19,7 @@ pub struct InferenceBackend {
     pub backend_id: String,
     pub name: String,
     pub provider_kind: BackendProviderKind,
+    pub openai_wire_api: Option<OpenAiWireApi>,
     /// OpenAI-compatible API base URL, including the `/v1` path segment.
     pub endpoint: String,
     pub api_key: Option<String>,
@@ -44,6 +46,9 @@ impl InferenceBackend {
                 .to_string(),
             provider_kind: BackendProviderKind::parse_optional(
                 v.get("provider_kind").and_then(|value| value.as_str()),
+            )?,
+            openai_wire_api: OpenAiWireApi::parse_optional(
+                v.get("openai_wire_api").and_then(|value| value.as_str()),
             )?,
             endpoint: v
                 .get("endpoint")
@@ -153,7 +158,7 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
         escaped_id
     );
 
@@ -188,7 +193,7 @@ pub(crate) async fn lookup_backend_by_doc_id(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(doc_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
         escaped_id
     );
 
@@ -226,6 +231,7 @@ pub(crate) async fn list_backend_records(
             backend_id
             name
             provider_kind
+            openai_wire_api
             endpoint
             api_key
             api_key_env_var
@@ -280,7 +286,7 @@ pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBacke
 }
 
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled probe_status models last_probe } }"#;
+    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled probe_status models last_probe } }"#;
 
     let resp = node.execute(query).await;
     if resp.has_errors() {
@@ -367,6 +373,14 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
         if backend.probe_status == HEALTHY_PROBE_STATUS {
             continue;
         }
+        if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex {
+            tracing::info!(
+                backend_id = %backend.backend_id,
+                endpoint = %backend.endpoint,
+                "startup backend probe: skipping ChatGPT Codex backend because OAuthCredential is agent-scoped"
+            );
+            continue;
+        }
         async {
             let api_key = backend.resolved_api_key();
             match crate::backend_provider::discover_models(
@@ -374,6 +388,7 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
                 backend.provider_kind,
                 &backend.endpoint,
                 api_key.as_deref(),
+                None,
             )
             .await
             {

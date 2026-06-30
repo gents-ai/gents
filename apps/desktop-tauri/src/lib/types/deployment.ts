@@ -37,6 +37,7 @@ export type InferenceBackendView = {
   backendId: string;
   name?: string | null;
   providerKind?: string | null;
+  openaiWireApi?: string | null;
   endpoint?: string | null;
   apiKeyConfigured: boolean;
   apiKeyEnvVar?: string | null;
@@ -84,6 +85,8 @@ export type ToolSelectionView = {
   crossDeploymentSpawnTimeoutSeconds?: number | null;
   enableMemory?: boolean | null;
   enableSessionHistoryTool?: boolean | null;
+  enableContextBudget?: boolean | null;
+  enableDefraQuery?: boolean | null;
 };
 
 export type ToolServiceRegistryView = {

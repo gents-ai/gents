@@ -26,6 +26,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -86,6 +87,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -120,6 +122,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -154,6 +157,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -186,6 +190,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -216,6 +221,7 @@ fn selection_without_root_inherits_operator_root() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -259,6 +265,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -299,6 +306,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -342,6 +350,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -373,6 +382,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -404,6 +414,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -443,6 +454,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
+            enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
@@ -492,6 +504,48 @@ async fn defra_query_tool_gated_by_selection() {
     .await
     .unwrap();
     assert!(!disabled.tool_names().contains(&"defra_query".to_string()));
+}
+
+#[tokio::test]
+async fn context_budget_tool_gated_by_selection() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let enabled = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_context_budget: true,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(enabled.tool_names().contains(&"context_budget".to_string()));
+
+    let disabled = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_context_budget: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(!disabled
+        .tool_names()
+        .contains(&"context_budget".to_string()));
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = disabled.build_tools(&runtime).unwrap();
+    assert!(!built.iter().any(|tool| tool.name() == "context_budget"));
 }
 
 #[tokio::test]
@@ -563,10 +617,10 @@ async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    // `context_budget` is always registered by build_tools. A write tool that
-    // reuses that name (here bypassing apply-time validation by constructing the
-    // surface directly) must be dropped by the runtime guard, not registered as
-    // a second ToolDyn under the same name.
+    // `context_budget` is registered by default. A write tool that reuses that
+    // name (here bypassing apply-time validation by constructing the surface
+    // directly) must be dropped by the runtime guard, not registered as a second
+    // ToolDyn under the same name.
     let surface = BehaviorToolConfig::from_selection(
         "ops",
         ToolSelection {
@@ -688,6 +742,7 @@ async fn session_history_tool_requires_selection_opt_in() {
         "ops",
         ToolSelection {
             enable_session_history_tool: false,
+            enable_context_budget: true,
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -758,6 +813,7 @@ fn init_like_tool_selection_document(
         cross_deployment_spawn_timeout_seconds: None,
         enable_memory: Some(false),
         enable_session_history_tool: Some(false),
+        enable_context_budget: Some(true),
         enable_defra_query: Some(enable_defra_query),
         defra_query_collections: Some(Vec::new()),
         write_tools: None,
@@ -812,8 +868,8 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             mcp_services_online: false,
             expected_tool_names: vec!["context_budget"],
             absent_tool_names: vec!["call_tool", "defra_query", "read_file", "spawn_process"],
-            expected_warnings: vec![],
-            host_ceiling_warning: false,
+            expected_warnings: vec!["host_ceiling_not_global"],
+            host_ceiling_warning: true,
         },
         Case {
             name: "introspection-offline",
@@ -832,10 +888,11 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             expected_tool_names: vec!["context_budget", "defra_query"],
             absent_tool_names: vec!["call_tool", "read_file", "spawn_process"],
             expected_warnings: vec![
+                "host_ceiling_not_global",
                 "meta_requested_no_online_mcp",
                 "defra_query_empty_scope_all",
             ],
-            host_ceiling_warning: false,
+            host_ceiling_warning: true,
         },
         Case {
             name: "introspection-online",
@@ -858,8 +915,12 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "defra_query",
             ],
             absent_tool_names: vec!["read_file", "spawn_process", "spawn_subagent"],
-            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
-            host_ceiling_warning: false,
+            expected_warnings: vec![
+                "host_ceiling_not_global",
+                "mcp_empty_allowlist_all",
+                "defra_query_empty_scope_all",
+            ],
+            host_ceiling_warning: true,
         },
         Case {
             name: "readonly-online",
@@ -1026,6 +1087,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         cross_deployment_spawn_timeout_seconds: Some(120),
         enable_memory: Some(true),
         enable_session_history_tool: Some(false),
+        enable_context_budget: Some(true),
         enable_defra_query: Some(true),
         defra_query_collections: Some(vec![
             "AgentRequest".to_string(),

@@ -2,12 +2,14 @@ type InferenceBackend {
     backend_id: String @index(unique: true)
     name: String @index
     provider_kind: String
+    # OpenAI-style wire API override: responses or chat_completions. Null means default.
+    openai_wire_api: String
     # OpenAI-compatible API base URL, including the /v1 path segment.
     endpoint: String
     # Optional raw API key for local or operator-managed deployments.
     api_key: String
     # Optional environment-variable reference for the backend API key.
-    # Credentials are not stored directly in DefraDB documents.
+    # Raw API-key backends can use this instead of storing the key in the document.
     api_key_env_var: String
     max_concurrent: Int
     max_queue_depth: Int

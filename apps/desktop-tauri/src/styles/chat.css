@@ -24,7 +24,7 @@
   .operations-rail.is-open {
     top: 0;
     bottom: 0;
-    width: min(396px, calc(100% - var(--space-6)));
+    width: min(520px, calc(100% - var(--space-6)));
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
     overflow: hidden;

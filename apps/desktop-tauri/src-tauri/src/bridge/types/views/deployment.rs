@@ -59,6 +59,7 @@ pub(crate) struct InferenceBackendView {
     pub backend_id: String,
     pub name: Option<String>,
     pub provider_kind: Option<String>,
+    pub openai_wire_api: Option<String>,
     pub endpoint: Option<String>,
     pub api_key_configured: bool,
     pub api_key_env_var: Option<String>,
@@ -111,6 +112,8 @@ pub(crate) struct ToolSelectionView {
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_memory: Option<bool>,
     pub enable_session_history_tool: Option<bool>,
+    pub enable_context_budget: Option<bool>,
+    pub enable_defra_query: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -125,6 +125,7 @@ impl BehaviorToolConfig {
             orchestration_enabled: _,
             enable_memory,
             enable_session_history_tool: _,
+            enable_context_budget,
             enable_defra_query: _,
             defra_query_collections: _,
             write_tools,
@@ -184,7 +185,7 @@ impl BehaviorToolConfig {
             },
             custom_tools,
             enable_memory: static_policy.memory && enable_memory,
-            enable_context_budget_tool: static_policy.context_budget,
+            enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
             enable_session_history_tool: static_policy.session_history,
             enable_defra_query: static_policy.include_defra_query(),
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
@@ -209,6 +210,10 @@ impl BehaviorToolConfig {
 
     pub(crate) fn defra_query_requested(&self) -> bool {
         self.enable_defra_query
+    }
+
+    pub(crate) fn context_budget_requested(&self) -> bool {
+        self.enable_context_budget_tool
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {

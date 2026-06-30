@@ -28,6 +28,7 @@ env:
   DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
   DEFRA_AGENT_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
   DEFRA_AGENT_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  DEFRA_AGENT_TAURI_LIVE_REQUIRE_REAL_INFERENCE: "1"
   AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
 
 jobs:
@@ -177,6 +178,99 @@ jobs:
       - name: Run live desktop interrupt smoke
         working-directory: apps/desktop-tauri
         run: npm run test:live:interrupt
+
+      - name: Cleanup git auth
+        if: always()
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+  desktop-live-browser-smoke:
+    runs-on: [self-hosted, macOS, ARM64, studio]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Rewrite Git SSH dependencies to HTTPS
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
+            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
+            exit 1
+          fi
+          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop-tauri/package-lock.json
+
+      - name: Install protobuf compiler
+        run: |
+          set -euo pipefail
+
+          protoc_path=""
+          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
+            protoc_path="/opt/homebrew/bin/protoc"
+          elif command -v protoc >/dev/null 2>&1; then
+            protoc_path="$(command -v protoc)"
+          else
+            if ! command -v brew >/dev/null 2>&1; then
+              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
+              exit 1
+            fi
+            brew install protobuf
+            protoc_path="$(brew --prefix protobuf)/bin/protoc"
+          fi
+
+          if [[ ! -x "${protoc_path}" ]]; then
+            echo "::error::protoc was not found at ${protoc_path}."
+            exit 1
+          fi
+
+          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
+          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
+          "${protoc_path}" --version
+
+      - name: Prepare disk-backed Rust build cache
+        run: .github/scripts/setup-rust-build-cache.sh
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop-tauri
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: apps/desktop-tauri
+        run: npx playwright install chromium
+
+      - name: Run live desktop browser smoke
+        working-directory: apps/desktop-tauri
+        run: npm run test:ui:live:e2e
+
+      - name: Upload live desktop browser artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-live-browser-artifacts
+          if-no-files-found: ignore
+          path: |
+            apps/desktop-tauri/test-results/playwright-live
+            apps/desktop-tauri/playwright-live-report
 
       - name: Cleanup git auth
         if: always()

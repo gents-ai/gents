@@ -959,9 +959,6 @@ async fn boot_streaming_interrupt_flow_agent(
     test_name: &str,
     endpoint: &str,
 ) -> BootedAgent {
-    // The MockStreamingBackend serves Chat Completions; the OpenAiCompatible
-    // default is now the Responses API, so force chat for this in-process agent.
-    std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
     let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
     upsert_interrupt_flow_backend(db.node.as_ref(), endpoint).await;
 
@@ -991,9 +988,6 @@ async fn boot_streaming_idle_timeout_agent(
     test_name: &str,
     endpoint: &str,
 ) -> BootedAgent {
-    // The MockStreamingBackend serves Chat Completions; the OpenAiCompatible
-    // default is now the Responses API, so force chat for this in-process agent.
-    std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
     let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
     upsert_idle_timeout_backend(db.node.as_ref(), endpoint).await;
 

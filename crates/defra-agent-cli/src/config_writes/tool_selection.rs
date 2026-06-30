@@ -409,6 +409,7 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 "enable_session_history_tool",
                 selection.enable_session_history_tool,
             ),
+            optional_bool_field("enable_context_budget", selection.enable_context_budget),
             optional_bool_field("enable_defra_query", selection.enable_defra_query),
             selection
                 .defra_query_collections

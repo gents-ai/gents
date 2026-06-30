@@ -69,6 +69,24 @@ impl ToolSurfaceExplanation {
         explain_builtin_reads(config, surface, &mut builder);
 
         let tool_names = surface.tool_names();
+        // Re-integrated from main (#526-era): the operator ToolCeiling still only
+        // clamps host-native file/bash/CLI tools, so a behavior with no host
+        // tools but a model-callable built-in read is a sign the ceiling is not
+        // globally clamping. (SP1 made the ceiling category-complete in the
+        // model/resolver; this warning stays until the host-ceiling story is
+        // fully unified.)
+        if surface.host_tools.tool_names().is_empty()
+            && tool_names.iter().any(|name| {
+                name == CONTEXT_BUDGET_TOOL_NAME
+                    || name == SESSION_HISTORY_TOOL_NAME
+                    || name == DEFRA_QUERY_TOOL_NAME
+            })
+        {
+            builder.warn(
+                "host_ceiling_not_global",
+                "ToolCeiling currently clamps host-native file/bash/CLI tools only; built-in read tools can still be model-callable.",
+            );
+        }
         builder.finish(
             tool_names,
             ToolSurfacePolicyTrace {
@@ -328,6 +346,8 @@ fn explain_builtin_reads(
 ) {
     if surface.enable_context_budget_tool {
         builder.include_many("built_in_read", [CONTEXT_BUDGET_TOOL_NAME.to_string()]);
+    } else if config.context_budget_requested() {
+        builder.unavailable("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
     } else {
         builder.exclude("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
     }

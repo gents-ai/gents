@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
-use defra_agent::BackendProviderKind;
+use defra_agent::{BackendProviderKind, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::output_format::OutputFormat;
@@ -58,7 +58,9 @@ pub(crate) enum Command {
         after_help = CODEX_AFTER_HELP
     )]
     Codex(CodexArgs),
-    #[command(about = "Probe an existing Codex ChatGPT OAuth session")]
+    #[command(about = "Sign in with ChatGPT and store OAuth credentials in DefraDB")]
+    CodexLogin(CodexLoginArgs),
+    #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
@@ -168,19 +170,38 @@ pub(crate) struct NativeFsRunnerArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
-    #[arg(
-        long,
-        env = "DEFRA_CODEX_HOME",
-        value_name = "CODEX_HOME",
-        help = "Codex home directory to read. Defaults to ~/.codex"
-    )]
-    pub(crate) codex_home: Option<PathBuf>,
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
     #[arg(
         long,
         default_value_t = 20,
         help = "Maximum number of model slugs to print"
     )]
     pub(crate) max_models: usize,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CodexLoginArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "chatgpt-codex")]
+    pub(crate) provider: String,
+    #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
+    pub(crate) device_auth: bool,
+    #[arg(long, help = "OAuth issuer override for testing")]
+    pub(crate) issuer: Option<String>,
+    #[arg(long, help = "OAuth client ID override for testing")]
+    pub(crate) client_id: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -314,6 +335,12 @@ pub(crate) struct InitArgs {
         help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
     )]
     pub(crate) provider_kind: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "OpenAI-style wire API for OpenAiCompatible backends: responses or chat-completions"
+    )]
+    pub(crate) openai_wire_api: Option<OpenAiWireApiArg>,
     #[arg(long, help = "Raw API key stored directly in the backend document")]
     pub(crate) api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the backend API key")]
@@ -456,6 +483,13 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
     pub(crate) codex_shim_poll_ms: u64,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = P2pTransportArg::Iroh,
+        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
+    )]
+    pub(crate) p2p_transport: P2pTransportArg,
     #[arg(long)]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
@@ -681,6 +715,22 @@ pub(crate) enum P2pDiscoveryArg {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OpenAiWireApiArg {
+    Responses,
+    #[value(name = "chat-completions", alias = "chat_completions")]
+    ChatCompletions,
+}
+
+impl OpenAiWireApiArg {
+    pub(crate) fn to_config(self) -> OpenAiWireApi {
+        match self {
+            Self::Responses => OpenAiWireApi::Responses,
+            Self::ChatCompletions => OpenAiWireApi::ChatCompletions,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum BackendPresetArg {
     #[value(name = "generic-openai-compatible")]
     GenericOpenAiCompatible,
@@ -743,11 +793,8 @@ impl BackendPresetArg {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
-            Self::GenericOpenAiCompatible
-            | Self::OpenAi
-            | Self::OpenRouter
-            | Self::ChatGptCodex
-            | Self::Vllm => None,
+            Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
+            Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
         }
     }
 
@@ -756,6 +803,18 @@ impl BackendPresetArg {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::GenericOpenAiCompatible
+            | Self::ChatGptCodex
+            | Self::Ollama
+            | Self::Vllm
+            | Self::LlamaCpp => None,
+        }
+    }
+
+    pub(crate) fn default_openai_wire_api(self) -> Option<OpenAiWireApi> {
+        match self {
+            Self::OpenAi => Some(OpenAiWireApi::Responses),
+            Self::GenericOpenAiCompatible
+            | Self::OpenRouter
             | Self::ChatGptCodex
             | Self::Ollama
             | Self::Vllm
@@ -1352,6 +1411,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) enable_session_history_tool: Option<bool>,
     #[arg(
         long,
+        help = "Enable or disable the context_budget tool: --enable-context-budget true|false. Omit to leave the existing document setting unchanged (default is enabled)"
+    )]
+    pub(crate) enable_context_budget: Option<bool>,
+    #[arg(
+        long,
         help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
     )]
     pub(crate) enable_defra_query: Option<bool>,
@@ -1575,6 +1639,12 @@ pub(crate) struct BackendUpsertArgs {
     pub(crate) provider_kind: Option<String>,
     #[arg(
         long,
+        value_enum,
+        help = "OpenAI-style wire API for OpenAiCompatible backends: responses or chat-completions"
+    )]
+    pub(crate) openai_wire_api: Option<OpenAiWireApiArg>,
+    #[arg(
+        long,
         help = "Inference backend base URL, usually including /v1. Falls back to the preset default when available"
     )]
     pub(crate) endpoint: Option<String>,
@@ -1621,6 +1691,16 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the probe API key")]
     pub(crate) api_key_env_var: Option<String>,
+    #[arg(
+        long,
+        help = "Agent DID owning the ChatGptCodex OAuth credential (defaults to the local agent). Only used for ChatGptCodex backends, whose bearer is a DefraDB document rather than an api_key"
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(
+        long,
+        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.defra-agent). Pass --agent-did instead to target a specific agent"
+    )]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -2589,6 +2669,19 @@ mod tests {
         );
         assert_eq!(
             parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn enable_context_budget_flag_accepts_false_true_and_omission() {
+        assert_eq!(parse_tools_set(&[]).enable_context_budget, None);
+        assert_eq!(
+            parse_tools_set(&["--enable-context-budget", "false"]).enable_context_budget,
+            Some(false)
+        );
+        assert_eq!(
+            parse_tools_set(&["--enable-context-budget", "true"]).enable_context_budget,
             Some(true)
         );
     }

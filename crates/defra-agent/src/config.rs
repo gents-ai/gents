@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
 use crate::identity::{AgentIdentity, AgentPrincipal};
+use crate::openai_wire::OpenAiWireApi;
 use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
@@ -31,6 +32,7 @@ pub struct AgentBehavior {
     pub principal: Arc<AgentPrincipal>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
+    pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
     pub backend_api_key: Option<String>,
     pub backend_api_key_env_var: Option<String>,
@@ -90,6 +92,7 @@ impl std::fmt::Debug for AgentBehavior {
             .field("principal_did", &self.principal.agent_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
+            .field("openai_wire_api", &self.openai_wire_api)
             .field("backend_endpoint", &self.backend_endpoint)
             .field(
                 "backend_api_key",
@@ -182,4 +185,73 @@ fn normalize_optional_secret(value: Option<&str>) -> Option<&str> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::KeyIdentity;
+
+    fn stub_principal() -> Arc<AgentPrincipal> {
+        let identity = Arc::new(
+            KeyIdentity::load_or_create(
+                std::env::temp_dir().join(format!("config-behavior-{}.key", uuid::Uuid::new_v4())),
+                None,
+            )
+            .unwrap(),
+        );
+        Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity,
+            default_behavior_id: String::new(),
+            display_name: None,
+            enabled: true,
+        })
+    }
+
+    fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> AgentBehavior {
+        AgentBehavior {
+            behavior_id: "general".to_string(),
+            principal: stub_principal(),
+            backend_id: Some("backend-general".to_string()),
+            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api,
+            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            backend_api_key: None,
+            backend_api_key_env_var: None,
+            model_name: DEFAULT_MODEL_NAME.to_string(),
+            context_window: DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            max_turns: DEFAULT_MAX_TURNS,
+            system_prompt: "system".to_string(),
+            request_context_template: None,
+            tools: BehaviorToolConfig::meta_only(),
+            compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+            stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+            deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            sampling: SamplingConfig::default(),
+            skills: Vec::new(),
+        }
+    }
+
+    /// TA-1 (#566 review): `openai_wire_api` must appear in the manual `Debug`
+    /// impl, because the runtime configuration fingerprint hashes
+    /// `format!("{behavior:?}")` (see `runtime_snapshot::configuration_fingerprint`).
+    /// Without the Debug field, switching a backend's wire API would not change the
+    /// fingerprint, so the control watcher would never reconcile the change into a new
+    /// generation. Deleting the `.field("openai_wire_api", …)` line makes these equal.
+    #[test]
+    fn debug_distinguishes_openai_wire_api_for_reconcile_fingerprint() {
+        let chat = format!("{:?}", behavior_with_wire(OpenAiWireApi::ChatCompletions));
+        let responses = format!("{:?}", behavior_with_wire(OpenAiWireApi::Responses));
+        assert_ne!(
+            chat, responses,
+            "openai_wire_api must be in AgentBehavior Debug so the runtime fingerprint \
+             changes when the wire API changes"
+        );
+        assert!(chat.contains("ChatCompletions"));
+        assert!(responses.contains("Responses"));
+    }
 }

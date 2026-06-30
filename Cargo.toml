@@ -37,6 +37,7 @@ repository = "https://github.com/sourcenetwork/defra-agent"
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

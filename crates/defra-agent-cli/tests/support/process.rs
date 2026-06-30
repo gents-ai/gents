@@ -89,9 +89,6 @@ pub fn desktop_bin() -> Result<PathBuf> {
 pub fn run_desktop_init_json(agent_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
     let output = Command::new(desktop_bin()?)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .arg("init")
         .arg("--agent-home")
         .arg(agent_home)
@@ -162,9 +159,6 @@ pub fn spawn_server_with_ready_json(
     command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .current_dir(home_dir)
         .arg("server")
         .arg("--http-port")
@@ -242,9 +236,6 @@ pub fn spawn_server_with_env(
     command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .current_dir(home_dir)
         .arg("server")
         .arg("--http-port")
@@ -294,9 +285,6 @@ pub fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
     Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .current_dir(home_dir)
         .args(args)
         .stdout(Stdio::piped())
@@ -309,9 +297,6 @@ pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .current_dir(home_dir)
         .args(args)
         .output()
@@ -333,9 +318,6 @@ pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .args(args)
         .output()
         .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
@@ -356,9 +338,6 @@ pub fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> 
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .args(args)
         .output()
         .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
@@ -379,9 +358,6 @@ pub fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Val
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        // CLI mocks (and their assertions) speak Chat Completions; force that
-        // wire API so the Responses-API default doesn't break them.
-        .env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1")
         .current_dir(home_dir)
         .args(args)
         .output()

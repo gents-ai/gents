@@ -81,6 +81,10 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
             .and_then(Value::as_bool),
         Some(true)
     );
+    assert!(
+        output.pointer("/checks/chatgpt_auth/ok").is_some(),
+        "diagnose output missing ChatGPT auth check: {output}"
+    );
 
     Ok(())
 }

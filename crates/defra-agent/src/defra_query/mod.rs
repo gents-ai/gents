@@ -259,7 +259,7 @@ mod truncation_tests {
         let mut value = json!({
             "count": 42,
             "active": true,
-            "score": 3.14,
+            "score": 2.5,
             "missing": null
         });
         let truncated = truncate_field_strings(&mut value);

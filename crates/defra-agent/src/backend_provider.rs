@@ -3,6 +3,24 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
+/// A non-success HTTP status from model discovery, carried as a typed error source so callers can
+/// classify (e.g. 401/403 auth failures) by status rather than scraping the rendered message.
+#[derive(Debug, thiserror::Error)]
+#[error("{provider} model discovery failed at {url}: {status} {body}")]
+pub struct ModelDiscoveryHttpError {
+    pub provider: String,
+    pub url: String,
+    pub status: u16,
+    pub body: String,
+}
+
+impl ModelDiscoveryHttpError {
+    /// True when the provider rejected the request on authentication grounds (401/403).
+    pub fn is_auth(&self) -> bool {
+        matches!(self.status, 401 | 403)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendProviderKind {
     #[default]
@@ -95,6 +113,7 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
+    chatgpt_credential: Option<&crate::chatgpt_codex::OAuthCredential>,
 ) -> Result<Vec<String>> {
     let endpoint = if kind == BackendProviderKind::ChatGptCodex {
         crate::chatgpt_codex::normalize_endpoint(endpoint)
@@ -106,23 +125,17 @@ pub async fn discover_models(
     async {
         let mut request = client.get(&models_url);
         if kind == BackendProviderKind::ChatGptCodex {
-            let (_codex_home, auth) = match crate::chatgpt_codex::load_default_chatgpt_auth().await
-            {
-                Ok(auth) => auth,
-                Err(error) => {
-                    tracing::Span::current().record("failure_class", "auth");
-                    return Err(error);
-                }
+            let Some(credential) = chatgpt_credential else {
+                tracing::Span::current().record("failure_class", "auth");
+                anyhow::bail!(
+                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `defra-agent codex-login` for the agent DID first"
+                );
             };
-            let access_token = match auth.get_token() {
-                Ok(token) => token,
-                Err(error) => {
-                    tracing::Span::current().record("failure_class", "auth");
-                    return Err(error).context("ChatGPT Codex auth did not expose a bearer token");
-                }
-            };
-            request = request.bearer_auth(access_token);
-            let headers = match crate::chatgpt_codex::build_chatgpt_codex_headers(&auth) {
+            request = request.bearer_auth(&credential.access_token);
+            let headers = match crate::chatgpt_codex::build_chatgpt_codex_headers(
+                credential.account_id.as_deref(),
+                credential.is_fedramp,
+            ) {
                 Ok(headers) => headers,
                 Err(error) => {
                     tracing::Span::current().record("failure_class", "auth");
@@ -134,7 +147,12 @@ pub async fn discover_models(
                     request = request.header(name, value);
                 }
             }
-            request = request.query(&[("client_version", env!("CARGO_PKG_VERSION"))]);
+            // Must match the request `version` header: /models gates the returned model set on
+            // the advertised Codex client version (defra-agent's own version returns an empty set).
+            request = request.query(&[(
+                "client_version",
+                crate::chatgpt_codex::chatgpt_codex_client_version(),
+            )]);
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
         }
@@ -164,13 +182,13 @@ pub async fn discover_models(
             .unwrap_or_else(|_| "<unreadable body>".to_string());
         if !status.is_success() {
             tracing::Span::current().record("failure_class", "http_status");
-            anyhow::bail!(
-                "{} model discovery failed at {}: {} {}",
-                provider_name,
-                models_url,
-                status,
-                truncate_probe_body(&body)
-            );
+            return Err(ModelDiscoveryHttpError {
+                provider: provider_name.to_string(),
+                url: models_url.to_string(),
+                status: status.as_u16(),
+                body: truncate_probe_body(&body),
+            }
+            .into());
         }
 
         let models: OpenAiModelsResponse = match serde_json::from_str(&body) {
@@ -234,6 +252,7 @@ mod tests {
             BackendProviderKind::OpenAiCompatible,
             &format!("{endpoint}/v1/"),
             Some("sk-test"),
+            None,
         )
         .await
         .expect("model discovery should succeed");
@@ -263,11 +282,70 @@ mod tests {
             BackendProviderKind::OpenAiCompatible,
             &endpoint,
             None,
+            None,
         )
         .await
         .expect("model discovery should accept the Codex-compatible models shape");
 
         assert_eq!(models, vec!["codex-mini-latest"]);
+    }
+
+    #[tokio::test]
+    async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
+        let (endpoint, requests) =
+            spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-5.5"}]}"#).await;
+        let credential = crate::chatgpt_codex::OAuthCredential {
+            doc_id: None,
+            credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: Some("acct_123".to_string()),
+            chatgpt_plan_type: Some("plus".to_string()),
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+        };
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::ChatGptCodex,
+            &endpoint,
+            None,
+            Some(&credential),
+        )
+        .await
+        .expect("ChatGPT Codex model discovery should succeed");
+
+        assert_eq!(models, vec!["gpt-5.5"]);
+        let requests = requests.lock().expect("requests lock");
+        let request = requests.first().expect("captured request");
+        let version = crate::chatgpt_codex::chatgpt_codex_client_version();
+        assert!(
+            request.starts_with(&format!("GET /models?client_version={version} ")),
+            "Codex /models should advertise client_version query param: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("version: {}", version).to_ascii_lowercase()),
+            "Codex /models should advertise matching version header: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream, application/json"),
+            "Codex /models should send Codex Accept header: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer access-token"),
+            "Codex /models should send OAuth bearer: {request}"
+        );
     }
 
     async fn spawn_model_discovery_server(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {

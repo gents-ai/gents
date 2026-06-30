@@ -37,6 +37,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "backgroundable_tool_names": plan.selection.backgroundable_tool_names,
         "enable_memory": args.enable_memory,
         "enable_session_history_tool": args.enable_session_history_tool,
+        "enable_context_budget": args.enable_context_budget,
         "enable_defra_query": args.enable_defra_query,
         "defra_query_collections": plan.selection.defra_query_collections,
         "subagent_targets": plan.selection.subagent_targets,
@@ -170,6 +171,7 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         cross_deployment_spawn_timeout_seconds,
         enable_memory: args.enable_memory,
         enable_session_history_tool: args.enable_session_history_tool,
+        enable_context_budget: args.enable_context_budget,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections,
         // `write_tools` is apply-managed (declared in `config apply` manifests);
@@ -379,6 +381,7 @@ mod tests {
             clear_backgroundable_tool_names: false,
             enable_memory: None,
             enable_session_history_tool: None,
+            enable_context_budget: None,
             enable_defra_query: None,
             defra_query_collections: Vec::new(),
             clear_defra_query_collections: false,

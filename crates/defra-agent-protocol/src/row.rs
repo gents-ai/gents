@@ -640,6 +640,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub enable_session_history_tool: Option<bool>,
     #[serde(default)]
+    pub enable_context_budget: Option<bool>,
+    #[serde(default)]
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,
@@ -659,6 +661,8 @@ pub struct InferenceBackendRow {
     #[serde(default)]
     pub provider_kind: Option<String>,
     #[serde(default)]
+    pub openai_wire_api: Option<String>,
+    #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -676,6 +680,35 @@ pub struct InferenceBackendRow {
     pub last_probe: Option<String>,
     #[serde(default)]
     pub probe_status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OAuthCredentialRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    pub credential_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub chatgpt_plan_type: Option<String>,
+    #[serde(default)]
+    pub is_fedramp: Option<bool>,
+    #[serde(default)]
+    pub access_token_expires_at: Option<String>,
+    #[serde(default)]
+    pub last_refresh: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -275,6 +275,7 @@ pub struct ToolSelectionDocument {
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub enable_memory: Option<bool>,
     pub enable_session_history_tool: Option<bool>,
+    pub enable_context_budget: Option<bool>,
     pub enable_defra_query: Option<bool>,
     #[serde(
         default,
@@ -529,6 +530,7 @@ pub(crate) async fn load_tool_selection_record(
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
                 enable_session_history_tool
+                enable_context_budget
                 enable_defra_query
                 defra_query_collections
                 write_tools
@@ -586,6 +588,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
                 enable_session_history_tool
+                enable_context_budget
                 enable_defra_query
                 defra_query_collections
                 write_tools
@@ -643,6 +646,7 @@ pub(crate) async fn list_tool_selection_records(
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
                 enable_session_history_tool
+                enable_context_budget
                 enable_defra_query
                 defra_query_collections
                 write_tools
@@ -694,6 +698,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 cross_deployment_spawn_timeout_seconds
                 enable_memory
                 enable_session_history_tool
+                enable_context_budget
                 enable_defra_query
                 defra_query_collections
                 write_tools
@@ -809,6 +814,10 @@ pub async fn upsert_tool_selection(
             selection.enable_session_history_tool,
         ),
         graphql_fields::graphql_optional_bool_field(
+            "enable_context_budget",
+            selection.enable_context_budget,
+        ),
+        graphql_fields::graphql_optional_bool_field(
             "enable_defra_query",
             selection.enable_defra_query,
         ),
@@ -911,6 +920,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "enable_session_history_tool",
             selection.enable_session_history_tool,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_context_budget",
+            selection.enable_context_budget,
         ),
         graphql_fields::graphql_optional_bool_field(
             "enable_defra_query",

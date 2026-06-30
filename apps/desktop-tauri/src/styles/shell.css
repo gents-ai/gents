@@ -140,14 +140,24 @@
 
   @media (max-width: 760px) {
     .app-shell {
+      height: auto;
+      min-height: 100vh;
       padding: var(--space-5);
       gap: var(--space-5);
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
     .workspace {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(220px, 34vh) minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
       gap: var(--space-5);
+      height: auto;
+      overflow: visible;
+    }
+
+    .sidebar {
+      overflow: visible;
     }
 
     .workspace-tabs {

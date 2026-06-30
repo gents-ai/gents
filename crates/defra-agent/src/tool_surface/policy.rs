@@ -334,7 +334,7 @@ impl ToolPolicySurface {
             defra_query: selection.enable_defra_query,
             memory: selection.enable_memory,
             session_history: selection.enable_session_history_tool,
-            context_budget: true,
+            context_budget: selection.enable_context_budget,
             spawn: subagent_tools.spawn_enabled,
             steering: subagent_tools.steering_enabled,
             background: subagent_tools.background_enabled,

@@ -39,9 +39,19 @@ help:
 	@echo
 	@echo "Desktop UI:"
 	@echo "  make desktop-ui            Run full desktop UI suite"
+	@echo "  make desktop-ui-qa-sweep   Run desktop QA sweep (format/build/unit/e2e/screenshots/fuzz)"
 	@echo "  make desktop-ui-unit       Run desktop unit tests"
 	@echo "  make desktop-ui-e2e        Run desktop Playwright journeys"
+	@echo "  make desktop-ui-invariants Run desktop Playwright invariant checks"
+	@echo "  make desktop-ui-screenshots  Capture stable desktop screenshot artifacts"
 	@echo "  make desktop-ui-fuzz       Run desktop Bombadil smoke (FUZZ_TIME=$(FUZZ_TIME))"
+	@echo "  make desktop-ui-fuzz-long  Run longer desktop Bombadil sweep"
+	@echo "  make desktop-ui-visual     Run desktop visual baseline checks"
+	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
+	@echo "  make desktop-ui-live-e2e-real  Run live browser smoke against a configured real provider"
+	@echo "  make desktop-native-preflight  Build frontend/Rust shell and print Tauri CLI version"
+	@echo "  make desktop-native-dev    Launch the native Tauri dev app for manual QA"
+	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
@@ -127,9 +137,12 @@ test-agent-e2e:
 test-cli:
 	$(CARGO) test -p defra-agent-cli -- --nocapture --test-threads=1
 
-.PHONY: desktop-ui desktop-ui-unit desktop-ui-e2e desktop-ui-fuzz
+.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui
+
+desktop-ui-qa-sweep:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:qa-sweep
 
 desktop-ui-unit:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:unit
@@ -137,8 +150,35 @@ desktop-ui-unit:
 desktop-ui-e2e:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:e2e
 
+desktop-ui-invariants:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:invariants
+
+desktop-ui-screenshots:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:screenshots
+
 desktop-ui-fuzz:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:fuzz -- --time-limit $(FUZZ_TIME)
+
+desktop-ui-fuzz-long:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:fuzz:long
+
+desktop-ui-visual:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:visual
+
+desktop-ui-live-e2e:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e
+
+desktop-ui-live-e2e-real:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e:real
+
+desktop-native-preflight:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
+
+desktop-native-dev:
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
+
+desktop-native-build:
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

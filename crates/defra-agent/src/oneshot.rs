@@ -69,7 +69,7 @@ pub async fn run_openai_oneshot_with_tools(
                 "building OpenAI-compatible completion client for behavior {} against {}",
                 behavior.behavior_id, behavior.backend_endpoint
             );
-            if crate::inference_http::force_openai_chat_completions() {
+            if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client: rig::providers::openai::CompletionsClient<
                     crate::inference_http::SessionTaggingHttpClient,
                 > = crate::inference_http::build_openai_chat_completions_client(
@@ -91,11 +91,15 @@ pub async fn run_openai_oneshot_with_tools(
                 .await
             } else {
                 let client: rig::providers::openai::Client<
-                    crate::inference_http::SessionTaggingHttpClient,
+                    crate::inference_http::SessionTaggingHttpClient<
+                        crate::inference_http::ResponsesNormalizingHttpClient,
+                    >,
                 > = crate::inference_http::build_openai_responses_client(
                     &api_key,
                     &behavior.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::default(),
+                    crate::inference_http::SessionTaggingHttpClient::new(
+                        crate::inference_http::ResponsesNormalizingHttpClient::default(),
+                    ),
                     Default::default(),
                 )
                 .with_context(|| build_context.clone())?;
@@ -136,14 +140,18 @@ pub async fn run_openai_oneshot_with_tools(
             .await
         }
         BackendProviderKind::ChatGptCodex => {
-            let client = crate::chatgpt_codex::build_responses_client(&behavior.backend_endpoint)
-                .await
-                .with_context(|| {
-                    format!(
-                        "building ChatGPT Codex completion client for behavior {} against {}",
-                        behavior.behavior_id, behavior.backend_endpoint
-                    )
-                })?;
+            let client = crate::chatgpt_codex::build_responses_client(
+                node.clone(),
+                behavior.agent_did(),
+                &behavior.backend_endpoint,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "building ChatGPT Codex completion client for behavior {} against {}",
+                    behavior.behavior_id, behavior.backend_endpoint
+                )
+            })?;
             run_oneshot_with_completion_client(
                 node,
                 behavior,

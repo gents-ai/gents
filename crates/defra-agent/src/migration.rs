@@ -92,6 +92,10 @@ const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
 ]"#;
 
+const ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_context_budget","Kind":2}}
+]"#;
+
 const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
 ]"#;
@@ -674,6 +678,25 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 pre = %pre_version_id,
                 v9 = %v9.version_id,
                 "ToolSelection patched with policy version"
+            );
+            active_version = v9;
+        }
+
+        if collection_has_field(&active_version, "enable_context_budget") {
+            tracing::debug!("ToolSelection already has context budget flag; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v10 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH)
+                .await
+                .context("patch_collection ToolSelection context budget flag")?;
+            node.set_active_collection_version(&v10.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection context budget flag")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v10 = %v10.version_id,
+                "ToolSelection patched with context budget flag"
             );
         }
     } else {
@@ -1762,6 +1785,7 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
             ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH,
             ADD_TOOL_SELECTION_ORCHESTRATION_PATCH,
+            ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH,
             ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
             ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH,
             ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH,

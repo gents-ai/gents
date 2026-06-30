@@ -31,6 +31,8 @@ pub const INFERENCE_CALL_NAME: &str = "InferenceCall";
 pub const INFERENCE_CALL: &str = include_str!("../schemas/inference/inference_call.graphql");
 pub const INFERENCE_PROFILE_NAME: &str = "InferenceProfile";
 pub const INFERENCE_PROFILE: &str = include_str!("../schemas/inference/inference_profile.graphql");
+pub const OAUTH_CREDENTIAL_NAME: &str = "OAuthCredential";
+pub const OAUTH_CREDENTIAL: &str = include_str!("../schemas/inference/oauth_credential.graphql");
 
 // services domain
 pub const TOOL_SERVICE_REGISTRY_NAME: &str = "ToolServiceRegistry";
@@ -54,6 +56,7 @@ pub const ALL: &[&str] = &[
     AGENT_MEMORY,
     TOOL_SELECTION,
     SKILL,
+    OAUTH_CREDENTIAL,
     INFERENCE_PROFILE,
     INFERENCE_CALL,
     AGENT_CONVERSATION,
@@ -87,6 +90,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,
     SKILL_NAME,
+    OAUTH_CREDENTIAL_NAME,
     INFERENCE_PROFILE_NAME,
     INFERENCE_CALL_NAME,
     AGENT_CONVERSATION_NAME,
@@ -126,7 +130,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            31,
+            32,
             "ALL should enumerate every non-runtime schema"
         );
     }

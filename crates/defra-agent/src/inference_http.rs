@@ -27,31 +27,6 @@ use rig::wasm_compat::WasmCompatSend;
 /// Header carrying the agent session id on outbound inference requests.
 const SESSION_ID_HEADER: &str = "x-session-id";
 
-/// Force the legacy Chat Completions client for OpenAI-compatible backends.
-///
-/// Default production behavior is the Responses API. The override keeps
-/// compatibility with backends that do not serve `/v1/responses` and with test
-/// mocks whose assertions are chat-format.
-pub(crate) fn force_openai_chat_completions() -> bool {
-    // defra-agent's own lib unit tests (compiled with `cfg(test)`) boot
-    // in-process agents against Chat Completions mocks, so default to chat
-    // there. Integration tests link defra-agent WITHOUT `cfg(test)`, so they
-    // set the env explicitly; production + the real CLI binary default to the
-    // Responses API.
-    if cfg!(test) {
-        return true;
-    }
-    openai_chat_completions_override_enabled(
-        std::env::var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS")
-            .ok()
-            .as_deref(),
-    )
-}
-
-fn openai_chat_completions_override_enabled(value: Option<&str>) -> bool {
-    matches!(value, Some("1") | Some("true"))
-}
-
 pub(crate) fn build_openai_responses_client<H>(
     api_key: &str,
     base_url: &str,
@@ -86,16 +61,94 @@ where
         .context("building OpenAI Chat Completions client")
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ResponsesNormalizingHttpClient<H = ReqwestClient> {
+    inner: H,
+}
+
+impl<H> ResponsesNormalizingHttpClient<H> {
+    pub fn new(inner: H) -> Self {
+        Self { inner }
+    }
+
+    fn normalize_json_body<T>(req: Request<T>) -> Request<Bytes>
+    where
+        T: Into<Bytes>,
+    {
+        let (parts, body) = req.into_parts();
+        let mut body = body.into();
+        if parts.uri.path().ends_with("/responses") {
+            if let Some(normalized) = normalize_responses_body(&body) {
+                body = normalized;
+            }
+        }
+        Request::from_parts(parts, body)
+    }
+}
+
+fn normalize_responses_body(body: &[u8]) -> Option<Bytes> {
+    let mut value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    crate::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
+    serde_json::to_vec(&value).ok().map(Bytes::from)
+}
+
+impl<H> HttpClientExt for ResponsesNormalizingHttpClient<H>
+where
+    H: Clone + HttpClientExt + 'static,
+{
+    fn send<T, U>(
+        &self,
+        req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+    where
+        T: Into<Bytes> + WasmCompatSend,
+        U: From<Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        let inner = self.inner.clone();
+        let req = Self::normalize_json_body(req);
+        async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
+    }
+
+    fn send_multipart<U>(
+        &self,
+        req: Request<MultipartForm>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+    where
+        U: From<Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        let inner = self.inner.clone();
+        async move { HttpClientExt::send_multipart(&inner, req).await }
+    }
+
+    fn send_streaming<T>(
+        &self,
+        req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+    where
+        T: Into<Bytes>,
+    {
+        let inner = self.inner.clone();
+        let req = Self::normalize_json_body(req);
+        async move { HttpClientExt::send_streaming(&inner, req).await }
+    }
+}
+
 /// A [`HttpClientExt`] that injects [`SESSION_ID_HEADER`] from the current
 /// admission request context onto each outbound request, then delegates to the
 /// inner reqwest client. When there is no active session context (e.g. one-shot
 /// calls outside the daemon scope) the request is passed through unchanged.
 #[derive(Clone, Debug, Default)]
-pub struct SessionTaggingHttpClient {
-    inner: ReqwestClient,
+pub struct SessionTaggingHttpClient<H = ReqwestClient> {
+    inner: H,
 }
 
-impl SessionTaggingHttpClient {
+impl<H> SessionTaggingHttpClient<H> {
+    pub fn new(inner: H) -> Self {
+        Self { inner }
+    }
+
     fn tag<T>(req: Request<T>) -> Request<Bytes>
     where
         T: Into<Bytes>,
@@ -152,7 +205,10 @@ impl SessionTaggingHttpClient {
     }
 }
 
-impl HttpClientExt for SessionTaggingHttpClient {
+impl<H> HttpClientExt for SessionTaggingHttpClient<H>
+where
+    H: Clone + HttpClientExt + 'static,
+{
     fn send<T, U>(
         &self,
         req: Request<T>,
@@ -164,7 +220,7 @@ impl HttpClientExt for SessionTaggingHttpClient {
     {
         let inner = self.inner.clone();
         let req = Self::tag(req);
-        async move { HttpClientExt::send(&inner, req).await }
+        async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
     }
 
     fn send_multipart<U>(
@@ -196,15 +252,75 @@ impl HttpClientExt for SessionTaggingHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn chat_completions_override_parses_only_explicit_true_values() {
-        assert!(openai_chat_completions_override_enabled(Some("1")));
-        assert!(openai_chat_completions_override_enabled(Some("true")));
-        assert!(!openai_chat_completions_override_enabled(Some("TRUE")));
-        assert!(!openai_chat_completions_override_enabled(Some("0")));
-        assert!(!openai_chat_completions_override_enabled(Some("false")));
-        assert!(!openai_chat_completions_override_enabled(None));
+    #[derive(Clone, Debug, Default)]
+    struct CapturingHttpClient {
+        bodies: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl CapturingHttpClient {
+        fn bodies(&self) -> Vec<serde_json::Value> {
+            self.bodies.lock().expect("capture lock").clone()
+        }
+    }
+
+    impl HttpClientExt for CapturingHttpClient {
+        fn send<T, U>(
+            &self,
+            req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            T: Into<Bytes> + WasmCompatSend,
+            U: From<Bytes>,
+            U: WasmCompatSend + 'static,
+        {
+            let bodies = Arc::clone(&self.bodies);
+            let body = req.into_body().into();
+            async move {
+                bodies
+                    .lock()
+                    .expect("capture lock")
+                    .push(serde_json::from_slice(&body).expect("captured JSON body"));
+                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                Ok(Response::builder().status(200).body(body)?)
+            }
+        }
+
+        fn send_multipart<U>(
+            &self,
+            req: Request<MultipartForm>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            U: From<Bytes>,
+            U: WasmCompatSend + 'static,
+        {
+            let _ = req;
+            async move {
+                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                Ok(Response::builder().status(200).body(body)?)
+            }
+        }
+
+        fn send_streaming<T>(
+            &self,
+            req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+        where
+            T: Into<Bytes>,
+        {
+            let bodies = Arc::clone(&self.bodies);
+            let body = req.into_body().into();
+            async move {
+                bodies
+                    .lock()
+                    .expect("capture lock")
+                    .push(serde_json::from_slice(&body).expect("captured JSON body"));
+                let stream: rig::http_client::sse::BoxedStream =
+                    Box::pin(futures::stream::empty::<http_client::Result<Bytes>>());
+                Ok(Response::builder().status(200).body(stream)?)
+            }
+        }
     }
 
     #[test]
@@ -228,10 +344,91 @@ mod tests {
     }
 
     #[test]
+    fn session_tagging_client_can_wrap_inner_transport() {
+        let _wrapped = SessionTaggingHttpClient::new(ReqwestClient::default());
+    }
+
+    #[tokio::test]
+    async fn responses_normalizing_client_normalizes_send_body() {
+        let inner = CapturingHttpClient::default();
+        let client = ResponsesNormalizingHttpClient::new(inner.clone());
+        let req = Request::builder()
+            .uri("http://example.test/v1/responses")
+            .body(Bytes::from_static(
+                br#"{"input":[{"role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}"#,
+            ))
+            .expect("request");
+
+        let _ = HttpClientExt::send::<Bytes, Vec<u8>>(&client, req)
+            .await
+            .expect("send");
+
+        let bodies = inner.bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0]["input"][0]["type"], "message");
+        assert_eq!(bodies[0]["input"][0]["id"], "msg_defra_0");
+        assert_eq!(bodies[0]["input"][0]["status"], "completed");
+        assert_eq!(
+            bodies[0]["input"][0]["content"][0]["annotations"],
+            serde_json::json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_normalizing_client_normalizes_streaming_body() {
+        let inner = CapturingHttpClient::default();
+        let client = ResponsesNormalizingHttpClient::new(inner.clone());
+        let req = Request::builder()
+            .uri("http://example.test/v1/responses")
+            .body(Bytes::from_static(
+                br#"{"input":[{"role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}"#,
+            ))
+            .expect("request");
+
+        let _ = HttpClientExt::send_streaming(&client, req)
+            .await
+            .expect("send streaming");
+
+        let bodies = inner.bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0]["input"][0]["type"], "message");
+        assert_eq!(bodies[0]["input"][0]["id"], "msg_defra_0");
+        assert_eq!(bodies[0]["input"][0]["status"], "completed");
+        assert_eq!(
+            bodies[0]["input"][0]["content"][0]["annotations"],
+            serde_json::json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_normalizing_client_leaves_other_paths_unchanged() {
+        let inner = CapturingHttpClient::default();
+        let client = ResponsesNormalizingHttpClient::new(inner.clone());
+        let original = serde_json::json!({
+            "input": [{
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}]
+            }]
+        });
+        let req = Request::builder()
+            .uri("http://example.test/v1/chat/completions")
+            .body(Bytes::from(
+                serde_json::to_vec(&original).expect("serialize"),
+            ))
+            .expect("request");
+
+        let _ = HttpClientExt::send::<Bytes, Vec<u8>>(&client, req)
+            .await
+            .expect("send");
+
+        assert_eq!(inner.bodies(), vec![original]);
+    }
+
+    #[test]
     fn tag_is_noop_without_session_context() {
         // Outside any admission scope there is no session id to attach.
         let req = Request::new(Bytes::from_static(b""));
-        let tagged = SessionTaggingHttpClient::tag(req);
+        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag(req);
         assert!(
             !tagged.headers().contains_key(SESSION_ID_HEADER),
             "x-session-id must not be set when there is no active session context"
@@ -241,7 +438,7 @@ mod tests {
     #[test]
     fn tag_adds_valid_trace_context_headers() {
         let req = Request::new(Bytes::from_static(b""));
-        let tagged = SessionTaggingHttpClient::tag_with_trace_context_headers(
+        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag_with_trace_context_headers(
             req,
             HashMap::from([
                 (

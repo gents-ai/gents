@@ -386,6 +386,10 @@ mod tests {
             Ok(())
         }
 
+        async fn disconnect_peer(&self, _addr: &str) -> P2PResult<()> {
+            Ok(())
+        }
+
         async fn notify_network_change(&self) -> P2PResult<()> {
             self.notify_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())

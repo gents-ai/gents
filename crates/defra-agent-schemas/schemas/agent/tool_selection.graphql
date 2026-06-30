@@ -28,6 +28,7 @@ type ToolSelection {
     cross_deployment_spawn_timeout_seconds: Int
     enable_memory: Boolean
     enable_session_history_tool: Boolean
+    enable_context_budget: Boolean
     enable_defra_query: Boolean
     defra_query_collections: [String]
     write_tools: [String]

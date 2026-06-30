@@ -8,11 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use tokio::sync::watch;
+use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::{
@@ -33,6 +35,7 @@ use crate::UpdateSubscriptionSource;
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
+const SUBAGENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct SubagentSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -42,6 +45,9 @@ pub struct SubagentSource {
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     processed_tool_calls: HashSet<String>,
+    /// Periodic scan over running bridge rows. This closes the event-drop gap
+    /// for child materialization without bypassing the normal source path.
+    rescan_tick: tokio::time::Interval,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +75,12 @@ struct ToolCallRow {
     cancel_policy: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallDocIdRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
 }
 
 impl ToolCallRow {
@@ -148,6 +160,17 @@ impl SpawnArgs {
     }
 }
 
+fn subagent_source_rescan_tick(interval: Duration) -> tokio::time::Interval {
+    let interval = if interval.is_zero() {
+        SUBAGENT_SOURCE_RESCAN_INTERVAL
+    } else {
+        interval
+    };
+    let mut tick = tokio::time::interval(interval);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tick
+}
+
 impl SubagentSource {
     pub fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -171,7 +194,17 @@ impl SubagentSource {
             cancel,
             collection_id_to_name: HashMap::new(),
             processed_tool_calls: HashSet::new(),
+            rescan_tick: subagent_source_rescan_tick(SUBAGENT_SOURCE_RESCAN_INTERVAL),
         }
+    }
+
+    /// Override the periodic rescan cadence. Exposed for integration tests
+    /// that need to drive the live rescan path without waiting for the
+    /// production interval.
+    #[doc(hidden)]
+    pub fn with_rescan_interval(mut self, interval: Duration) -> Self {
+        self.rescan_tick = subagent_source_rescan_tick(interval);
+        self
     }
 
     fn ensure_subscription(&mut self) {
@@ -344,6 +377,65 @@ impl SubagentSource {
             .and_then(|data| data.get("AgentRequest"))
             .and_then(serde_json::Value::as_array)
             .is_some_and(|rows| !rows.is_empty()))
+    }
+
+    async fn load_running_bridge_doc_ids(&self) -> anyhow::Result<Vec<String>> {
+        let query = r#"{
+            AgentToolCall(
+                filter: {
+                    lifecycle_state: { _eq: "running" },
+                    child_request_id: { _ne: "" }
+                }
+            ) { _docID }
+        }"#;
+        let response = self.node.execute(query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "query running AgentToolCall bridge rows for SubagentSource rescan failed: {:?}",
+                response.errors
+            );
+        }
+        let rows: Vec<ToolCallDocIdRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(TOOL_CALL_COLLECTION))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        Ok(rows.into_iter().map(|row| row.doc_id).collect())
+    }
+
+    async fn rescan_running_bridge_rows(&mut self) -> Option<FireIntent> {
+        let doc_ids = match self.load_running_bridge_doc_ids().await {
+            Ok(doc_ids) => doc_ids,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "subagent source periodic rescan failed to load running bridge rows",
+                );
+                return None;
+            }
+        };
+
+        for doc_id in doc_ids {
+            match self.build_intent_for_tool_call_doc(&doc_id).await {
+                Ok(Some(intent)) => {
+                    tracing::info!(
+                        doc_id = %doc_id,
+                        "subagent source periodic rescan emitted fire intent",
+                    );
+                    return Some(intent);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %doc_id,
+                        %error,
+                        "subagent source periodic rescan failed to process AgentToolCall row",
+                    );
+                }
+            }
+        }
+        None
     }
 
     async fn fail_unauthorized_tool_call(
@@ -766,8 +858,8 @@ impl EventDeliveryRuntimeContract for SubagentSource {
     const EVENT_DELIVERY_CONTRACT: EventDeliverySourceContract = EventDeliverySourceContract {
         name: "SubagentSource",
         dedupe_policy: "monotone_once",
-        rescan_bounded_by: 0,
-        deviation: Some("subagent_source_lacks_live_rescan"),
+        rescan_bounded_by: 1,
+        deviation: None,
     };
 }
 
@@ -778,12 +870,14 @@ impl TriggerSource for SubagentSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
-                let message = {
+                let mut message = None;
+                let mut dropped = 0;
+                let rescan_due = {
                     let subscription = self
                         .subscription
                         .as_mut()
                         .expect("subagent source subscription opened before polling");
-                    tokio::select! {
+                    let rescan_due = tokio::select! {
                         biased;
                         _ = self.cancel.cancelled() => return None,
                         res = self.snapshot_rx.changed() => {
@@ -792,9 +886,13 @@ impl TriggerSource for SubagentSource {
                             }
                             continue;
                         }
+                        _ = self.rescan_tick.tick() => true,
                         msg = subscription.recv() => {
                             match msg {
-                                Some(message) => message,
+                                Some(received) => {
+                                    message = Some(received);
+                                    false
+                                }
                                 None => {
                                     tracing::warn!(
                                         "subagent source subscription channel closed; source exiting",
@@ -803,18 +901,24 @@ impl TriggerSource for SubagentSource {
                                 }
                             }
                         }
+                    };
+                    if !rescan_due {
+                        dropped = subscription.check_and_reset_dropped();
                     }
+                    rescan_due
                 };
+                if rescan_due {
+                    if let Some(intent) = self.rescan_running_bridge_rows().await {
+                        return Some(intent);
+                    }
+                    continue;
+                }
+                let message = message.expect("subscription recv branch sets message");
 
-                let dropped = self
-                    .subscription
-                    .as_mut()
-                    .expect("subagent source subscription remains open")
-                    .check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(
                         dropped,
-                        "subagent source dropped messages; may have missed child spawns",
+                        "subagent source dropped messages; periodic rescan will recover child spawns",
                     );
                 }
 

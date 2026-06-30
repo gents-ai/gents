@@ -24,6 +24,10 @@ pub async fn upsert_inference_backend(
             "provider_kind",
             row.provider_kind.as_deref(),
         )),
+        Some(graphql_string_field(
+            "openai_wire_api",
+            row.openai_wire_api.as_deref(),
+        )),
         Some(graphql_string_field("endpoint", row.endpoint.as_deref())),
         Some(graphql_string_field("api_key", row.api_key.as_deref())),
         Some(graphql_string_field(
@@ -54,6 +58,10 @@ pub async fn upsert_inference_backend(
         Some(graphql_string_field(
             "provider_kind",
             row.provider_kind.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "openai_wire_api",
+            row.openai_wire_api.as_deref(),
         )),
         Some(graphql_string_field("endpoint", row.endpoint.as_deref())),
         Some(graphql_string_field("api_key", row.api_key.as_deref())),

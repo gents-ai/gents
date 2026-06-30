@@ -20,6 +20,9 @@ pub const MAX_LIMIT: u32 = 1000;
 const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("InferenceBackend", "api_key"),
     ("InferenceBackend", "api_key_env_var"),
+    ("OAuthCredential", "access_token"),
+    ("OAuthCredential", "refresh_token"),
+    ("OAuthCredential", "id_token"),
 ];
 
 fn is_restricted_field(collection: &str, field: &str) -> bool {
@@ -293,6 +296,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_selecting_oauth_token_fields() {
+        let err = build_query(
+            &params("OAuthCredential", &["credential_id", "refresh_token"]),
+            &CollectionScope::all(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("restricted"), "{err}");
+    }
+
+    #[test]
     fn allows_non_secret_fields_on_a_sensitive_collection() {
         assert!(build_query(
             &params(
@@ -316,6 +329,14 @@ mod tests {
     fn rejects_restricted_field_nested_in_filter_composition() {
         let mut p = params("InferenceBackend", &["backend_id"]);
         p.filter = Some(json!({ "_or": [{ "api_key_env_var": { "_eq": "X" } }] }));
+        let err = build_query(&p, &CollectionScope::all()).unwrap_err();
+        assert!(err.to_string().contains("restricted"), "{err}");
+    }
+
+    #[test]
+    fn rejects_filtering_on_oauth_token_fields() {
+        let mut p = params("OAuthCredential", &["credential_id"]);
+        p.filter = Some(json!({ "_or": [{ "access_token": { "_like": "eyJ%" } }] }));
         let err = build_query(&p, &CollectionScope::all()).unwrap_err();
         assert!(err.to_string().contains("restricted"), "{err}");
     }

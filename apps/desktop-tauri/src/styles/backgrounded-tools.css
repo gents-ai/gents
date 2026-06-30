@@ -129,12 +129,14 @@
 .background-tools-panel .tools-table-wrap {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--color-surface-strong);
 }
 
 .background-tools-panel table.tools {
   width: 100%;
+  min-width: 520px;
   border-collapse: collapse;
   font-size: 13px;
 }

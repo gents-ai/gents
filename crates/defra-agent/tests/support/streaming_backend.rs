@@ -62,11 +62,6 @@ pub struct MockStreamingBackend {
 
 impl MockStreamingBackend {
     pub fn start(model_name: &str, scripts: Vec<StreamScript>) -> anyhow::Result<Self> {
-        // This mock serves Chat Completions only. In-process integration tests
-        // link defra-agent without `cfg(test)`, so force the chat wire API for any
-        // OpenAiCompatible agent booted alongside this mock (the default is now the
-        // Responses API). Covers every in-process consumer of this backend.
-        std::env::set_var("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(StreamingState::new(
             model_name.to_string(),

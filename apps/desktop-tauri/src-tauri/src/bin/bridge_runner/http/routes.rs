@@ -72,6 +72,7 @@ pub(super) fn handle_request(
     request: HttpRequestData,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
+        ("OPTIONS", _) => Ok(HttpResponse::empty("204 No Content")),
         ("GET", "/health") => Ok(HttpResponse::json_ok(
             serde_json::json!({ "status": "ok" }).to_string(),
         )),
