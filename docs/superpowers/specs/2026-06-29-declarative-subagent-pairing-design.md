@@ -116,17 +116,31 @@ The model extends the pairing/template layer to prove:
   node whose DID equals the spawn's resolved target. Holds because the bridge is
   filtered to `spawn_target_did == T` (it only reaches `T`) *and* is defended at
   claim time (§5).
+- **Cancel propagation** — the full delegation *lifecycle*, not just
+  materialization + completion, must survive the filters. Cross-deployment cancel
+  writes `cancel_cascade_intent_at` onto the coordinator's bridge in the same
+  update that terminalizes the call (`bridge.rs:269`); the host's mirror reads the
+  replicated bridge and interrupts the host-owned child
+  (`cross_deployment_cancel_mirror.rs:127`); the coordinator observes the ack via
+  the returned child request (`background_completion.rs:202`). The existing legs
+  already carry this — the cancel signal is a *bridge update* that, because
+  `spawn_target_did` is `@immutable`, stays inside the forward `spawn_target_did == host`
+  filter and re-replicates C→host; the child ack is host-owned and returns under
+  `agent_did == host`. The Lean crossing set must therefore include the bridge
+  cancel-update (C→host) and the child cancel-ack (host→C), and conformance must
+  exercise it (§6) so it cannot regress.
 
 Conformance mirrors the obligation in `tests/conformance/` per the existing
 Proofs/ ↔ conformance structure fence.
 
 ### 1. Schema: one denormalized routing field
 
-- **`AgentToolCall.spawn_target_did: String @index`** — denormalized from
-  `SpawnArgs.agent_did` when the bridge is written. Makes the coordinator-owned
+- **`AgentToolCall.spawn_target_did: String @index @immutable`** — denormalized
+  from `SpawnArgs.agent_did` when the bridge is written. Makes the coordinator-owned
   bridge routable to its intended host. Empty/absent for non-spawn tool calls.
-  Must be `@immutable` (filter-field requirement from #1033: a doc cannot drift
-  in/out of a filter).
+  `@immutable` is mandatory (filter-field requirement from #1033: a doc cannot
+  drift in/out of a filter) — and it is also what lets a *bridge update* (e.g. the
+  cancel-cascade signal, §0) stay in-filter and re-replicate to the host.
 
 **No new field on `PeerPairingDesired`.** An earlier draft added a
 `subagent_target_did` DID column to name the host on both rows. It isn't needed:
@@ -220,9 +234,21 @@ single template as-is: invite tokens sign one template that `join` writes direct
   tells the joiner to write `subagent-host` (the *complementary* role, not a
   verbatim copy). The token carries the coordinator role marker so `join` knows
   which side it is. This is the primary, demo path.
-- **Registry/CLI:** `p2p pairings set` (and registry-derived pairings) take the
-  role explicitly (e.g. `--subagent-role coordinator|host`) and stamp the matching
-  template; the operator declares one intent per side.
+- **CLI:** `p2p pairings set` takes the role explicitly (e.g.
+  `--subagent-role coordinator|host`) and stamps the matching template; the
+  operator declares one intent per side.
+- **Registry/discovery — excluded for this cut.** Registry discovery stamps a
+  peer's *offered* template verbatim (`discovery.rs:205` `chosen_template` →
+  `:667` `upsert_registry_desired_mutation`). That is correct for *symmetric*
+  templates (`conversation`, `agent-config`, `discovery`) but **wrong** for the
+  directional subagent roles: if peer B advertises `subagent-host`, A must stamp
+  the *complement* `subagent-coordinator`, never a verbatim `subagent-host`. Rather
+  than build complement-mapping into the registry now, `chosen_template` **skips
+  any `subagent-*` offered id** (treats it as unhonorable, like an unknown id), so
+  registry never auto-materializes a subagent pairing. Subagent topology is
+  provisioned only by the explicit invite/join and CLI paths above. Complement-aware
+  registry materialization is a possible future enhancement, explicitly out of
+  scope here.
 - **Fence (conformance + unit):** a pairing whose two ends are **not**
   complementary (two `subagent-coordinator`, two `subagent-host`, or a `subagent-*`
   paired against a non-subagent template) yields no working channel and must be
@@ -255,7 +281,13 @@ could otherwise have a leaked bridge claimed by the wrong one.
   expected per-collection (field, value) filter map and outbound replicator
   leg(s) / no subscription, for a concrete (coordinator, host) pair — including
   that the coordinator leg is `AgentRequest@agent_did==local` + `AgentToolCall@spawn_target_did==peer`
-  and the host leg is the conversation set at `agent_did==local`.
+  and the host leg is the conversation set at `agent_did==local`. Also assert
+  `chosen_template` skips a `subagent-*` offered id (registry exclusion, §4a).
+- **Cancel-propagation case** (conformance + e2e): after a background cross-deployment
+  spawn, cancel the parent and assert the cancel rides the declarative legs —
+  the bridge cancel-update reaches the host (interrupting the child) and the child
+  cancel-ack returns to the coordinator. Guards the §0 cancel-propagation obligation
+  against regression.
 
 ### 7. Restart stopgap (until defradb.rs#1074)
 
