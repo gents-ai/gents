@@ -229,14 +229,19 @@ single template as-is: invite tokens sign one template that `join` writes direct
 (`discovery.rs:632`). So "set up an A→B delegation" must expand into
 `subagent-coordinator` on A and `subagent-host` on B. Design:
 
-- **Invite/join:** a delegation invite is **role-bearing** — the inviter (the
-  coordinator) writes its own `subagent-coordinator` row and the signed token
-  tells the joiner to write `subagent-host` (the *complementary* role, not a
-  verbatim copy). The token carries the coordinator role marker so `join` knows
-  which side it is. This is the primary, demo path.
-- **CLI:** `p2p pairings set` takes the role explicitly (e.g.
-  `--subagent-role coordinator|host`) and stamps the matching template; the
-  operator declares one intent per side.
+- **CLI (primary):** the existing `p2p pairings set --template <id>` flag already
+  validates against the catalog (`resolve_pairing_template`), so once
+  `subagent-coordinator`/`subagent-host` are catalog entries the operator
+  provisions each side explicitly: `--template subagent-coordinator` on the
+  coordinator, `--template subagent-host` on the host. **No new `--subagent-role`
+  flag** — that would duplicate what `--template` already does (YAGNI).
+- **Invite/join:** the invite token already carries a single `template`
+  (`pairing_token.rs:48`); **no token-struct change** (and no signed-payload
+  version bump). The inviter (coordinator) issues with `--template
+  subagent-coordinator`; `join` maps a subagent role to its **complement** before
+  writing its row (`subagent-coordinator` → `subagent-host` and vice versa) via a
+  `complement_subagent_template()` helper, so the joiner lands the host role. Plain
+  (non-subagent) templates pass through unchanged.
 - **Registry/discovery — excluded for this cut.** Registry discovery stamps a
   peer's *offered* template verbatim (`discovery.rs:205` `chosen_template` →
   `:667` `upsert_registry_desired_mutation`). That is correct for *symmetric*

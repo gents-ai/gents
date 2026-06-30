@@ -125,7 +125,25 @@ def scopeFilter (scope : Scope) (collections : List String)
           value := match r.source with | .localDid => localDid | .peerDid => peerDid })
 ```
 
-- [ ] **Step 4: State and prove crossing-soundness theorems.** Add to `Derivation.lean`. The exact-filter theorems are by `rfl`/`simp [scopeFilter, ...]` after `decide` on the concrete rule lists; the value-membership theorem is the no-third-party guarantee:
+- [ ] **Step 4: State and prove crossing-soundness theorems.** Add to `Derivation.lean`. **The exact-equality theorems are the primary obligation** — they pin the precise collections, fields, AND values, so they catch wrong field names or missing collection coverage (the general value-membership lemma below does not, since `DidSource` has only two constructors and would hold for any rule set). Prove both exact-equality theorems:
+
+```lean
+theorem subagentCoordinator_filter_eq (peerDid localDid : String) :
+    scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
+      = [ { collection := "AgentRequest",  field := "agent_did",        value := localDid }
+        , { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid  } ] := by
+  simp [scopeFilter, subagentCoordinatorRules]
+
+theorem subagentHost_filter_eq (peerDid localDid : String) :
+    scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
+      = subagentHostCollections.map
+          (fun c => { collection := c, field := "agent_did", value := localDid }) := by
+  simp [scopeFilter, subagentHostRules]
+```
+
+These two ARE the crossing-soundness proof for the template layer: the coordinator leg carries exactly `{AgentRequest@agent_did==local, AgentToolCall@spawn_target_did==peer}` and the host leg exactly `{conversation-set@agent_did==local}` — no other collection, field, or value. Zero `sorry`; follow the proof style already used for `scopeFilter_peerDid` in this file.
+
+- [ ] **Step 4b: Add the no-third-party lemma as a supporting (secondary) corollary** — it backs the spec §0 "no third-party documents" statement but is not load-bearing on its own:
 
 ```lean
 theorem subagent_filter_values_local_or_peer
@@ -136,15 +154,7 @@ theorem subagent_filter_values_local_or_peer
   simp [scopeFilter] at hk
   obtain ⟨r, _, hr⟩ := hk
   cases hsrc : r.source <;> simp [hsrc] at hr <;> subst hr <;> simp
-
-theorem subagentCoordinator_filter_eq (peerDid localDid : String) :
-    scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
-      = [ { collection := "AgentRequest",  field := "agent_did",        value := localDid }
-        , { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid  } ] := by
-  simp [scopeFilter, subagentCoordinatorRules]
 ```
-
-(Prove `subagentHost_filter_eq` the same way over `subagentHostRules`. Zero `sorry`; follow the proof style already used for `scopeFilter_peerDid` in this file.)
 
 - [ ] **Step 5: Build the proofs.**
 
@@ -243,7 +253,20 @@ const ADD_AGENT_TOOL_CALL_SPAWN_TARGET_PATCH: &str = r#"[
 
 Wire it into the same startup migration routine that applies the workflow patch, guarded by the existing `collection_has_field()` idempotency check (apply only if `AgentToolCall` lacks `spawn_target_did`).
 
-- [ ] **Step 3: Verify immutable enforcement.** Confirm DefraDB honors `@immutable` for a field added via patch on upgraded DBs (read `defradb.rs` schema-patch handling, or confirm via the fresh-DB SDL path which carries the directive). If patch-added fields cannot be immutable, note it: the bridge only ever *creates* `spawn_target_did` (never updates it), so functional correctness holds; record the finding in the task's commit message.
+- [ ] **Step 3: Verify immutable enforcement — this is a GATE, not a note.** `@immutable` on the filter field is load-bearing for the filtered-replication soundness argument (#1033 DAG-completeness: a doc must not be able to drift in/out of a filtered scope after creation). It is NOT sufficient that the runtime only writes the field once — a buggy or hostile writer that mutated `spawn_target_did` could drift a bridge across host scopes, breaking the §0 crossing-soundness guarantee. So:
+  - Confirm DefraDB enforces `@immutable` on the **fresh-DB SDL path** (the directive is in the SDL). Add a test that updating `spawn_target_did` after create is rejected:
+
+```rust
+#[tokio::test]
+async fn spawn_target_did_is_immutable() {
+    let db = test_db().await;
+    let id = create_tool_call_with_spawn_target(&db, "did:key:host-a").await;
+    let err = update_tool_call_spawn_target(&db, &id, "did:key:host-b").await;
+    assert!(err.is_err(), "spawn_target_did must reject post-create mutation");
+}
+```
+
+  - Confirm the **upgraded-DB patch path** also enforces immutability. Read `defradb.rs` schema-patch handling to see whether a patch-added field can carry the immutable flag. If the Kind-11 patch cannot mark the field immutable, **that is a blocker for this task** — resolve it before proceeding by one of: (a) extend the patch to set the immutable flag (preferred — find the field-property the SDL path sets and replicate it in the patch JSON), or (b) enforce immutability at the write layer for `spawn_target_did` (reject updates that change a non-empty value). Do not proceed to Phase D until upgraded DBs enforce it; record which mechanism was used in the commit message.
 
 - [ ] **Step 4: Build to confirm SDL + patch compile/parse.**
 
@@ -561,7 +584,7 @@ git commit -m "feat(#575): exclude subagent-* templates from registry auto-mater
 - Consumes: `InviteToken.template`.
 - Produces: a joiner row whose template is the complement of the inviter's subagent role.
 
-> Design note (refines spec §4a): no new `--subagent-role` CLI flag and no token-struct change. The inviter issues with `--template subagent-coordinator` (the existing flag, now valid since the template is in the catalog). `join` maps the token's subagent role to its complement before writing. Two explicit `p2p pairings set` commands (one per node) also fully provision the pair with no join change — this task covers the invite/join path for the demo.
+> Design note (per spec §4a, now aligned): no new `--subagent-role` CLI flag and no token-struct change. The inviter issues with `--template subagent-coordinator` (the existing flag, valid once the template is in the catalog). `join` maps the token's subagent role to its complement before writing. Two explicit `p2p pairings set` commands (one per node) also fully provision the pair with no join change — this task covers the invite/join path for the demo.
 
 - [ ] **Step 1: Write the failing unit test** for the complement helper in `pairings.rs` tests:
 
@@ -618,50 +641,83 @@ git commit -m "feat(#575): join writes complementary subagent role from invite t
 - Consumes: `spawn_target_did` (now a top-level bridge field), `snapshot.local_did`.
 - Produces: trusted-path materialization refused when the spawn's resolved target ≠ local.
 
-- [ ] **Step 1: Write the failing test.** Add a `subagent_source.rs` unit/integration test: a trusted-peer bridge whose resolved target DID ≠ local DID must NOT materialize a child.
+- [ ] **Step 1: Write the failing tests.** Add `subagent_source.rs` tests keyed on the **top-level `spawn_target_did`**: (a) a trusted-peer bridge whose `spawn_target_did` ≠ local DID must NOT materialize; (b) a bridge whose top-level `spawn_target_did` and in-`args` target disagree must NOT materialize.
 
 ```rust
 #[tokio::test]
 async fn trusted_path_refuses_spawn_targeting_other_host() {
-    // bridge: parent authored by a paired peer; resolved target DID = some OTHER host
-    let src = subagent_source_with_paired_peer().await;
-    let outcome = src.try_materialize_bridge(bridge_targeting("did:key:other-host")).await.unwrap();
-    assert!(outcome.is_none(), "must not materialize a spawn addressed to a different host");
+    let src = subagent_source_with_paired_peer().await; // local_did = did:key:me
+    // top-level spawn_target_did = a DIFFERENT host, args agree
+    let bridge = bridge_with(/*spawn_target_did*/ "did:key:other-host", /*args target*/ "did:key:other-host");
+    assert!(src.try_materialize_bridge(bridge).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn trusted_path_refuses_field_args_mismatch() {
+    let src = subagent_source_with_paired_peer().await; // local_did = did:key:me
+    // top-level field routed here (== local), but args claim a different target
+    let bridge = bridge_with(/*spawn_target_did*/ "did:key:me", /*args target*/ "did:key:other-host");
+    assert!(src.try_materialize_bridge(bridge).await.unwrap().is_none());
 }
 ```
 
-(Reuse the existing `subagent_source` test scaffolding; `bridge_targeting` sets `spawn_target_did`/`SpawnArgs.agent_did`.)
+(Reuse the existing `subagent_source` test scaffolding; `bridge_with` sets the top-level `spawn_target_did` and the `SpawnArgs.agent_did` in `args` independently.)
 
 - [ ] **Step 2: Run; confirm failure** (today the trusted path skips the target check).
 
 Run: `cargo test -p defra-agent trusted_path_refuses_spawn_targeting_other_host`
 Expected: FAIL (child materializes).
 
-- [ ] **Step 3: Add the gate.** In the trusted-paired-peer branch (`subagent_source.rs:510`), after the cross-deployment-allow check and before materialization, add:
+- [ ] **Step 3a: Ensure the bridge row query selects `spawn_target_did`.** The gate must key on the **top-level `spawn_target_did`** — the field the replication filter actually trusted to route the bridge here — not only the `SpawnArgs.agent_did` parsed from `args`. Add `spawn_target_did` to the `AgentToolCall` selection in the bridge-row query/struct that `build_intent_for_tool_call_doc` loads (`subagent_source.rs`), exposing it as `row.spawn_target_did: Option<String>`.
+
+- [ ] **Step 3b: Add the gate.** In the trusted-paired-peer branch (`subagent_source.rs:510`), after the cross-deployment-allow check and before materialization:
 
 ```rust
-// Even on the trusted path, only the node that owns the spawn's resolved
-// target may materialize it. The §2 replicator filter should already keep a
-// bridge from reaching the wrong host; this is the defense-in-depth gate.
+// Even on the trusted path, only the node that owns the spawn's target may
+// materialize it. The §2 replicator filter keys on the TOP-LEVEL
+// spawn_target_did, so the gate must validate THAT field (what routing
+// trusted) — and reject a bridge whose top-level field and in-args target
+// disagree (a forged/inconsistent bridge).
 let local_did = snapshot.local_did.trim();
-let resolved_target = resolved_target_did
+let bridge_target = row
+    .spawn_target_did
     .as_deref()
     .map(str::trim)
     .filter(|v| !v.is_empty());
-if let Some(target) = resolved_target {
-    if target != local_did {
+match bridge_target {
+    Some(target) if target == local_did => { /* addressed to us: proceed */ }
+    Some(target) => {
         tracing::debug!(
             parent_request_id = %parent_request_id,
-            target_did = %target,
+            spawn_target_did = %target,
             local_did = %local_did,
             "trusted-path spawn not addressed to this node; skipping (claim-time gate)",
+        );
+        return Ok(None);
+    }
+    None => {
+        tracing::warn!(
+            parent_request_id = %parent_request_id,
+            "trusted-path bridge missing spawn_target_did; refusing to materialize",
+        );
+        return Ok(None);
+    }
+}
+// Reject inconsistency between the routed field and the in-args target.
+if let Some(args_target) = resolved_target_did.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+    if Some(args_target) != bridge_target {
+        tracing::warn!(
+            parent_request_id = %parent_request_id,
+            spawn_target_did = ?bridge_target,
+            args_agent_did = %args_target,
+            "bridge spawn_target_did disagrees with args target; refusing to materialize",
         );
         return Ok(None);
     }
 }
 ```
 
-(`resolved_target_did` is computed at `subagent_source.rs:624`; if the gate needs it earlier, hoist that computation above the trusted branch.)
+(`resolved_target_did` is computed at `subagent_source.rs:624`; hoist that computation above the trusted branch so the mismatch check can use it.)
 
 - [ ] **Step 4: Run; confirm pass. Run the existing cross-deployment tests for no regression.**
 
@@ -819,6 +875,10 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
     for case in cases {
         // boot host agent + coordinator db; write subagent-host / subagent-coordinator
         // PeerPairingDesired rows on each; let the reconciler install the legs.
+        // DETERMINISTIC WAIT (no sleeps): before spawning, poll until both legs are
+        // applied on both nodes — wait_for_replicator_installed(coord, host_addr) and
+        // wait_for_replicator_installed(host, coord_addr) — same helper as Task 13,
+        // since the reconciler is sweep-driven (engine.rs:23) and a bare write races it.
         // spawn background child from the coordinator hook; wait for child on host.
         // cancel the parent request -> bridge cancel_cascade_intent_at written.
         assert!(case.cancel_intent_written_on_bridge);
@@ -856,6 +916,15 @@ git commit -m "test(#575): cancel propagation across declarative subagent legs"
 
 - [ ] **Step 1: Replace hand-wired replication with declarative rows.** In `live_cross_node_subagent_delegation()`, delete the two `install_one_way_replicator(...)` calls. Keep peer connectivity setup, but provision pairing via the templates — write `PeerPairingDesired{ template: "subagent-coordinator" }` on the coordinator (peer = host DID) and `PeerPairingDesired{ template: "subagent-host" }` on the host (peer = coordinator DID), then let the reconciler install the legs. (Reuse the existing `write_pairing` helper, extended to take a `template` argument, or write the rows inline with `upsert_PeerPairingDesired`.)
 
+- [ ] **Step 1b: Deterministically wait for the legs to apply before spawning (no sleeps).** The pairing reconciler runs on a 30s periodic sweep plus on-`Update` (`engine.rs:23` `PAIRING_SWEEP_INTERVAL`); a bare write-then-spawn races the reconcile and is flaky. Before submitting the spawn, poll until both outbound legs are actually installed on both nodes — query each node's installed replicators (the `get_replicators`/applied-state path the reconciler uses) and assert the expected leg is present, bounded by a timeout:
+
+```rust
+wait_for_replicator_installed(coord.node(), /*to*/ host_addr.as_str()).await; // coordinator -> host
+wait_for_replicator_installed(host.node(), /*to*/ coord_addr.as_str()).await;  // host -> coordinator
+```
+
+If a direct reconcile-tick entry point exists on the reconciler handle, prefer invoking it explicitly over waiting for the sweep. Add `wait_for_replicator_installed` as a bounded-poll helper in the e2e support module. **Flakes here are defects** — fix the wait, never add a bare sleep.
+
 - [ ] **Step 2: Keep the existing completion assertion** (child runs on host, result projects back to the parent bridge).
 
 - [ ] **Step 3: Add the no-third-party assertion.** After delegation completes, assert the host holds no `AgentRequest` owned by a DID other than the coordinator or the host:
@@ -891,4 +960,7 @@ git commit -m "test(#575): drive subagent delegation e2e through declarative tem
 - **Spec coverage:** §0 Lean → Tasks 1, 11; §1 schema → Task 3; §2 templates → Tasks 1/5; §3 reconciler → Task 6; §4 lifecycle stamping (both producers) → Task 4; §4a provisioning → Tasks 7 (registry exclusion), 8 (join complement); §5 claim hardening → Task 9; §6 tests → Tasks 2, 12, 13; §7 restart stopgap → Task 10; cancel obligation → Tasks 11, 12.
 - **Known investigation point (Task 6, Step 1):** the exact local-DID source in the reconciler loader must be located — the engine comment ("the loader first sanitizes [agent_did] to this node's DID") confirms it exists; wire from there.
 - **Known verification point (Task 3, Step 3):** whether `@immutable` is honored for a patch-added field on upgraded DBs. Functional correctness holds regardless (bridge only creates the field), but record the finding.
-- **Refinement of spec §4a:** no `--subagent-role` CLI flag (the existing `--template` flag validates `subagent-*` via `resolve_pairing_template` once the catalog has them); provisioning is two explicit `set` calls or the invite/join complement (Task 8).
+- **Spec §4a alignment:** spec and plan now agree — no `--subagent-role` CLI flag (the existing `--template` flag validates `subagent-*` via `resolve_pairing_template` once the catalog has them); provisioning is two explicit `set` calls or the invite/join complement (Task 8). Spec §4a updated to match.
+- **Immutability is a gate (Task 3), not a note:** upgraded DBs must enforce `@immutable` on `spawn_target_did` (filtered-replication DAG-completeness); blocker if the patch path can't, with two listed remedies.
+- **Deterministic reconcile waits (Tasks 12, 13):** tests poll for applied legs on both nodes before exercising behavior; the reconciler is sweep-driven, so write-then-act races. No bare sleeps.
+- **Claim gate keys on the top-level `spawn_target_did` (Task 9)** — the field replication trusted — and rejects field/args mismatch.
