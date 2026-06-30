@@ -198,6 +198,7 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 

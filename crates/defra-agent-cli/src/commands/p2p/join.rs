@@ -20,8 +20,8 @@ use super::network_admin::{
     load_membership_record, load_optional_network_record, write_agent_network, write_membership,
 };
 use super::pairings::{
-    peer_pairing_exists, resolve_pairing_template, wait_for_pairing_connected,
-    write_pairing_desired,
+    complement_subagent_template, peer_pairing_exists, resolve_pairing_template,
+    wait_for_pairing_connected, write_pairing_desired,
 };
 
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
@@ -241,8 +241,13 @@ fn is_unique_nonce_violation(error: &anyhow::Error) -> bool {
 /// template. The token's template is used when `--template` is not provided.
 /// An unknown template id is a hard error.
 fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Result<String> {
-    let template = cli_template.unwrap_or(token_template);
-    resolve_pairing_template(template)
+    match cli_template {
+        Some(template) => resolve_pairing_template(template),
+        None => {
+            let joiner_template = complement_subagent_template(token_template);
+            resolve_pairing_template(&joiner_template)
+        }
+    }
 }
 
 /// Enforce v5 join admission: the runtime side of Lean `admitsV5Join`. The
@@ -444,5 +449,21 @@ mod tests {
         let existing = membership("active", "2026-06-17T09:00:00Z", "");
 
         assert!(active_grant_supersedes_revocation(&incoming, &existing).unwrap());
+    }
+
+    #[test]
+    fn join_complements_token_subagent_role_only_without_explicit_override() {
+        assert_eq!(
+            resolve_join_template(None, "subagent-coordinator").unwrap(),
+            "subagent-host"
+        );
+        assert_eq!(
+            resolve_join_template(Some("subagent-host"), "subagent-coordinator").unwrap(),
+            "subagent-host"
+        );
+        assert_eq!(
+            resolve_join_template(None, "conversation").unwrap(),
+            "conversation"
+        );
     }
 }

@@ -88,6 +88,8 @@ inductive Scope where
   deriving DecidableEq, Repr
 ```
 
+- [ ] **Step 1b: Extend the executable scope vocabulary.** In `Executable.lean`, add a `perCollection` case to `ScopeKind`, `ScopeKind.ofScope`, `toContract`, `fromContract?`, and the round-trip theorem branches. This file is currently exhaustive over `peerDid` / `unscoped`; `lake build` should fail until the executable vocabulary knows about the new `Scope.perCollection` constructor.
+
 - [ ] **Step 2: Define the rules, the template values, and a CONCRETE `builtinCatalog`.** The existing model is catalog-*parametric* (`abbrev Catalog := List Template`; `resolveTemplate (cat) (id)` is ∀-quantified over `cat`) — there is no concrete catalog value, so proving facts about the rule constants alone is **vacuous** as a catalog fence. Add a concrete `builtinCatalog` mirroring the Rust `BUILTIN_TEMPLATES`, so Lean fails if a subagent entry is missing or malformed. In `State.lean` (or a new `Catalog.lean` under `ScopeTemplates/`, added to the barrel):
 
 ```lean
@@ -206,7 +208,7 @@ git commit -m "proof(#575): directional per-collection subagent scope templates"
 **Interfaces:**
 - Consumes (from Task 5, written next but the test is authored first to drive it): `resolve_template("subagent-coordinator"|"subagent-host")`, `scope_filter(scope, collections, peer_did, local_did)` (new 4-arg signature), `Scope::PerCollection`.
 
-- [ ] **Step 1: Write the failing conformance test.** Append to `scope_templates.rs`, mirroring the Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq`:
+- [ ] **Step 1: Write the failing conformance test.** Append to `scope_templates.rs`, mirroring the Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq`. Also extend the existing import list to include `FilterPredicate`:
 
 ```rust
 /// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` and
@@ -498,10 +500,10 @@ pub fn scope_filter(
         }
 ```
 
-- [ ] **Step 5: Build (the `defra-agent` runtime callers will break — that's Task 6; the CLI must compile now).**
+- [ ] **Step 5: Build (runtime callers will break — that's Task 6).**
 
-Run: `cargo build -p defra-agent-cli && cargo build -p defra-agent 2>&1 | head -30`
-Expected: `defra-agent-cli` builds; `defra-agent` FAILs only at `scope_filter` call sites (arity). Confirm the runtime failures are exactly those (engine.rs + any tests), not within `templates.rs`.
+Run: `cargo build -p defra-agent 2>&1 | head -30`
+Expected: FAIL only at `scope_filter` call sites (arity). Confirm the failures are exactly those (engine.rs + any tests), not within `templates.rs` or `defra-agent-cli/src/commands/p2p/templates.rs`. Do **not** require `cargo build -p defra-agent-cli` in this step: the CLI package depends on `defra-agent`, so it cannot compile while the runtime crate intentionally has arity errors.
 
 - [ ] **Step 6: Commit.**
 
@@ -560,7 +562,7 @@ Expected: PASS.
 
 - [ ] **Step 6: Run + commit.**
 
-Run: `cargo test -p defra-agent --test conformance scope_templates && cargo test -p defra-agent p2p_reconcile`
+Run: `cargo test -p defra-agent --test conformance scope_templates && cargo test -p defra-agent p2p_reconcile && cargo build -p defra-agent-cli`
 Expected: PASS.
 
 ```bash

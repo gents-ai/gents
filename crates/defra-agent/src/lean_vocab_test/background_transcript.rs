@@ -122,6 +122,26 @@ pub(crate) struct LeanR5CrossDeploymentCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCancelPropagationCase {
+    pub(crate) name: String,
+    pub(crate) route: String,
+    pub(crate) action: String,
+    pub(crate) parent_deployment: String,
+    pub(crate) child_deployment: String,
+    pub(crate) parent_request_id: String,
+    pub(crate) parent_tool_call_id: String,
+    pub(crate) child_request_id: String,
+    pub(crate) bridge_collection: String,
+    pub(crate) child_request_collection: String,
+    pub(crate) cancel_intent_written_on_bridge: bool,
+    pub(crate) bridge_cancel_replicates_to_host: bool,
+    pub(crate) host_interrupts_child: bool,
+    pub(crate) child_terminal_replicates_to_coordinator: bool,
+    pub(crate) cancel_ack_returns_to_coordinator: bool,
+    pub(crate) no_third_party_rows: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanBackgroundTheoremWitness {
     pub(crate) theorem_name: String,
     pub(crate) witness_kind: String,

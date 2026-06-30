@@ -483,7 +483,7 @@ async fn create_parent_request(
 async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str) {
     let peer_id = escape_graphql_string(peer_id);
     let peer_agent_did = escape_graphql_string(peer_agent_did);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
@@ -491,15 +491,17 @@ async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str)
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{peer_agent_did}",
-                    collections: ["AgentRequest", "AgentToolCall"],
-                    replicator_addresses: [],
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{peer_agent_did}",
-                    collections: ["AgentRequest", "AgentToolCall"],
-                    replicator_addresses: [],
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}

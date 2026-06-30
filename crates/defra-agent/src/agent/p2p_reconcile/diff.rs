@@ -29,11 +29,19 @@ pub struct PairingDesired {
     pub replicator_collections: BTreeSet<String>,
     #[serde(default)]
     pub replicator_filter: PairingFilters,
+    #[serde(default)]
+    pub template_ids: BTreeSet<String>,
 }
 
 impl PairingDesired {
     pub fn has_wiring(&self) -> bool {
         !self.collections.is_empty() || !self.replicator_addresses.is_empty()
+    }
+
+    pub fn uses_subagent_template(&self) -> bool {
+        self.template_ids
+            .iter()
+            .any(|template| template.starts_with("subagent-"))
     }
 }
 

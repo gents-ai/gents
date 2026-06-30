@@ -36,6 +36,7 @@ separately in the resolved filter; the contract distinguishes the *kind*). -/
 inductive ScopeKind where
   | peerDid
   | unscoped
+  | perCollection
   deriving DecidableEq, Repr
 
 namespace ScopeKind
@@ -44,14 +45,17 @@ namespace ScopeKind
 def ofScope : Scope → ScopeKind
   | .peerDid _ => .peerDid
   | .unscoped => .unscoped
+  | .perCollection _ => .perCollection
 
 def toContract : ScopeKind → String
   | .peerDid => "peerDid"
   | .unscoped => "unscoped"
+  | .perCollection => "perCollection"
 
 def fromContract? : String → Option ScopeKind
   | "peerDid" => some .peerDid
   | "unscoped" => some .unscoped
+  | "perCollection" => some .perCollection
   | _ => none
 
 theorem fromContract_toContract (k : ScopeKind) :

@@ -38,6 +38,29 @@ pub enum Scope {
     },
     /// No per-peer filtering — replicate all documents in the collection set.
     Unscoped,
+    /// Explicit per-collection filter rules for directional pairings where
+    /// different collections scope to different DID sources.
+    PerCollection(&'static [CollectionRule]),
+}
+
+/// DID source for one per-collection filter rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DidSource {
+    /// Use this node's local agent DID.
+    LocalDid,
+    /// Use the paired peer's agent DID.
+    PeerDid,
+}
+
+/// One exact per-collection filter rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollectionRule {
+    /// Collection this rule filters.
+    pub collection: &'static str,
+    /// Field name filtered on the collection.
+    pub field: &'static str,
+    /// DID source used as the filter value.
+    pub source: DidSource,
 }
 
 /// A named pairing intent in the static catalog.
@@ -132,7 +155,71 @@ pub const NETWORK_CONTROL_COLLECTIONS: &[&str] = &[
     "NetworkJoinRequest",
 ];
 
+/// Coordinator → host leg for subagent delegation: carry the parent request
+/// owned by the coordinator plus bridges addressed to the host.
+const SUBAGENT_COORDINATOR_COLLECTIONS: &[&str] = &["AgentRequest", "AgentToolCall"];
+
+const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentRequest",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentToolCall",
+        field: "spawn_target_did",
+        source: DidSource::PeerDid,
+    },
+];
+
+/// Host → coordinator leg for subagent completion: carry the host-owned
+/// conversation slice, including child tool calls.
+const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentRequest",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentResponse",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentMessage",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentToolCall",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentToolResult",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentSession",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "AgentConversation",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+    CollectionRule {
+        collection: "CompactionEntry",
+        field: "agent_did",
+        source: DidSource::LocalDid,
+    },
+];
+
 pub const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
+pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
+pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
@@ -165,6 +252,18 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
     },
+    ScopeTemplate {
+        id: SUBAGENT_COORDINATOR_TEMPLATE,
+        collections: SUBAGENT_COORDINATOR_COLLECTIONS,
+        scope: Scope::PerCollection(SUBAGENT_COORDINATOR_RULES),
+        delivery: Delivery::Push,
+    },
+    ScopeTemplate {
+        id: SUBAGENT_HOST_TEMPLATE,
+        collections: CONVERSATION_COLLECTIONS,
+        scope: Scope::PerCollection(SUBAGENT_HOST_RULES),
+        delivery: Delivery::Push,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -182,12 +281,19 @@ pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
 }
 
 /// Build per-collection `PairingFilters` for a template scope against a
-/// concrete peer DID.
+/// concrete peer/local DID pair.
 ///
 /// - `Scope::PeerDid { field }` → for each collection, insert a predicate
 ///   `{ field, value: peer_did }`.
 /// - `Scope::Unscoped` → empty map (no filtering).
-pub fn scope_filter(scope: &Scope, collections: &[&str], peer_did: &str) -> PairingFilters {
+/// - `Scope::PerCollection(rules)` → insert each exact collection rule using
+///   either the peer DID or local DID as the value source.
+pub fn scope_filter(
+    scope: &Scope,
+    collections: &[&str],
+    peer_did: &str,
+    local_did: &str,
+) -> PairingFilters {
     match scope {
         Scope::PeerDid { field } => collections
             .iter()
@@ -202,6 +308,22 @@ pub fn scope_filter(scope: &Scope, collections: &[&str], peer_did: &str) -> Pair
             })
             .collect(),
         Scope::Unscoped => BTreeMap::new(),
+        Scope::PerCollection(rules) => rules
+            .iter()
+            .map(|rule| {
+                let value = match rule.source {
+                    DidSource::LocalDid => local_did,
+                    DidSource::PeerDid => peer_did,
+                };
+                (
+                    rule.collection.to_string(),
+                    FilterPredicate {
+                        field: rule.field.to_string(),
+                        value: value.to_string(),
+                    },
+                )
+            })
+            .collect(),
     }
 }
 
@@ -241,7 +363,7 @@ mod tests {
     #[test]
     fn scope_filter_builds_per_collection_agent_did_equality() {
         let t = resolve_template("conversation").unwrap();
-        let f = scope_filter(&t.scope, t.collections, "did:key:bob");
+        let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
         assert_eq!(f.len(), 8);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(p.field, "agent_did");
@@ -251,7 +373,7 @@ mod tests {
     #[test]
     fn unscoped_scope_filter_is_empty() {
         let t = resolve_template("backup").unwrap();
-        assert!(scope_filter(&t.scope, t.collections, "did:key:bob").is_empty());
+        assert!(scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice").is_empty());
     }
 
     #[test]
@@ -272,8 +394,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_four() {
-        assert_eq!(builtin_templates().len(), 5);
+    fn builtin_template_count_is_seven() {
+        assert_eq!(builtin_templates().len(), 7);
     }
 
     #[test]
@@ -308,9 +430,50 @@ mod tests {
     #[test]
     fn scope_filter_covers_all_collections_in_template() {
         let t = resolve_template("conversation").unwrap();
-        let f = scope_filter(&t.scope, t.collections, "did:key:alice");
+        let f = scope_filter(&t.scope, t.collections, "did:key:alice", "did:key:self");
         for col in t.collections {
             assert!(f.contains_key(*col), "missing filter for {col}");
+        }
+    }
+
+    #[test]
+    fn subagent_coordinator_has_directional_rules() {
+        let t = resolve_template(SUBAGENT_COORDINATOR_TEMPLATE).unwrap();
+        assert_eq!(t.delivery, Delivery::Push);
+        assert_eq!(t.collections, SUBAGENT_COORDINATOR_COLLECTIONS);
+        let f = scope_filter(&t.scope, t.collections, "did:key:host", "did:key:coord");
+        assert_eq!(
+            f.get("AgentRequest"),
+            Some(&FilterPredicate {
+                field: "agent_did".to_string(),
+                value: "did:key:coord".to_string(),
+            })
+        );
+        assert_eq!(
+            f.get("AgentToolCall"),
+            Some(&FilterPredicate {
+                field: "spawn_target_did".to_string(),
+                value: "did:key:host".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn subagent_host_filters_conversation_on_local_owner() {
+        let t = resolve_template(SUBAGENT_HOST_TEMPLATE).unwrap();
+        assert_eq!(t.delivery, Delivery::Push);
+        assert_eq!(t.collections, CONVERSATION_COLLECTIONS);
+        let f = scope_filter(&t.scope, t.collections, "did:key:coord", "did:key:host");
+        assert_eq!(f.len(), CONVERSATION_COLLECTIONS.len());
+        for col in CONVERSATION_COLLECTIONS {
+            assert_eq!(
+                f.get(*col),
+                Some(&FilterPredicate {
+                    field: "agent_did".to_string(),
+                    value: "did:key:host".to_string(),
+                }),
+                "unexpected subagent-host filter for {col}"
+            );
         }
     }
 }

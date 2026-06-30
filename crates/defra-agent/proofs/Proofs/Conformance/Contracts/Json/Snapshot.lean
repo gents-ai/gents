@@ -112,6 +112,9 @@ def snapshotJson : String :=
     ++ "\"r5_cross_deployment_cases\":"
       ++ jsonArray
         (r5CrossDeploymentCases.map r5CrossDeploymentCaseJson) ++ ","
+    ++ "\"cancel_propagation_cases\":"
+      ++ jsonArray
+        (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"workflow_cases\":"
       ++ workflowCasesJson ++ ","
     ++ "\"r6_background_theorem_witnesses\":"

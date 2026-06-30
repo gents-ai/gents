@@ -187,6 +187,14 @@ pub(super) fn resolve_pairing_template(template: &str) -> Result<String> {
     anyhow::bail!("unknown scope template {template:?}; known templates: {known}");
 }
 
+pub(super) fn complement_subagent_template(template: &str) -> String {
+    match template.trim() {
+        "subagent-coordinator" => "subagent-host".to_string(),
+        "subagent-host" => "subagent-coordinator".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn required_trimmed(value: &str, flag_name: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -839,6 +847,19 @@ mod tests {
         let error = resolve_pairing_template("nope").unwrap_err().to_string();
         assert!(error.contains("unknown scope template"));
         assert!(error.contains("conversation"));
+    }
+
+    #[test]
+    fn complement_maps_subagent_roles_and_passes_others() {
+        assert_eq!(
+            complement_subagent_template("subagent-coordinator"),
+            "subagent-host"
+        );
+        assert_eq!(
+            complement_subagent_template("subagent-host"),
+            "subagent-coordinator"
+        );
+        assert_eq!(complement_subagent_template("conversation"), "conversation");
     }
 
     #[test]

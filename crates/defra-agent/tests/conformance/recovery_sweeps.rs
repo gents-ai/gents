@@ -666,6 +666,7 @@ async fn start_running_background_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        "did:defra-agent:target".to_string(),
     );
     bridge.start_running().await.unwrap();
 }
@@ -968,6 +969,7 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Foreground,
                 CancelPolicy::Cascade,
                 child_request_id,
+                "did:defra-agent:target".to_string(),
             )
         }
         "detached_bridge_child_completed_to_completed"
@@ -1004,6 +1006,7 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Background,
                 CancelPolicy::Detach,
                 child_request_id,
+                "did:defra-agent:target".to_string(),
             )
         }
         "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
@@ -1061,6 +1064,7 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Background,
                 CancelPolicy::Cascade,
                 child_request_id,
+                "did:defra-agent:target".to_string(),
             )
         }
         other => panic!("unhandled tool recovery case {other}"),

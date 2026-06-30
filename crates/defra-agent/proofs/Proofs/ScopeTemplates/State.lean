@@ -13,9 +13,10 @@ push vs. subscribe+replicate).
 
 Mirrors the Rust `crates/defra-agent/src/agent/p2p_reconcile/templates.rs`:
 `ScopeTemplate { id, collections, scope, delivery }`, `Scope = PeerDid {field} |
-Unscoped`, `Delivery = Push | Replicate`, and `scope_filter`. The catalog is a
-static `&[ScopeTemplate]`; here it is a `List Template` over which resolution is
-proven deterministic and total.
+Unscoped | PerCollection`, `Delivery = Push | Replicate`, and `scope_filter`.
+The catalog is a static `&[ScopeTemplate]`; here it is a concrete
+`builtinCatalog` plus a `List Template` type over which resolution is proven
+deterministic and total.
 
 `@immutable`/DAG-completeness is upstream's obligation (#1033); not modeled here.
 -/
@@ -32,11 +33,26 @@ inductive Delivery where
   | replicate
   deriving DecidableEq, Repr
 
+/-- Source of the DID value used in a per-collection filter rule. -/
+inductive DidSource where
+  | localDid
+  | peerDid
+  deriving DecidableEq, Repr
+
+/-- One per-collection filter rule. -/
+structure CollectionRule where
+  collection : String
+  field : String
+  source : DidSource
+  deriving DecidableEq, Repr
+
 /-- Scoping policy. `PeerDid f` filters each collection on field `f` equal to the
-peer's DID; `Unscoped` applies no filter. -/
+peer's DID; `Unscoped` applies no filter; `PerCollection` carries exact
+collection/field/source rules for directional pairings. -/
 inductive Scope where
   | peerDid (field : String)
   | unscoped
+  | perCollection (rules : List CollectionRule)
   deriving DecidableEq, Repr
 
 /-- The scope filter key resolved from a scope against a concrete peer DID.
@@ -68,5 +84,84 @@ structure Template where
 `&[ScopeTemplate]`. Resolution is `List.find?` by id, matching
 `resolve_template`'s `iter().find(|t| t.id == id)`. -/
 abbrev Catalog := List Template
+
+def conversationCollections : List String :=
+  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
+   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
+
+def agentConfigCollections : List String :=
+  ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
+   "ToolServiceRegistry", "Skill"]
+
+def discoveryCollections : List String :=
+  ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
+   "AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
+   "ToolServiceRegistry", "Skill"]
+
+def networkControlCollections : List String :=
+  ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest"]
+
+def subagentHostCollections : List String :=
+  conversationCollections
+
+def subagentCoordinatorRules : List CollectionRule :=
+  [ { collection := "AgentRequest",  field := "agent_did",        source := .localDid }
+  , { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
+
+def subagentHostRules : List CollectionRule :=
+  subagentHostCollections.map
+    (fun c => { collection := c, field := "agent_did", source := .localDid })
+
+def conversationTemplate : Template :=
+  { id := "conversation"
+  , collections := conversationCollections.toFinset
+  , scope := .peerDid "agent_did"
+  , delivery := .push }
+
+def agentConfigTemplate : Template :=
+  { id := "agent-config"
+  , collections := agentConfigCollections.toFinset
+  , scope := .unscoped
+  , delivery := .replicate }
+
+def backupTemplate : Template :=
+  { id := "backup"
+  , collections := conversationCollections.toFinset
+  , scope := .unscoped
+  , delivery := .replicate }
+
+def discoveryTemplate : Template :=
+  { id := "discovery"
+  , collections := discoveryCollections.toFinset
+  , scope := .unscoped
+  , delivery := .replicate }
+
+def networkControlTemplate : Template :=
+  { id := "network-control"
+  , collections := networkControlCollections.toFinset
+  , scope := .unscoped
+  , delivery := .replicate }
+
+def subagentCoordinatorTemplate : Template :=
+  { id := "subagent-coordinator"
+  , collections := ["AgentRequest", "AgentToolCall"].toFinset
+  , scope := .perCollection subagentCoordinatorRules
+  , delivery := .push }
+
+def subagentHostTemplate : Template :=
+  { id := "subagent-host"
+  , collections := subagentHostCollections.toFinset
+  , scope := .perCollection subagentHostRules
+  , delivery := .push }
+
+/-- Concrete catalog mirroring Rust `BUILTIN_TEMPLATES`. -/
+def builtinCatalog : Catalog :=
+  [ conversationTemplate
+  , agentConfigTemplate
+  , backupTemplate
+  , discoveryTemplate
+  , networkControlTemplate
+  , subagentCoordinatorTemplate
+  , subagentHostTemplate ]
 
 end ScopeTemplates

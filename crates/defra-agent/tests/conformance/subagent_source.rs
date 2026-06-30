@@ -155,6 +155,7 @@ async fn ensure_parent_subagent_authorization(
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     request_id: String,
+    agent_did: String,
     behavior_id: String,
     content: String,
     lifecycle_state: Option<String>,
@@ -181,6 +182,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
                 limit: 1
             ) {{
                 request_id
+                agent_did
                 behavior_id
                 content
                 lifecycle_state
@@ -311,11 +313,13 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
+    assert_eq!(child.agent_did, running.booted.agent_did);
     assert_eq!(child.behavior_id, running.behavior_id);
     assert_eq!(child.content, "child prompt from source");
     assert_eq!(child.subagent_depth, Some(1));
@@ -332,6 +336,60 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
         Some(parent_tool_call_id)
     );
     assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
+
+    running.booted.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_source_rejects_mismatched_spawn_target_did_and_args() {
+    let db = test_db("r3-subagent-source-target-mismatch").await;
+    let running = boot_agent(&db, "r3-subagent-source-target-mismatch").await;
+    let parent_request_id = "r3-parent-target-mismatch";
+    let parent_tool_call_id = "r3-tc-target-mismatch";
+    let child_request_id = "r3-child-target-mismatch";
+    let parent_session_id = "r3-session-target-mismatch";
+    let mismatched_args_did = "did:key:zArgsTargetMismatch";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        parent_session_id,
+        "parent prompt",
+    )
+    .await;
+
+    let args = serde_json::json!({
+        "agent_did": mismatched_args_did,
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "child prompt from mismatched target"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        "did:defra-agent:test".to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+        running.booted.agent_did.clone(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(750),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/agent_did", mismatched_args_did);
 
     running.booted.shutdown().await;
 }
@@ -372,6 +430,7 @@ async fn subagent_source_rejects_unauthorized_target_without_child_request() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -425,6 +484,7 @@ async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_activ
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -485,6 +545,7 @@ async fn subagent_source_rejects_when_spawn_disabled_even_with_authorized_target
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -546,6 +607,7 @@ async fn subagent_source_rejects_background_when_background_disabled() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -722,6 +784,7 @@ async fn cascade_after_source_spawn_reaches_child_request() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -869,6 +932,7 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        remote_did.to_string(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -929,6 +993,7 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -1218,6 +1283,7 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
 
     // Drive the bridge create and the parent interrupt CONCURRENTLY. The source
@@ -1300,6 +1366,7 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -1366,6 +1433,7 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -1427,6 +1495,7 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
         AwaitMode::Background,
         CancelPolicy::Detach,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -1824,6 +1893,7 @@ async fn write_cross_deployment_bridge(
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_target_agent_did = escape_graphql_string(target_agent_did);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
         "name": target_behavior_id,
@@ -1851,6 +1921,7 @@ async fn write_cross_deployment_bridge(
                 started_at: "{started_at}",
                 deadline_at: "{deadline_at}",
                 child_request_id: "{escaped_child_request_id}",
+                spawn_target_did: "{escaped_target_agent_did}",
                 await_mode: "background",
                 cancel_policy: "cascade",
                 selected_service_id: null,
@@ -1886,6 +1957,7 @@ async fn create_orphan_cross_deployment_tool_call(
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_target_agent_did = escape_graphql_string(target_agent_did);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
         "name": target_name,
@@ -1913,6 +1985,7 @@ async fn create_orphan_cross_deployment_tool_call(
                 started_at: "{started_at}",
                 deadline_at: "{deadline_at}",
                 child_request_id: "{escaped_child_request_id}",
+                spawn_target_did: "{escaped_target_agent_did}",
                 await_mode: "background",
                 cancel_policy: "cascade",
                 selected_service_id: null,
@@ -1981,6 +2054,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_spawn_target_did = escape_graphql_string(crate::support::AGENT_DID);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
         "behavior_id": crate::support::AGENT_NAME,
@@ -2007,6 +2081,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
                 started_at: "{started_at}",
                 deadline_at: "{deadline_at}",
                 child_request_id: "{escaped_child_request_id}",
+                spawn_target_did: "{escaped_spawn_target_did}",
                 await_mode: "{await_mode}",
                 cancel_policy: "cascade",
                 selected_service_id: null,

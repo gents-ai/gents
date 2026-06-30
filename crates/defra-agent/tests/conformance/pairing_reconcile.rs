@@ -130,6 +130,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         replicator_addresses: set(&[address]),
         replicator_collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
         replicator_filter: PairingFilters::new(),
+        template_ids: BTreeSet::new(),
     };
     let data_plane = PairingDesired {
         collections: set(&["AgentRequest", "AgentResponse"]),
@@ -139,6 +140,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
             .into_iter()
             .chain(one_filter("AgentResponse", "agent_did", "did:key:a"))
             .collect(),
+        template_ids: BTreeSet::new(),
     };
 
     let merged =
@@ -190,6 +192,7 @@ fn layered_desired_merge_absent_data_plane_preserves_control_only() {
         replicator_addresses: set(&["/ip4/127.0.0.1/tcp/4103/p2p/peer-a"]),
         replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
         replicator_filter: PairingFilters::new(),
+        template_ids: BTreeSet::new(),
     };
 
     let merged = merge_layered_desired(Some(control.clone()), None).expect("control desired state");

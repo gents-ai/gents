@@ -19,9 +19,8 @@
 //! ## Cross-node delegation (Test 2)
 //!
 //! `live_cross_node_subagent_delegation` exercises orchestrator-on-A delegating
-//! to a behavior hosted on B over REAL in-process P2P replication (the proven
-//! `test_p2p_db` + `install_one_way_replicator` pattern from the R5
-//! cross-deployment conformance harness — no test "pump").
+//! to a behavior hosted on B over REAL in-process P2P replication installed by
+//! declarative `PeerPairingDesired` rows — no test "pump".
 //!
 //! Subagent targets are named `(agent_did, behavior_id)` pairs. The orchestrator
 //! on A writes the child `AgentRequest` LOCALLY stamped with the TARGET's
@@ -38,10 +37,10 @@ use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, AgentIdentity, DefraAgent, DocumentRuntimeOptions, SubagentTarget,
-    ToolCeiling, ToolSelectionDocument,
+    agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
+    default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
+    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent,
+    DocumentRuntimeOptions, SubagentTarget, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -55,21 +54,6 @@ const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 /// Friendly, model-facing subagent target name (the model never sees behavior ids).
 const RESEARCHER_TARGET_NAME: &str = "researcher";
-
-/// The `chat-requests` P2P collection profile (matches the `p2p pair`
-/// chat-requests profile in `defra-agent-cli`). These carry the full delegation
-/// round-trip: the child `AgentRequest` + bridge `AgentToolCall` A->B and the
-/// terminal child + its response/messages B->A.
-const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
-    "AgentConversation",
-    "AgentRequest",
-    "AgentResponse",
-    "AgentToolResult",
-    "AgentSession",
-    "AgentMessage",
-    "AgentToolCall",
-    "CompactionEntry",
-];
 
 fn live_enabled() -> bool {
     std::env::var("DEFRA_AGENT_LIVE_SUBAGENT").as_deref() == Ok("1")
@@ -340,26 +324,27 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Pairing must exist on BOTH nodes BEFORE the agents boot (paired_peer_dids
-    // are loaded at startup). A trusts DID-B; B trusts DID-A.
-    write_pairing(db_a.node.as_ref(), "peer-b", &did_b).await;
-    write_pairing(db_b.node.as_ref(), "peer-a", &did_a).await;
+    let addr_a = wait_for_listen_addr(db_a.node.as_ref()).await;
+    let addr_b = wait_for_listen_addr(db_b.node.as_ref()).await;
 
-    // REAL bidirectional in-process P2P replication for the chat-requests
-    // collection set, installed BEFORE the request is submitted. A->B carries
-    // the child request + bridge tool call so B materializes + runs the child;
-    // B->A carries the terminal child request + response/messages so A's
-    // BackgroundCompletionObserver can project completion back onto the parent.
-    install_one_way_replicator(
+    // Pairing rows exist on BOTH nodes BEFORE the agents boot. The running
+    // pairing reconcilers perform the actual installation: A's coordinator leg
+    // carries parent+bridge docs to B; B's host leg carries B-owned child docs
+    // back to A. The rows carry the peer's real listen address, never `[]`.
+    write_pairing(
         db_a.node.as_ref(),
-        db_b.node.as_ref(),
-        CHAT_REQUEST_COLLECTIONS,
+        "peer-b",
+        &did_b,
+        "subagent-coordinator",
+        &addr_b,
     )
     .await;
-    install_one_way_replicator(
+    write_pairing(
         db_b.node.as_ref(),
-        db_a.node.as_ref(),
-        CHAT_REQUEST_COLLECTIONS,
+        "peer-a",
+        &did_a,
+        "subagent-host",
+        &addr_a,
     )
     .await;
 
@@ -367,6 +352,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     // claim and run the replicated child request against the live model.
     let agent_b = boot_document_agent(&db_b, identity_b).await?;
     let agent_a = boot_document_agent(&db_a, identity_a).await?;
+    wait_for_replicator_installed(db_a.node.as_ref(), "peer-b", Duration::from_secs(120)).await;
+    wait_for_replicator_installed(db_b.node.as_ref(), "peer-a", Duration::from_secs(120)).await;
 
     let request_id = "req-live-cross-node";
     let session_id = "session-live-cross-node";
@@ -895,62 +882,6 @@ async fn wait_for_assistant_answer(
 // Cross-node helpers (Test 2)
 // ---------------------------------------------------------------------------
 
-/// Connect two P2P nodes and install a sender->receiver replicator for
-/// `collections`. Mirrors the proven R5 cross-deployment harness pattern: add
-/// the collections to both nodes' P2P sets and register the replicator on both
-/// the sender (push target) and receiver (authorization) sides. Call it both
-/// directions (A->B and B->A) for bidirectional replication.
-async fn install_one_way_replicator(
-    sender: &EmbeddedNode,
-    receiver: &EmbeddedNode,
-    collections: &[&str],
-) {
-    let sender_addr = wait_for_listen_addr(sender).await;
-    let receiver_addr = wait_for_listen_addr(receiver).await;
-    let sender_p2p = sender.p2p().expect("sender p2p");
-    let receiver_p2p = receiver.p2p().expect("receiver p2p");
-
-    sender_p2p
-        .connect_peer(&receiver_addr)
-        .await
-        .expect("connect sender to receiver");
-    wait_for_connected_peer(sender).await;
-    wait_for_connected_peer(receiver).await;
-
-    let collection_names = collections
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    sender_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add sender p2p collections");
-    receiver_p2p
-        .add_collections(collection_names.clone())
-        .await
-        .expect("add receiver p2p collections");
-    receiver_p2p
-        .add_replicator(
-            collection_names.clone(),
-            Some(&sender_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("authorize sender as receiver-side replicator");
-    sender_p2p
-        .add_replicator(
-            collection_names,
-            Some(&receiver_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("install sender to receiver replicator");
-}
-
 async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -970,30 +901,66 @@ async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     }
 }
 
-async fn wait_for_connected_peer(node: &EmbeddedNode) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let escaped_peer_id = escape_graphql_string(peer_id);
+    let mut last = String::from("<none>");
     loop {
-        let peers = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .connected_peers()
-            .await
-            .expect("connected peers");
-        if !peers.is_empty() {
-            return;
+        let query = format!(
+            r#"{{
+                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped_peer_id}" }} }}, limit: 1) {{
+                    peer_id
+                    collections
+                    replicator_addresses
+                    replicator_filter
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        if let Some(row) = first_optional_row::<serde_json::Value>(&response, "PeerPairingApplied")
+        {
+            last = serde_json::to_string(&row).unwrap_or_else(|_| format!("{row:?}"));
+            let installed = row
+                .get("replicator_addresses")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|addresses| {
+                    addresses
+                        .iter()
+                        .any(|address| address.as_str().is_some_and(|s| !s.trim().is_empty()))
+                });
+            if installed {
+                return;
+            }
         }
         if Instant::now() >= deadline {
-            panic!("node never reported a connected peer; last_peers={peers:?}");
+            panic!(
+                "timed out waiting for PeerPairingApplied({peer_id}) to install a replicator; last row={last}"
+            );
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
 /// Write a `PeerPairingDesired` doc so the local node trusts `peer_did`.
-async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_did: &str) {
+async fn write_pairing(
+    node: &EmbeddedNode,
+    peer_id: &str,
+    peer_did: &str,
+    template: &str,
+    peer_addr: &str,
+) {
+    let collections = resolve_template(template)
+        .unwrap_or_else(|| panic!("template {template} should resolve"))
+        .collections
+        .iter()
+        .map(|collection| format!("\"{}\"", escape_graphql_string(collection)))
+        .collect::<Vec<_>>()
+        .join(", ");
     let peer_id = escape_graphql_string(peer_id);
     let peer_did = escape_graphql_string(peer_did);
-    let now = chrono::Utc::now().to_rfc3339();
+    let template = escape_graphql_string(template);
+    let peer_addr = escape_graphql_string(peer_addr);
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
@@ -1001,12 +968,23 @@ async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_did: &str) {
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{peer_did}",
-                    collections: ["AgentRequest", "AgentToolCall", "AgentResponse", "AgentMessage"],
-                    replicator_addresses: [],
+                    collections: [{collections}],
+                    replicator_addresses: ["{peer_addr}"],
+                    profiles: null,
+                    template: "{template}",
+                    source: "operator",
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
-                update: {{ agent_did: "{peer_did}", updated_at: "{now}" }}
+                update: {{
+                    agent_did: "{peer_did}",
+                    collections: [{collections}],
+                    replicator_addresses: ["{peer_addr}"],
+                    profiles: null,
+                    template: "{template}",
+                    source: "operator",
+                    updated_at: "{now}"
+                }}
             ) {{ _docID }}
         }}"#
     );
