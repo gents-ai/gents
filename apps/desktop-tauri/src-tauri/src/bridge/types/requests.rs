@@ -149,6 +149,21 @@ pub(crate) struct ToolSelectionSaveRequest {
     pub enable_context_budget: Option<bool>,
     #[serde(default)]
     pub enable_defra_query: Option<bool>,
+    /// Editable query allowlist. `None` = field absent → preserve the stored
+    /// value (so a save that doesn't touch it can't wipe it); `Some(list)` sets
+    /// it (empty list clears). This is the field whose silent revert was the SP2
+    /// data-loss bug.
+    #[serde(default)]
+    pub defra_query_collections: Option<Vec<String>>,
+    #[serde(default)]
+    pub subagent_default_await_mode: Option<String>,
+    #[serde(default)]
+    pub orchestration_enabled: Option<bool>,
+    // NOTE: `write_tools` and `tool_policy_version` are intentionally NOT in the
+    // save request. write_tools is apply-managed and editing raw WriteToolDecl
+    // JSON through the UI would risk bricking the fail-closed runtime loader;
+    // tool_policy_version is backfill-owned. Both are preserved from the loaded
+    // row (the read query now fetches them), never set from the UI.
 }
 
 #[derive(Debug, Clone, Deserialize)]

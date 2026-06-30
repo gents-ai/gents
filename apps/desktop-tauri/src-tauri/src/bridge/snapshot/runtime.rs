@@ -185,6 +185,13 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     enable_session_history_tool: row.enable_session_history_tool,
                     enable_context_budget: row.enable_context_budget,
                     enable_defra_query: row.enable_defra_query,
+                    defra_query_collections: row.defra_query_collections.clone(),
+                    write_tools: row.write_tools.clone(),
+                    tool_policy_version: normalize_optional(row.tool_policy_version.as_deref()),
+                    subagent_default_await_mode: normalize_optional(
+                        row.subagent_default_await_mode.as_deref(),
+                    ),
+                    orchestration_enabled: row.orchestration_enabled,
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));

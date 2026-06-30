@@ -65,9 +65,11 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         selection_id: "tools-amy".to_string(),
         agent_did: Some("did:defra:amy".to_string()),
         display_name: Some("Amy Tools".to_string()),
-        tool_policy_version: None,
-        subagent_default_await_mode: None,
-        write_tools: Vec::new(),
+        tool_policy_version: Some("tool-policy/v1".to_string()),
+        subagent_default_await_mode: Some("foreground".to_string()),
+        write_tools: vec![
+            r#"{"tool_name":"upsert_note","collection":"Note","fields":[]}"#.to_string(),
+        ],
         enable_file_tools: Some(true),
         file_tools_mode: Some("workspace-write".to_string()),
         file_tool_root: Some("/workspace".to_string()),
@@ -86,7 +88,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_session_history_tool: Some(false),
         enable_context_budget: Some(true),
         enable_defra_query: Some(true),
-        defra_query_collections: Vec::new(),
+        defra_query_collections: vec!["AgentSession".to_string()],
         subagent_targets: vec!["amy-research".to_string()],
         subagent_spawn_enabled: Some(true),
         orchestration_enabled: Some(true),
@@ -190,6 +192,20 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(tools.subagent_background_enabled, Some(true));
     assert_eq!(tools.subagent_allow_cross_deployment, Some(true));
     assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
+    // SP2 Phase B: the unified-policy parity fields must survive the
+    // save (mutation) → store refresh (read query) round-trip, not silently drop.
+    assert_eq!(tools.enable_defra_query, Some(true));
+    assert_eq!(
+        tools.defra_query_collections,
+        vec!["AgentSession".to_string()]
+    );
+    assert_eq!(tools.tool_policy_version.as_deref(), Some("tool-policy/v1"));
+    assert_eq!(
+        tools.subagent_default_await_mode.as_deref(),
+        Some("foreground")
+    );
+    assert_eq!(tools.write_tools.len(), 1);
+    assert!(tools.write_tools[0].contains("upsert_note"));
     assert!(snapshot.skills.iter().any(|row| row.skill_id == "amy-skill"
         && row.name.as_deref() == Some("Amy Skill")
         && row.tool_refs == vec!["read_file".to_string()]));

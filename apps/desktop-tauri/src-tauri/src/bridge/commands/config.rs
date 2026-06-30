@@ -382,6 +382,22 @@ pub(crate) async fn save_tool_selection_config(
         .or(row.enable_session_history_tool);
     row.enable_context_budget = request.enable_context_budget.or(row.enable_context_budget);
     row.enable_defra_query = request.enable_defra_query.or(row.enable_defra_query);
+    // Preserve-on-absent: only overwrite the allowlist when the request actually
+    // carries it, so a save from a panel that doesn't manage this field can't
+    // wipe a configured allowlist (the SP2 data-loss bug). Some([]) clears it.
+    if let Some(collections) = request.defra_query_collections {
+        row.defra_query_collections = collections
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+    }
+    row.subagent_default_await_mode =
+        trim_optional(request.subagent_default_await_mode).or(row.subagent_default_await_mode);
+    row.orchestration_enabled = request.orchestration_enabled.or(row.orchestration_enabled);
+    // tool_policy_version + write_tools are NOT touched here: preserved from the
+    // loaded row (version is backfill-owned; write_tools is apply-managed and the
+    // UI never edits it — avoids bricking the fail-closed runtime loader).
     core.save_tool_selection(&row).await?;
     Ok(())
 }
