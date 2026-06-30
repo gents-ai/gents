@@ -14,8 +14,11 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
+use defra_agent::graphql::escape_graphql_string;
+
 use crate::cli::args::DemoArgs;
 use crate::commands::chat::submit_chat_turn;
+use crate::graphql_access::post_graphql;
 
 const NODE_A_NAME: &str = "demo";
 
@@ -33,16 +36,20 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     }
     let work = home.join("work");
 
-    // First run sets up; later runs resume the saved agent.
-    let (agent_did, first_run) = match read_agent_did(&home) {
+    // First run sets up; later runs resume the saved agent. The backend args are
+    // persisted so a resumed session (and a paired node B) reuse the same backend.
+    let backend_file = home.join("demo-backend.json");
+    let (agent_did, first_run, backend_init_args) = match read_agent_did(&home) {
         Some(did) => {
             println!("Resuming your demo agent ({}).", short(&did));
-            (did, false)
+            (did, false, read_backend_args(&backend_file))
         }
         None => {
             let backend = resolve_backend(&args).await?;
             println!("\nSetting up your demo agent (backend: {})…", backend.label);
-            (init_agent(&bin, &home, &work, &backend).await?, true)
+            let did = init_agent(&bin, &home, &work, &backend).await?;
+            write_backend_args(&backend_file, &backend.init_args);
+            (did, true, backend.init_args)
         }
     };
 
@@ -60,12 +67,64 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
         seed_demo_skills(&bin, &graphql, &agent_did).await;
     }
 
+    let mut fleet = Fleet {
+        bin: bin.clone(),
+        home_a: home.clone(),
+        graphql_a: graphql.clone(),
+        did_a: agent_did.clone(),
+        base_port: port,
+        backend_init_args,
+        node_b: None,
+    };
     print_welcome(&graphql);
-    let result = run_shell(&graphql, &agent_did).await;
+    let mut reader = BufReader::new(tokio::io::stdin()).lines();
+    let result = run_shell(&mut fleet, &mut reader).await;
 
+    fleet.teardown();
     let _ = server.start_kill();
-    println!("Stopped. Your demo agent is saved at {} (run `defra-agent demo` again to resume, or `--reset` to start over).", home.display());
+    println!(
+        "Stopped. Your demo agent is saved at {} (run `defra-agent demo` again to resume, or `--reset` to start over).",
+        home.display()
+    );
     result
+}
+
+/// The running demo fleet: node A (always) plus an optional paired node B.
+struct Fleet {
+    bin: PathBuf,
+    home_a: PathBuf,
+    graphql_a: String,
+    did_a: String,
+    base_port: u16,
+    backend_init_args: Vec<String>,
+    node_b: Option<NodeB>,
+}
+
+struct NodeB {
+    graphql: String,
+    did: String,
+    server: Child,
+}
+
+impl Fleet {
+    fn teardown(&mut self) {
+        if let Some(b) = self.node_b.as_mut() {
+            let _ = b.server.start_kill();
+        }
+    }
+}
+
+fn write_backend_args(path: &Path, args: &[String]) {
+    if let Ok(json) = serde_json::to_string(args) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn read_backend_args(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
 
 fn resolve_home(explicit: Option<PathBuf>) -> PathBuf {
@@ -290,6 +349,11 @@ fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Result<Child>
     ]);
     // The demo backends use the OpenAI chat-completions wire.
     cmd.env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
+    // Fast pairing reconcile so `pair` converges in seconds, not minutes.
+    cmd.env("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "1000");
+    cmd.env("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000");
+    cmd.env("DEFRA_AGENT_REGISTRY_STALE_MS", "300000");
+    cmd.env("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
     cmd.spawn().context("spawning demo server")
 }
@@ -371,8 +435,10 @@ fn print_welcome(graphql: &str) {
     println!("Type `chat` to talk to your agent, or `help` for the full list.");
 }
 
-async fn run_shell(graphql: &str, agent_did: &str) -> Result<()> {
-    let mut reader = BufReader::new(tokio::io::stdin()).lines();
+async fn run_shell(
+    fleet: &mut Fleet,
+    reader: &mut tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+) -> Result<()> {
     loop {
         prompt("demo> ");
         let Some(line) = reader.next_line().await? else {
@@ -381,18 +447,341 @@ async fn run_shell(graphql: &str, agent_did: &str) -> Result<()> {
         match line.trim() {
             "" => continue,
             "help" | "?" => print_help(),
-            "chat" => chat_loop(graphql, agent_did, &mut reader).await?,
-            "status" => println!("  node A: live · agent {} · {graphql}", short(agent_did)),
+            "chat" => chat_loop(&fleet.graphql_a, &fleet.did_a, reader).await?,
+            "status" => print_status(fleet),
             "skill" | "skills" => {
                 println!("  skills: summarize, fleet-guide (ask the agent to use one in `chat`)")
             }
-            "pair" => println!("  `pair` (add a 2nd node) lands in the next stage."),
-            "delegate" => println!("  `delegate` (cross-node subagent) lands in a later stage."),
+            "pair" => {
+                if let Err(error) = pair(fleet).await {
+                    println!("  pair failed: {error}");
+                }
+            }
+            "delegate" => {
+                if let Err(error) = delegate(fleet).await {
+                    println!("  delegate failed: {error}");
+                }
+            }
             "down" | "quit" | "exit" => break,
             other => println!("  unknown command: {other} (try `help`)"),
         }
     }
     Ok(())
+}
+
+fn print_status(fleet: &Fleet) {
+    println!(
+        "  node A: live · agent {} · {}",
+        short(&fleet.did_a),
+        fleet.graphql_a
+    );
+    match &fleet.node_b {
+        Some(b) => {
+            println!("  node B: live · agent {} · {}", short(&b.did), b.graphql);
+            println!("  paired: yes · run `delegate` for cross-node subagent delegation");
+        }
+        None => println!("  node B: not paired (run `pair` to add a 2nd node)"),
+    }
+}
+
+// ---- pair (2-node fleet) ----------------------------------------------------
+
+async fn pair(fleet: &mut Fleet) -> Result<()> {
+    if fleet.node_b.is_some() {
+        println!("  already paired.");
+        return Ok(());
+    }
+    let bin = fleet.bin.clone();
+    let home_a = fleet.home_a.clone();
+    let home_b = home_a.join("node-b");
+    let work_b = home_b.join("work");
+    let port_b = fleet.base_port + 1;
+    let graphql_b = format!("http://127.0.0.1:{port_b}/api/v0/graphql");
+
+    println!("  initializing node B (worker)…");
+    let mut init_b: Vec<String> = vec![
+        "init".into(),
+        "--home".into(),
+        path_arg(&home_b),
+        "--dangerously-overwrite".into(),
+        "--agent-name".into(),
+        "worker".into(),
+        "--tool-root".into(),
+        path_arg(&work_b),
+        "--disable-defra-query".into(),
+    ];
+    init_b.extend(fleet.backend_init_args.iter().cloned());
+    let did_b = run_cli_json(&bin, &init_b)
+        .await?
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .context("node B init did not return agent_did")?
+        .to_string();
+    std::fs::create_dir_all(&work_b)?;
+
+    println!("  starting node B…");
+    let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
+    wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await?;
+
+    let (peer_a, addr_a) = p2p_identity(&bin, &home_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&bin, &home_b).await?;
+
+    println!("  creating the network and enrolling node B…");
+    run_cli_text(
+        &bin,
+        &cli(&[
+            "p2p",
+            "network",
+            "create",
+            "--home",
+            &path_arg(&home_a),
+            "--name",
+            "Demo Fleet",
+            "--output",
+            "json",
+        ]),
+    )
+    .await?;
+    run_cli_text(
+        &bin,
+        &cli(&[
+            "p2p",
+            "network",
+            "grant",
+            "--home",
+            &path_arg(&home_a),
+            &did_b,
+            "--output",
+            "json",
+        ]),
+    )
+    .await?;
+    let token = run_cli_json(
+        &bin,
+        &cli(&[
+            "p2p",
+            "pairings",
+            "invite",
+            "--home",
+            &path_arg(&home_a),
+            "--member-did",
+            &did_b,
+            "--template",
+            "network-control",
+        ]),
+    )
+    .await?
+    .get("token")
+    .and_then(Value::as_str)
+    .context("invite missing token")?
+    .to_string();
+    run_cli_text(
+        &bin,
+        &cli(&[
+            "p2p",
+            "pairings",
+            "join",
+            "--home",
+            &path_arg(&home_b),
+            &token,
+        ]),
+    )
+    .await?;
+
+    println!("  installing the conversation data plane…");
+    upsert_data_plane(&fleet.graphql_a, &peer_b, &fleet.did_a, &addr_b).await?;
+    upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a).await?;
+
+    println!("  waiting for replicators…");
+    wait_replicator(&graphql_b, &peer_a).await?;
+    wait_replicator(&fleet.graphql_a, &peer_b).await?;
+
+    fleet.node_b = Some(NodeB {
+        graphql: graphql_b,
+        did: did_b,
+        server: server_b,
+    });
+    println!(
+        "  ✓ paired. Node B (worker) is live; run `delegate` to enable cross-node delegation."
+    );
+    Ok(())
+}
+
+async fn p2p_identity(bin: &Path, home: &Path) -> Result<(String, String)> {
+    let status = run_cli_json(bin, &cli(&["p2p", "status", "--home", &path_arg(home)])).await?;
+    let peer = status
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .context("p2p status missing p2p_peer_id")?
+        .to_string();
+    let addr = status
+        .get("p2p_shareable_address")
+        .and_then(Value::as_str)
+        .context("p2p status missing p2p_shareable_address")?
+        .to_string();
+    Ok((peer, addr))
+}
+
+const DATA_PLANE_COLLECTIONS: &str = r#"["AgentRequest","AgentResponse","AgentMessage","AgentToolCall","AgentToolResult","AgentSession","AgentConversation","CompactionEntry"]"#;
+
+async fn upsert_data_plane(
+    graphql: &str,
+    peer_id: &str,
+    local_did: &str,
+    address: &str,
+) -> Result<()> {
+    let peer = escape_graphql_string(peer_id);
+    let did = escape_graphql_string(local_did);
+    let addr = escape_graphql_string(address);
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let cols = DATA_PLANE_COLLECTIONS;
+    let mutation = format!(
+        r#"mutation {{
+  upsert_DataPlanePairingDesired(
+    filter: {{ peer_id: {{ _eq: "{peer}" }} }},
+    add: {{ peer_id: "{peer}", agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "conversation", created_at: "{now}", updated_at: "{now}" }},
+    update: {{ agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "conversation", updated_at: "{now}" }}
+  ) {{ _docID }}
+}}"#
+    );
+    post_graphql(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn wait_replicator(graphql: &str, peer_id: &str) -> Result<()> {
+    let query = format!(
+        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ replicator_addresses replicator_filter }} }}"#,
+        escape_graphql_string(peer_id)
+    );
+    for _ in 0..240 {
+        if let Ok(resp) = post_graphql(graphql, &query).await {
+            let armed = resp
+                .pointer("/data/PeerPairingApplied/0/replicator_addresses")
+                .and_then(Value::as_array)
+                .map(|addresses| !addresses.is_empty())
+                .unwrap_or(false);
+            if armed {
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    bail!("timed out waiting for the replicator for peer {peer_id}")
+}
+
+// ---- delegate (cross-node subagent) -----------------------------------------
+
+async fn delegate(fleet: &Fleet) -> Result<()> {
+    let Some(worker) = &fleet.node_b else {
+        bail!("not paired — run `pair` first");
+    };
+    println!("  configuring cross-node delegation…");
+    // Worker (node B) must accept cross-deployment spawns from the orchestrator.
+    config_tools(
+        &fleet.bin,
+        &worker.graphql,
+        &worker.did,
+        &[
+            "--enable-defra-query",
+            "false",
+            "--subagent-allow-cross-deployment",
+            "true",
+        ],
+    )
+    .await?;
+    let worker_gen = runtime_generation(&worker.graphql).await;
+    wait_runtime_reconcile(&worker.graphql, worker_gen).await;
+
+    // Orchestrator (node A): background spawn of a remote `worker` target.
+    let target = format!(
+        r#"{{"name":"worker","agent_did":"{}","behavior_id":"{}:default","description":"Remote worker subagent"}}"#,
+        worker.did, worker.did
+    );
+    let orch_gen = runtime_generation(&fleet.graphql_a).await;
+    config_tools(
+        &fleet.bin,
+        &fleet.graphql_a,
+        &fleet.did_a,
+        &[
+            "--enable-defra-query",
+            "false",
+            "--subagent-spawn-enabled",
+            "true",
+            "--subagent-background-enabled",
+            "true",
+            "--subagent-allow-cross-deployment",
+            "true",
+            "--subagent-target",
+            &target,
+        ],
+    )
+    .await?;
+    wait_runtime_reconcile(&fleet.graphql_a, orch_gen).await;
+
+    println!("  ✓ cross-node delegation enabled.");
+    println!("  In `chat`, ask the orchestrator to use its worker subagent, e.g.:");
+    println!(
+        "    Delegate to the worker subagent: summarize what a worker node does, then report back."
+    );
+    println!("  The child runs on node B (the worker) and its result replicates back.");
+    Ok(())
+}
+
+async fn config_tools(bin: &Path, graphql: &str, did: &str, extra: &[&str]) -> Result<()> {
+    let mut args: Vec<String> = vec![
+        "config".into(),
+        "tools".into(),
+        "set".into(),
+        "--graphql".into(),
+        graphql.into(),
+        "--agent-did".into(),
+        did.into(),
+        "--selection-id".into(),
+        format!("{did}:default-tools"),
+    ];
+    args.extend(extra.iter().map(|value| value.to_string()));
+    run_cli_text(bin, &args).await?;
+    Ok(())
+}
+
+async fn runtime_generation(graphql: &str) -> i64 {
+    post_graphql(graphql, "{ AgentRuntime { active_generation } }")
+        .await
+        .ok()
+        .and_then(|r| {
+            r.pointer("/data/AgentRuntime/0/active_generation")
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(0)
+}
+
+async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) {
+    for _ in 0..80 {
+        if let Ok(resp) = post_graphql(
+            graphql,
+            "{ AgentRuntime { active_generation reconcile_phase } }",
+        )
+        .await
+        {
+            let generation = resp
+                .pointer("/data/AgentRuntime/0/active_generation")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let phase = resp
+                .pointer("/data/AgentRuntime/0/reconcile_phase")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if generation > prev_generation && phase == "idle" {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Build an owned arg vector from string slices (paths must already be strings).
+fn cli(args: &[&str]) -> Vec<String> {
+    args.iter().map(|value| value.to_string()).collect()
 }
 
 async fn chat_loop(
