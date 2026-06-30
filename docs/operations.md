@@ -79,16 +79,9 @@ To run the same two-node substrate and open it in the native desktop fleet UI:
 make demo-desktop-two-node
 ```
 
-For working chat with **no external model**, start the bundled mock backend.
-It is a real, zero-dependency OpenAI-compatible server (canned replies) that
-exercises the full request → runtime → response → replication path:
-
-```bash
-DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND=1 make demo-desktop-two-node
-```
-
-The default desktop demo otherwise expects a local OpenAI-compatible inference
-server at `http://127.0.0.1:8080/v1`, matching the getting-started
+The desktop demo needs a real OpenAI-compatible backend reachable on both
+nodes — e.g. a local inference server at `http://127.0.0.1:8080/v1`, matching the
+getting-started
 `llama-server` command:
 
 ```bash

@@ -125,7 +125,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     Ok(())
 }
 
-async fn submit_chat_turn(
+pub(crate) async fn submit_chat_turn(
     graphql: &str,
     agent_did: &str,
     session_id: &str,

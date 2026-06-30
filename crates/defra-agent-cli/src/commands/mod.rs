@@ -6,6 +6,7 @@ pub(crate) mod codex_auth_probe;
 pub(crate) mod codex_login;
 pub(crate) mod codex_shim;
 pub(crate) mod config;
+pub(crate) mod demo;
 pub(crate) mod diagnose;
 pub(crate) mod fleet;
 pub(crate) mod init;

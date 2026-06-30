@@ -29,12 +29,8 @@ Environment:
                                   API-key env var stored in the backend document.
   DEFRA_AGENT_DEMO_SUBAGENT=1      Also prove cross-node subagent routing: node A
                                   delegates a 'worker' subagent that runs on node
-                                  B and replicates back. Needs a tool-calling
-                                  backend; auto-starts the bundled mock unless a
-                                  real backend is configured.
-  DEFRA_AGENT_DEMO_MOCK_BACKEND=1 Start the bundled zero-dependency mock OpenAI
-                                  backend (scripts/demo-mock-inference.py) and
-                                  point both nodes at it.
+                                  B and replicates back. Requires a real
+                                  tool-calling backend (set a preset or URL).
   AGENT_A_HTTP_PORT               Amy HTTP port. Default: 19391
   AGENT_B_HTTP_PORT               Coding HTTP port. Default: 19392
 EOF
@@ -84,15 +80,8 @@ fi
 API_KEY_ENV_VAR="${DEFRA_AGENT_DEMO_API_KEY_ENV_VAR:-}"
 # Optional capstone: after proving replication, prove cross-node subagent
 # delegation (node A delegates a child that runs on node B and replicates back).
-# It needs a tool-calling backend, so default it to the bundled mock unless a
-# real backend is configured.
+# It needs a real tool-calling backend (set a preset or inference URL).
 SUBAGENT_PROOF="${DEFRA_AGENT_DEMO_SUBAGENT:-0}"
-MOCK_BACKEND="${DEFRA_AGENT_DEMO_MOCK_BACKEND:-0}"
-MOCK_PID=""
-if [[ "$SUBAGENT_PROOF" == "1" && "$MOCK_BACKEND" != "1" \
-      && -z "$BACKEND_PRESET" && -z "${DEFRA_AGENT_DEMO_INFERENCE_URL:-}" ]]; then
-  MOCK_BACKEND=1
-fi
 # Agent names are parameterized so wrappers (e.g. the desktop demo) can relabel
 # the two runtimes; the standalone runbook keeps amy/coding.
 AGENT_A_NAME="${DEFRA_AGENT_DEMO_AGENT_A_NAME:-amy}"
@@ -130,13 +119,9 @@ cleanup() {
     for pid in "${PIDS[@]:-}"; do
       echo "  kill $pid"
     done
-    if [[ -n "$MOCK_PID" ]]; then
-      echo "  kill $MOCK_PID  # bundled mock inference backend"
-    fi
     return
   fi
 
-  [[ -n "$MOCK_PID" ]] && kill "$MOCK_PID" >/dev/null 2>&1 || true
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
@@ -441,27 +426,6 @@ EOF
   return 1
 }
 
-maybe_start_mock() {
-  [[ "$MOCK_BACKEND" == "1" ]] || return 0
-  need python3
-  local mock_script mock_log mport
-  mock_script="$(dirname "$0")/demo-mock-inference.py"
-  [[ -f "$mock_script" ]] || { echo "mock backend script not found: $mock_script" >&2; exit 1; }
-  mock_log="$LOG_DIR/mock.log"
-  MODEL_NAME="mock-model"
-  python3 "$mock_script" --port 0 --model "$MODEL_NAME" >"$mock_log" 2>&1 &
-  MOCK_PID=$!
-  for _ in $(seq 1 50); do
-    mport="$(sed -n 's/.*port=\([0-9]*\).*/\1/p' "$mock_log" | head -1)"
-    [[ -n "$mport" ]] && break
-    kill -0 "$MOCK_PID" >/dev/null 2>&1 || { echo "mock backend exited early; see $mock_log" >&2; exit 1; }
-    sleep 0.1
-  done
-  [[ -n "$mport" ]] || { echo "mock backend did not report a port; see $mock_log" >&2; exit 1; }
-  MODEL_URL="http://127.0.0.1:$mport/v1"
-  export DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1
-  echo "  Mock inference backend on $MODEL_URL (pid $MOCK_PID)"
-}
 
 runtime_generation() {
   post_graphql "$1" '{ AgentRuntime { active_generation } }' 2>/dev/null \
@@ -551,11 +515,6 @@ echo "  Coding port: $AGENT_B_HTTP_PORT free"
 
 mkdir -p "$AGENT_A_HOME" "$AGENT_B_HOME" "$AGENT_A_WORK" "$AGENT_B_WORK" "$LOG_DIR"
 : >"$PID_FILE"
-
-if [[ "$MOCK_BACKEND" == "1" ]]; then
-  say "Starting the bundled mock inference backend"
-  maybe_start_mock
-fi
 
 INIT_BACKEND_ARGS=()
 if [[ -n "$MODEL_NAME" ]]; then
