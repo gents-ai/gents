@@ -399,12 +399,12 @@ fn annotate_pairing_health(
         })
         .collect::<BTreeMap<_, _>>();
 
-    let connected_set = connected.iter().cloned().collect::<BTreeSet<_>>();
+    let connected_set = connected_peer_id_set(connected);
 
     for row in &mut desired {
-        // Exact peer-id equality (matching network.rs `BTreeSet::contains`): a
-        // peer id that is merely a *substring* of a connected id must not count
-        // as connected.
+        // Exact peer-id equality after normalizing live peer rows. Some
+        // runtimes report bare peer ids, while others report address-shaped
+        // values ending in `/p2p/<peer-id>`.
         row.connected = connected_set.contains(&row.peer_id);
         let (applied_collections, applied_replicators) = applied_by_peer
             .get(row.peer_id.as_str())
@@ -433,6 +433,38 @@ fn annotate_pairing_health(
         };
     }
     desired
+}
+
+fn connected_peer_id_set(connected: &[String]) -> BTreeSet<String> {
+    connected
+        .iter()
+        .flat_map(|peer| connected_peer_id_candidates(peer))
+        .collect()
+}
+
+fn connected_peer_id_candidates(peer: &str) -> Vec<String> {
+    let peer = peer.trim();
+    if peer.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ids = vec![peer.to_string()];
+    if let Some(id) = peer_id_from_address_like_peer(peer) {
+        if id != peer {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+fn peer_id_from_address_like_peer(value: &str) -> Option<String> {
+    let (_, suffix) = value.rsplit_once("/p2p/")?;
+    let peer_id = suffix
+        .split('/')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(peer_id.to_string())
 }
 
 /// Whether the pairing's template uses Push delivery (filtered replicator is the
@@ -500,9 +532,7 @@ pub(super) async fn wait_for_pairing_connected(
     let deadline = Instant::now() + timeout;
     loop {
         let peers = fetch_connected_peer_ids(graphql).await?;
-        // Exact equality (matching network.rs): a substring match could falsely
-        // satisfy the wait against an unrelated peer id.
-        if peers.iter().any(|peer| peer == peer_id) {
+        if connected_peer_id_set(&peers).contains(peer_id) {
             return Ok(json!({
                 "p2p_connected_peers": peers,
             }));
@@ -802,6 +832,39 @@ mod tests {
         let annotated = annotate_pairing_health(desired, &[], &connected);
 
         assert!(annotated[0].connected);
+    }
+
+    #[test]
+    fn connected_health_matches_address_form_peer_id() {
+        let desired = vec![desired_row(
+            "peer-a",
+            "conversation",
+            &["AgentRequest"],
+            &[],
+        )];
+        let connected = vec!["100.74.68.88:9192/p2p/peer-a".to_string()];
+
+        let annotated = annotate_pairing_health(desired, &[], &connected);
+
+        assert!(annotated[0].connected);
+    }
+
+    #[test]
+    fn connected_health_address_form_still_uses_exact_peer_id() {
+        let desired = vec![desired_row(
+            "peer-a",
+            "conversation",
+            &["AgentRequest"],
+            &[],
+        )];
+        let connected = vec!["100.74.68.88:9192/p2p/peer-ab".to_string()];
+
+        let annotated = annotate_pairing_health(desired, &[], &connected);
+
+        assert!(
+            !annotated[0].connected,
+            "substring of address-form connected peer id must not report connected"
+        );
     }
 
     #[test]
