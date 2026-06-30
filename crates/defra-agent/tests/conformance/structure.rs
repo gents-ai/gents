@@ -43,7 +43,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         (
             "CrossMachineComposed",
-            Module("conformance/r5_cross_deployment.rs"),
+            Module("conformance/composed_invariants.rs"),
         ),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),

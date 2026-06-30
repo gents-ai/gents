@@ -406,6 +406,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_r5_cross_deployment_cases_drive_production_dispatch",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/conformance.rs",

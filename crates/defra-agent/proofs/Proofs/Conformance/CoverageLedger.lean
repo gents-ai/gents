@@ -130,6 +130,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "composed-invariants"
+    , required := [Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "managed-exec"
     , required := [Surface.agentFacing]
     , deferred := []
@@ -578,6 +582,11 @@ def caseCoverage : List CoverageEntry :=
       "R5CrossDeploymentCases"
       "defra_agent_desktop_tauri::bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
       "subagents-cross-deployment" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "composed_invariant_witnesses"
+      "ComposedInvariantWitnesses"
+      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance")
+      "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
