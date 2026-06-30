@@ -38,6 +38,17 @@ to render in the UI.
 If you isolated the agent home, pass the same path as
 `--agent-home /some/path` to `defra-agent-desktop init`.
 
+For an isolated desktop data directory — useful for demos and QA runs — set
+`DEFRA_AGENT_DESKTOP_HOME` before launching the Tauri app:
+
+```bash
+DEFRA_AGENT_DESKTOP_HOME=/tmp/defra-agent-desktop-demo/desktop \
+  npm --prefix apps/desktop-tauri run tauri -- dev
+```
+
+The launcher, bootstrap summary, logs, peer directory, and embedded desktop
+node all use that directory when the variable is set.
+
 ## P2P defaults and pinning
 
 The standard server path always starts the IROH P2P transport for local
@@ -60,6 +71,69 @@ For the scripted local version, run:
 
 ```bash
 make demo-p2p-two-node
+```
+
+To run the same two-node substrate and open it in the native desktop fleet UI:
+
+```bash
+make demo-desktop-two-node
+```
+
+For working chat with **no external model**, start the bundled mock backend.
+It is a real, zero-dependency OpenAI-compatible server (canned replies) that
+exercises the full request → runtime → response → replication path:
+
+```bash
+DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND=1 make demo-desktop-two-node
+```
+
+The default desktop demo otherwise expects a local OpenAI-compatible inference
+server at `http://127.0.0.1:8080/v1`, matching the getting-started
+`llama-server` command:
+
+```bash
+llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
+```
+
+For hosted inference, select a preset and a provider model before launching:
+
+```bash
+DEFRA_AGENT_DEMO_BACKEND_PRESET=openai \
+DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini \
+OPENAI_API_KEY=... \
+  make demo-desktop-two-node
+```
+
+That command:
+
+- starts two runtimes, **Orchestrator** and **Worker**, through the two-node
+  P2P script;
+- tightens each agent's tool surface — drops the `defra_query` tool — and
+  enables the Orchestrator to delegate to the **Worker on node B** via a
+  cross-node subagent (it prints the resolved surface via
+  `defra-agent tools explain`);
+- seeds an isolated desktop peer directory with both runtimes;
+- launches the Tauri dev app with `DEFRA_AGENT_DESKTOP_HOME` pointed at the
+  demo desktop home.
+
+In the app, open **Fleet Dashboard** to see both deployments. Open Chat for the
+**Orchestrator** and ask it to use its worker subagent: it calls
+`spawn_subagent` (background await), the runtime materializes a child request
+**on the Worker node** (`agent_did` = the Worker), the Worker runs it, and its
+result replicates back to the Orchestrator over P2P. Open the Worker's Chat to
+watch the delegated child run there. Cross-node delegation uses background await
+(foreground remote spawns are rejected) and is enabled for the trusted local
+loopback fleet via `subagent_allow_cross_deployment` on both runtimes. Set
+`DEFRA_AGENT_DESKTOP_DEMO_LAUNCH=0` to prepare
+the demo without launching the app, or `DEFRA_AGENT_DESKTOP_DEMO_KEEP=1` to keep
+runtimes and data after exit. By default the launcher refuses to open the GUI if
+the local model backend is unreachable; set
+`DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND=1` only when you want to
+inspect the seeded fleet UI without sending live chat turns:
+
+```bash
+DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND=1 \
+  make demo-desktop-two-node
 ```
 
 To bring up two runtimes manually and enroll Coding into Amy's signed network:

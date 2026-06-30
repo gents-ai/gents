@@ -564,15 +564,32 @@ pub(super) fn branchable_pair_sync_enabled() -> bool {
 }
 
 pub(super) fn p2p_pairing_enabled_for_graphql(graphql: &str) -> bool {
-    graphql_endpoint_is_loopback_or_unspecified(graphql) || env_flag_enabled(REMOTE_P2P_PAIRING_ENV)
+    let env_value = std::env::var(REMOTE_P2P_PAIRING_ENV).ok();
+    p2p_pairing_enabled_for_graphql_with_env(graphql, env_value.as_deref())
+}
+
+fn p2p_pairing_enabled_for_graphql_with_env(graphql: &str, env_value: Option<&str>) -> bool {
+    if let Some(enabled) = env_flag_value(env_value) {
+        return enabled;
+    }
+
+    graphql_endpoint_is_loopback_or_unspecified(graphql)
 }
 
 fn env_flag_enabled(name: &str) -> bool {
     let Ok(value) = std::env::var(name) else {
         return false;
     };
+    env_flag_value(Some(&value)).unwrap_or(false)
+}
+
+fn env_flag_value(value: Option<&str>) -> Option<bool> {
+    let value = value?;
     let value = value.trim().to_ascii_lowercase();
-    matches!(value.as_str(), "1" | "true" | "yes" | "on")
+    if value.is_empty() {
+        return None;
+    }
+    Some(matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
@@ -621,4 +638,41 @@ fn graphql_endpoint_is_loopback_or_unspecified(graphql: &str) -> bool {
     host.parse::<std::net::IpAddr>()
         .map(|addr| addr.is_loopback() || addr.is_unspecified())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_graphql_pairs_by_default() {
+        assert!(p2p_pairing_enabled_for_graphql_with_env(
+            "http://127.0.0.1:9191/api/v0/graphql",
+            None
+        ));
+    }
+
+    #[test]
+    fn explicit_pairing_env_false_disables_loopback_pairing() {
+        assert!(!p2p_pairing_enabled_for_graphql_with_env(
+            "http://127.0.0.1:9191/api/v0/graphql",
+            Some("0")
+        ));
+        assert!(!p2p_pairing_enabled_for_graphql_with_env(
+            "http://localhost:9191/api/v0/graphql",
+            Some("false")
+        ));
+    }
+
+    #[test]
+    fn explicit_pairing_env_true_enables_remote_pairing() {
+        assert!(p2p_pairing_enabled_for_graphql_with_env(
+            "http://agent-host:9191/api/v0/graphql",
+            Some("1")
+        ));
+        assert!(p2p_pairing_enabled_for_graphql_with_env(
+            "http://agent-host:9191/api/v0/graphql",
+            Some("yes")
+        ));
+    }
 }
